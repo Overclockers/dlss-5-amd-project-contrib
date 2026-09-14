@@ -39,6 +39,11 @@ OptiScaler-AMD-PreSR*.zip
 analysis/setup-*-test*/
 analysis/installer-gui-*/
 analysis/v25-package-test-output/
+analysis/smoke-objects-*/
+analysis/menu-test-objects-*/
+
+# 取证构建产物（DLL/日志/obj）—— 回滚用，只留本地，不进仓库
+exports/review-s*/
 
 # 编辑器/会话
 .claude/
@@ -67,6 +72,5 @@ exports/review-s7-ks1/
 *.ipdb
 *.obj
 *.lib
-analysis/menu-test-objects-*/
 
 analysis/
