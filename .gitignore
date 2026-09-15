@@ -36,6 +36,7 @@ OptiScaler-AMD-PreSR*.zip
 *.ilk
 *.exp
 
+# 本地分析产物（整包 / 工程库 / 烟雾测试输出）—— 只留本地
 analysis/setup-*-test*/
 analysis/installer-gui-*/
 analysis/v25-package-test-output/
@@ -71,7 +72,6 @@ dist/
 # 这条与上游 OptiScaler 一致（它的 .gitignore 也是 *.dll + 单条例外）。
 # 注意：gitignore 对「已跟踪」的文件无效，已跟踪的要用 git rm --cached 才生效。
 *.dll
-!.analysis-tools/capstone/lib/capstone.dll
 !OptiScaler-DLSSNR-PreSR-Multipass-main/external/directx_agility_sdk/lib/D3D12Core.dll
 
 # 编辑器/会话
@@ -128,8 +128,18 @@ analysis/version-strings.txt
 # 作者 DLL 的 PE 头与导出表
 analysis/version-pe.json
 analysis/dxre-audit.txt
-# 分析输入（原作者二进制），本机自备
+# 分析输入（第三方运行时二进制），本机自备
 analysis/*-runtime.dll
+
+# 只留能复现发布的三样：
+#   analysis/build-release-local.cmd          本地跑一遍 CI 等价的 Release
+#   analysis/compilecheck-nomacro.cmd         无诊断宏时的编译检查
+#   analysis/experimental-lighting/Lighting.hlsl
+#       ↑ package-amd-presr/experimental_lighting 里那两个 .cso 的源，是发布资产
+# 其余（分析脚本、测量脚本、vendored 工具）只留本地。
+.analysis-tools/
+analysis/*.py
+analysis/capture-slots-sweep.ps1
 
 # ---------------------------------------------------------------------------
 # 内部文档不进仓库（2026-09-15 定）：exports/ 与 .handoff/ 整个忽略，
