@@ -120,6 +120,8 @@ analysis/*.rgba16f
 analysis/smoke-*
 analysis/diagnostics-test.txt
 analysis/version-strings.txt
+# 作者 DLL 的 PE 头与导出表
+analysis/version-pe.json
 analysis/dxre-audit.txt
 # 分析输入（原作者二进制），本机自备
 analysis/*-runtime.dll
