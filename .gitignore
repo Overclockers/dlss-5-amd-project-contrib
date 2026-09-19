@@ -111,3 +111,4 @@ analysis/
 exports/
 .handoff/
 GIT-REWRITE-STATUS.md
+third_party/lmxxf/shaders/shader-cache/
