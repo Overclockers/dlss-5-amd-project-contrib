@@ -6,27 +6,15 @@ dlssnr_on_amd_setup.exe
 nvngx_dlssnr.dll
 dlssnr_on_amd_weights.bin
 
-# 本地 mod 试验目录（XeFG 等第三方文件，不随仓库）
-/mod/
-
-
-
-# 游戏 log 快照与 R1 本地部署包（体积大，只分析用）
-exports/onimusha-*/
-exports/review-r1/
-exports/presentmon-*/
-
 # 打包输出（含 FSR/XeSS/pass DLL，体积大）
-OptiScaler-AMD-PreSR-Multipass-v2.25/
-OptiScaler-AMD-PreSR-Multipass-v2.25.zip
-OptiScaler-AMD-PreSR-R1/
-OptiScaler-AMD-PreSR-R1.zip
 OptiScaler-AMD-PreSR*.zip
 
 # 本机构建产物
 **/x64/Release/
 **/x64/Debug/
 **/Release/
+# core.ignorecase=true on Windows makes **/Release/ swallow the tools/release/ scripts too.
+!/tools/release/
 *.pdb
 *.ilk
 *.exp
@@ -36,25 +24,8 @@ OptiScaler-AMD-PreSR*.zip
 # NOTICE.txt 是随附的第三方声明：「Proprietary and confidential」「Unauthorized copying
 # of this file, via any medium is strictly prohibited」；同目录 *.hlsl 是它的 native
 # adaptation，iMMERSE_*.rgba 是 iMMERSE 贴图的二进制转换。研究用，不随本项目分发。
-# 2026-09-15：git rm -r --cached，磁盘保留。发布的包走 package-amd-presr/experimental_lighting
-# （shaders/Lighting.hlsl 编译，自述「no translated effect code」），与此无关。
-
-# 取证构建产物（DLL/日志/obj）—— 回滚用，只留本地，不进仓库
-exports/review-s*/
-
-# 本地构建输出（构建脚本 + 打包器用的目录），不进仓库
-exports/build/
-
-# tools/build-release-local.cmd 的输出（OptiScaler.dll、obj、测试 exe、build.log）。
-# *.dll/*.obj/*.lib 已被下面的全局规则盖住，但 build.log 和 amd_submission_state.exe
-# 没有，`git add -A` 会扫进来。
-exports/release-local/
-
-/tools/minhook-master
-/tools/reshade-main
-
-# 旧的按版本命名的发布目录（r17/r18 等），本地留档用
-exports/release-r*/
+# 2026-09-15：git rm -r --cached，磁盘保留。发布的包走 assets/experimental_lighting
+# （Lighting.hlsl 编译成 GatherCS/ResolveCS.cso，自述「no translated effect code」），与此无关。
 
 # Release packaging output (local / CI artifact)
 dist/
@@ -66,7 +37,6 @@ dist/
 !OptiScaler-DLSSNR-PreSR-Multipass-main/external/directx_agility_sdk/lib/D3D12Core.dll
 
 # 编辑器/会话
-.claude/
 .vs/
 .vscode/
 *.code-workspace
@@ -76,18 +46,7 @@ dist/
 __pycache__/
 *.pyc
 
-exports/temporal-a*.log
-exports/review-s5/
-exports/review-s6/
-exports/review-s7/
-exports/review-s7-ks1/
-
-# Codex 会话导出与答复汇总 —— 外部代理的中间产物，随时重生成。
-# 2026-09-15：`git add -A` 曾把其中两个（`_codex_134944_last/prev.txt`）
-# 扫进 777dfcd；靠显式 `git add <文件>` 躲开不是办法，规则挡掉。
-exports/_codex_*
-
-# MSVC 中间产物 —— 可由 build-review-*.cmd 完全重建，不应进仓库。
+# MSVC 中间产物 —— 可由构建脚本完全重建，不应进仓库。
 # 2026-09-14：此前 `git add -A exports` 把 review-s*/obj/ 一路扫进来，
 # 单个 OptiScaler.pch 达 183 MB，直接导致 GitHub push 被 GH001 拒绝。
 **/obj/
@@ -99,24 +58,13 @@ exports/_codex_*
 
 
 
-# analysis/ 整个目录只留本地（2026-09-15 定）。
-# 原来这里有 30 条逐文件规则；一条整目录盖掉。目录里仍留着本地的
+# Local workspace material and generated output stay outside version control.
 analysis/
-
 .analysis-tools/
-
-# ---------------------------------------------------------------------------
-# 内部文档不进仓库（2026-09-15 定）：exports/ 与 .handoff/ 整个忽略，
-# GIT-REWRITE-STATUS.md 单条忽略。磁盘上都保留，只是不跟踪、不会随分支推上去。
-#
-#
-# 文档以后公开多少，另行决定——先把「不会被误推」这件事锁住。
-#
-# 注意：gitignore 对**已跟踪**的文件无效。这三个路径已用 `git rm --cached`
-# 取消跟踪，规则才真正生效。`.githooks/pre-commit` 拦住 `git add -f` 的绕过。
 exports/
 .handoff/
 GIT-REWRITE-STATUS.md
+/work/
 # D3D shader cache. Regenerated beside the hlsl on first use. Not shipped.
 third_party/lmxxf/shaders/shader-cache/
 
