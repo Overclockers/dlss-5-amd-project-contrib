@@ -125,5 +125,6 @@ class ResourceStateBook
     }
 
     size_t TrackedCount() const { return states.size(); }
+    void Forget(ID3D12Resource* resource) { states.erase(resource); }
 };
 } // namespace DlssNr::Submission

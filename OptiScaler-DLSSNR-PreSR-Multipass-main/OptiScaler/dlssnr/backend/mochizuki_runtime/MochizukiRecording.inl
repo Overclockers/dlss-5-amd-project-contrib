@@ -128,8 +128,14 @@ int32_t EnqueueHip(void* context, void* token, void* queue)
 {
     auto* s = static_cast<Session*>(context);
     auto* r = FindRecording(s, token);
-    if (!r || s->executing != token || r->executingQueue.Get() != queue)
+    if (!r || s->executing != token || (!s->inlineQueue && r->executingQueue.Get() != queue))
         return Fail(LMXXF_NR_INVALID_ARGUMENT, "Enqueue: Begin on this queue is required");
+    if (s->inlineQueue) {
+        auto* q = static_cast<ID3D12CommandQueue*>(queue);
+        if (!q || (q->GetDesc().Type != D3D12_COMMAND_LIST_TYPE_DIRECT && q->GetDesc().Type != D3D12_COMMAND_LIST_TYPE_COMPUTE))
+            return Fail(LMXXF_NR_INVALID_ARGUMENT, "Enqueue: direct/compute side queue required");
+        if (const auto rc = CheckExecutionDevice(s, q, "Enqueue queue"); rc != LMXXF_NR_OK) return rc;
+    }
     if (r->job.enqueued) return LMXXF_NR_OK;
     const auto now = GetTickCount64();
     const bool continuous = s->historyMotion && s->historyNetwork.lock() == r->network &&

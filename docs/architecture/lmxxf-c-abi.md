@@ -21,10 +21,12 @@
 
 ## 整包 ABI 契约
 
-宿主与 runtime 随整包覆盖安装，只接受当前 `LMXXF_NR_ABI_VERSION=3`、176 字节函数表和
-160 字节 FrameInfo（新增 guides/jitter/temporal flags）。旧 ABI v1/v2、旧函数表及历史帧尺寸直接拒绝；宿主不再降级或去掉曝光重试，
+宿主与 runtime 随整包覆盖安装，只接受当前 `LMXXF_NR_ABI_VERSION=5`、176 字节函数表、
+160 字节 FrameInfo 与 32 字节 Job（包含可选第一层输出）。v5 增加录制租约下的独立执行队列许可；
+它不改变结构尺寸，要求宿主证明输入捕获完成并同时保留游戏与网络两侧的完成凭证。
+旧 ABI v1/v2/v3/v4、旧函数表及历史帧尺寸直接拒绝；宿主不再降级或去掉曝光重试，
 版本不匹配时提示替换完整安装包。计时函数 `GetTimings` 放在本产品录制扩展之后，
-不能直接把上游 v1 的函数表当成本产品 v3 使用。
+不能直接把上游 v1 的函数表当成本产品 v5 使用。
 
 `LmxxfNrTimings` 沿用上游 fe4d1d73 的 24 字节载荷：valid、network_ms、frame_id。
 GetTimings 由渲染线程调用，首次请求才开启事件，返回最近完成的帧；UI 只读缓存。
@@ -38,7 +40,7 @@ GetTimings 由渲染线程调用，首次请求才开启事件，返回最近完
 - `gfx1201_target` 字段已标 DEPRECATED，不反映实际架构；实际架构用 `GetStatus` 查询。
 - `LMXXF_NR_CREATE_FLAG_ZERO_OUTPUT_FALLBACK` 用于独立串行诊断路径；与 `LMXXF_NR_CREATE_FLAG_RECORDING_LEASES` 互斥。产品宿主采用录制租约模式，执行错误会停止新 NR 录制，已提交资源继续保留到可证明安全。
 - Session 建立失败按 2、4、8… 次 Record 指数退避，上限 600 次（60 fps 下约 10 s）。
-- 录制的有效期由成功 Reset / 最终 Release 结束，GPU 完成与录制失效分别追踪；提交一次不会销毁可重放录制。见 [录制生命周期](lmxxf-recording-lifecycle.md)。v3 沿用 v2 租约，不使用旧 CancelUnsubmitted / Retire 接口回收。
+- 录制的有效期由成功 Reset / 最终 Release 结束，GPU 完成与录制失效分别追踪；提交一次不会销毁可重放录制。见 [录制生命周期](lmxxf-recording-lifecycle.md)。v5 沿用录制租约，不使用旧 CancelUnsubmitted / Retire 接口回收。
 - `LmxxfNrRuntime.cpp` / `LmxxfNrApi.h` / `LmxxfProductionOptions.h` 不在 sync 清单里，从上游到本仓库、从本仓库到上游都不会自动同步；上游若改了它们，我们不会自动知道。
 
 ## 改 ABI 时的验证

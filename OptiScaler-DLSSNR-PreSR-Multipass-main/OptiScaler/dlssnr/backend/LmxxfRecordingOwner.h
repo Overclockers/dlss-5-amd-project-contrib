@@ -2,6 +2,7 @@
 #include "LmxxfEvaluateCut.h"
 #include "../NrSessionActivity.h"
 #include "lmxxf_runtime/LmxxfNrApi.h"
+#include "NrInlineRecording.h"
 #include <memory>
 #include <vector>
 #include <array>
@@ -23,6 +24,19 @@ struct SessionOwner
     HMODULE module = nullptr;
     std::atomic<bool> failed { false };
     NrSessionActivity activity;
+    std::shared_ptr<InlineRecording::Resources> pendingInline;
+    std::shared_ptr<InlineRecording::Pipelines> inlinePipelines;
+    uint64_t inlineActivityToken = 0;
+    bool InlineBusy() {
+        if (!pendingInline) return false;
+        if (!pendingInline->Complete()) return true;
+        if (!pendingInline->Succeeded()) {
+            activity.Reset(); api.ResetHistory(context);
+            if (!pendingInline->WasAborted()) LOG_WARN("NR inline wait exhausted; original frame selected, history reset");
+        } else if (!failed) activity.Succeeded(inlineActivityToken);
+        pendingInline.reset();
+        return false;
+    }
     // Accessed under RecordingMutex. Preserve the first error on the callback
     // thread: GetLastError is thread-local and cannot be queried by the menu.
     Failure failure {};
@@ -72,12 +86,18 @@ inline std::vector<std::shared_ptr<Lease>>& Registry()
 inline bool CollectLocked();
 inline void ScheduleCollectionLocked() noexcept;
 
-struct Lease final : Submission::RecordingObserver
+struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this<Lease>
 {
     std::shared_ptr<SessionOwner> owner;
     void* job;
     Submission::RecordingIdentity identity;
     bool ready = false, invalidated = false, begun = false;
+    std::shared_ptr<InlineRecording::Resources> inlineResources;
+    bool inlineEnqueueFinished = false, executionReported = false;
+    uint64_t inlineResetSerial = 0, activeExecutionSerial = 0;
+    Submission::RecordingExecution inlineExecution {};
+    Microsoft::WRL::ComPtr<ID3D12CommandQueue> inlineQueue;
+    Microsoft::WRL::ComPtr<ID3D12Fence> inlineFence;
     uint64_t traceId = 0;
     void (*trace)(uint64_t, const char*, const void*, int32_t) noexcept = nullptr;
     unsigned traceExecutions = 0;
@@ -94,16 +114,89 @@ struct Lease final : Submission::RecordingObserver
             owner->RecordFailure("identity", E_UNEXPECTED, e.queue, "invalidated or mismatched recording");
             return E_UNEXPECTED;
         }
+        if (inlineResources && owner->InlineBusy()) return E_PENDING;
         tracing = traceId && traceExecutions < 2;
         if (tracing) ++traceExecutions;
         Trace("execute.begin", e.queue);
         enqueued = false;
+        if (inlineResources) {
+            inlineResetSerial = e.serial;
+            try { inlineResources->BeforeExecute(e.queue); }
+            catch (const std::exception& error) {
+                owner->RecordFailure("inline reset", E_FAIL, e.queue, error.what()); owner->failed = true; return E_FAIL;
+            }
+            inlineEnqueueFinished = executionReported = false;
+            owner->pendingInline = inlineResources;
+            owner->inlineActivityToken = activityToken;
+        }
         const int32_t rc = owner->api.BeginRecordingExecution(owner->context, job, e.queue);
         if (rc != LMXXF_NR_OK) owner->RecordFailure("BeginRecordingExecution", rc, e.queue);
         Trace("execute.admitted", e.queue, rc);
         begun = rc == LMXXF_NR_OK;
+        if (begun) activeExecutionSerial = e.serial;
         if (!begun) owner->failed = true;
         return begun ? S_OK : E_FAIL;
+    }
+    struct Work { std::shared_ptr<Lease> lease; HMODULE module = nullptr; };
+    static void CALLBACK InlineCallback(PTP_CALLBACK_INSTANCE instance, void* context)
+    {
+        std::unique_ptr<Work> work(static_cast<Work*>(context));
+        auto lease = work->lease;
+        try {
+            const bool captured = lease->inlineResources->WaitCapture();
+            std::lock_guard lock(Submission::RecordingMutex());
+            if (captured) {
+                Submission::RecordingExecution side {}; side.queue = lease->inlineResources->SideQueue();
+                lease->Between(side);
+            } else {
+                lease->owner->RecordFailure("inline capture", E_FAIL, nullptr, "input capture was not observed; network was not started");
+                lease->owner->failed = true;
+            }
+            lease->inlineResources->NetworkQueued(lease->enqueued);
+            lease->inlineEnqueueFinished = true;
+            if (lease->executionReported) lease->FinishInline();
+        } catch (const std::exception& error) {
+            std::lock_guard lock(Submission::RecordingMutex());
+            lease->owner->RecordFailure("inline worker", E_FAIL, nullptr, error.what()); lease->owner->failed = true;
+            try { lease->inlineResources->NetworkQueued(false); } catch (...) {}
+            lease->inlineEnqueueFinished = true;
+            if (lease->executionReported) lease->FinishInline();
+        }
+        const auto module = work->module;
+        work.reset(); lease.reset();
+        FreeLibraryWhenCallbackReturns(instance, module);
+    }
+    void ProducerSubmitted(const Submission::RecordingExecution&) noexcept override
+    {
+        if (!inlineResources || !begun || !ready) return;
+        HMODULE module = nullptr;
+        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                               reinterpret_cast<LPCWSTR>(&InlineCallback), &module)) {
+            owner->RecordFailure("inline worker module", E_FAIL, nullptr, "host module could not be retained"); owner->failed = true;
+            try { inlineResources->NetworkQueued(false); } catch (...) {}
+            inlineEnqueueFinished = true; return;
+        }
+        Work* work = nullptr;
+        try { work = new Work {shared_from_this(), module}; } catch (...) {}
+        if (!work || !TrySubmitThreadpoolCallback(&InlineCallback, work, nullptr)) {
+            delete work; FreeLibrary(module);
+            owner->RecordFailure("inline worker start", E_FAIL, nullptr, "threadpool submission failed"); owner->failed = true;
+            try { inlineResources->NetworkQueued(false); } catch (...) {}
+            inlineEnqueueFinished = true;
+        }
+    }
+    void FinishInline() noexcept
+    {
+        auto facts = inlineExecution;
+        facts.queue = inlineQueue.Get(); facts.fence = inlineFence.Get();
+        // The consumer was recorded in the same submitted native list as its capture.
+        facts.continuationSubmitted = facts.producerSubmitted && ready;
+        FinishExecution(facts);
+        inlineQueue.Reset(); inlineFence.Reset();
+        if (invalidated) {
+            owner->api.InvalidateRecording(owner->context, job);
+            if (CollectLocked()) ScheduleCollectionLocked();
+        }
     }
     void Between(const Submission::RecordingExecution& e) noexcept override
     {
@@ -131,6 +224,21 @@ struct Lease final : Submission::RecordingObserver
     }
     void Executed(const Submission::RecordingExecution& e) noexcept override
     {
+        // A rejected overlapping replay must not end the still-running execution.
+        if (inlineResources && begun && activeExecutionSerial != e.serial) return;
+        if (inlineResources && begun && ready && e.producerSubmitted) {
+            inlineExecution = e; inlineQueue = e.queue; inlineFence = e.fence;
+            inlineResources->GameSubmitted(e.fence, e.fenceValue, e.status);
+            executionReported = true;
+            if (inlineEnqueueFinished) FinishInline();
+            return;
+        }
+        if (inlineResources && inlineResetSerial == e.serial && (!ready || !e.producerSubmitted))
+            inlineResources->CertifyWithoutNetwork(e.producerSubmitted ? e.fence : nullptr, e.fenceValue, e.status);
+        FinishExecution(e);
+    }
+    void FinishExecution(const Submission::RecordingExecution& e) noexcept
+    {
         if (!begun) {
             if (FAILED(e.status))
                 owner->RecordFailure("ExecuteCommandLists", e.status, e.queue,
@@ -151,16 +259,19 @@ struct Lease final : Submission::RecordingObserver
         Trace("retire.end", e.queue, rc);
         tracing = false;
         begun = false;
-        if (neural && ready && enqueued && e.producerSubmitted && e.continuationSubmitted &&
+        if (!inlineResources && neural && ready && enqueued && e.producerSubmitted && e.continuationSubmitted &&
             SUCCEEDED(e.status) && rc == LMXXF_NR_OK && !owner->failed.load(std::memory_order_acquire))
             owner->activity.Succeeded(activityToken);
-        else if (neural)
+        else if (!inlineResources && neural)
             owner->activity.Reset();
     }
     void Invalidated(Submission::RecordingIdentity id) noexcept override
     {
         if (invalidated || !(id == identity)) return;
         invalidated = true;
+        // A Reset may follow submission before the worker reaches Enqueue. Keep
+        // the runtime job executable until its deferred End event has been recorded.
+        if (inlineResources && begun) return;
         const int32_t rc = owner->api.InvalidateRecording(owner->context, job);
         if (rc != LMXXF_NR_OK) {
             owner->RecordFailure("InvalidateRecording", rc, nullptr);
@@ -177,7 +288,9 @@ inline bool CollectLocked()
     for (auto it = leases.begin(); it != leases.end();)
     {
         auto& lease = *it;
+        lease->owner->InlineBusy();
         if (!lease->invalidated) { ++it; continue; }
+        if (lease->begun || (lease->inlineResources && !lease->inlineResources->Complete())) { pending = true; ++it; continue; }
         const int32_t rc = lease->owner->api.CollectRecording(lease->owner->context, lease->job);
         if (rc == LMXXF_NR_OK || rc == LMXXF_NR_DEVICE_LOST)
         {
@@ -229,11 +342,12 @@ inline void Collect()
 // Register ownership before any NR commands are appended. A failed later Record
 // still leaves its observer attached, so partial private work is tracked safely.
 inline std::shared_ptr<Lease> Attach(const std::shared_ptr<SessionOwner>& owner, void* job,
-                                     Submission::ILogicalCommandList* logical)
+                                     Submission::ILogicalCommandList* logical,
+                                     std::shared_ptr<InlineRecording::Resources> inlineResources = {})
 {
     // No private commands have been appended yet. An ineligible recording must
     // not acquire an observer or retain a job merely to be rejected after input writes.
-    if (!logical || logical->IsSplitIneligible())
+    if (!logical || (!inlineResources && logical->IsSplitIneligible()))
     {
         owner->api.InvalidateRecording(owner->context, job);
         owner->api.CollectRecording(owner->context, job);
@@ -243,6 +357,7 @@ inline std::shared_ptr<Lease> Attach(const std::shared_ptr<SessionOwner>& owner,
     try
     {
         lease = std::make_shared<Lease>(owner, job, logical->Identity());
+        lease->inlineResources = std::move(inlineResources);
         Registry().push_back(lease);
     }
     catch (...)

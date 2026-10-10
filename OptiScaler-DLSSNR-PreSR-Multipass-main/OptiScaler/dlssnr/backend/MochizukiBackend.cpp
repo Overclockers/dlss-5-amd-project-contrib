@@ -92,7 +92,8 @@ struct MochizukiBackend::Impl
         setLogging(Config::Instance()->LogToFile.value_or_default());
         if (!std::filesystem::is_regular_file(directory / L"dlssnr-amd/dlssnr.bin"))
         { Status("mochizuki: model missing; run the Mochizuki model installer (see docs/mochizuki.md)"); return false; }
-        LmxxfNrCreateInfo ci {sizeof ci, device.Get(), queue.Get(), directory.c_str(), LMXXF_NR_CREATE_FLAG_RECORDING_LEASES};
+        LmxxfNrCreateInfo ci {sizeof ci, device.Get(), queue.Get(), directory.c_str(),
+                            LMXXF_NR_CREATE_FLAG_RECORDING_LEASES | LMXXF_NR_CREATE_FLAG_INLINE_QUEUE};
         void* session = nullptr;
         if (api.Create(&ci, &session) != LMXXF_NR_OK) { Error("Create failed"); return false; }
         MochizukiNrInfo contract {sizeof contract};
@@ -172,9 +173,10 @@ ID3D12Resource* MochizukiBackend::Record(ID3D12GraphicsCommandList* cmd, const A
     return RecordLayers(cmd, input, settings, nullptr);
 }
 
-ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, const AmdPreSr::Frame& input,
+ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, const AmdPreSr::Frame& incoming,
                                               const AmdPreSr::Settings&, ID3D12Resource** first)
 {
+    auto input = incoming;
     if (first) *first = nullptr;
     std::lock_guard lifetime(Submission::RecordingMutex());
     LmxxfRecording::Collect();
@@ -187,10 +189,25 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     if (!cmd || !input.colour) return nullptr;
     Microsoft::WRL::ComPtr<Submission::ILogicalCommandList> logical;
     Microsoft::WRL::ComPtr<Submission::IRecordingResources> resources;
-    if (FAILED(cmd->QueryInterface(IID_PPV_ARGS(&logical))) || logical->IsSplitIneligible() ||
-        FAILED(cmd->QueryInterface(IID_PPV_ARGS(&resources))) || !resources->CanAppendCompute())
-    { p->Status("mochizuki: recording boundary unavailable; original frame"); return nullptr; }
+    if (FAILED(cmd->QueryInterface(IID_PPV_ARGS(&logical))) || FAILED(cmd->QueryInterface(IID_PPV_ARGS(&resources))))
+    { p->Status("mochizuki: recording proxy unavailable; original frame"); return nullptr; }
+    const bool inlineMode = Config::Instance()->NrInline.value_or_default();
+    if (logical->IsSplitIneligible()) logical->TraceOpenQueries();
+    InlineRecording::StateScope inlineState;
+    if (inlineMode) {
+        const bool motion = !input.motionJittered && Config::Instance()->MochizukiTemporal.value_or_default();
+        if (FAILED(inlineState.Begin(cmd, input, motion, false, false))) {
+            p->Status(std::string("mochizuki: inline unavailable: ") + inlineState.Reason()); return nullptr;
+        }
+    } else if (logical->IsSplitIneligible() || !resources->CanAppendCompute()) {
+        const char* reason = logical->IsSplitIneligible() ? logical->SplitRejectionReason() : "compute append unsupported";
+        p->Status(std::string("mochizuki: recording boundary unavailable: ") + reason + "; original frame");
+        static unsigned rejected = 0;
+        if (++rejected <= 5 || rejected % 1000 == 0) LOG_WARN("mochizuki recording rejected: {}", reason);
+        return nullptr;
+    }
     if (!p->Ensure()) return nullptr;
+    if (p->owner->InlineBusy()) { p->Status("mochizuki: previous inline execution pending; original frame"); return nullptr; }
     auto* cfg = Config::Instance();
     p->setLogging(cfg->LogToFile.value_or_default());
     MochizukiNrFrameInfo frame {};
@@ -240,7 +257,19 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
         }
         return nullptr;
     }
-    auto lease = LmxxfRecording::Attach(p->owner, job.handle, logical.Get());
+    std::shared_ptr<InlineRecording::Resources> inlineResources;
+    if (inlineMode) {
+        try {
+            inlineResources = std::make_shared<InlineRecording::Resources>(p->device.Get(), input.colour,
+                static_cast<ID3D12Resource*>(job.private_output), static_cast<ID3D12Resource*>(job.first_pass_output),
+                frame.color_width, frame.color_height, p->owner->inlinePipelines);
+            p->owner->inlinePipelines = inlineResources->PipelineCache();
+        } catch (const std::exception& error) {
+            p->api.InvalidateRecording(p->owner->context, job.handle); p->api.CollectRecording(p->owner->context, job.handle);
+            p->Status(std::string("mochizuki: inline unavailable: ") + error.what()); return nullptr;
+        }
+    }
+    auto lease = LmxxfRecording::Attach(p->owner, job.handle, logical.Get(), inlineResources);
     if (!lease) { p->Status("mochizuki: this recording already owns NR work"); return nullptr; }
     lease->neural = true;
     if (p->tracedRecordings < 2)
@@ -251,16 +280,19 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     }
     auto* invocation = AmdPreSr::GraphicsSnap::GraphicsInvocationFor(reinterpret_cast<uint64_t>(cmd));
     if (invocation) { invocation->commandsRecorded = true; invocation->outcome = "recording_attempted"; }
-    if (p->api.RecordInputs(p->owner->context, job.handle, cmd) != LMXXF_NR_OK ||
-        LmxxfCut::TrySplitAtEvaluate(cmd) != S_OK ||
+    if (p->api.RecordInputs(p->owner->context, job.handle, cmd) != LMXXF_NR_OK)
+    { p->failed = true; p->Error("input recording failed"); return nullptr; }
+    if (inlineResources) { inlineResources->RecordCapture(cmd); inlineResources->RecordWait(cmd); }
+    if ((!inlineResources && LmxxfCut::TrySplitAtEvaluate(cmd) != S_OK) ||
         p->api.RecordOutputs(p->owner->context, job.handle, cmd) != LMXXF_NR_OK)
     { p->failed = true; p->Error("recording failed"); return nullptr; }
+    if (inlineResources) inlineResources->RecordSelect(cmd, input.colourState);
     lease->ready = true;
     if (lease->trace) SubmissionTrace(frameId, "record.ready", cmd, 0);
     if (invocation) invocation->outcome = "recorded";
     p->Info();
-    if (first) *first = static_cast<ID3D12Resource*>(job.first_pass_output);
-    return static_cast<ID3D12Resource*>(job.private_output);
+    if (first) *first = inlineResources ? inlineResources->FirstTexture() : static_cast<ID3D12Resource*>(job.first_pass_output);
+    return inlineResources ? inlineResources->OutputTexture() : static_cast<ID3D12Resource*>(job.private_output);
 }
 void MochizukiBackend::Submitted(ID3D12CommandQueue*, UINT, ID3D12CommandList* const*) { LmxxfRecording::Collect(); }
 bool MochizukiBackend::PollRelease() { LmxxfRecording::Collect(); return true; }

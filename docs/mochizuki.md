@@ -4,8 +4,10 @@ This backend runs mochizuki0323's Vulkan network on the game's AMD adapter while
 game stays on native D3D12. This integration targets Windows and RDNA4. Other GPU
 architectures and individual games are not validated by this integration.
 Recordings with unsupported state (including enhanced barriers or an active render
-pass) pass through without NR; this backend does not inherit lmxxf's experimental
-enhanced-barrier override.
+pass) pass through without NR on the ordinary split path. Experimental `NrInline=true`
+adds a separate same-list path, including validated whole-resource enhanced-layout
+interop when `LmxxfAllowEnhancedBarriers=true`; partial/pending or unknown layouts
+remain unsupported. See [inline execution](architecture/nr-inline-recording.md).
 
 The network core and shaders come from the
 [official repository](https://github.com/mochizuki0323/DLSSNR-AMD).

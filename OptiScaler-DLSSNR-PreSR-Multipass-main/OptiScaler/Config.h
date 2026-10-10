@@ -391,6 +391,7 @@ class Config
     // SYNC_SPLIT barrier group across two submits. Default false (fail-closed reject).
     // true opts in for games that need those lists on the NR path.
     CustomOptional<bool> LmxxfAllowEnhancedBarriers { false };
+    CustomOptional<bool> NrInline { false }; // Experimental same-list execution for lmxxf/Mochizuki.
     // Wrap host CreateCommandList results before the swapchain exists.
     // Missing = engine whitelist (Unreal + Forza). false = never. true = force for any engine.
     // Other engines (e.g. Yan Yun) can crash with early ArmCreate + wrap. Restart after change.

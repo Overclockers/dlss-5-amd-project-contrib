@@ -50,6 +50,7 @@ int main(int argc, char **argv)
     Require(telemetry.api.SetEnabled(nullptr, 1) == LMXXF_NR_INVALID_ARGUMENT, "timing requires session");
 
     LmxxfNrApi rejected {}; rejected.struct_size = sizeof rejected;
+    Require(getApi(4, &rejected) == LMXXF_NR_UNSUPPORTED_ABI, "ABI4 rejected; install complete package");
     Require(getApi(3, &rejected) == LMXXF_NR_UNSUPPORTED_ABI, "ABI3 rejected; install complete package");
     static_assert(sizeof(LmxxfNrJob) == 32, "v4 first-pass job output");
     Require(getApi(2, &rejected) == LMXXF_NR_UNSUPPORTED_ABI, "ABI2 rejected; install complete package");

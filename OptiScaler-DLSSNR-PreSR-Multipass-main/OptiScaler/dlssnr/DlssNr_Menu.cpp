@@ -56,6 +56,7 @@ static void ResetSharedNrDefaults(Config* config)
     ResetSharedEffectsDefaults(config);
     config->NrTimingEnabled = std::optional<bool>{};
     config->NrTimingLog = std::optional<bool>{};
+    config->NrInline.reset();
 }
 
 // The "(?)" marker every control carries, matching the rest of the menu.
@@ -598,6 +599,17 @@ void RenderMenu(Config* config, float menuResScale)
                     "Network execution only, not whole NR or frame latency. Detailed timing is in Diagnostics.");
             }
             MenuUi::SeparatorText(PipelineUi::SectionName(page));
+            if ((isLmxxf || kind == Backend::Kind::Mochizuki) && page == PipelineUi::Section::Input) {
+                bool inlineMode = config->NrInline.value_or_default();
+                if (MenuUi::Checkbox("Experimental inline execution", &inlineMode)) config->NrInline = inlineMode;
+                HelpMarker("Keeps the game command list intact. Bounded wait selects the original frame on timeout."
+                           "\nShared by lmxxf and Mochizuki. INI: NrInline. Off uses command-list splitting.");
+                bool enhanced = config->LmxxfAllowEnhancedBarriers.value_or_default();
+                if (MenuUi::Checkbox("Allow enhanced barriers", &enhanced)) {
+                    config->LmxxfAllowEnhancedBarriers = enhanced; SetAllowEnhancedBarriers(enhanced);
+                }
+                HelpMarker("Experimental. Inline execution restores known whole-resource layouts; partial or pending layouts are rejected.");
+            }
             if (page == PipelineUi::Section::Output) RenderSharedOutputEffects(config);
             if (kind == Backend::Kind::Mochizuki) {
                 RenderMochizukiMenu(config, page, status);
@@ -659,6 +671,8 @@ void RenderMenu(Config* config, float menuResScale)
                     resetOption(config->LmxxfPdl);
                     CfgKey::PutEnvAlias(CfgKey::Pdl, config->LmxxfPdl.value_or_default());
                     resetOption(config->LmxxfAllowEnhancedBarriers);
+                    resetOption(config->NrInline);
+                    SetAllowEnhancedBarriers(config->LmxxfAllowEnhancedBarriers.value_or_default());
                     resetOption(config->LmxxfEarlyExeWrap);
                 }
                 else {
@@ -1292,6 +1306,7 @@ void RenderMenu(Config* config, float menuResScale)
                         if (MenuUi::Checkbox("Allow enhanced barriers", &eb))
                         {
                             config->LmxxfAllowEnhancedBarriers = eb;
+                            SetAllowEnhancedBarriers(eb);
                         }
                         HelpMarker("Leave off unless a game needs NR on lists that use"
                                    "\nenhanced barriers (may corrupt state / TDR). Restart.");

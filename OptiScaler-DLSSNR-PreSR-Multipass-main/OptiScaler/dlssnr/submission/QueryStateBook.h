@@ -50,5 +50,10 @@ class QueryStateBook
     }
 
     bool CanSplit() const { return open.empty(); }
+    size_t OpenCount() const { return open.size(); }
+    template<class F> void ForEachOpen(F&& fn) const
+    {
+        for (const auto& key : open) fn(key.heap, key.type, key.index);
+    }
 };
 } // namespace DlssNr::Submission

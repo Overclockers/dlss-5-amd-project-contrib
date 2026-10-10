@@ -1578,6 +1578,7 @@ struct Session
     // session, so it can always be freed.
     std::atomic<bool> gpuUsed { false };
     bool zeroOutputFallback = false; // Create's LMXXF_NR_CREATE_FLAG_ZERO_OUTPUT_FALLBACK: frames pass through
+    bool inlineQueue = false;
     TestHooks hooks;
     std::atomic<uint32_t> errors { 0 }; // failed calls and passed-through frames, for the log's rate limit
 
@@ -3789,12 +3790,14 @@ int32_t Create(const LmxxfNrCreateInfo* info, void** context)
         return Fail(LMXXF_NR_INVALID_ARGUMENT, "Create: struct_size mismatch");
     if (!info->device || !info->queue)
         return Fail(LMXXF_NR_INVALID_ARGUMENT, "Create: device and queue required");
-    if (info->flags != LMXXF_NR_CREATE_FLAG_RECORDING_LEASES)
+    if (info->flags != LMXXF_NR_CREATE_FLAG_RECORDING_LEASES &&
+        info->flags != (LMXXF_NR_CREATE_FLAG_RECORDING_LEASES | LMXXF_NR_CREATE_FLAG_INLINE_QUEUE))
         return Fail(LMXXF_NR_INVALID_ARGUMENT, "Create: current package recording ABI required");
     auto* s = new (std::nothrow) Session;
     if (!s)
         return Fail(LMXXF_NR_FAILED, "Create: out of memory");
     s->zeroOutputFallback = true;
+    s->inlineQueue = (info->flags & LMXXF_NR_CREATE_FLAG_INLINE_QUEUE) != 0;
     s->assets = info->assets_directory ? info->assets_directory : DataDirectory();
     s->hooks = Hooks();
     static_cast<IUnknown*>(info->device)->QueryInterface(IID_PPV_ARGS(&s->device));

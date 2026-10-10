@@ -2,6 +2,7 @@
 
 #include "Config.h"
 #include "ConfigKeys.h"
+#include "dlssnr/submission/SubmissionPolicy.h"
 
 #include "Util.h"
 
@@ -333,6 +334,8 @@ bool Config::Reload(std::filesystem::path iniPath)
             LmxxfAutoExposure.set_from_config(readBool("DlssNr", "LmxxfAutoExposure"));
             LmxxfAutoExposureScale.set_from_config(readFloat("DlssNr", "LmxxfAutoExposureScale"));
             LmxxfAllowEnhancedBarriers.set_from_config(readBool("DlssNr", "LmxxfAllowEnhancedBarriers"));
+            SetAllowEnhancedBarriers(LmxxfAllowEnhancedBarriers.value_or_default());
+            NrInline.set_from_config(readBool(CfgKey::kSection, CfgKey::NrInline));
             LmxxfEarlyExeWrap.set_from_config(readBool("DlssNr", "LmxxfEarlyExeWrap"));
             DlssNrMaxRatio.set_from_config(readFloat("DlssNr", "MaxRatio"));
             DlssNrTransfer.set_from_config(readUInt("DlssNr", "Transfer"));
@@ -1761,6 +1764,8 @@ bool Config::SaveIni()
                  GetFloatValue(Instance()->LmxxfAutoExposureScale.value_for_config()).c_str());
     ini.SetValue("DlssNr", "LmxxfAllowEnhancedBarriers",
                  GetBoolValue(Instance()->LmxxfAllowEnhancedBarriers.value_for_config()).c_str());
+    ini.SetValue(CfgKey::kSection, CfgKey::NrInline,
+                 GetBoolValue(Instance()->NrInline.value_for_config()).c_str());
     if (auto earlyWrap = Instance()->LmxxfEarlyExeWrap.value_for_config(); earlyWrap.has_value())
         ini.SetValue("DlssNr", "LmxxfEarlyExeWrap", GetBoolValue(earlyWrap).c_str());
     ini.SetValue("DlssNr", "AmdGraphicsUnsafe", GetIntValue(Instance()->AmdGraphicsUnsafe.value_for_config()).c_str());

@@ -7,6 +7,7 @@ if /i "%~1"=="abi" (
 )
 call tests\_lib\msvc-env.cmd || exit /b 1
 if not exist exports\mochizuki-tests mkdir exports\mochizuki-tests
+if /i "%~1"=="inline" goto inline
 if /i "%~1"=="hdr-shader" goto hdrshader
 cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /I OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler tests/mochizuki/runtime.cpp /Foexports/mochizuki-tests/runtime.obj /Feexports/mochizuki-tests/runtime.exe /link d3d12.lib dxgi.lib || exit /b 1
 if /i "%~1"=="destroy-tail" goto destroytail
@@ -37,6 +38,16 @@ if /i "%~2"=="budget" set "MZ_TEST_UPGRADE_REFUSALS=1"
 if /i "%~2"=="oom" set "MZ_TEST_UPGRADE_OOM_ONCE=1"
 if /i "%~2"=="frame-budget" set "MZ_TEST_FRAME_BUDGET_ONCE=1"
 exports\mochizuki-tests\runtime.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" --pass-switch "%MOCHI_PASS_MODE%"
+exit /b %errorlevel%
+
+:inline
+set "INCLUDE=%INCLUDE%;%CD%"
+set "MOCHI_INLINE_RUNTIME=%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll"
+if not "%~2"=="" set "MOCHI_INLINE_RUNTIME=%~f2"
+cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /I OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/include tests/lmxxf/nr_inline_runtime_gpu.cpp /Foexports/mochizuki-tests/nr_inline_runtime_gpu.obj /Feexports/mochizuki-tests/nr_inline_runtime_gpu.exe /link d3d12.lib dxgi.lib dxguid.lib d3dcompiler.lib OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/library/detours/detours.lib || exit /b 1
+exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki
+if errorlevel 1 exit /b 1
+exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --timeout
 exit /b %errorlevel%
 
 :startup

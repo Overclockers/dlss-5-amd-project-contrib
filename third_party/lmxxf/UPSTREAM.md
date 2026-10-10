@@ -11,8 +11,11 @@ last completed integration; `sync-state.json` records any pending attempt.
 
 ## Current ownership after PR #12
 
-The person-partition experiment adds one explicit, opt-in interface patch
-(`first-pass-output.patch`) on this unchanged upstream base. No file pins are
+The product adds two explicit, opt-in interface patches (`first-pass-output.patch`
+and `inline-side-queue.patch`) on this unchanged upstream base. The latter lets
+recording leases use a same-device side queue after host capture proof; game and
+side completion remain host-owned. See [inline recording](../../docs/architecture/nr-inline-recording.md).
+No inference module/arithmetic change is involved. No file pins are
 restored. The zero-source-patch description below records the PR #12 baseline;
 current ownership and hardware acceptance limits are documented in
 [person partition](../../docs/architecture/nr-person-partition.md).
@@ -22,7 +25,8 @@ final-pass auxiliary interface. The current integration targets its corrective
 follow-up `48a41fccb89300cd6636b16bc7b86010384c4cc1`.
 [Review, exact-source proof and validation](../../docs/lmxxf-pr12-merged-review.md).
 
-`tools/lmxxf-sync/manifest.json` has no pinned files and no local source patches.
+`tools/lmxxf-sync/manifest.json` has no pinned files; it replays the two optional
+interface patches described above.
 All selected headers (including `hip_d3d12_bridge.h`), top-level HIP sources and
 includes, and top-level HLSL follow the resolved official SHA. Missing required
 files fail before vendor mutation. New dependencies must be reviewed and added

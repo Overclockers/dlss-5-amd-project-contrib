@@ -684,3 +684,11 @@ was satisfactory; three-pass clothing flicker remains unresolved and is not
 claimed fixed. Shared Overall Intensity still applies after person composition.
 The release asset preparer fetches the fixed OpenCV Zoo PP model with SHA256
 verification; both models and their licenses remain in the package.
+
+## 2026-10-11 · 保留切分，增加默认关闭的内联执行
+
+- **决定**：lmxxf/Mochizuki 共用 `NrInline` 实验选项，默认关闭。保留查询未闭合时的切分保护，不人工 End/Begin 游戏查询、不丢弃前半段结果。
+- **实现**：独立 D3D12 compute 队列确认输入捕获后启动 HIP/Vulkan；游戏列表有限等待并冻结输出选择，迟到则使用本帧原始颜色。已知完整增强布局经 COMMON 互操作后恢复；未知、局部或未完成布局拒绝。ABI v5 要求整包匹配。
+- **验证**：RX 9070 XT 上真实 HIP/Vulkan 输出与切分基线哈希一致，跨队列重放、捕获前 Reset、双侧完成回收、查询保留、有限等待耗尽和第一层原帧回退通过。补丁在原官方 pin 上严格重放并与 vendor 逐字节匹配；内核及模块配方未变。
+- **边界**：红沙本体、其它驱动/适配器、完整 temporal/multi-pass 与长时间热切压力尚未验收；不宣称红沙已经兼容或可以正式发布。人物分区原有硬件/语义蒙版验收延期保留。
+- **落在**：[内联执行](architecture/nr-inline-recording.md)、`NrInlineRecording.h`、录制代理/所有权、`inline-side-queue.patch` 与已接入运行入口的专项测试。

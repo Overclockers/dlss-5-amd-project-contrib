@@ -1112,6 +1112,7 @@ struct Session
     ID3D12Resource *decodeDisplay = nullptr;
     Job job {};
     bool recordingLeases = false;
+    bool inlineQueue = false;
     Job* preparing = nullptr;
     std::map<void*, std::unique_ptr<RecordingJob>> recordings;
     std::shared_ptr<RecordingChain> recordingChain;
@@ -1569,8 +1570,11 @@ int32_t Create(const LmxxfNrCreateInfo *info, void **context)
         *context = nullptr;
         if (info->struct_size != sizeof(LmxxfNrCreateInfo))
             return Fail(LMXXF_NR_INVALID_ARGUMENT, "Create: struct_size mismatch");
-        if (info->flags & ~(LMXXF_NR_CREATE_FLAG_ZERO_OUTPUT_FALLBACK | LMXXF_NR_CREATE_FLAG_RECORDING_LEASES))
+        if (info->flags & ~(LMXXF_NR_CREATE_FLAG_ZERO_OUTPUT_FALLBACK | LMXXF_NR_CREATE_FLAG_RECORDING_LEASES |
+                            LMXXF_NR_CREATE_FLAG_INLINE_QUEUE))
             return Fail(LMXXF_NR_INVALID_ARGUMENT, "Create: unknown flags");
+        if ((info->flags & LMXXF_NR_CREATE_FLAG_INLINE_QUEUE) && !(info->flags & LMXXF_NR_CREATE_FLAG_RECORDING_LEASES))
+            return Fail(LMXXF_NR_INVALID_ARGUMENT, "Create: inline queue requires recording leases");
         if ((info->flags & LMXXF_NR_CREATE_FLAG_RECORDING_LEASES) &&
             (info->flags & LMXXF_NR_CREATE_FLAG_ZERO_OUTPUT_FALLBACK))
             return Fail(LMXXF_NR_INVALID_ARGUMENT, "Create: recording leases cannot use legacy blocking recovery");
@@ -1595,6 +1599,7 @@ int32_t Create(const LmxxfNrCreateInfo *info, void **context)
 
         auto *session = new Session;
         session->recordingLeases = (info->flags & LMXXF_NR_CREATE_FLAG_RECORDING_LEASES) != 0;
+        session->inlineQueue = (info->flags & LMXXF_NR_CREATE_FLAG_INLINE_QUEUE) != 0;
         session->zeroOutputFallback = (info->flags & LMXXF_NR_CREATE_FLAG_ZERO_OUTPUT_FALLBACK) != 0;
         session->assetsDir = assets;
         session->modulesDir = modulesDir;
@@ -1888,6 +1893,7 @@ int32_t PrepareFrame(void *context, const LmxxfNrFrameInfo *info, LmxxfNrJob *jo
             session->bridge->Create(session->queue, opt, {});
             session->bridge->SetAdaptiveReuseAllowed(!requestHistory);
             if (session->recordingLeases) session->bridge->EnableRecordingLeases();
+            if (session->inlineQueue) session->bridge->EnableSideQueueSubmission();
             ++session->bridgeCreates;
             session->hipPrepared = true;
             session->vitByteStream = opt.vit_byte_stream;
@@ -2189,6 +2195,7 @@ int32_t PrepareFrame(void *context, const LmxxfNrFrameInfo *info, LmxxfNrJob *jo
                 session->bridge->Create(session->queue, opt, {});
                 session->bridge->SetAdaptiveReuseAllowed(!requestHistory);
                 if (session->recordingLeases) session->bridge->EnableRecordingLeases();
+                if (session->inlineQueue) session->bridge->EnableSideQueueSubmission();
                 ++session->bridgeCreates;
                 session->hipPrepared = true;
                 session->vitByteStream = opt.vit_byte_stream;
@@ -2533,8 +2540,17 @@ int32_t EnqueueHip(void *context, void *job, void *command_queue)
         {
             auto* lease = static_cast<RecordingJob*>(j);
             if (!lease->executing || !command_queue ||
-                !NativeSameDevice(static_cast<ID3D12CommandQueue*>(command_queue), lease->executionQueue))
+                (!session->inlineQueue && !NativeSameDevice(static_cast<ID3D12CommandQueue*>(command_queue), lease->executionQueue)))
                 return Fail(LMXXF_NR_INVALID_ARGUMENT, "EnqueueHip: no recording execution");
+            if (session->inlineQueue) {
+                auto* side = static_cast<ID3D12CommandQueue*>(command_queue);
+                ID3D12Device* dev = nullptr; const auto hr = side->GetDevice(IID_PPV_ARGS(&dev));
+                const bool same = SUCCEEDED(hr) && dev && NativeSameDevice(dev, session->device);
+                if (dev) dev->Release();
+                const auto type = side->GetDesc().Type;
+                if (!same || (type != D3D12_COMMAND_LIST_TYPE_COMPUTE && type != D3D12_COMMAND_LIST_TYPE_DIRECT))
+                    return Fail(LMXXF_NR_INVALID_ARGUMENT, "EnqueueHip: side queue device/type mismatch");
+            }
             if (!j->codec_passthrough)
             {
                 auto* bridge = lease->chain->bridge.get();

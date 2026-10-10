@@ -64,7 +64,9 @@ class LmxxfBackend final : public Host
                                      const AmdPreSr::Settings &);
 
     bool EnsureRuntime();
-    ID3D12Resource *FinishRecord(ID3D12GraphicsCommandList *recordCmd, void *jobHandle, void *privateOutput);
+    ID3D12Resource *FinishRecord(ID3D12GraphicsCommandList *recordCmd, void *jobHandle, void *privateOutput,
+                                const AmdPreSr::Frame* inlineFrame = nullptr, void* firstPass = nullptr,
+                                ID3D12Resource** first = nullptr);
     bool EnsureSession();
     void NoteSessionFailure();
     bool NoteEnqueueRecoveries();

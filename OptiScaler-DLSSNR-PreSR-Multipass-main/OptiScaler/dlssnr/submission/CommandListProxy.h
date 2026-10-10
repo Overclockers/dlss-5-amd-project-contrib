@@ -3,14 +3,15 @@
 #include "ContinuationState.h"
 #include "ResourceStateBook.h"
 #include "QueryStateBook.h"
+#include "SubmissionPolicy.h"
+#include "EnhancedBarrierBook.h"
+#include <cstring>
+#include <algorithm>
 #include <atomic>
 #include <memory>
 #include <wrl/client.h>
 // Enhanced-barrier policy (host sets from LmxxfAllowEnhancedBarriers; no Config.h include here).
 // Fail-closed default: split state does not model layout/access, so leave those lists off NR.
-inline std::atomic<bool> g_allowEnhancedBarriers { false };
-inline void SetAllowEnhancedBarriers(bool on) { g_allowEnhancedBarriers.store(on, std::memory_order_release); }
-inline bool AllowEnhancedBarriers() { return g_allowEnhancedBarriers.load(std::memory_order_acquire); }
 
 #ifndef LOG_WARN
 #define LOG_WARN(...) ((void)0)
@@ -46,6 +47,9 @@ ILogicalCommandList : public IUnknown
     virtual ID3D12GraphicsCommandList *STDMETHODCALLTYPE RecordingNativeList(void) = 0;
     virtual RecordingIdentity STDMETHODCALLTYPE Identity(void) = 0;
     virtual HRESULT STDMETHODCALLTYPE ObserveRecording(std::shared_ptr<RecordingObserver> observer) = 0;
+    virtual void STDMETHODCALLTYPE TraceOpenQueries() = 0;
+    virtual HRESULT STDMETHODCALLTYPE PrepareUnsplitBatch(ID3D12CommandQueue* queue) = 0;
+    virtual void STDMETHODCALLTYPE CompleteUnsplitBatch(ID3D12CommandQueue* queue, HRESULT submissionStatus) = 0;
 };
 
 MIDL_INTERFACE("8e54c39a-4a7e-4c2e-9c8f-63fa758a610e")
@@ -54,6 +58,11 @@ IRecordingResources : public IUnknown
     virtual HRESULT STDMETHODCALLTYPE ObserveResources(std::shared_ptr<RecordingObserver> observer) = 0;
     virtual bool STDMETHODCALLTYPE InContinuation() = 0;
     virtual bool STDMETHODCALLTYPE CanAppendCompute() = 0;
+    virtual bool STDMETHODCALLTYPE CanRecordInline() = 0;
+    virtual const char* STDMETHODCALLTYPE InlineRejectionReason() = 0;
+    virtual HRESULT STDMETHODCALLTYPE BeginInlineState(UINT count, ID3D12Resource** resources,
+                                                        D3D12_RESOURCE_STATES* states) = 0;
+    virtual void STDMETHODCALLTYPE EndInlineState() = 0;
 };
 
 class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogicalCommandList, public IRecordingResources
@@ -63,6 +72,8 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
     const uint64_t stableIdentity = ++nextIdentity;
     uint64_t executionSerial = 0;
     std::shared_ptr<RecordingObservers> recordingObserver;
+    std::shared_ptr<RecordingObservers> batchObserver;
+    RecordingExecution batchExecution {};
     LogicalList logical;
     ContinuationState contState;
     ResourceStateBook resBook;
@@ -71,10 +82,46 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
     bool renderPassActive = false, enhancedBarriersSeen = false;
     std::atomic<bool> rawInterfaceEscaped { false }; // Lifetime-wide; an alias can outlive Reset.
     const char *splitIneligibleReason = nullptr;
+    bool inlineUnsafe = false, inlineStateActive = false;
+    const char* inlineUnsafeReason = nullptr;
+    const char* inlineRejection = "eligible";
+    ContinuationState inlineState;
+    ContinuationState& TrackedState() { return inlineStateActive ? inlineState : contState; }
+    EnhancedBarrierBook enhancedBook;
+    std::vector<std::pair<ID3D12Resource*, EnhancedBarrierBook::State>> inlineLayouts;
+
+    void TransitionEnhanced(ID3D12GraphicsCommandList7* list, ID3D12Resource* resource,
+                            EnhancedBarrierBook::State state, bool toCommon)
+    {
+        D3D12_BARRIER_GROUP group {};
+        group.NumBarriers = 1;
+        D3D12_TEXTURE_BARRIER texture {};
+        D3D12_BUFFER_BARRIER buffer {};
+        if (state.texture) {
+            texture.SyncBefore = texture.SyncAfter = D3D12_BARRIER_SYNC_ALL;
+            texture.AccessBefore = toCommon ? state.access : D3D12_BARRIER_ACCESS_COMMON;
+            texture.AccessAfter = toCommon ? D3D12_BARRIER_ACCESS_COMMON : state.access;
+            texture.LayoutBefore = toCommon ? state.layout : D3D12_BARRIER_LAYOUT_COMMON;
+            texture.LayoutAfter = toCommon ? D3D12_BARRIER_LAYOUT_COMMON : state.layout;
+            texture.pResource = resource;
+            texture.Subresources.IndexOrFirstMipLevel = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            group.Type = D3D12_BARRIER_TYPE_TEXTURE; group.pTextureBarriers = &texture;
+        } else {
+            buffer.SyncBefore = buffer.SyncAfter = D3D12_BARRIER_SYNC_ALL;
+            buffer.AccessBefore = toCommon ? state.access : D3D12_BARRIER_ACCESS_COMMON;
+            buffer.AccessAfter = toCommon ? D3D12_BARRIER_ACCESS_COMMON : state.access;
+            buffer.pResource = resource; buffer.Size = UINT64_MAX;
+            group.Type = D3D12_BARRIER_TYPE_BUFFER; group.pBufferBarriers = &buffer;
+        }
+        list->Barrier(1, &group);
+    }
 
     void MarkSplitIneligible(const char *reason)
     {
         splitIneligible = true;
+        if (reason && std::strcmp(reason, "enhanced_barrier") != 0) {
+            inlineUnsafe = true; if (!inlineUnsafeReason) inlineUnsafeReason = reason;
+        }
         if (!splitIneligibleReason)
         {
             splitIneligibleReason = reason;
@@ -119,6 +166,92 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
         } catch (...) { return E_OUTOFMEMORY; }
     }
     bool STDMETHODCALLTYPE CanAppendCompute() override { return !rawInterfaceEscaped && !renderPassActive && !enhancedBarriersSeen; }
+    bool STDMETHODCALLTYPE CanRecordInline() override
+    {
+        if (rawInterfaceEscaped) inlineRejection = "native_interface_escaped";
+        else if (renderPassActive) inlineRejection = "render_pass";
+        else if (inlineUnsafe) inlineRejection = inlineUnsafeReason ? inlineUnsafeReason : "unsupported_state";
+        else if (logical.WasSplit()) inlineRejection = "already_split";
+        else if (!resBook.CanSplit(nullptr)) inlineRejection = "open_split_barrier";
+        else if (enhancedBarriersSeen && !AllowEnhancedBarriers()) inlineRejection = "enhanced_barriers_not_allowed";
+        else { inlineRejection = "eligible"; return true; }
+        return false;
+    }
+    const char* STDMETHODCALLTYPE InlineRejectionReason() override { return inlineRejection; }
+    HRESULT STDMETHODCALLTYPE BeginInlineState(UINT count, ID3D12Resource** resources,
+                                               D3D12_RESOURCE_STATES* states) override
+    {
+        if (!CanRecordInline() || inlineStateActive) return E_UNEXPECTED;
+        if (count && (!resources || !states)) return E_INVALIDARG;
+        inlineLayouts.clear();
+        // Validate every source before writing any command or changing caller states.
+        for (UINT i = 0; i < count; ++i) {
+            if (!resources[i]) continue;
+            if (const auto* state = enhancedBook.Find(resources[i])) {
+                if (!state->known) {
+                    inlineRejection = "enhanced_layout_partial_or_pending"; return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
+                }
+                if (std::none_of(inlineLayouts.begin(), inlineLayouts.end(), [&](const auto& p) {
+                        return p.first == resources[i]; })) inlineLayouts.emplace_back(resources[i], *state);
+            } else if (enhancedBarriersSeen) {
+                D3D12_RESOURCE_STATES known;
+                if (!resBook.TryGet(resources[i], &known)) {
+                    inlineRejection = "source_layout_unknown"; return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
+                }
+            }
+        }
+        auto* list7 = inlineLayouts.empty() ? nullptr : CurAs<ID3D12GraphicsCommandList7>();
+        if (!inlineLayouts.empty() && !list7) return E_NOINTERFACE;
+        inlineState.Reset();
+        inlineStateActive = true;
+        for (const auto& [resource, state] : inlineLayouts) {
+            TransitionEnhanced(list7, resource, state, true);
+            enhancedBook.Forget(resource);
+            resBook.Forget(resource);
+            for (UINT i = 0; i < count; ++i) if (resources[i] == resource) states[i] = D3D12_RESOURCE_STATE_COMMON;
+        }
+        if (list7) list7->Release();
+        return S_OK;
+    }
+    void STDMETHODCALLTYPE EndInlineState() override
+    {
+        if (!inlineStateActive) return;
+        Cur()->SetPredication(nullptr, 0, D3D12_PREDICATION_OP_EQUAL_ZERO);
+        auto* list7 = inlineLayouts.empty() ? nullptr : CurAs<ID3D12GraphicsCommandList7>();
+        for (const auto& [resource, state] : inlineLayouts) {
+            D3D12_RESOURCE_STATES legacy = D3D12_RESOURCE_STATE_COMMON;
+            resBook.TryGet(resource, &legacy);
+            if (legacy != D3D12_RESOURCE_STATE_COMMON) {
+                D3D12_RESOURCE_BARRIER b {};
+                b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                b.Transition = {resource, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, legacy, D3D12_RESOURCE_STATE_COMMON};
+                Cur()->ResourceBarrier(1, &b);
+            }
+            TransitionEnhanced(list7, resource, state, false);
+            enhancedBook.Restore(resource, state);
+            resBook.Forget(resource);
+        }
+        if (list7) list7->Release();
+        inlineLayouts.clear();
+        // Apply to the native list: our private bindings must not overwrite the game snapshot.
+        contState.ApplyTo(Cur());
+        inlineState.Reset();
+        inlineStateActive = false;
+    }
+    void STDMETHODCALLTYPE TraceOpenQueries() override
+    {
+        static std::atomic<uint32_t> traces {0};
+        if (queryBook.CanSplit()) return;
+        const auto n = ++traces;
+        if (n > 5 && n % 1000) return;
+        const auto id = Identity();
+        LOG_WARN("NR open queries: list={} generation={} count={} sample={}",
+                 id.list, id.generation, queryBook.OpenCount(), n);
+        queryBook.ForEachOpen([&](ID3D12QueryHeap* heap, D3D12_QUERY_TYPE type, UINT index) {
+            (void)heap; (void)type; (void)index;
+            LOG_WARN("NR open query: heap={:p} type={} index={}", (void*)heap, unsigned(type), index);
+        });
+    }
     bool STDMETHODCALLTYPE InContinuation() override { return logical.WasSplit(); }
     HRESULT STDMETHODCALLTYPE ObserveResources(std::shared_ptr<RecordingObserver> observer) override
     {
@@ -144,7 +277,7 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
             return hr;
         }
         if (initial)
-            p->contState.OnPso(initial);
+            p->TrackedState().OnPso(initial);
         *out = p;
         return S_OK;
     }
@@ -277,14 +410,17 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
             return hr;
         if (recordingObserver) recordingObserver->Invalidated(oldIdentity);
         recordingObserver.reset();
-        contState.Reset();
+        TrackedState().Reset();
         resBook.Reset();
         queryBook.Reset();
         splitIneligible = false;
         renderPassActive = enhancedBarriersSeen = false;
         splitIneligibleReason = nullptr;
+        inlineUnsafe = inlineStateActive = false;
+        inlineUnsafeReason = nullptr; inlineRejection = "eligible";
+        enhancedBook.Reset(); inlineLayouts.clear();
         if (initial)
-            contState.OnPso(initial);
+            TrackedState().OnPso(initial);
         return hr;
     }
     HRESULT STDMETHODCALLTYPE SplitSegments() override
@@ -297,11 +433,11 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
             MarkSplitIneligible(why ? why : "resource_state");
             return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
         }
-        const HRESULT hr = logical.Split(contState.stateObject != nullptr);
+        const HRESULT hr = logical.Split(TrackedState().stateObject != nullptr);
         if (FAILED(hr))
             return hr;
         // Seed continuation with captured producer bindings (IA/SO/VRS included).
-        contState.ApplyTo(logical.Current());
+        TrackedState().ApplyTo(logical.Current());
         // Producer Execute introduces a promotion/decay boundary: keep tracked
         // resources but apply Microsoft decay so continuation starts from the
         // post-Execute expectation (plan D / M3), not a wipe.
@@ -327,7 +463,26 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
     }
     ID3D12CommandList *STDMETHODCALLTYPE UnsplitNativeList() override
     {
-        return logical.WasSplit() || recordingObserver ? nullptr : logical.Current();
+        return logical.WasSplit() ? nullptr : logical.Current();
+    }
+    HRESULT STDMETHODCALLTYPE PrepareUnsplitBatch(ID3D12CommandQueue* queue) override
+    {
+        if (!recordingObserver) return S_FALSE;
+        if (batchObserver) return E_UNEXPECTED;
+        batchExecution = {Identity(), ++executionSerial, queue};
+        auto observer = recordingObserver;
+        const auto hr = logical.PrepareUnsplitBatch(queue, batchExecution, observer.get());
+        if (SUCCEEDED(hr)) batchObserver = std::move(observer);
+        else { batchExecution.status = hr; observer->Executed(batchExecution); }
+        return hr;
+    }
+    void STDMETHODCALLTYPE CompleteUnsplitBatch(ID3D12CommandQueue* queue, HRESULT submissionStatus) override
+    {
+        if (!batchObserver) return;
+        auto observer = std::move(batchObserver);
+        batchExecution.status = SUCCEEDED(submissionStatus) ?
+            logical.CompleteUnsplitBatch(queue, batchExecution, observer.get()) : submissionStatus;
+        observer->Executed(batchExecution);
     }
     const char *STDMETHODCALLTYPE SplitRejectionReason() override
     {
@@ -342,21 +497,21 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
     const char *SplitIneligibleReason() const { return splitIneligibleReason; }
     UINT STDMETHODCALLTYPE CapturedViewportCount() override
     {
-        return contState.hasViewports ? contState.numViewports : 0;
+        return TrackedState().hasViewports ? TrackedState().numViewports : 0;
     }
-    BOOL STDMETHODCALLTYPE CapturedIbBound() override { return contState.hasIb ? TRUE : FALSE; }
-    UINT STDMETHODCALLTYPE CapturedVbSlotCount() override { return contState.CapturedVbSlotCount(); }
-    UINT STDMETHODCALLTYPE CapturedGfxRootCount() override { return contState.gfxRoots.BoundCount(); }
+    BOOL STDMETHODCALLTYPE CapturedIbBound() override { return TrackedState().hasIb ? TRUE : FALSE; }
+    UINT STDMETHODCALLTYPE CapturedVbSlotCount() override { return TrackedState().CapturedVbSlotCount(); }
+    UINT STDMETHODCALLTYPE CapturedGfxRootCount() override { return TrackedState().gfxRoots.BoundCount(); }
     BOOL STDMETHODCALLTYPE CapturedSamplePositions() override
     {
-        return contState.hasSamplePositions ? TRUE : FALSE;
+        return TrackedState().hasSamplePositions ? TRUE : FALSE;
     }
 
     void STDMETHODCALLTYPE ClearState(ID3D12PipelineState *p) override
     {
-        contState.Reset();
+        TrackedState().Reset();
         if (p)
-            contState.OnPso(p);
+            TrackedState().OnPso(p);
         if (auto *c = Cur())
             c->ClearState(p);
     }
@@ -406,7 +561,7 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
     }
     void STDMETHODCALLTYPE IASetPrimitiveTopology(D3D12_PRIMITIVE_TOPOLOGY t) override
     {
-        contState.OnTopology(t);
+        TrackedState().OnTopology(t);
         if (auto *c = Cur())
             c->IASetPrimitiveTopology(t);
     }
@@ -419,7 +574,7 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
         if (n > 16 || (n > 0 && !v))
             MarkSplitIneligible("viewport_unmodelled");
         else
-            contState.OnViewports(n, v);
+            TrackedState().OnViewports(n, v);
         if (auto *c = Cur())
             c->RSSetViewports(n, v);
     }
@@ -428,30 +583,32 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
         if (n > 16 || (n > 0 && !r))
             MarkSplitIneligible("scissor_unmodelled");
         else
-            contState.OnScissors(n, r);
+            TrackedState().OnScissors(n, r);
         if (auto *c = Cur())
             c->RSSetScissorRects(n, r);
     }
     void STDMETHODCALLTYPE OMSetBlendFactor(const FLOAT f[4]) override
     {
-        contState.OnBlend(f);
+        TrackedState().OnBlend(f);
         if (auto *c = Cur())
             c->OMSetBlendFactor(f);
     }
     void STDMETHODCALLTYPE OMSetStencilRef(UINT s) override
     {
-        contState.OnStencil(s);
+        TrackedState().OnStencil(s);
         if (auto *c = Cur())
             c->OMSetStencilRef(s);
     }
     void STDMETHODCALLTYPE SetPipelineState(ID3D12PipelineState *p) override
     {
-        contState.OnPso(p);
+        TrackedState().OnPso(p);
         if (auto *c = Cur())
             c->SetPipelineState(p);
     }
     void STDMETHODCALLTYPE ResourceBarrier(UINT n, const D3D12_RESOURCE_BARRIER *b) override
     {
+        for (UINT i = 0; b && i < n; ++i)
+            if (b[i].Type == D3D12_RESOURCE_BARRIER_TYPE_TRANSITION) enhancedBook.Forget(b[i].Transition.pResource);
         const char *why = nullptr;
         if (!resBook.OnBarriers(n, b, &why))
             MarkSplitIneligible(why ? why : "barrier");
@@ -466,128 +623,128 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
     }
     void STDMETHODCALLTYPE SetDescriptorHeaps(UINT n, ID3D12DescriptorHeap *const *h) override
     {
-        contState.OnHeaps(n, h);
+        TrackedState().OnHeaps(n, h);
         if (auto *c = Cur())
             c->SetDescriptorHeaps(n, h);
     }
     void STDMETHODCALLTYPE SetComputeRootSignature(ID3D12RootSignature *s) override
     {
-        contState.OnComputeRoot(s);
+        TrackedState().OnComputeRoot(s);
         if (auto *c = Cur())
             c->SetComputeRootSignature(s);
     }
     void STDMETHODCALLTYPE SetGraphicsRootSignature(ID3D12RootSignature *s) override
     {
-        contState.OnGfxRoot(s);
+        TrackedState().OnGfxRoot(s);
         if (auto *c = Cur())
             c->SetGraphicsRootSignature(s);
     }
     void STDMETHODCALLTYPE SetComputeRootDescriptorTable(UINT i, D3D12_GPU_DESCRIPTOR_HANDLE h) override
     {
-        if (!contState.computeRoots.OnTable(i, h))
+        if (!TrackedState().computeRoots.OnTable(i, h))
             MarkSplitIneligible("root_overflow");
         if (auto *c = Cur())
             c->SetComputeRootDescriptorTable(i, h);
     }
     void STDMETHODCALLTYPE SetGraphicsRootDescriptorTable(UINT i, D3D12_GPU_DESCRIPTOR_HANDLE h) override
     {
-        if (!contState.gfxRoots.OnTable(i, h))
+        if (!TrackedState().gfxRoots.OnTable(i, h))
             MarkSplitIneligible("root_overflow");
         if (auto *c = Cur())
             c->SetGraphicsRootDescriptorTable(i, h);
     }
     void STDMETHODCALLTYPE SetComputeRoot32BitConstant(UINT i, UINT v, UINT o) override
     {
-        if (!contState.computeRoots.OnSingleConstant(i, v, o))
+        if (!TrackedState().computeRoots.OnSingleConstant(i, v, o))
             MarkSplitIneligible("root_overflow");
         if (auto *c = Cur())
             c->SetComputeRoot32BitConstant(i, v, o);
     }
     void STDMETHODCALLTYPE SetGraphicsRoot32BitConstant(UINT i, UINT v, UINT o) override
     {
-        if (!contState.gfxRoots.OnSingleConstant(i, v, o))
+        if (!TrackedState().gfxRoots.OnSingleConstant(i, v, o))
             MarkSplitIneligible("root_overflow");
         if (auto *c = Cur())
             c->SetGraphicsRoot32BitConstant(i, v, o);
     }
     void STDMETHODCALLTYPE SetComputeRoot32BitConstants(UINT i, UINT n, const void *s, UINT o) override
     {
-        if (!contState.computeRoots.OnConstants(i, n, s, o))
+        if (!TrackedState().computeRoots.OnConstants(i, n, s, o))
             MarkSplitIneligible("root_overflow");
         if (auto *c = Cur())
             c->SetComputeRoot32BitConstants(i, n, s, o);
     }
     void STDMETHODCALLTYPE SetGraphicsRoot32BitConstants(UINT i, UINT n, const void *s, UINT o) override
     {
-        if (!contState.gfxRoots.OnConstants(i, n, s, o))
+        if (!TrackedState().gfxRoots.OnConstants(i, n, s, o))
             MarkSplitIneligible("root_overflow");
         if (auto *c = Cur())
             c->SetGraphicsRoot32BitConstants(i, n, s, o);
     }
     void STDMETHODCALLTYPE SetComputeRootConstantBufferView(UINT i, D3D12_GPU_VIRTUAL_ADDRESS a) override
     {
-        if (!contState.computeRoots.OnGpuVa(i, RootBindState::EntryType::CBV, a))
+        if (!TrackedState().computeRoots.OnGpuVa(i, RootBindState::EntryType::CBV, a))
             MarkSplitIneligible("root_overflow");
         if (auto *c = Cur())
             c->SetComputeRootConstantBufferView(i, a);
     }
     void STDMETHODCALLTYPE SetGraphicsRootConstantBufferView(UINT i, D3D12_GPU_VIRTUAL_ADDRESS a) override
     {
-        if (!contState.gfxRoots.OnGpuVa(i, RootBindState::EntryType::CBV, a))
+        if (!TrackedState().gfxRoots.OnGpuVa(i, RootBindState::EntryType::CBV, a))
             MarkSplitIneligible("root_overflow");
         if (auto *c = Cur())
             c->SetGraphicsRootConstantBufferView(i, a);
     }
     void STDMETHODCALLTYPE SetComputeRootShaderResourceView(UINT i, D3D12_GPU_VIRTUAL_ADDRESS a) override
     {
-        if (!contState.computeRoots.OnGpuVa(i, RootBindState::EntryType::SRV, a))
+        if (!TrackedState().computeRoots.OnGpuVa(i, RootBindState::EntryType::SRV, a))
             MarkSplitIneligible("root_overflow");
         if (auto *c = Cur())
             c->SetComputeRootShaderResourceView(i, a);
     }
     void STDMETHODCALLTYPE SetGraphicsRootShaderResourceView(UINT i, D3D12_GPU_VIRTUAL_ADDRESS a) override
     {
-        if (!contState.gfxRoots.OnGpuVa(i, RootBindState::EntryType::SRV, a))
+        if (!TrackedState().gfxRoots.OnGpuVa(i, RootBindState::EntryType::SRV, a))
             MarkSplitIneligible("root_overflow");
         if (auto *c = Cur())
             c->SetGraphicsRootShaderResourceView(i, a);
     }
     void STDMETHODCALLTYPE SetComputeRootUnorderedAccessView(UINT i, D3D12_GPU_VIRTUAL_ADDRESS a) override
     {
-        if (!contState.computeRoots.OnGpuVa(i, RootBindState::EntryType::UAV, a))
+        if (!TrackedState().computeRoots.OnGpuVa(i, RootBindState::EntryType::UAV, a))
             MarkSplitIneligible("root_overflow");
         if (auto *c = Cur())
             c->SetComputeRootUnorderedAccessView(i, a);
     }
     void STDMETHODCALLTYPE SetGraphicsRootUnorderedAccessView(UINT i, D3D12_GPU_VIRTUAL_ADDRESS a) override
     {
-        if (!contState.gfxRoots.OnGpuVa(i, RootBindState::EntryType::UAV, a))
+        if (!TrackedState().gfxRoots.OnGpuVa(i, RootBindState::EntryType::UAV, a))
             MarkSplitIneligible("root_overflow");
         if (auto *c = Cur())
             c->SetGraphicsRootUnorderedAccessView(i, a);
     }
     void STDMETHODCALLTYPE IASetIndexBuffer(const D3D12_INDEX_BUFFER_VIEW *v) override
     {
-        contState.OnIndexBuffer(v);
+        TrackedState().OnIndexBuffer(v);
         if (auto *c = Cur())
             c->IASetIndexBuffer(v);
     }
     void STDMETHODCALLTYPE IASetVertexBuffers(UINT s, UINT n, const D3D12_VERTEX_BUFFER_VIEW *v) override
     {
-        contState.OnVertexBuffers(s, n, v);
+        TrackedState().OnVertexBuffers(s, n, v);
         if (auto *c = Cur())
             c->IASetVertexBuffers(s, n, v);
     }
     void STDMETHODCALLTYPE SOSetTargets(UINT s, UINT n, const D3D12_STREAM_OUTPUT_BUFFER_VIEW *v) override
     {
-        contState.OnSoTargets(s, n, v);
+        TrackedState().OnSoTargets(s, n, v);
         if (auto *c = Cur())
             c->SOSetTargets(s, n, v);
     }
     void STDMETHODCALLTYPE OMSetRenderTargets(UINT n, const D3D12_CPU_DESCRIPTOR_HANDLE *rt, BOOL single,
                                               const D3D12_CPU_DESCRIPTOR_HANDLE *ds) override
     {
-        contState.OnOm(n, rt, single, ds);
+        TrackedState().OnOm(n, rt, single, ds);
         if (auto *c = Cur())
             c->OMSetRenderTargets(n, rt, single, ds);
     }
@@ -644,7 +801,7 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
     }
     void STDMETHODCALLTYPE SetPredication(ID3D12Resource *b, UINT64 o, D3D12_PREDICATION_OP op) override
     {
-        MarkSplitIneligible("predication");
+        if (!inlineStateActive) MarkSplitIneligible("predication");
         if (auto *c = Cur())
             c->SetPredication(b, o, op);
     }
@@ -693,7 +850,7 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
     }
     void STDMETHODCALLTYPE OMSetDepthBounds(FLOAT mn, FLOAT mx) override
     {
-        contState.OnDepthBounds(mn, mx);
+        TrackedState().OnDepthBounds(mn, mx);
         if (auto *c = CurAs<ID3D12GraphicsCommandList1>())
         {
             c->OMSetDepthBounds(mn, mx);
@@ -706,7 +863,7 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
         if (ContinuationState::SamplePositionsOverflow(samplesPerPixel, numPixels))
             MarkSplitIneligible("sample_positions");
         else
-            contState.OnSamplePositions(samplesPerPixel, numPixels, positions);
+            TrackedState().OnSamplePositions(samplesPerPixel, numPixels, positions);
         if (auto *c = CurAs<ID3D12GraphicsCommandList1>())
         {
             c->SetSamplePositions(samplesPerPixel, numPixels, positions);
@@ -725,7 +882,7 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
     }
     void STDMETHODCALLTYPE SetViewInstanceMask(UINT mask) override
     {
-        contState.OnViewInstanceMask(mask);
+        TrackedState().OnViewInstanceMask(mask);
         if (auto *c = CurAs<ID3D12GraphicsCommandList1>())
         {
             c->SetViewInstanceMask(mask);
@@ -829,7 +986,7 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
     void STDMETHODCALLTYPE SetPipelineState1(ID3D12StateObject *stateObject) override
     {
         if (!stateObject) MarkSplitIneligible("null_state_object");
-        contState.OnStateObject(stateObject);
+        TrackedState().OnStateObject(stateObject);
         if (auto *c = CurAs<ID3D12GraphicsCommandList4>())
         {
             c->SetPipelineState1(stateObject);
@@ -853,7 +1010,7 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
     void STDMETHODCALLTYPE RSSetShadingRate(D3D12_SHADING_RATE base,
                                             const D3D12_SHADING_RATE_COMBINER *combiners) override
     {
-        contState.OnShadingRate(base, combiners);
+        TrackedState().OnShadingRate(base, combiners);
         if (auto *c = CurAs<ID3D12GraphicsCommandList5>())
         {
             c->RSSetShadingRate(base, combiners);
@@ -862,7 +1019,7 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
     }
     void STDMETHODCALLTYPE RSSetShadingRateImage(ID3D12Resource *image) override
     {
-        contState.OnShadingRateImage(image);
+        TrackedState().OnShadingRateImage(image);
         if (auto *c = CurAs<ID3D12GraphicsCommandList5>())
         {
             c->RSSetShadingRateImage(image);
@@ -890,6 +1047,7 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
         if (auto *c = CurAs<ID3D12GraphicsCommandList7>())
         {
             enhancedBarriersSeen = true;
+            enhancedBook.Observe(numGroups, groups);
             c->Barrier(numGroups, groups);
             c->Release();
         }
@@ -916,7 +1074,7 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
     }
     void STDMETHODCALLTYPE IASetIndexBufferStripCutValue(D3D12_INDEX_BUFFER_STRIP_CUT_VALUE value) override
     {
-        contState.OnStripCut(value);
+        TrackedState().OnStripCut(value);
         if (auto *c = CurAs<ID3D12GraphicsCommandList9>())
         {
             c->IASetIndexBufferStripCutValue(value);

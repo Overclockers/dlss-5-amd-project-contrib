@@ -56,6 +56,7 @@ class ConfigPriorityTests(unittest.TestCase):
                 "AutoExposureScale",
                 "PaperWhite",
                 "AllowEnhancedBarriers",
+                "NrInline",  # Host-owned submission mode, no upstream environment alias.
                 "EarlyExeWrap",
                 "Diagnostic",
                 "NrTimingEnabled",  # Product telemetry, not an upstream kernel option.

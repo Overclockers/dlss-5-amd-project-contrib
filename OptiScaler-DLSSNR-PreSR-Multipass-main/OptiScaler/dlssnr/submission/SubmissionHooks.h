@@ -206,13 +206,27 @@ inline void ExecuteExpanded(ID3D12CommandQueue *queue, UINT num, ID3D12CommandLi
     // every unsplit proxy into separate Executes would itself change resource decay.
     std::lock_guard<std::recursive_mutex> submitLock(RecordingMutex());
     std::vector<ID3D12CommandList *> run;
+    std::vector<ILogicalCommandList*> runLogical;
     run.reserve(num);
+    runLogical.reserve(num);
     const auto flush = [&]() {
+        HRESULT admitted = S_OK;
+        std::vector<ILogicalCommandList*> prepared;
         if (!run.empty())
         {
-            rawExec(queue, static_cast<UINT>(run.size()), run.data());
+            for (auto* logical : runLogical) {
+                const auto hr = logical->PrepareUnsplitBatch(queue);
+                if (FAILED(hr)) { admitted = hr; break; }
+                if (hr == S_OK) prepared.push_back(logical);
+            }
+            if (SUCCEEDED(admitted)) rawExec(queue, static_cast<UINT>(run.size()), run.data());
+            for (auto* logical : prepared) logical->CompleteUnsplitBatch(queue, admitted);
             run.clear();
         }
+        for (auto* logical : runLogical) logical->Release();
+        runLogical.clear();
+        if (FAILED(admitted)) g_submissionFailures.fetch_add(1, std::memory_order_relaxed);
+        return SUCCEEDED(admitted);
     };
     for (UINT i = 0; i < num; ++i)
     {
@@ -226,11 +240,13 @@ inline void ExecuteExpanded(ID3D12CommandQueue *queue, UINT num, ID3D12CommandLi
         if (auto *native = logical->UnsplitNativeList())
         {
             run.push_back(native);
+            runLogical.push_back(logical); // Keep the observer and native list through batch notification.
             g_unsplitProxySubmissions.fetch_add(1, std::memory_order_relaxed);
+            continue;
         }
         else
         {
-            flush();
+            if (!flush()) { logical->Release(); return; }
             struct Invocation
             {
                 BetweenFn fn;

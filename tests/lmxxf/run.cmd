@@ -1,6 +1,6 @@
 @echo off
 rem lmxxf runtime and submission tests. Every test in tests\lmxxf belongs to exactly one tier below.
-rem Usage: tests\lmxxf\run.cmd abi^|warp^|device^|early-unity^|hip-passthrough^|gpu [out-dir]
+rem Usage: tests\lmxxf\run.cmd abi^|warp^|device^|inline^|inline-gpu^|early-unity^|hip-passthrough^|gpu [out-dir]
 rem   abi    : lmxxf_nr_abi, lmxxf_zero_fallback_abi.c, test_runtime_validation.py (no GPU)
 rem   warp   : lmxxf_same_frame_boundary, lmxxf_color_probe (D3D12 WARP; no GPU)
 rem   device : lmxxf_list_split, lmxxf_list1_wrap, lmxxf_create_execute, lmxxf_evaluate_cut
@@ -39,7 +39,9 @@ if /i "%TIER%"=="device" goto device
 if /i "%TIER%"=="early-unity" goto early-unity
 if /i "%TIER%"=="gpu" goto gpu
 if /i "%TIER%"=="hip-passthrough" goto hip-passthrough
-echo usage: tests\lmxxf\run.cmd abi^|warp^|device^|early-unity^|hip-passthrough^|gpu [out-dir]
+if /i "%TIER%"=="inline" goto inline
+if /i "%TIER%"=="inline-gpu" goto inline-gpu
+echo usage: tests\lmxxf\run.cmd abi^|warp^|device^|inline^|inline-gpu^|early-unity^|hip-passthrough^|gpu [out-dir]
 exit /b 2
 
 :abi
@@ -55,6 +57,7 @@ copy /Y "%LMXXF_TEST_RUNTIME%" "%OUT%\LmxxfNrRuntime.dll" >nul || goto fail
 goto pass
 
 :warp
+call :RunInlineFixture warp || goto fail
 %CXX% /I"%INC%" tests\lmxxf\lmxxf_wrapped_command_list.cpp /Fe"%OUT%\lmxxf_wrapped_command_list.exe" /Fo"%OUT%\lmxxf_wrapped_command_list.obj" /link %D3D% "%DETOURS%" || goto fail
 "%OUT%\lmxxf_wrapped_command_list.exe" || goto fail
 %CXX% tests\lmxxf\lmxxf_temporal_control.cpp /Fe"%OUT%\lmxxf_temporal_control.exe" /Fo"%OUT%\lmxxf_temporal_control.obj" /link %D3D% d3dcompiler.lib || goto fail
@@ -77,6 +80,7 @@ call tests\lmxxf\shader-compiler.cmd "%OUT%\shader-compiler" || goto fail
 goto pass
 
 :device
+call :RunInlineFixture hardware || goto fail
 %CXX% tests\lmxxf\lmxxf_list_split.cpp /Fe"%OUT%\lmxxf_list_split.exe" /Fo"%OUT%\lmxxf_list_split.obj" /link %D3D% || goto fail
 "%OUT%\lmxxf_list_split.exe" || goto fail
 for %%T in (lmxxf_list1_wrap lmxxf_create_execute lmxxf_evaluate_cut) do (
@@ -89,6 +93,24 @@ goto pass
 :early-unity
 call :EarlyUnity || goto fail
 goto pass
+
+:inline
+call :RunInlineFixture hardware || goto fail
+goto pass
+
+:inline-gpu
+if not defined LMXXF_ASSETS goto fail
+set "LMXXF_WEIGHTS_DIR=%LMXXF_ASSETS%"
+call :Runtime || goto fail
+%CXX% /I"%INC%" tests\lmxxf\nr_inline_runtime_gpu.cpp /Fe"%OUT%\nr_inline_runtime_gpu.exe" /Fo"%OUT%\nr_inline_runtime_gpu.obj" /link %D3D% d3dcompiler.lib "%DETOURS%" || goto fail
+"%OUT%\nr_inline_runtime_gpu.exe" "%LMXXF_TEST_RUNTIME%" "%MODS%" || goto fail
+"%OUT%\nr_inline_runtime_gpu.exe" "%LMXXF_TEST_RUNTIME%" "%MODS%" --timeout || goto fail
+goto pass
+
+:RunInlineFixture
+%CXX% /I"%INC%" tests\lmxxf\nr_inline_recording.cpp /Fe"%OUT%\nr_inline_recording.exe" /Fo"%OUT%\nr_inline_recording.obj" /link %D3D% d3dcompiler.lib || exit /b 1
+if /i "%~1"=="hardware" ("%OUT%\nr_inline_recording.exe" --hardware) else ("%OUT%\nr_inline_recording.exe")
+exit /b %errorlevel%
 
 :EarlyUnity
 for %%N in (UnityPlayer OtherEngine) do (

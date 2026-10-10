@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-#define LMXXF_NR_ABI_VERSION 4u
+#define LMXXF_NR_ABI_VERSION 5u
 
 
 /* Optional recovery when HIP enqueue or the session queue contract fails.
@@ -28,6 +28,10 @@ extern "C" {
  * each job until recording invalidation AND CollectRecording confirms completion.
  * This mode does not support the blocking legacy zero-output recovery path. */
 #define LMXXF_NR_CREATE_FLAG_RECORDING_LEASES (1u << 1)
+/* v5: host may enqueue a captured recording on a same-device side compute/direct queue.
+ * Host owns capture ordering, bounded game wait, frozen output selection, and BOTH
+ * side-queue and game-queue completion before reuse/invalidation collection. */
+#define LMXXF_NR_CREATE_FLAG_INLINE_QUEUE (1u << 2)
 #define LMXXF_NR_SUBMITTED_PRODUCER (1u << 0)
 #define LMXXF_NR_SUBMITTED_CONSUMER (1u << 1)
 

@@ -261,6 +261,34 @@ class LogicalList
     // to the queue, but before the continuation command list is submitted.
     using BetweenCallback = void (*)(ID3D12CommandQueue *queue, void *ctx);
 
+    HRESULT PrepareUnsplitBatch(ID3D12CommandQueue* queue, RecordingExecution& facts, RecordingObserver* observer)
+    {
+        if (!queue || !producer || split) return E_INVALIDARG;
+        if (phase == Phase::RecordingProducer) {
+            const auto hr = Close(); if (FAILED(hr)) return hr;
+        }
+        if (phase != Phase::Closed || unconfirmedSubmission) return E_UNEXPECTED;
+        auto hr = EnsureRetireFence(); if (FAILED(hr)) return hr;
+        if (lastQueue && lastQueue != queue && retireFenceValue) {
+            hr = queue->Wait(retireFence, retireFenceValue); if (FAILED(hr)) return hr;
+        }
+        return observer ? observer->BeforeExecute(facts) : S_OK;
+    }
+    HRESULT CompleteUnsplitBatch(ID3D12CommandQueue* queue, RecordingExecution& facts, RecordingObserver* observer)
+    {
+        facts.producerSubmitted = true;
+        if (observer) observer->ProducerSubmitted(facts);
+        const auto value = ++retireFenceValue;
+        const auto hr = queue->Signal(retireFence, value);
+        executed = true;
+        if (lastQueue != queue) {
+            queue->AddRef(); if (lastQueue) lastQueue->Release(); lastQueue = queue;
+        }
+        facts.fence = retireFence; facts.fenceValue = value;
+        if (FAILED(hr)) unconfirmedSubmission = true;
+        return hr;
+    }
+
     // Closed lists may be re-submitted after prior GPU work (D3D12 allows multiple Execute).
     HRESULT Execute(ID3D12CommandQueue *queue, BetweenCallback between = nullptr, void *betweenCtx = nullptr,
                     RecordingExecution* facts = nullptr, RecordingObserver* observer = nullptr)

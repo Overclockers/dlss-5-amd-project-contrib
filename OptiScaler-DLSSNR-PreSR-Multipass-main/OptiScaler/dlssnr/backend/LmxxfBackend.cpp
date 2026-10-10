@@ -422,7 +422,7 @@ bool LmxxfBackend::EnsureSession()
     info.device = device;
     info.queue = queue;
     info.assets_directory = modulesW.c_str();
-    info.flags = LMXXF_NR_CREATE_FLAG_RECORDING_LEASES;
+    info.flags = LMXXF_NR_CREATE_FLAG_RECORDING_LEASES | LMXXF_NR_CREATE_FLAG_INLINE_QUEUE;
     void *ctx = nullptr;
     int32_t createRc = api->table.Create(&info, &ctx);
     if (createRc != LMXXF_NR_OK || !ctx)
@@ -489,7 +489,8 @@ bool LmxxfBackend::NoteEnqueueRecoveries()
 }
 
 ID3D12Resource *LmxxfBackend::FinishRecord(ID3D12GraphicsCommandList *recordCmd, void *jobHandle,
-                                           void *privateOutput)
+                                           void *privateOutput, const AmdPreSr::Frame* inlineFrame,
+                                           void* firstPass, ID3D12Resource** first)
 {
     DlssNr::Submission::ILogicalCommandList* logical = nullptr;
     if (FAILED(recordCmd->QueryInterface(__uuidof(DlssNr::Submission::ILogicalCommandList),
@@ -504,7 +505,21 @@ ID3D12Resource *LmxxfBackend::FinishRecord(ID3D12GraphicsCommandList *recordCmd,
     const char* borrowed = logical->SplitRejectionReason();
     const std::string splitReason = borrowed ? borrowed : "unknown";
     const bool eligible = !logical->IsSplitIneligible();
-    auto lease = LmxxfRecording::Attach(sessionOwner, jobHandle, logical);
+    std::shared_ptr<InlineRecording::Resources> inlineResources;
+    if (inlineFrame) {
+        try {
+            const auto desc = inlineFrame->colour->GetDesc();
+            inlineResources = std::make_shared<InlineRecording::Resources>(device, inlineFrame->colour,
+                static_cast<ID3D12Resource*>(privateOutput), static_cast<ID3D12Resource*>(firstPass),
+                inlineFrame->width ? inlineFrame->width : UINT(desc.Width), inlineFrame->height ? inlineFrame->height : desc.Height,
+                sessionOwner->inlinePipelines);
+            sessionOwner->inlinePipelines = inlineResources->PipelineCache();
+        } catch (const std::exception& error) {
+            logical->Release(); api->table.InvalidateRecording(session, jobHandle); api->table.CollectRecording(session, jobHandle);
+            SetStatus((std::string("lmxxf: inline unavailable: ") + error.what()).c_str()); return nullptr;
+        }
+    }
+    auto lease = LmxxfRecording::Attach(sessionOwner, jobHandle, logical, inlineResources);
     logical->Release();
     if (!lease)
     {
@@ -523,7 +538,8 @@ ID3D12Resource *LmxxfBackend::FinishRecord(ID3D12GraphicsCommandList *recordCmd,
         return nullptr;
     }
     ReTrace(reTraceId, "inputs.end/split.begin", jobHandle, 0);
-    const HRESULT splitHr = LmxxfCut::TrySplitAtEvaluate(recordCmd);
+    if (inlineResources) { inlineResources->RecordCapture(recordCmd); inlineResources->RecordWait(recordCmd); }
+    const HRESULT splitHr = inlineResources ? S_OK : LmxxfCut::TrySplitAtEvaluate(recordCmd);
     ReTrace(reTraceId, "split.end", recordCmd, splitHr);
     if (splitHr != S_OK)
     {
@@ -544,7 +560,13 @@ ID3D12Resource *LmxxfBackend::FinishRecord(ID3D12GraphicsCommandList *recordCmd,
         return nullptr;
     }
     ReTrace(reTraceId, "outputs.end", jobHandle, 0);
+    if (inlineResources) inlineResources->RecordSelect(recordCmd, inlineFrame->colourState);
     lease->ready = true;
+    if (inlineResources) {
+        SetStatus("lmxxf: experimental inline recording ready");
+        if (first) *first = inlineResources->FirstTexture();
+        return inlineResources->OutputTexture();
+    }
     SetStatus(diagnostic == LmxxfProbe::Mode::HipPassthrough ?
                   "lmxxf diagnostic: hip-passthrough (HIP round trip; NO NR)" :
               diagnostic == LmxxfProbe::Mode::CodecPassthrough ?
@@ -557,9 +579,10 @@ ID3D12Resource *LmxxfBackend::Record(ID3D12GraphicsCommandList *cmd, const AmdPr
 {
     return RecordLayers(cmd, frame, settings, nullptr);
 }
-ID3D12Resource* LmxxfBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, const AmdPreSr::Frame& frame,
+ID3D12Resource* LmxxfBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, const AmdPreSr::Frame& incoming,
                                          const AmdPreSr::Settings& settings, ID3D12Resource** first)
 {
+    auto frame = incoming;
     if(first)*first=nullptr;
     std::lock_guard recordLock(LmxxfCut::LifecycleMutex());
     ++frameId; // Include bypassed evaluations in temporal continuity.
@@ -582,10 +605,18 @@ ID3D12Resource* LmxxfBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, const
         return nullptr;
     }
     const bool ineligible = logical->IsSplitIneligible();
+    if (ineligible) logical->TraceOpenQueries();
     const char *borrowedReason = logical->SplitRejectionReason();
     const std::string reason = borrowedReason ? borrowedReason : "unknown";
     logical->Release();
-    if (ineligible)
+    const bool inlineMode = Config::Instance()->NrInline.value_or_default();
+    InlineRecording::StateScope inlineState;
+    const bool inlineGuides = Config::Instance()->LmxxfModelHistory.value_or_default();
+    if (inlineMode && FAILED(inlineState.Begin(cmd, frame, inlineGuides, inlineGuides,
+                                               IsUsableExposureTexture(frame.exposure)))) {
+        SetStatus((std::string("lmxxf: inline unavailable: ") + inlineState.Reason() + " (NO NR)").c_str()); return nullptr;
+    }
+    if (ineligible && !inlineMode)
     {
         char status[128] {};
         std::snprintf(status, sizeof(status), "lmxxf: split ineligible: %s (NO NR)",
@@ -609,6 +640,7 @@ ID3D12Resource* LmxxfBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, const
     ReTrace(reTraceId, "session.begin", session, 0);
     if (!EnsureSession())
         return nullptr;
+    if (sessionOwner->InlineBusy()) { SetStatus("lmxxf: previous inline execution pending; original frame"); return nullptr; }
     ReTrace(reTraceId, "session.end", session, 0);
     UpdateTiming();
 
@@ -762,8 +794,9 @@ ID3D12Resource* LmxxfBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, const
         }
     }
 
-    ID3D12Resource *result = FinishRecord(cmd, job.handle, job.private_output);
-    if(result && first)*first=static_cast<ID3D12Resource*>(job.first_pass_output);
+    ID3D12Resource *result = FinishRecord(cmd, job.handle, job.private_output,
+                                        inlineMode ? &frame : nullptr, job.first_pass_output, first);
+    if(result && first && !inlineMode)*first=static_cast<ID3D12Resource*>(job.first_pass_output);
     static uint64_t recordEvalCount = 0;
     const auto rEval = ++recordEvalCount;
     auto &p = LmxxfCut::Pending();
