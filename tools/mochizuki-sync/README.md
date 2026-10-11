@@ -35,6 +35,13 @@ independently to an arbitrary upstream checkout. For each upstream proposal,
 apply its preceding series in a disposable checkout and reduce the proposal to
 its own API requirements; do not send all local policy changes as one PR.
 
+Subsequent patches in the manifest include the unused `up_shown` removal (07),
+the local 30-layer mode (08), and the decoder-tail correctness fix (09).
+Patch 09 is adapted from Overclockers' `60f9202f` in project PR #5. It excludes
+the C64 persistent decoder to fused C32 pair from tile chaining, preserving the
+existing barrier and associated arena lifetime boundary; other chains remain.
+Its attribution and validation are in the backend guide and source record.
+
 This eight-patch series records the product snapshot; it is not the upstream PR
 series. The upstream preparation branch has reverted the ACO, buffer-optimization
 and timing-calculation snapshots and retains only optional interface proposals.

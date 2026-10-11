@@ -6,6 +6,8 @@ if /i "%~1"=="abi" (
   if errorlevel 1 exit /b 1
   python -B tests\mochizuki\test_source_pin.py
   if errorlevel 1 exit /b 1
+  python -B tests\mochizuki\test_aco_temporal.py
+  if errorlevel 1 exit /b 1
 )
 if /i "%~1"=="source-pin" (
   python -B tests\mochizuki\test_source_pin.py || exit /b 1
@@ -16,6 +18,8 @@ if not exist exports\mochizuki-tests mkdir exports\mochizuki-tests
 if /i "%~1"=="abi" call :acounit || exit /b 1
 if /i "%~1"=="aco-unit" goto acounit
 if /i "%~1"=="inline" goto inline
+if /i "%~1"=="aco-inline" goto inline
+if /i "%~1"=="aco-temporal" goto acotemporal
 if /i "%~1"=="hdr-shader" goto hdrshader
 cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /I OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler tests/mochizuki/runtime.cpp /Foexports/mochizuki-tests/runtime.obj /Feexports/mochizuki-tests/runtime.exe /link d3d12.lib dxgi.lib || exit /b 1
 if /i "%~1"=="destroy-tail" goto destroytail
@@ -57,19 +61,21 @@ exports\mochizuki-tests\runtime.exe "%CD%\exports\mochizuki-runtime\MochizukiNrR
 exit /b %errorlevel%
 
 :inline
+set "MOCHI_ACO_ARG="
+if /i "%~1"=="aco-inline" set "MOCHI_ACO_ARG=--aco"
 set "INCLUDE=%INCLUDE%;%CD%"
 set "MOCHI_INLINE_RUNTIME=%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll"
 if not "%~2"=="" set "MOCHI_INLINE_RUNTIME=%~f2"
 cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /I OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/include tests/lmxxf/nr_inline_runtime_gpu.cpp /Foexports/mochizuki-tests/nr_inline_runtime_gpu.obj /Feexports/mochizuki-tests/nr_inline_runtime_gpu.exe /link d3d12.lib dxgi.lib dxguid.lib d3dcompiler.lib OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/library/detours/detours.lib || exit /b 1
-exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki
+exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki %MOCHI_ACO_ARG%
 if errorlevel 1 exit /b 1
-exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --timeout
+exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --timeout %MOCHI_ACO_ARG%
 if errorlevel 1 exit /b 1
-exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --ahead
+exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --ahead %MOCHI_ACO_ARG%
 if errorlevel 1 exit /b 1
-exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --timeout --ahead
+exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --timeout --ahead %MOCHI_ACO_ARG%
 if errorlevel 1 exit /b 1
-exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --large --temporal
+exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --large --temporal %MOCHI_ACO_ARG%
 exit /b %errorlevel%
 
 :startup
@@ -136,4 +142,9 @@ exit /b 0
 
 :composition
 exports\mochizuki-tests\runtime.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" --composition
+exit /b %errorlevel%
+
+:acotemporal
+cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /I OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler tests/mochizuki/aco_temporal.cpp /Foexports/mochizuki-tests/aco_temporal.obj /Feexports/mochizuki-tests/aco_temporal.exe /link d3d12.lib dxgi.lib || exit /b 1
+python -X utf8 -B tests/mochizuki/aco_temporal.py %2 %3 %4 %5
 exit /b %errorlevel%

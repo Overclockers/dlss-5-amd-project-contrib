@@ -256,6 +256,15 @@
       "files": [
         "windows/src/core/nr_runtime.cpp"
       ]
+    },
+    {
+      "feature": "aco-decoder-tail-barrier",
+      "path": "patches/09-aco-decoder-tail-barrier.patch",
+      "files": [
+        "windows/src/core/nr_graph.cpp"
+      ],
+      "source_commit": "60f9202fd6bc0384d1d4615658cee2ddca9b3004",
+      "author": "Overclockers"
     }
   ],
   "source_comment_policy": "omit-sample-address-annotations-v1"

@@ -66,6 +66,34 @@ The 599-entry `dlssnr.bin` model still comes from the user's own `nvngx_dlssnr.d
 
 On 2026-10-11, `tests/mochizuki/run.cmd aco` selected AMD Radeon RX 9070 XT (vendor 0x1002, device 0x7550). `exports/mochizuki-runtime/mochizuki_nr.log` recorded 58/58 record matches, Vulkan driver 26.8.1 (LLPC), driverVersion 0x0080018b, and `ACO network ready: 29 imported pipelines`. The graph builder counted 24 kernels. The test printed `ACO_FRAME_OK 256x256`, `ACO_SWITCH_NATIVE_OK`, `ACO_SWITCH_ACO_OK` and `ACO_CONTRACT_OK effective=1`. The same command then printed `ACO_DEVICE_FALLBACK_OK` for a forced pipeline-binary device rejection, `ACO_BUDGET_KEEP_OK effective=1` when the second frame-buffer admission was refused, and `ACO_FALLBACK_OK` for the missing-bundle, missing-alias and corrupt-record fixtures. The same adapter then ran `tests/mochizuki/run.cmd aco-rapid`: a native candidate that installed after ACO was requested again printed `ACO_RAPID_REENABLE requested=1 effective=0`, and the following ACO network printed `ACO_RAPID_OK`. The machine driver was left at 32.0.31041.1004.
 
+## Decoder-tail synchronization correction (2026-10-12)
+
+`09-aco-decoder-tail-barrier.patch` adapts the graph fix by **Overclockers** from
+[project PR #5](https://github.com/TheAutomatic/dlss-5-amd-project/pull/5), commit
+[`60f9202fd6bc0384d1d4615658cee2ddca9b3004`](https://github.com/TheAutomatic/dlss-5-amd-project/commit/60f9202fd6bc0384d1d4615658cee2ddca9b3004).
+The C64 persistent decoder to fused C32 pair is no longer admitted by `tchain_pair`.
+The existing inter-dispatch barrier and arena lifetime boundary are therefore
+retained together. Earlier decoder/encoder/C512/ViT chains keep their official
+schedule. This is a dependency correction, not a product synchronization control.
+
+Moving-input, continuous temporal byte comparison and retained-recording tests
+are adapted from the same contribution. Local test adaptations cover 30-layer
+capacity/selection, reduced-resolution classic enlargement and pass-0 output.
+The all-barrier oracle is built into a dedicated test-only DLL from the same
+source/graph/arena/records, changing only the runtime barrier skip in a private
+generated translation unit. It has no production build manifest, menu or ABI flag.
+
+Local RX 9070 XT validation passed cases 1–26, 42 and 45 of the 45-case fixture:
+128 static/moving frames at 256/512, FP16/sRGB, one/three passes and preprocessing,
+16 moving frames at 2258x1270, two eight-frame odd-size cases at 1129x635,
+30-layer capacity with pass 15 selected, and reduced-resolution classic pass-0.
+Every completed case matched the oracle byte-for-byte, remained active rather
+than passing through, and replayed its retained recording. Full local matrix was
+stopped at user request; remaining cases and complete CI were not run locally.
+ACO inline also passed 120 fresh 256x256 recordings with stable queue identity,
+deferred collection, cross-queue replay and 100% temporal history consumption.
+These are fixture results, not new game acceptance or FPS measurements.
+
 ## Not claimed
 
 No game scene was part of this integration. Official timing numbers are not reused as local results. INT4 stays off. The same-repo draft's explicit barrier switch was not added.

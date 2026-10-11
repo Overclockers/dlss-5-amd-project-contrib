@@ -295,3 +295,33 @@ switching depend on game work that may need the switching thread to continue.
 collecting NR work, then blocking both game queues behind an unrelated fence.
 Destroy must return before the helper releases that fence. The full GPU suite
 includes this check alongside live-recording and cancellation coverage.
+
+## ACO decoder-tail dependency (2026-10-12)
+
+The C64 persistent decoder → fused C32 boundary keeps its synchronization while
+the other official tile-counter chains remain enabled. This adopts Overclockers'
+`60f9202f` dependency fix; see [source attribution](../third_party/mochizuki/UPSTREAM.md#decoder-tail-synchronization-correction-2026-10-12).
+The ACO machine-code setting still selects the compiler. There is no additional
+product scheduling switch or default-policy change in the INI/menu/controls ABI.
+
+The scheduling oracle is a separate test build, never a release runtime:
+
+```powershell
+tools/build/build-mochizuki-runtime.cmd --skip-shaders --test-full-barriers
+tests/mochizuki/run.cmd aco-temporal --case 9
+tests/mochizuki/run.cmd aco-inline
+```
+
+The reference build is restricted to `exports/mochizuki-test-reference`, records
+its source/DLL proof, and produces no production packaging manifest. The fixture
+compares actual frame bytes against production using the same graph and assets,
+with controlled diagnostic environment and mandatory actual ACO import. Case
+selectors cannot report success after selecting no cases. Synthetic frame streams
+are removed after equality; logs/receipts remain under `exports/mochizuki-temporal`.
+The default `aco-temporal` entry contains 45 GPU cases; use selected cases for
+routine local checks. It is not the full CI suite. Full CI belongs to release
+Actions, and this machine-specific GPU fixture needs a suitable device.
+
+Local cases 1–26, 42 and 45 passed; the remainder was intentionally skipped after
+the user narrowed local verification. Inline ACO passed 120 fresh recordings and
+retained replay with 100% observed temporal history. No game/FPS result is claimed.

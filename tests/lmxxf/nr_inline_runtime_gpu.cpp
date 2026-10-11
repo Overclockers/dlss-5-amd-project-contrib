@@ -19,10 +19,13 @@ int main(int argc, char** argv) {
     bool large = false;
     bool temporalRequested = false, temporalMode = false;
     bool ahead = false;
+    bool aco = false;
     for (int i = 3; i < argc; ++i) timeoutMode |= std::strcmp(argv[i], "--timeout") == 0;
     for (int i = 3; i < argc; ++i) large |= std::strcmp(argv[i], "--large") == 0;
     for (int i = 3; i < argc; ++i) temporalRequested |= std::strcmp(argv[i], "--temporal") == 0;
     for (int i = 3; i < argc; ++i) ahead |= std::strcmp(argv[i], "--ahead") == 0;
+    for (int i = 3; i < argc; ++i) aco |= std::strcmp(argv[i], "--aco") == 0;
+    Require(!aco || mochi, "ACO fixture requires Mochizuki");
     Ptr<ID3D12Debug> debug;
     if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug)))) debug->EnableDebugLayer();
     HMODULE dll = LoadLibraryW(Widen(argv[1]).c_str()); Require(dll != nullptr, "runtime load");
@@ -37,6 +40,7 @@ int main(int argc, char** argv) {
     for (UINT i = 0;; ++i) {
         Ptr<IDXGIAdapter1> adapter; if (factory->EnumAdapters1(i, &adapter) == DXGI_ERROR_NOT_FOUND) break;
         DXGI_ADAPTER_DESC1 d {}; adapter->GetDesc1(&d);
+        if (aco && !wcsstr(d.Description, L"9070 XT")) continue;
         if (d.VendorId == 0x1002 && SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&device)))) break;
     }
     Require(bool(device), "AMD device");
@@ -46,7 +50,14 @@ int main(int argc, char** argv) {
     const auto assets = Widen(argv[2]);
     LmxxfNrCreateInfo ci {sizeof ci, device.Get(), game.Get(), assets.c_str(),
                          LMXXF_NR_CREATE_FLAG_RECORDING_LEASES | LMXXF_NR_CREATE_FLAG_INLINE_QUEUE};
-    void* context = nullptr; ok(api.Create(&ci, &context), "Create"); ok(api.PrepareSession(context), "PrepareSession");
+    void* context = nullptr; ok(api.Create(&ci, &context), "Create");
+    if (aco) {
+        auto defaults = reinterpret_cast<PFN_MochizukiNrGetControlDefaults>(GetProcAddress(dll, "MochizukiNrGetControlDefaults"));
+        auto set = reinterpret_cast<PFN_MochizukiNrSetControls>(GetProcAddress(dll, "MochizukiNrSetControls"));
+        MochizukiNrControls controls{sizeof controls}; Require(defaults && set, "ACO controls");
+        ok(defaults(&controls), "ACO defaults"); controls.aco_mode = 1; ok(set(context, &controls), "ACO request before device");
+    }
+    ok(api.PrepareSession(context), "PrepareSession");
     auto owner = Own::SessionOwner::Create(api, context); Require(bool(owner), "module/session owner");
     if (!mochi) { LmxxfNrTimings timing {sizeof timing}; ok(api.GetTimings(context, &timing), "enable physical HIP event timing"); }
     const UINT width = large ? 2560 : (mochi ? 256 : 1280), height = large ? 1440 : (mochi ? 256 : 720);
@@ -102,7 +113,14 @@ int main(int argc, char** argv) {
                 f.transfer_strength = f.color_strength = f.model_scale = f.paper_white = f.pre_exposure = f.exposure_scale = 1;
                 rc = api.PrepareFrame(context, &f, &job);
             }
-            if (!rc) return job;
+            if (!rc) {
+                if (aco) {
+                    auto getInfo = reinterpret_cast<PFN_MochizukiNrGetInfo>(GetProcAddress(dll, "MochizukiNrGetInfo"));
+                    MochizukiNrInfo state{sizeof state}; Require(getInfo, "ACO info");
+                    ok(getInfo(context, &state), "ACO installed info"); Require(state.aco_effective == 1, "inline fixture must execute ACO");
+                }
+                return job;
+            }
             if (rc != LMXXF_NR_UNAVAILABLE || GetTickCount64() > deadline) ok(rc, "PrepareFrame");
             Sleep(100);
         }

@@ -749,3 +749,12 @@ Reuse one side compute queue per NR session, retaining independent recording buf
 将本地整份 header 直接送上游。作者接受后更新 pin 并删除被覆盖的补丁。
 见[逐项扩展决策](architecture/mochizuki-upstream-extensions.md)与
 [只读来源复核流程](../tools/mochizuki-sync/README.md)。这不代表游戏或发布验收完成。
+
+## 2026-10-12 ACO 保留 decoder-tail 必要依赖
+
+接入 Overclockers PR #5 / `60f9202f` 的 C64→融合 C32 边界修复及长时序测试，
+保留其他官方重叠调度。全显式等待只用于独立测试 oracle，不添加同步菜单开关或
+产品 ABI/INI 字段。测试与固定来源补丁记录作者归属；本侧适配作为共同署名提交。
+本地只运行实际风险所需的 GPU 对照与短 ABI/来源核验；不跑完整发布 CI。
+这次全矩阵按用户要求中止，已完成 28 个对照用例和一个 inline ACO 时域用例。
+详见 [ACO 依赖与验证](mochizuki.md#aco-decoder-tail-dependency-2026-10-12)。
