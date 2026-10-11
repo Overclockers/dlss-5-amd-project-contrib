@@ -181,6 +181,7 @@ jobs:
             exports/mochizuki-runtime/MochizukiNrRuntime.dll
             exports/mochizuki-runtime/build-manifest.json
             exports/mochizuki-runtime/dlssnr-amd/shaders
+            exports/mochizuki-runtime/dlssnr-amd/aco
           key: mochi-${{ runner.os }}-${{ steps.cache_keys.outputs.mochi }}
 
       - name: Restore tooling test receipt
@@ -289,93 +290,59 @@ jobs:
           name: ${{ github.ref_name }}
           generate_release_notes: true
           body: |
-            ### 1.11.0（相较于 1.10.5-alpha）
+            ### v1.12.0-alpha
 
-            - **定向整合上游 OptiScaler UI 升级、稳定性与字体排版修复**：
-              - 采用响应式卡片分类布局，菜单在各类窗口及分辨率下自适应排版。
-              - 保留三后端独立控制、分组 reset 与中英双语本地化支持，增加可选背景模糊（`MenuBlur`）。
-              - 页面切换渲染前主动刷新活动后端状态，彻底解决换页后状态滞后。
-              - 修复零尺寸 HWND 交换链包装问题，修复窗口调整大小时的潜在崩溃；修复 FFX 超分辨率版本查询在空列表或失败情况下的空指针问题。
-              - 重构并扩充 `NotoSansSC-Menu.ttf` 中文字体子集，增补 Mochizuki 专属分项耗时（融/拆/张/浮）与人物保护全部字符，实测 144 种界面布局 0 乱码/豆腐块。
-            - **增加 Authenticode 自签名**：
-              - 签署 staging 二进制并生成 `SIGNATURES.json` 强绑定清单，提升兼容性与防篡改验证。
-            - **实验性：公共残差分频与细节/肤色保护**：
-              - 新增低频增益、细节增益及肤色/边缘保护启发式控制（`NrResidualLowGain`、`NrResidualDetailGain`、`NrResidualSkinProtection`、`NrResidualEdgeProtection`）。
-              - 适用于三后端统一输出，在保持原始色域与 alpha 基础上增强画面立体感与边缘细节。
-            - **实验性：人物/场景分区分割、双后端通用保护与时序抗鬼影**（支持 Mochizuki 与 lmxxf 后端，当前仅使用 Mochizuki 在《燕云十六声》游戏中做了多轮测试）：
-              - 引入基于 ONNX Runtime CPU 的异步轻量推理通道（`NrPersonPartition`）。
-              - 通用打通 lmxxf 与 Mochizuki 双后端的人物保护控制（`NrPersonStrength` 强度 / `NrPersonDetailGain` 细节保留）。
-              - 加入运动对齐的蒙版时序平滑、过期淡出与遮挡拒绝，减轻蒙版刷新时的跳变；快速运动效果仍需游戏验证。
-            - **开箱即用体验与安装器自愈能力增强**：
-              - 安装包正式直接内置 ONNX Runtime 动态库 (MIT) 以及 PP-HumanSeg (Apache-2.0) 与 YOLO11n-seg (AGPL-3.0) 权重，默认启用 PP-HumanSeg（支持在菜单内自由切换），解压即可直接开箱启用人物保护，支持自备模型无缝覆盖。
-              - `Setup.bat` 重装/升级防丢：更新时选择 **Y 先卸载** 也会智能保留并继承已存在的 `person-model`，避免重复下载与意外清空。
-              - 人物推理使用独立 `person-worker.exe`，ONNX 与新版 VC++ 运行库放在 `person-model/`；使用普通优先级与 2–4 个 CPU 线程。
-            - **Mochizuki 后端与 ReShade 设备穿透兼容**：
-              - 修复 ReShade 包装设备与原生 Fence 设备身份不同导致 Mochizuki 提交被拒绝的问题，已在燕云组合测试通过；其他加载顺序及插件仍需验证。
+            - **实验性：同命令列表原地内联执行架构（NrInline 模式）**：
+              - 解决《红色沙漠》（Crimson Desert）等游戏中因跨 Evaluate 未闭合非时间戳 Query（open_query）或复杂增强屏障导致的切分拒绝与崩溃。
+            - **Mochizuki 官方 a9b13dd 深度集成与 ACO 编译器支持**：
+              - 修复 ACO 解码器尾部（C64 到 fused-C32）屏障依赖与生命周期边界（感谢 @[Overclockers](https://github.com/TheAutomatic/dlss-5-amd-project/commits?author=Overclockers)）。
+              - 支持可选 30 层降噪模式与 SR 后 NR 运动矢量直通。
+            - **架构稳定性与自动化测试回归**。
 
             **安装与对应后端权重准备**
 
             - 请完整解压 ZIP 至任意文件夹并运行新包的 `Setup.bat`。更新时推荐选择 **Y 先卸载**，重新使用包内默认配置（已自带人物模型保留规则）。
             - **Daniel 0.6.0**：运行文件请前往 [Daniel 官方发布页](https://github.com/danielblnc/DLSS-NR-on-AMD/releases) 获取；`nvngx_dlssnr.dll` 310.8.0 请自行获取。
             - **lmxxf 0.41**：需自备 `native-game-tiled-assets` 权重目录，见 [原仓库](https://github.com/lmxxf/dlss5-on-amd-9070xt-porting) 或 [下载镜像](https://gofile.io/d/wRln0Pue)。
-            - **Mochizuki 0.0.3（引入0.04部分特性）**：从 `nvngx_dlssnr.dll` 310.8.0（与 Daniel 使用同一文件）提取权重，需要 Python 3.10+。
-            - 如本次安装目标游戏文件夹内留存曾安装过的三后端有效权重，执行 `Setup.bat` 后可自动利用，并补回安装包内缺失的权重，使得日常更新本插件时无需反复重新拷贝。
+            - **Mochizuki 0.0.3（引入 0.04/a9b13dd 特性）**：从 `nvngx_dlssnr.dll` 310.8.0（与 Daniel 使用同一文件）提取权重，需要 Python 3.10+。
             - 本包已内置 PP-HumanSeg 与 YOLO11n-seg 人物分割模型权重（见 Licenses/）；不含 NVIDIA DLL、Daniel 安装器或全图专有神经渲染权重。
 
             **已知问题**
 
+            - 实验性内联模式（`NrInline`）目前需在配置中显式开启，专用于解决不兼容命令列表拆分的游戏；在已兼容切分模式的游戏中建议保持默认。
             - SR → NR 支持 DX12 及 DX11/Vulkan 转 DX12 桥接，不扩展原生 RR/Vulkan；不支持的纹理布局保留 SR 图像并显示原因。
-            - lmxxf 时序历史（抗闪烁）功能与 ViT 自适应复用继续互斥；SR 后 NR 路径暂不启用 lmxxf 时序历史。预测第 3 层使用最后一次真实网络的辅助量，画面仍可能存在近似误差，建议关闭预测第 3 层。
-            - ReShade 兼容性：已修复所测燕云组合的 Mochizuki 提交问题；如其他游戏或注入组合仍无法生效，请附日志反馈。
-            - 部分游戏如遇 NR 丢失带来闪烁或 hook 失效问题，请尝试开启实验性开关“提前接管”（Early command-list wrap / INI: LmxxfEarlyExeWrap，设为 force on，伊莫已默认开启）。
+            - lmxxf 时序历史（抗闪烁）功能与 ViT 自适应复用继续互斥；建议关闭预测第 3 层。
             - 部分场景与 XeFG 插件冲突，请关闭 XeFG 后重新进入游戏。
 
-            感谢各位 Bilibili 用户的测试与反馈。
+            感谢各位用户的测试与反馈。
 
             ---
 
-            ### 1.11.0 (compared to 1.10.5-alpha)
+            ### v1.12.0-alpha
 
-            - **Selective Upstream OptiScaler UI Upgrade, Stability and Chinese Typographic Fixes**:
-              - Responsive card categorization layout adapting across window sizes and resolutions.
-              - Retains dedicated controls for all three backends, group reset, bilingual localization, and optional background blur (`MenuBlur`).
-              - Actively refreshes active backend state before rendering any page to prevent UI display lag.
-              - Fixed zero-sized HWND swapchain wrapping to prevent window resize crashes; rejected failed or empty upscaler version queries in FFX discovery.
-              - Rebuilt and expanded Chinese font subset (`NotoSansSC-Menu.ttf`) with Mochizuki timing metrics glyphs (融/拆/张/浮) and person protection terminology for complete 100% coverage with zero tofu characters.
-            - **Added Authenticode Self-Signing**:
-              - Signs staged binaries and records bound hash manifests in `SIGNATURES.json` for tamper-resistance and loader compatibility.
-            - **Experimental: Shared Residual Shaping and Detail/Skin Protection**:
-              - Added low/detail gain and skin/edge protection heuristics (`NrResidualLowGain`, `NrResidualDetailGain`, `NrResidualSkinProtection`, `NrResidualEdgeProtection`).
-              - Applied across all backends' common outputs while keeping original color space and alpha intact.
-            - **Experimental: Person/Scene Partition, Shared Detail Controls & Anti-Ghosting** (supports Mochizuki and lmxxf backends; currently multi-round tested only on Mochizuki in Where Winds Meet):
-              - Asynchronous CPU inference path via ONNX Runtime supporting selectable PP-HumanSeg (default) and YOLO11n-seg models (`NrPersonPartition`).
-              - Shared person protection controls across lmxxf and Mochizuki (`NrPersonStrength` and `NrPersonDetailGain`).
-              - Added motion-aligned temporal mask smoothing, expiry fading and disocclusion rejection to reduce mask refresh pulses. Fast-motion results still need game validation.
-            - **Out-of-the-Box Packaging & Installer Self-Healing**:
-              - Bundles ONNX Runtime (MIT) along with PP-HumanSeg (Apache-2.0) and YOLO11n-seg (AGPL-3.0) weights under `person-model/`, defaulting to PP-HumanSeg (with in-menu switching) for out-of-the-box evaluation with custom model override support.
-              - `Setup.bat` preserves existing `person-model` assets when upgrading with `uninstallFirst` (selecting Y to uninstall).
-              - Runs person inference in a separate `person-worker.exe` with private ONNX/VC++ dependencies under `person-model/`. Uses normal priority and 2–4 CPU threads.
-            - **Mochizuki & ReShade Native Fence Penetration**:
-              - Resolves D3D12 device wrapper mismatches behind ReShade by safely extracting native device identities through session fences (`accept proven native fence identity behind ReShade`).
+            - **Experimental: Same-Command-List Inline NR Execution (`NrInline` Mode)**:
+              - Resolves split rejection (`open_query`) and crashes in games like *Crimson Desert* caused by unclosed non-timestamp queries or enhanced barriers across Evaluate.
+            - **Mochizuki Official a9b13dd Upstream Integration & ACO Compiler Support**:
+              - Fixed ACO decoder-tail (C64 to fused-C32) barrier dependencies and lifetime boundaries (special thanks to @[Overclockers](https://github.com/TheAutomatic/dlss-5-amd-project/commits?author=Overclockers)).
+              - Added selectable 30-layer pass mode and post-SR NR motion vector passthrough.
+            - **Architectural Stability & Automated Test Coverage**.
 
             **Installation and backend model preparation**
 
-            - Extract the complete ZIP into a folder of your choice and run the new package's `Setup.bat`. When upgrading, we recommend choosing **Y to uninstall first** and start with the package's default settings (existing person models are preserved automatically).
-            - **Daniel 0.6.0**: obtain the runtime files from the [Daniel releases page](https://github.com/danielblnc/DLSS-NR-on-AMD/releases). Obtain `nvngx_dlssnr.dll` 310.8.0 separately.
-            - **lmxxf 0.41**: provide `native-game-tiled-assets` weights from the [upstream repository](https://github.com/lmxxf/dlss5-on-amd-9070xt-porting) or [download mirror](https://gofile.io/d/wRln0Pue).
-            - **Mochizuki 0.0.3 (includes partial 0.0.4 features)**: extract the weights from `nvngx_dlssnr.dll` 310.8.0, the same file used by Daniel. Python 3.10+ is required.
-            - If the game folder selected for this installation still contains valid weights from previous installations of any of the three backends, `Setup.bat` can reuse them and copy missing weights back into the installer folder, so you do not need to copy them manually again for routine plugin updates.
-            - Bundles PP-HumanSeg and YOLO11n-seg person partition models (see Licenses/); NVIDIA DLLs, the Daniel installer and full-frame neural rendering weights are not included.
+            - Extract the complete ZIP into a folder of your choice and run `Setup.bat`. When updating, we recommend choosing **Y to uninstall first** and start with default settings (existing person models are preserved automatically).
+            - **Daniel 0.6.0**: obtain runtime files from the [Daniel releases page](https://github.com/danielblnc/DLSS-NR-on-AMD/releases). Obtain `nvngx_dlssnr.dll` 310.8.0 separately.
+            - **lmxxf 0.41**: provide `native-game-tiled-assets` weights from the [upstream repository](https://github.com/lmxxf/dlss5-on-amd-9070xt-porting) or [mirror](https://gofile.io/d/wRln0Pue).
+            - **Mochizuki 0.0.3 (includes 0.04/a9b13dd features)**: extract weights from `nvngx_dlssnr.dll` 310.8.0 (same file as Daniel). Python 3.10+ is required.
+            - Bundles PP-HumanSeg and YOLO11n-seg person partition models (see Licenses/); NVIDIA DLLs, Daniel installers, and proprietary neural weights are not included.
 
             **Known issues**
 
-            - SR → NR supports DX12 and the DX11/Vulkan-to-DX12 bridges; it does not add native RR/Vulkan support. Unsupported texture layouts preserve the SR image and report the reason.
-            - lmxxf temporal history (anti-flicker) and adaptive ViT reuse remain mutually exclusive; lmxxf temporal history is unavailable in the post-SR NR path. Predicted pass 3 uses auxiliary data from the last real network execution and may introduce approximation artifacts; disabling predicted pass 3 is recommended.
-            - ReShade compatibility: the tested Where Winds Meet combination now submits Mochizuki frames correctly. Other games, load orders and add-ons still need validation; please include logs with reports.
-            - If NR dropping out causes flicker or hook failure in some games, try enabling the experimental "Early command-list wrap" switch (INI: LmxxfEarlyExeWrap, set to force on; enabled by default for Aniimo).
-            - May conflict with the XeFG plugin in certain scenarios; please disable XeFG and restart the game if encountered.
+            - Experimental `NrInline` mode must be explicitly enabled in configuration; intended specifically for games with split-ineligible command lists. Keep default split mode for normally compatible titles.
+            - SR → NR supports DX12 and DX11/Vulkan-to-DX12 bridges; does not provide native RR/Vulkan. Unsupported layouts retain the SR frame and display diagnostic reasons.
+            - lmxxf temporal history and adaptive ViT reuse remain mutually exclusive. Disabling predicted pass 3 is recommended.
+            - May conflict with the XeFG plugin in certain titles; disable XeFG and restart the game if encountered.
 
-            Thanks to all Bilibili users for testing and feedback.
+            Thanks to all users for testing and feedback.
 
             This archive does not include NVIDIA proprietary binaries, the danielblnc installer, or unauthorized model weights.
 
