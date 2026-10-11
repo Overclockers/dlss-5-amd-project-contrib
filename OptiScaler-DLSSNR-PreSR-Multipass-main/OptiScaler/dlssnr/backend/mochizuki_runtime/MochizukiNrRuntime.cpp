@@ -1604,6 +1604,9 @@ struct Recording
     Microsoft::WRL::ComPtr<ID3D12CommandQueue> executingQueue;
     uint64_t tailValue = 0, executions = 0;
     bool invalidated = false, uncertain = false;
+    // inlineExecution is this recording's mode, not the create-time INLINE_QUEUE bit.
+    // privateBuffers is a checked-out set. Split recordings share the session set.
+    bool inlineExecution = false, privateBuffers = false, ended = false;
 };
 
 struct Session
@@ -1632,6 +1635,28 @@ struct Session
     static constexpr uint32_t kRecordingSlots = 4;
     std::vector<FrameBuffers> recordingPool;
     uint32_t recordingBuffersOutstanding = 0;
+
+    uint32_t RecipeCount() const { return static_cast<uint32_t>(recordings.size()); }
+
+    // Inline admission counts a reservation or an unfinished execution.
+    // A closed recording whose tail has completed stays in the map for replay
+    // and does not consume a slot. Split recordings never do.
+    uint32_t InFlightRecordings() const
+    {
+        uint32_t n = 0;
+        for (const auto& entry : recordings)
+        {
+            const Recording* rec = entry.second.get();
+            if (!rec || !rec->inlineExecution || rec->invalidated) continue;
+            if (rec->executingQueue || !rec->ended) { ++n; continue; }
+            if (std::find(enqueueOrder.begin(), enqueueOrder.end(), entry.first) != enqueueOrder.end())
+            { ++n; continue; }
+            if (!rec->tail) continue;
+            const uint64_t done = rec->tail->GetCompletedValue();
+            if (done == UINT64_MAX || done < rec->tailValue) ++n;
+        }
+        return n;
+    }
     D3D12_RESOURCE_DESC bufferResultDesc {};
     // Tokens whose Begin ran while `executing` was already set. Oldest is next.
     std::deque<void*> enqueueOrder;
@@ -2743,19 +2768,18 @@ struct Session
         {
             if (!(recordingPool[i].geometry == geometry) || !SameDesc(recordingPool[i].resultDesc, bufferResultDesc))
                 continue;
-            if (recordingBuffersOutstanding >= kRecordingSlots) return false;
             const bool ok = take(recordingPool[i]);
             recordingPool.erase(recordingPool.begin() + static_cast<std::ptrdiff_t>(i));
             return ok;
         }
-        while (!recordingPool.empty() &&
-               recordingBuffersOutstanding + static_cast<uint32_t>(recordingPool.size()) >= kRecordingSlots)
+        // Idle copies only. A completed recording keeps its own set until Collect,
+        // so the in-flight cap is not a cap on retained recipes.
+        while (recordingPool.size() >= kRecordingSlots)
         {
             FrameBuffers extra = std::move(recordingPool.back());
             recordingPool.pop_back();
             extra.Release(vk.device);
         }
-        if (recordingBuffersOutstanding >= kRecordingSlots) return false;
         FrameBuffers made;
         try { MakeBuffers(made, geometry, bufferResultDesc); }
         catch (...) { made.Release(vk.device); throw; }

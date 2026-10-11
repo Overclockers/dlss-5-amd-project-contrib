@@ -448,6 +448,74 @@ int wmain(int argc,wchar_t**argv) try {
         }
         return job;
     };
+    if(argc>3 && std::wstring(argv[3])==L"--split-retain") {
+        struct Held {
+            LmxxfNrJob job {sizeof job};
+            List in, out;
+            explicit Held(ID3D12Device* d) : in(d), out(d) {}
+        };
+        std::vector<std::unique_ptr<Held>> kept;
+        auto record=[&](Held& h) {
+            Rc(api.RecordInputs(context,h.job.handle,h.in.cmd.Get()));
+            Rc(api.RecordOutputs(context,h.job.handle,h.out.cmd.Get()));
+            frame.Read(h.out.cmd.Get(),static_cast<ID3D12Resource*>(h.job.private_output));
+            Hr(h.in.cmd->Close()); Hr(h.out.cmd->Close());
+        };
+        auto execute=[&](Held& h) {
+            Rc(api.BeginRecordingExecution(context,h.job.handle,q[0].Get()));
+            Submit(q[0].Get(),h.in);
+            Rc(api.EnqueueHip(context,h.job.handle,q[0].Get()));
+            Submit(q[0].Get(),h.out);
+            auto hr=q[0]->Signal(tail.Get(),++value);
+            Rc(api.EndRecordingExecution(context,h.job.handle,q[0].Get(),3,tail.Get(),value,hr));
+            Wait(tail.Get(),value);
+        };
+        ID3D12Resource* shared=nullptr;
+        for(int i=0;i<5;++i) {
+            auto h=std::make_unique<Held>(device.Get());
+            h->job=make(frame);
+            auto* output=static_cast<ID3D12Resource*>(h->job.private_output);
+            Require(output!=nullptr,"split recording has no output");
+            if(!shared) shared=output;
+            Require(output==shared,"split recording allocated a private buffer set");
+            record(*h);
+            execute(*h);
+            char error[256] {}; api.GetLastError(error,sizeof error);
+            Require(std::strstr(error,"inline slots are full")==nullptr,"split prepare reported inline slots full");
+            Require(api.CollectRecording(context,h->job.handle)==LMXXF_NR_UNAVAILABLE,"completed split recording collected before invalidate");
+            kept.push_back(std::move(h));
+        }
+        execute(*kept.front());
+        {
+            auto extra=std::make_unique<Held>(device.Get());
+            extra->job=make(frame);
+            Require(static_cast<ID3D12Resource*>(extra->job.private_output)==shared,"new split recording replaced the shared output");
+            record(*extra);
+            Rc(api.BeginRecordingExecution(context,extra->job.handle,q[0].Get()));
+            MochizukiNrFrameInfo blocked {}; blocked.struct_size=sizeof blocked;
+            blocked.color=frame.color.Get(); blocked.color_width=frame.width; blocked.color_height=frame.height;
+            blocked.color_state=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            blocked.flags=LMXXF_NR_FRAME_FLAG_STRENGTH; blocked.transfer_strength=blocked.color_strength=blocked.model_scale=1; blocked.passes=1;
+            LmxxfNrJob rejected {sizeof rejected};
+            const int rc=prepare(context,&blocked,&rejected);
+            char error[256] {}; api.GetLastError(error,sizeof error);
+            Require(rc==LMXXF_NR_UNAVAILABLE && std::strstr(error,"execution unresolved")!=nullptr,"in-flight split recording admitted another frame");
+            Rc(api.EndRecordingExecution(context,extra->job.handle,q[0].Get(),0,nullptr,0,S_OK));
+            auto followed=std::make_unique<Held>(device.Get());
+            followed->job=make(frame);
+            Require(static_cast<ID3D12Resource*>(followed->job.private_output)==shared,"split output changed after the in-flight frame ended");
+            record(*followed); execute(*followed);
+            kept.push_back(std::move(extra));
+            kept.push_back(std::move(followed));
+        }
+        for(auto& h:kept) {
+            Rc(api.InvalidateRecording(context,h->job.handle));
+            Rc(api.CollectRecording(context,h->job.handle));
+        }
+        Rc(api.Destroy(context)); FreeLibrary(dll);
+        puts("SPLIT_RETAIN_OK");
+        return 0;
+    }
     if(argc>3 && std::wstring(argv[3])==L"--first-pass") {
         auto release=[&](LmxxfNrJob& job) {
             Rc(api.InvalidateRecording(context,job.handle));

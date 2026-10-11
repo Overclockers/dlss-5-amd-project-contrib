@@ -425,62 +425,58 @@ static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const 
             if (g == 1 && page == PipelineUi::Section::Model)
             {
                 bool unlock = config->MochizukiUnlockPasses.value_or_default();
-                if (MenuUi::Checkbox("Allow 30 layers", &unlock))
+                if (MenuUi::Checkbox("Allow up to 30 layers", &unlock))
                 {
                     config->MochizukiUnlockPasses = unlock;
+                    if (!unlock)
+                    {
+                        const uint32_t kept = config->MochizukiPasses.value_or_default();
+                        if (kept > 3u) config->MochizukiPasses = 3u;
+                    }
                     changed = true;
                 }
-                HelpMarker("Default off. Off keeps the 1-3 pass slider."
-                           "\nOn shows Layer mode. 30 layers runs the model thirty times with one history each, then composes once."
-                           "\nThat mode hides the slider. It rebuilds the network. The VRAM budget can refuse it."
-                           "\nINI: [DlssNr] MochizukiUnlockPasses.");
-                if (unlock)
+                HelpMarker("Default off. Off keeps the pass control at 1-3."
+                           "\nOn raises that control to 1-30. It does not jump to 30."
+                           "\nThe count applies when editing finishes. Each added layer runs the model again and can rebuild."
+                           "\n30 is the heavy end of the range. Passes 2 and 3 can still override. Later layers inherit pass 1 with local tone 0."
+                           "\nINI: [DlssNr] MochizukiUnlockPasses and MochizukiPasses.");
+                const int passCap = unlock ? static_cast<int>(Config::kMochizukiLayerPasses) : 3;
+                int v = static_cast<int>(config->MochizukiEffectivePasses());
+                if (MochizukiIntegerControl("Passes", CfgKey::MochizukiPasses, &v, 1, passCap))
                 {
-                    int mode = config->MochizukiLayerMode.value_or_default() == 1u ? 1 : 0;
-                    if (MenuUi::Combo("Layer mode", &mode, "Slider (1-3)\0" "30 layers\0"))
-                    {
-                        config->MochizukiLayerMode = static_cast<uint32_t>(mode);
-                        changed = true;
-                    }
-                    HelpMarker("Slider (1-3) uses the pass slider."
-                               "\n30 layers ignores the slider. Counts from 4 to 29 are not a mode."
-                               "\nPasses 2 and 3 can still override. Later layers inherit pass 1 with local tone 0."
-                               "\nINI: [DlssNr] MochizukiLayerMode.");
-                }
-                if (config->MochizukiEffectivePasses() == Config::kMochizukiLayerPasses)
-                    MenuUi::TextWrapped("30 layers. The pass slider is off in this mode.");
-                else
-                {
-                    int v = static_cast<int>(config->MochizukiPasses.value_or_default());
-                    if (v < 1) v = 1;
-                    if (v > 3) v = 3;
-                    if (MochizukiIntegerControl("Passes", CfgKey::MochizukiPasses, &v, 1, 3))
-                    {
-                        config->MochizukiPasses = static_cast<uint32_t>(v);
-                        changed = true;
-                    }
+                    config->MochizukiPasses = static_cast<uint32_t>(v);
+                    changed = true;
                 }
             }
 #define MZ_F(name, def, low, high, group, label, target) if (g == group && MochizukiOptionOnPage(CfgKey::name, page)) { float v = config->name.value_or_default(); if (MochizukiFloatControl(label, CfgKey::name, &v, low, high)) { config->name = v; changed = true; } }
-#define MZ_U(name, def, low, high, group, label, target) if (g == group && MochizukiOptionOnPage(CfgKey::name, page) && std::string_view(CfgKey::name) != CfgKey::MochizukiPasses && !(std::string_view(CfgKey::name) == CfgKey::MochizukiMaxPasses && config->MochizukiEffectivePasses() == Config::kMochizukiLayerPasses)) { int v = static_cast<int>(config->name.value_or_default()); if (MochizukiIntegerControl(label, CfgKey::name, &v, low, high)) { config->name = static_cast<uint32_t>(v); changed = true; } }
+#define MZ_U(name, def, low, high, group, label, target) if (g == group && MochizukiOptionOnPage(CfgKey::name, page) && std::string_view(CfgKey::name) != CfgKey::MochizukiPasses && std::string_view(CfgKey::name) != CfgKey::MochizukiMaxPasses) { int v = static_cast<int>(config->name.value_or_default()); if (MochizukiIntegerControl(label, CfgKey::name, &v, low, high)) { config->name = static_cast<uint32_t>(v); changed = true; } }
 #define MZ_B(name, def, low, high, group, label, target) if (g == group && MochizukiOptionOnPage(CfgKey::name, page)) { bool v = config->name.value_or_default(); if (MenuUi::Checkbox(label, &v)) { config->name = v; changed = true; } }
 #include "backend/MochizukiOptions.inc"
 #undef MZ_F
 #undef MZ_U
 #undef MZ_B
+            if (g == 4 && page == PipelineUi::Section::Model)
+            {
+                const int cap = config->MochizukiUnlockPasses.value_or_default() ? static_cast<int>(Config::kMochizukiLayerPasses) : 3;
+                int prebuild = static_cast<int>(config->MochizukiMaxPasses.value_or_default());
+                if (prebuild < 0) prebuild = 0;
+                if (prebuild > cap) prebuild = cap;
+                if (MochizukiIntegerControl("Prebuild passes", CfgKey::MochizukiMaxPasses, &prebuild, 0, cap))
+                {
+                    config->MochizukiMaxPasses = static_cast<uint32_t>(prebuild);
+                    changed = true;
+                }
+            }
             if (changed) AmdBridge::InvalidateHistory();
             if (g == 0 || g == 5 || g == 6) MenuUi::TextWrapped("Style is the official Style 0-2. Skin structure -1 follows Structure.");
             if (g == 1) MenuUi::TextWrapped(page == PipelineUi::Section::Input ?
                 "Model scale (WorkingScale) is 25-100% of this stage. Edits apply when editing finishes. 50% halves width and height." :
-                "The slider covers passes 1-3 and applies when editing finishes. Allow 30 layers adds Layer mode. 30 layers hides the slider, costs about 30 model runs and can rebuild.");
+                "The pass control applies when editing finishes. Allow up to 30 layers raises it from 1-3 to 1-30. The selected count can rebuild; 30 runs the model thirty times.");
             if (g == 2) MenuUi::TextWrapped("NR -> SR uses unjittered motion. Mochizuki SR -> NR passes the game vectors through, including jittered ones, and the runtime scales render-resolution motion. The separate Residual Stabilizer filters the final correction.");
             if (g == 3) MenuUi::TextWrapped("Runs before the network. Preprocessing changes what the model sees and reverses that transform from its answer.");
             if (g == 4) MenuUi::TextWrapped(page == PipelineUi::Section::Input ?
                 "DRS buckets reduce rebuilds when the render size changes. White point controls linear-input brightness." :
-                "Automatic prebuild capacity grows as needed and is retained on pass reduction. Capacity is not the active pass count.");
-            if (g == 4 && page == PipelineUi::Section::Model &&
-                config->MochizukiEffectivePasses() == Config::kMochizukiLayerPasses)
-                MenuUi::TextWrapped("30-layer mode builds capacity for all 30 layers. The 1-3 prebuild slider is hidden.");
+                "Automatic prebuild capacity grows as needed and is retained on pass reduction. Capacity is not the active pass count. 0 is automatic. An explicit count is at least the active passes.");
             if (g == 7) {
                 MenuUi::TextWrapped("After the network: detail strength (TransferStrength), colour strength (ColourStrength), highlight guard (MaxRatio) and apply model output (Transfer). Apply model off still runs the network; disable NR to save GPU work.");
                 HelpMarker("Model enlargement applies below 100% model scale. Matched residual is the default. "

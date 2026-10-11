@@ -40,15 +40,32 @@ struct BoundRecording
     }
 };
 
+void LogAdmission(Session* s, const char* mode, const char* event)
+{
+    nr::logf("[mochizuki] %s %s recipe=%u in_flight=%u physical=%u",
+             mode, event, s->RecipeCount(), s->InFlightRecordings(), s->recordingBuffersOutstanding);
+}
+
 int32_t PrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfNrJob* out)
 {
     auto* s = static_cast<Session*>(context);
-    // Another recording may be in flight. Reject only an unresolved tail, and
-    // reject a full slot before CorePrepareFrame so lastFrameId is not advanced.
+    // Split shares one buffer set and may keep many closed lists. Inline ahead
+    // is limited by reservations still executing, not by retained recipes.
+    // INLINE_QUEUE on the session is only permission for a side queue.
     if (!s || s->uncertainExecution)
         return Fail(LMXXF_NR_UNAVAILABLE, "PrepareFrame: execution unresolved");
-    if (s->recordings.size() >= Session::kRecordingSlots)
-        return Fail(LMXXF_NR_UNAVAILABLE, "PrepareFrame: inline slots are full");
+    const bool inlineExec = info && (info->flags & MOCHIZUKI_NR_FRAME_FLAG_INLINE_EXECUTION) != 0;
+    if (!inlineExec && s->executing)
+        return Fail(LMXXF_NR_UNAVAILABLE, "PrepareFrame: execution unresolved");
+    if (inlineExec && s->InFlightRecordings() >= Session::kRecordingSlots)
+    {
+        char text[192] {};
+        std::snprintf(text, sizeof text,
+                      "PrepareFrame: inline slots are full mode=inline recipe=%u in_flight=%u physical=%u",
+                      s->RecipeCount(), s->InFlightRecordings(), s->recordingBuffersOutstanding);
+        LogAdmission(s, "inline", "reject");
+        return Fail(LMXXF_NR_UNAVAILABLE, text);
+    }
     const auto savedFrame = s->lastFrameId;
     const auto savedTick = s->lastFrameTick;
     const int32_t rc = CorePrepareFrame(context, info, out);
@@ -61,17 +78,26 @@ int32_t PrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfNrJob
         r->motion = s->job.motion;
         r->network = s->runtime;
         r->net = s->net;
+        r->inlineExecution = inlineExec;
         bool checkedOut = false;
         try {
-            if (!s->CheckoutRecordingBuffers(r->buffers)) {
-                s->lastFrameId = savedFrame;
-                s->lastFrameTick = savedTick;
-                return Fail(LMXXF_NR_UNAVAILABLE, "PrepareFrame: inline slots are full");
+            if (inlineExec) {
+                if (!s->CheckoutRecordingBuffers(r->buffers)) {
+                    s->lastFrameId = savedFrame;
+                    s->lastFrameTick = savedTick;
+                    LogAdmission(s, "inline", "reject");
+                    return Fail(LMXXF_NR_UNAVAILABLE, "PrepareFrame: recording buffers unavailable");
+                }
+                checkedOut = true;
+                r->privateBuffers = true;
+                // The host builds its SRV from this pointer before any later session swap.
+                out->private_output = r->buffers.result;
+                out->first_pass_output = r->buffers.firstResult;
+            } else {
+                auto view = s->TakeBuffers();
+                r->buffers = view;
+                s->UseBuffers(view);
             }
-            checkedOut = true;
-            // The host builds its SRV from this pointer before any later session swap.
-            out->private_output = r->buffers.result;
-            out->first_pass_output = r->buffers.firstResult;
             s->recordings.emplace(out->handle, std::move(r));
             return int32_t(LMXXF_NR_OK);
         } catch (...) {
@@ -133,6 +159,8 @@ int32_t BeginRecordingExecution(void* context, void* token, void* queue)
     if (const auto rc = CheckExecutionDevice(s, q, "Begin queue"); rc != LMXXF_NR_OK) return rc;
     if (s->uncertainExecution || s->failed)
         return Fail(LMXXF_NR_UNAVAILABLE, "Begin: previous execution unresolved");
+    if (!r->inlineExecution && s->executing)
+        return Fail(LMXXF_NR_UNAVAILABLE, "Begin: execution already active");
     // previousTail is published only after a submitted End, so this wait is on a
     // fence the queue has already been asked to signal. Do not wait on the fence
     // of a recording that has not submitted yet.
@@ -141,6 +169,10 @@ int32_t BeginRecordingExecution(void* context, void* token, void* queue)
     r->executingQueue = q;
     r->job.enqueued = false;
     if (r->executions++) r->job.reset = true; // A replay is a history discontinuity.
+    if (!r->inlineExecution) {
+        s->executing = token;
+        return LMXXF_NR_OK;
+    }
     if (s->executing && s->executing != token) {
         s->enqueueOrder.push_back(token);
         return LMXXF_NR_OK;
@@ -153,9 +185,9 @@ int32_t EnqueueHip(void* context, void* token, void* queue)
 {
     auto* s = static_cast<Session*>(context);
     auto* r = FindRecording(s, token);
-    if (!r || s->executing != token || (!s->inlineQueue && r->executingQueue.Get() != queue))
+    if (!r || s->executing != token || (!r->inlineExecution && r->executingQueue.Get() != queue))
         return Fail(LMXXF_NR_INVALID_ARGUMENT, "Enqueue: Begin on this queue is required");
-    if (s->inlineQueue) {
+    if (r->inlineExecution) {
         auto* q = static_cast<ID3D12CommandQueue*>(queue);
         if (!q || (q->GetDesc().Type != D3D12_COMMAND_LIST_TYPE_DIRECT && q->GetDesc().Type != D3D12_COMMAND_LIST_TYPE_COMPUTE))
             return Fail(LMXXF_NR_INVALID_ARGUMENT, "Enqueue: direct/compute side queue required");
@@ -168,16 +200,18 @@ int32_t EnqueueHip(void* context, void* token, void* queue)
         r->job.width == s->historyWidth && r->job.height == s->historyHeight &&
         r->job.controls.passes == s->historyPasses;
     const bool reset = s->resetPending.exchange(false);
-    if (s->inlineQueue && (r->job.reset || reset || !continuous)) {
+    if (r->job.reset || reset || !continuous) {
         const auto n = ++s->recordingHistoryResets;
         if (n <= 5 || n % 120 == 0)
-            nr::logf("[mochizuki] inline history reset %llu: frame=%llu previous=%llu requested=%u pending=%u motion=%u networkChanged=%u frameGap=%u timeGap=%u geometryChanged=%u passesChanged=%u",
+            nr::logf("[mochizuki] history reset mode=%s %llu: frame=%llu previous=%llu requested=%u pending=%u motion=%u networkChanged=%u frameGap=%u timeGap=%u geometryChanged=%u passesChanged=%u recipe=%u in_flight=%u physical=%u",
+                     r->inlineExecution ? "inline" : "split",
                      static_cast<unsigned long long>(n), static_cast<unsigned long long>(r->frameId),
                      static_cast<unsigned long long>(s->historyFrame), unsigned(r->job.reset), unsigned(reset),
                      unsigned(s->historyMotion), unsigned(s->historyNetwork.lock() != r->network),
                      unsigned(r->frameId != s->historyFrame + 1), unsigned(now - s->historyTick >= 250),
                      unsigned(r->job.width != s->historyWidth || r->job.height != s->historyHeight),
-                     unsigned(r->job.controls.passes != s->historyPasses));
+                     unsigned(r->job.controls.passes != s->historyPasses),
+                     s->RecipeCount(), s->InFlightRecordings(), s->recordingBuffersOutstanding);
     }
     r->job.reset = r->job.reset || reset || !continuous;
     const int32_t rc = WithRecording(context, token, [queue](Session* s, void* j) { return CoreEnqueueHip(s, j, queue); });
@@ -196,10 +230,12 @@ int32_t EnqueueHip(void* context, void* token, void* queue)
         s->historyNetwork.reset();
         s->resetPending = true;
     }
-    if (s->inlineQueue && (s->enqueueCalls <= 5 || s->enqueueCalls % 120 == 0))
-        nr::logf("[mochizuki] inline enqueue frame=%llu rc=%d reset=%u passes=%d calls=%llu",
+    if (s->enqueueCalls <= 5 || s->enqueueCalls % 120 == 0)
+        nr::logf("[mochizuki] %s enqueue frame=%llu rc=%d reset=%u passes=%d calls=%llu recipe=%u in_flight=%u physical=%u",
+                 r->inlineExecution ? "inline" : "split",
                  static_cast<unsigned long long>(r->frameId), rc, unsigned(r->job.reset),
-                 r->job.controls.passes, static_cast<unsigned long long>(s->enqueueCalls));
+                 r->job.controls.passes, static_cast<unsigned long long>(s->enqueueCalls),
+                 s->RecipeCount(), s->InFlightRecordings(), s->recordingBuffersOutstanding);
     return rc;
 }
 
@@ -210,6 +246,7 @@ int32_t EndRecordingExecution(void* context, void* token, void* queue, uint32_t 
     auto* r = FindRecording(s, token);
     if (!r || s->executing != token || r->executingQueue.Get() != queue)
         return Fail(LMXXF_NR_INVALID_ARGUMENT, "End: no matching Begin");
+    r->ended = true;
     s->executing = nullptr;
     if (!s->enqueueOrder.empty()) {
         s->executing = s->enqueueOrder.front();
@@ -262,9 +299,12 @@ int32_t CollectRecording(void* context, void* token)
         const uint64_t done = r->tail->GetCompletedValue();
         if (done == UINT64_MAX || done < r->tailValue) return LMXXF_NR_UNAVAILABLE;
     }
+    const bool recycle = r->privateBuffers;
     FrameBuffers buffers = std::move(r->buffers);
     s->recordings.erase(token);
-    s->RecycleRecordingBuffers(buffers);
+    // A split recording holds a view of the session set. Recycling it would
+    // pool that view and let a later checkout alias the live frame.
+    if (recycle) s->RecycleRecordingBuffers(buffers);
     return LMXXF_NR_OK;
 }
 

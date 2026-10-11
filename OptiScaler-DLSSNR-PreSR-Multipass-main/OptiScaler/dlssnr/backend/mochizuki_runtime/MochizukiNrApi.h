@@ -5,6 +5,9 @@
 // Separate frame contract; the shared v2 table supplies recording ownership and
 // submission operations. It never reinterprets lmxxf's frame or the older fork ABI.
 #define MOCHIZUKI_NR_FRAME_FLAG_TEMPORAL (1u << 8)
+// This frame records on the inline side queue. Absent means command-list split.
+// Create-time LMXXF_NR_CREATE_FLAG_INLINE_QUEUE only permits the side queue.
+#define MOCHIZUKI_NR_FRAME_FLAG_INLINE_EXECUTION (1u << 9)
 typedef struct MochizukiNrFrameInfo
 {
     uint32_t struct_size;

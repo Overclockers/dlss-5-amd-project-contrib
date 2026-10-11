@@ -27,6 +27,7 @@ if /i "%~1"=="aco" goto aco
 if /i "%~1"=="aco-rapid" goto acorapid
 if /i "%~1"=="shader-tail" goto shadertail
 if /i "%~1"=="pass-switch" goto passswitch
+if /i "%~1"=="split-retain" goto splitretain
 if /i "%~1"=="gpu" (
   call tests\mochizuki\run.cmd hdr-shader || exit /b 1
   exports\mochizuki-tests\runtime.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" --composition
@@ -37,6 +38,10 @@ if /i "%~1"=="gpu" (
 )
 if errorlevel 1 exit /b 1
 python -X utf8 -c "from pathlib import Path; import hashlib; p=Path('exports/mochizuki-runtime'); (p/'abi-ci.sha256').write_text(hashlib.sha256((p/'MochizukiNrRuntime.dll').read_bytes()).hexdigest()+'\n')"
+exit /b %errorlevel%
+
+:splitretain
+exports\mochizuki-tests\runtime.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" --split-retain
 exit /b %errorlevel%
 
 :passswitch

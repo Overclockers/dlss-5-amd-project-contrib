@@ -425,7 +425,7 @@ class Config
     CustomOptional<float> MochizukiWhitePoint { 1.f };
     CustomOptional<float> MochizukiModelScale { 1.f };
     CustomOptional<bool> MochizukiUnlockPasses { false };
-    // 0: the 1..3 pass slider. 1: 30 layers, and the slider is not used. Ignored while UnlockPasses is off.
+    // Ignored. Older builds used 1 to force exactly 30 layers. The pass count is MochizukiPasses.
     CustomOptional<uint32_t> MochizukiLayerMode { 0u };
     CustomOptional<uint32_t> MochizukiPasses { 1u };
     CustomOptional<bool> MochizukiTemporal { true };
@@ -1193,14 +1193,13 @@ class Config
 
     static constexpr uint32_t kMochizukiLayerPasses = 30;
 
-    // Slider stays 1..3. 30 is LayerMode while UnlockPasses is on, not a slider position.
+    // UnlockPasses raises the ceiling from 3 to 30. The selected count is MochizukiPasses.
     uint32_t MochizukiEffectivePasses() const
     {
+        const uint32_t cap = MochizukiUnlockPasses.value_or_default() ? kMochizukiLayerPasses : 3u;
         const uint32_t raw = MochizukiPasses.value_or_default();
-        const uint32_t slider = raw < 1u ? 1u : (raw > 3u ? 3u : raw);
-        if (MochizukiUnlockPasses.value_or_default() && MochizukiLayerMode.value_or_default() == 1u)
-            return kMochizukiLayerPasses;
-        return slider;
+        if (raw < 1u) return 1u;
+        return raw > cap ? cap : raw;
     }
 
     static Config* Instance();

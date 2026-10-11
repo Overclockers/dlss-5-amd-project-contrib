@@ -86,7 +86,8 @@ int main(int argc, char** argv) {
                 MochizukiNrFrameInfo f {}; f.struct_size = sizeof f; f.frame_id = tag;
                 f.color = source; f.color_width = width; f.color_height = height;
                 f.color_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-                f.flags = LMXXF_NR_FRAME_FLAG_STRENGTH; f.transfer_strength = f.color_strength = f.model_scale = 1; f.passes = 1;
+                f.flags = LMXXF_NR_FRAME_FLAG_STRENGTH | MOCHIZUKI_NR_FRAME_FLAG_INLINE_EXECUTION;
+                f.transfer_strength = f.color_strength = f.model_scale = 1; f.passes = 1;
                 if (temporalMode) {
                     f.flags |= MOCHIZUKI_NR_FRAME_FLAG_TEMPORAL; f.motion = motion.Get();
                     f.motion_width = width; f.motion_height = height; f.motion_scale_x = f.motion_scale_y = 1;
@@ -358,7 +359,8 @@ int main(int argc, char** argv) {
                     MochizukiNrFrameInfo extra {}; extra.struct_size = sizeof extra; extra.frame_id = 9000;
                     extra.color = patterns[0].Get(); extra.color_width = width; extra.color_height = height;
                     extra.color_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-                    extra.flags = LMXXF_NR_FRAME_FLAG_STRENGTH; extra.transfer_strength = extra.color_strength = extra.model_scale = 1; extra.passes = 1;
+                    extra.flags = LMXXF_NR_FRAME_FLAG_STRENGTH | MOCHIZUKI_NR_FRAME_FLAG_INLINE_EXECUTION;
+                    extra.transfer_strength = extra.color_strength = extra.model_scale = 1; extra.passes = 1;
                     LmxxfNrJob rejected {}; rejected.struct_size = sizeof rejected;
                     const int rc = mzPrepare(context, &extra, &rejected);
                     char message[256] {}; api.GetLastError(message, sizeof message);
