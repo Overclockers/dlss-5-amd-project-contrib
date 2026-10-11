@@ -1,6 +1,7 @@
 #pragma once
-// Shared SR-output adapter. Runtime ABIs remain unchanged: each backend receives
-// one colour-sized guide grid and returns its ordinary FP16 private output.
+// Shared SR-output adapter. Daniel and lmxxf receive one colour-sized guide grid.
+// Mochizuki SR -> NR keeps the caller's render-resolution guides for the network
+// and still writes the private FP16 result back onto the SR output.
 #include "amd/AmdPreSr.h"
 #include "effects/NrOutputEffects.h"
 
@@ -105,16 +106,19 @@ struct Storage
     // Closed recordings may share them; their descriptors remain private below.
     std::shared_ptr<LmxxfRuntime::RecordingCompletion> chain;
     bool unconfirmed = false;
+    bool guides = true;
     UINT width = 0, height = 0;
     DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
     UINT64 bytes = 0;
-    static std::shared_ptr<Storage> Create(std::shared_ptr<Pipeline> p, UINT w, UINT h, DXGI_FORMAT format)
+    static std::shared_ptr<Storage> Create(std::shared_ptr<Pipeline> p, UINT w, UINT h, DXGI_FORMAT format,
+                                           bool withGuides)
     {
         auto s = std::make_shared<Storage>();
         s->pipeline = p;
         s->width = w;
         s->height = h;
         s->format = format;
+        s->guides = withGuides;
         auto make = [&](DXGI_FORMAT f, ID3D12Resource** out)
         {
             auto desc = Effects::Storage::Description(w, h);
@@ -125,11 +129,21 @@ struct Storage
             return SUCCEEDED(
                 p->device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &desc, Read, nullptr, IID_PPV_ARGS(out)));
         };
-        if (!make(DXGI_FORMAT_R32G32_FLOAT, &s->motion) || !make(DXGI_FORMAT_R32_FLOAT, &s->depth) ||
-            !make(format, &s->output))
+        if (withGuides && (!make(DXGI_FORMAT_R32G32_FLOAT, &s->motion) || !make(DXGI_FORMAT_R32_FLOAT, &s->depth)))
+            return {};
+        if (!make(format, &s->output))
             return {};
         return s;
     }
+};
+// ReplaceFrame: Daniel and lmxxf. The backend sees output-sized guides.
+// KeepCallerGuides: resample into scratch for shared effects; the caller's guides stay.
+// WritebackOnly: copy the private result back. No guide resample.
+enum class GuideMode
+{
+    ReplaceFrame,
+    KeepCallerGuides,
+    WritebackOnly
 };
 struct Lease;
 struct State
@@ -285,18 +299,23 @@ inline void Reset()
 // Prepare allocations and register ownership BEFORE recording any GPU command.
 // Failure leaves the SR output intact and never falls back to running NR before SR.
 inline std::shared_ptr<Lease> Prepare(ID3D12GraphicsCommandList* cmd, AmdPreSr::Frame& f, UINT renderWidth,
-                                      UINT renderHeight, std::string& reason)
+                                      UINT renderHeight, std::string& reason,
+                                      GuideMode mode = GuideMode::ReplaceFrame)
 {
-    reason = "SR -> NR: unsupported output or guide layout";
-    if (!cmd || !TextureExtent(f.colour, f.width, f.height) || !TextureExtent(f.depth, renderWidth, renderHeight))
+    const bool guides = mode != GuideMode::WritebackOnly;
+    reason = guides ? "SR -> NR: unsupported output or guide layout" : "SR -> NR: unsupported output";
+    if (!cmd || !TextureExtent(f.colour, f.width, f.height))
         return {};
     const UINT mw = f.motionWidth ? f.motionWidth : renderWidth, mh = f.motionHeight ? f.motionHeight : renderHeight;
     const auto format = OutputFormat(f.colour->GetDesc().Format);
-    if (format == DXGI_FORMAT_UNKNOWN || !TextureExtent(f.motion, mw, mh) ||
-        Effects::DepthFormat(f.depth->GetDesc().Format) == DXGI_FORMAT_UNKNOWN ||
-        Effects::MotionFormat(f.motion->GetDesc().Format) == DXGI_FORMAT_UNKNOWN || f.colour == f.depth ||
-        f.colour == f.motion || f.depth == f.motion || !std::isfinite(f.jitterX) || !std::isfinite(f.jitterY) ||
-        !std::isfinite(f.motionScaleX) || !std::isfinite(f.motionScaleY))
+    if (format == DXGI_FORMAT_UNKNOWN)
+        return {};
+    if (guides &&
+        (!TextureExtent(f.depth, renderWidth, renderHeight) || !TextureExtent(f.motion, mw, mh) ||
+         Effects::DepthFormat(f.depth->GetDesc().Format) == DXGI_FORMAT_UNKNOWN ||
+         Effects::MotionFormat(f.motion->GetDesc().Format) == DXGI_FORMAT_UNKNOWN || f.colour == f.depth ||
+         f.colour == f.motion || f.depth == f.motion || !std::isfinite(f.jitterX) || !std::isfinite(f.jitterY) ||
+         !std::isfinite(f.motionScaleX) || !std::isfinite(f.motionScaleY)))
         return {};
     std::lock_guard lock(Submission::RecordingMutex());
     try
@@ -341,7 +360,8 @@ inline std::shared_ptr<Lease> Prepare(ID3D12GraphicsCommandList* cmd, AmdPreSr::
                      s.pool.end());
         std::shared_ptr<Storage> storage;
         for (auto& a : s.pool)
-            if (!a->unconfirmed && a->width == f.width && a->height == f.height && a->format == format)
+            if (!a->unconfirmed && a->guides == guides && a->width == f.width && a->height == f.height &&
+                a->format == format)
             {
                 storage = a;
                 break;
@@ -363,10 +383,11 @@ inline std::shared_ptr<Lease> Prepare(ID3D12GraphicsCommandList* cmd, AmdPreSr::
             for (auto& l : s.leases)
                 count(l->storage);
             UINT64 estimate = 0;
-            for (auto fmt : { DXGI_FORMAT_R32G32_FLOAT, DXGI_FORMAT_R32_FLOAT, format })
+            const DXGI_FORMAT estimateFormats[] { DXGI_FORMAT_R32G32_FLOAT, DXGI_FORMAT_R32_FLOAT, format };
+            for (size_t i = guides ? 0 : 2; i < 3; ++i)
             {
                 auto desc = Effects::Storage::Description(f.width, f.height);
-                desc.Format = fmt;
+                desc.Format = estimateFormats[i];
                 const auto n = d->GetResourceAllocationInfo(0, 1, &desc).SizeInBytes;
                 if (n == UINT64_MAX)
                     return {};
@@ -380,7 +401,7 @@ inline std::shared_ptr<Lease> Prepare(ID3D12GraphicsCommandList* cmd, AmdPreSr::
                          "lower resolution or wait for recordings";
                 return {};
             }
-            storage = Storage::Create(s.pipeline, f.width, f.height, format);
+            storage = Storage::Create(s.pipeline, f.width, f.height, format, guides);
             if (!storage)
             {
                 reason = "SR -> NR: texture allocation failed";
@@ -428,43 +449,54 @@ inline std::shared_ptr<Lease> Prepare(ID3D12GraphicsCommandList* cmd, AmdPreSr::
             d->CreateUnorderedAccessView(r, nullptr, &v, cpu);
             cpu.ptr += stride;
         };
-        srv(f.motion, Effects::MotionFormat(f.motion->GetDesc().Format));
-        srv(f.depth, Effects::DepthFormat(f.depth->GetDesc().Format));
-        uav(storage->motion.Get(), DXGI_FORMAT_R32G32_FLOAT);
-        uav(storage->depth.Get(), DXGI_FORMAT_R32_FLOAT);
-        // Reserve a separate immutable descriptor range for final composition.
-        cpu.ptr += stride;
+        if (guides)
+        {
+            srv(f.motion, Effects::MotionFormat(f.motion->GetDesc().Format));
+            srv(f.depth, Effects::DepthFormat(f.depth->GetDesc().Format));
+            uav(storage->motion.Get(), DXGI_FORMAT_R32G32_FLOAT);
+            uav(storage->depth.Get(), DXGI_FORMAT_R32_FLOAT);
+            // Reserve a separate immutable descriptor range for final composition.
+            cpu.ptr += stride;
+        }
+        else
+            cpu.ptr += 5 * stride;
         srv(f.colour, Effects::ReadFormat(f.colour->GetDesc().Format));
         uav(storage->output.Get(), format);
         uav(nullptr, DXGI_FORMAT_R32_FLOAT);
-        Barrier(cmd, f.motion, f.motionState, Read);
-        Barrier(cmd, f.depth, f.depthState, Read);
-        Barrier(cmd, storage->motion.Get(), Read, Write);
-        Barrier(cmd, storage->depth.Get(), Read, Write);
-        auto* heap = l->heap.Get();
-        cmd->SetDescriptorHeaps(1, &heap);
-        cmd->SetComputeRootSignature(s.pipeline->root.Get());
-        cmd->SetPipelineState(s.pipeline->guides.Get());
-        cmd->SetComputeRootDescriptorTable(0, heap->GetGPUDescriptorHandleForHeapStart());
-        struct
+        if (guides)
         {
-            UINT w, h, mw, mh, dw, dh;
-            float jx, jy;
-        } constants { f.width, f.height, mw, mh, renderWidth, renderHeight, f.jitterX, f.jitterY };
-        cmd->SetComputeRoot32BitConstants(1, 8, &constants, 0);
-        cmd->Dispatch((f.width + 7) / 8, (f.height + 7) / 8, 1);
-        Barrier(cmd, storage->motion.Get(), Write, Read);
-        Barrier(cmd, storage->depth.Get(), Write, Read);
-        Barrier(cmd, f.motion, Read, f.motionState);
-        Barrier(cmd, f.depth, Read, f.depthState);
-        f.motion = storage->motion.Get();
-        f.depth = storage->depth.Get();
-        f.motionState = f.depthState = Read;
-        f.motionScaleX *= float(f.width) / mw;
-        f.motionScaleY *= float(f.height) / mh;
-        f.motionWidth = f.width;
-        f.motionHeight = f.height;
-        f.jitterX = f.jitterY = 0;
+            Barrier(cmd, f.motion, f.motionState, Read);
+            Barrier(cmd, f.depth, f.depthState, Read);
+            Barrier(cmd, storage->motion.Get(), Read, Write);
+            Barrier(cmd, storage->depth.Get(), Read, Write);
+            auto* heap = l->heap.Get();
+            cmd->SetDescriptorHeaps(1, &heap);
+            cmd->SetComputeRootSignature(s.pipeline->root.Get());
+            cmd->SetPipelineState(s.pipeline->guides.Get());
+            cmd->SetComputeRootDescriptorTable(0, heap->GetGPUDescriptorHandleForHeapStart());
+            struct
+            {
+                UINT w, h, mw, mh, dw, dh;
+                float jx, jy;
+            } constants { f.width, f.height, mw, mh, renderWidth, renderHeight, f.jitterX, f.jitterY };
+            cmd->SetComputeRoot32BitConstants(1, 8, &constants, 0);
+            cmd->Dispatch((f.width + 7) / 8, (f.height + 7) / 8, 1);
+            Barrier(cmd, storage->motion.Get(), Write, Read);
+            Barrier(cmd, storage->depth.Get(), Write, Read);
+            Barrier(cmd, f.motion, Read, f.motionState);
+            Barrier(cmd, f.depth, Read, f.depthState);
+            if (mode == GuideMode::ReplaceFrame)
+            {
+                f.motion = storage->motion.Get();
+                f.depth = storage->depth.Get();
+                f.motionState = f.depthState = Read;
+                f.motionScaleX *= float(f.width) / mw;
+                f.motionScaleY *= float(f.height) / mh;
+                f.motionWidth = f.width;
+                f.motionHeight = f.height;
+                f.jitterX = f.jitterY = 0;
+            }
+        }
         reason.clear();
         return l;
     }

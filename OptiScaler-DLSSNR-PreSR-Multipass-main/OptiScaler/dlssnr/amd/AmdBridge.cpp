@@ -625,7 +625,10 @@ bool Evaluate(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* params, ID3D1
         b->InvalidateHistory();
         DlssNr::Effects::InvalidateHistory(); DlssNr::Person::Invalidate();
         DlssNr::PostSr::Reset();
-        LOG_INFO("AMD NR order: {}", beforeUpscale ? "NR -> SR" : "SR -> NR (experimental)");
+        LOG_INFO("AMD NR order: {}{}", beforeUpscale ? "NR -> SR" : "SR -> NR (experimental)",
+                 !beforeUpscale && active == DlssNr::Backend::Kind::Mochizuki
+                     ? " (Mochizuki: runtime scales render-resolution motion)"
+                     : "");
     }
     // The swapchain's present queue can change when FG is enabled. It is
     // only a bootstrap hint; Submitted identifies the queue executing our list.
@@ -886,25 +889,52 @@ bool Evaluate(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* params, ID3D1
     std::lock_guard effectsLifetime(DlssNr::Submission::RecordingMutex());
     PostSrFrameReport postReport {!beforeUpscale};
     std::shared_ptr<DlssNr::PostSr::Lease> post;
+    const bool mochiNativePost = !beforeUpscale && active == DlssNr::Backend::Kind::Mochizuki;
     if (!beforeUpscale)
     {
-        // Rebuild temporal state if the guide grid changes under a fixed SR output.
+        if (mochiNativePost)
+        {
+            // Low-res motion is still 0 here. The runtime scales whatever extent we
+            // store, so fill and clamp before the history-reset snapshot.
+            const bool fullResMotion = haveFlags && !(flags & NVSDK_NGX_DLSS_Feature_Flags_MVLowRes);
+            if (!fullResMotion)
+            {
+                if (!f.motionWidth) f.motionWidth = renderWidth;
+                if (!f.motionHeight) f.motionHeight = renderHeight;
+            }
+            if (f.motion)
+            {
+                const auto md = f.motion->GetDesc();
+                if (f.motionWidth > md.Width) f.motionWidth = static_cast<UINT>(md.Width);
+                if (f.motionHeight > md.Height) f.motionHeight = md.Height;
+            }
+            f.nativeGuideScale = true;
+        }
+        else
+        {
+            // Jittered MV cannot be used as unjittered post-SR history without a
+            // previous-jitter contract. Keep the host resample spatial there.
+            f.reset |= f.motionJittered;
+        }
+        // The extent the network and the effect scratch will use this frame.
         static UINT lastRenderWidth = 0, lastRenderHeight = 0, lastMotionWidth = 0, lastMotionHeight = 0;
         f.reset |= renderWidth != lastRenderWidth || renderHeight != lastRenderHeight ||
                    f.motionWidth != lastMotionWidth || f.motionHeight != lastMotionHeight;
         lastRenderWidth = renderWidth; lastRenderHeight = renderHeight;
         lastMotionWidth = f.motionWidth; lastMotionHeight = f.motionHeight;
-        // Jittered MV cannot be used as unjittered post-SR history without a
-        // previous-jitter contract. Keep this experimental route spatial there.
-        f.reset |= f.motionJittered;
         std::string reason;
-        post = DlssNr::PostSr::Prepare(cmd, f, renderWidth, renderHeight, reason);
+        const auto mode = mochiNativePost ? DlssNr::PostSr::GuideMode::KeepCallerGuides
+                                          : DlssNr::PostSr::GuideMode::ReplaceFrame;
+        post = DlssNr::PostSr::Prepare(cmd, f, renderWidth, renderHeight, reason, mode);
+        if (!post && mochiNativePost)
+            post = DlssNr::PostSr::Prepare(cmd, f, renderWidth, renderHeight, reason,
+                                           DlssNr::PostSr::GuideMode::WritebackOnly);
         if (!post) { b->InvalidateHistory(); Message(reason.c_str()); return true; }
         postReport.prepared = true;
     }
     const auto kind = static_cast<DlssNr::Backend::Kind>(g_activeKind.load(std::memory_order_acquire));
     const auto personPasses = kind == DlssNr::Backend::Kind::Lmxxf ? cfg.LmxxfMultiPass.value_or_default() :
-        kind == DlssNr::Backend::Kind::Mochizuki ? cfg.MochizukiPasses.value_or_default() : cfg.DlssNrPasses.value_or_default();
+        kind == DlssNr::Backend::Kind::Mochizuki ? cfg.MochizukiEffectivePasses() : cfg.DlssNrPasses.value_or_default();
     const auto personSettings = DlssNr::Person::Settings {
         cfg.NrPersonStrength.value_or_default(), cfg.NrPersonDetailGain.value_or_default(),
         cfg.NrPersonDebugMask.value_or_default() }.Bounded();
@@ -932,18 +962,42 @@ bool Evaluate(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* params, ID3D1
         effectRecorded = true;
         const bool isLmxxf = g_activeKind.load(std::memory_order_acquire) == static_cast<int>(DlssNr::Backend::Kind::Lmxxf);
         if (person && personPasses == 1) firstPass = replacement;
+        ID3D12Resource* effectMotion = f.motion;
+        ID3D12Resource* effectDepth = f.depth;
+        auto effectMotionState = f.motionState;
+        auto effectDepthState = f.depthState;
+        UINT effectMotionW = f.motionWidth ? f.motionWidth : f.width;
+        UINT effectMotionH = f.motionHeight ? f.motionHeight : f.height;
+        float effectScaleX = f.motionScaleX, effectScaleY = f.motionScaleY;
+        float effectJitterX = f.jitterX, effectJitterY = f.jitterY;
+        bool effectJittered = f.motionJittered;
+        if (mochiNativePost && post && post->storage && post->storage->guides && post->storage->motion &&
+            post->storage->depth)
+        {
+            const UINT srcW = f.motionWidth ? f.motionWidth : renderWidth;
+            const UINT srcH = f.motionHeight ? f.motionHeight : renderHeight;
+            effectMotion = post->storage->motion.Get();
+            effectDepth = post->storage->depth.Get();
+            effectMotionState = effectDepthState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            effectMotionW = f.width;
+            effectMotionH = f.height;
+            effectScaleX = srcW ? f.motionScaleX * float(f.width) / float(srcW) : f.motionScaleX;
+            effectScaleY = srcH ? f.motionScaleY * float(f.height) / float(srcH) : f.motionScaleY;
+            effectJitterX = effectJitterY = 0;
+            effectJittered = false;
+        }
         if (person) replacement = DlssNr::Person::Record(cmd, f.colour, firstPass, replacement,
             f.colourState, f.width, f.height,
-            {f.motion, f.depth, f.motionState, f.depthState,
-             f.motionWidth ? f.motionWidth : f.width, f.motionHeight ? f.motionHeight : f.height,
-             f.motionScaleX, f.motionScaleY, f.jitterX, f.jitterY, f.preExposure, f.exposureScale,
-             f.depthInverted, f.motionJittered, f.reset}, DlssNr::Person::Worker().Latest(), personSettings);
+            {effectMotion, effectDepth, effectMotionState, effectDepthState,
+             effectMotionW, effectMotionH,
+             effectScaleX, effectScaleY, effectJitterX, effectJitterY, f.preExposure, f.exposureScale,
+             f.depthInverted, effectJittered, f.reset}, DlssNr::Person::Worker().Latest(), personSettings);
         replacement = DlssNr::Effects::Record(cmd, f.colour, replacement, f.colourState, f.width, f.height,
             cfg.NrOverallIntensity.value_or_default(), isLmxxf && cfg.NrTimingEnabled.value_or_default(),
-            {f.motion, f.depth, f.motionState, f.depthState,
-             f.motionWidth ? f.motionWidth : f.width, f.motionHeight ? f.motionHeight : f.height,
-             f.motionScaleX, f.motionScaleY, f.jitterX, f.jitterY, f.preExposure, f.exposureScale,
-             f.depthInverted, f.motionJittered, f.reset},
+            {effectMotion, effectDepth, effectMotionState, effectDepthState,
+             effectMotionW, effectMotionH,
+             effectScaleX, effectScaleY, effectJitterX, effectJitterY, f.preExposure, f.exposureScale,
+             f.depthInverted, effectJittered, f.reset},
             {cfg.NrStabilizerEnabled.value_or_default(), cfg.NrStabilizerAlpha.value_or_default(),
              cfg.NrStabilizerThreshold.value_or_default()},
             {cfg.NrResidualLowGain.value_or_default(), cfg.NrResidualDetailGain.value_or_default(),

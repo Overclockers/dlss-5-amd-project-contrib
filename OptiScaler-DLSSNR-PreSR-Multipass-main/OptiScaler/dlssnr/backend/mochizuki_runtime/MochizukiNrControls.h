@@ -59,7 +59,8 @@ extern "C"
         uint32_t apply_model;    /* default 1; 0 runs the network at full cost and shows the original */
         uint32_t linear_input;   /* 0 auto (float formats are linear, default), 1 on, 2 off; rebuilds the network */
         uint32_t max_passes;     /* 0 (default): grow for the frame's passes, retain capacity on reduction;
-                                 * else 1..3: request exact capacity, at least the frame's; may rebuild */
+                                 * else 1..30: request exact capacity, at least the frame's; may rebuild.
+                                 * 30 is the host's layer mode, not a slider step. */
         /* Dynamic resolution. 0 exact (the default here and in a zeroed struct): the network is built for the
          * frame's render subrect, so every change of it rebuilds. 1 auto (the host's default, through
          * MochizukiDynamicResolution): as exact until a subrect smaller than the colour texture comes, then a

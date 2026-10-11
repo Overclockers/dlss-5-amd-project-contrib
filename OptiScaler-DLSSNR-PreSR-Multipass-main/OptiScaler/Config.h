@@ -269,7 +269,8 @@ class Config
     CustomOptional<bool> DlssNrEnabled { false };
     CustomOptional<int> DlssNrXeFGInterpolationCount { 0 };
     // Run the NR pass on the upscaler's colour input, at render resolution, immediately before SR.
-    // Off selects experimental SR -> NR for all AMD backends (DX12 and bridges).
+    // Off selects experimental SR -> NR. Mochizuki keeps render-resolution motion and the runtime
+    // scales it. Daniel and lmxxf resample those guides onto the output grid in the host.
     CustomOptional<bool> DlssNrRunBeforeSr { true };
     CustomOptional<bool> DlssNrApplyAfterRR { false };
     CustomOptional<unsigned int> DlssNrRRPasses { 1 };
@@ -423,6 +424,9 @@ class Config
     CustomOptional<bool> MochizukiAcoMode { false };
     CustomOptional<float> MochizukiWhitePoint { 1.f };
     CustomOptional<float> MochizukiModelScale { 1.f };
+    CustomOptional<bool> MochizukiUnlockPasses { false };
+    // 0: the 1..3 pass slider. 1: 30 layers, and the slider is not used. Ignored while UnlockPasses is off.
+    CustomOptional<uint32_t> MochizukiLayerMode { 0u };
     CustomOptional<uint32_t> MochizukiPasses { 1u };
     CustomOptional<bool> MochizukiTemporal { true };
     CustomOptional<float> MochizukiHistoryStrength { 1.f };
@@ -1186,6 +1190,18 @@ class Config
     void CheckUpscalerFiles();
 
     std::vector<std::string> GetConfigLog();
+
+    static constexpr uint32_t kMochizukiLayerPasses = 30;
+
+    // Slider stays 1..3. 30 is LayerMode while UnlockPasses is on, not a slider position.
+    uint32_t MochizukiEffectivePasses() const
+    {
+        const uint32_t raw = MochizukiPasses.value_or_default();
+        const uint32_t slider = raw < 1u ? 1u : (raw > 3u ? 3u : raw);
+        if (MochizukiUnlockPasses.value_or_default() && MochizukiLayerMode.value_or_default() == 1u)
+            return kMochizukiLayerPasses;
+        return slider;
+    }
 
     static Config* Instance();
 

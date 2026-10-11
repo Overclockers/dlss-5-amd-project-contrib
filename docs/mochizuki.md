@@ -92,19 +92,19 @@ lmxxf settings. The complete defaults are in the shipped `OptiScaler.ini`.
 
 | Group | Controls and behavior |
 |---|---|
-| Pass 1 | Model Intensity, Style (Standard/Natural/Cinematic), LocalTone, LocalStructure, SkinStructure (-1 follows Structure), AutomaticMask |
-| Output adjustment | ApplyModel, DetailStrength, ColourStrength, MaxRatio highlight guard |
-| Quality | ModelScale (0.25–1), Passes (1–3). Both affect GPU cost and can rebuild the network; edits commit when editing finishes |
-| Temporal history | Temporal and HistoryStrength. Requires supported, unjittered motion vectors; unavailable vectors disable history |
-| Preprocessing | Preprocess, PreprocessExposure (Off/Auto/Fixed), PreprocessBiasEv, PreprocessCurve (None/Neutral/Reinhard/Filmic/GT/ACES/AgX), PreprocessContrast and PreprocessSaturation. The transform changes the model input and is reversed from its answer |
+| Model response | Model Intensity, Style (official Style 0–2), LocalTone, LocalStructure, SkinStructure (-1 follows Structure), AutomaticMask |
+| After the model | ApplyModel (Transfer), DetailStrength (TransferStrength), ColourStrength, MaxRatio highlight guard, enlargement and ClassicScaler |
+| Resolution / Model passes | ModelScale (WorkingScale, 0.25–1), Passes slider (1–3). Allow 30 layers shows Layer mode: the slider, or 30 layers with the slider hidden. 30 runs the model 30 times in one network, one history image per layer, then one composition. Counts 4–29 are not a mode. Layers after 3 inherit pass 1 with local tone 0. This rebuilds; the VRAM budget can refuse it |
+| Temporal history | Temporal and HistoryStrength. NR → SR drops jittered motion. Mochizuki SR → NR passes the game vectors through and the runtime scales the render-resolution motion region |
+| Before the model | Preprocess, PreprocessExposure (Off/Auto/Fixed), PreprocessBiasEv, PreprocessCurve (None/Neutral/Reinhard/Filmic/GT/ACES/AgX), PreprocessContrast and PreprocessSaturation. The transform changes the model input and is reversed from its answer |
 | Advanced | WhitePoint for linear input, LinearInput (Auto/Linear/Encoded), MaxPasses (0 grows capacity as needed and retains it on pass reduction), DynamicResolution (Exact/Auto bucket/Always bucket) |
 | Pass 2/3 | Explicit override plus that pass's style, intensity, tone, structure, skin structure and mask. With override off, inherit pass 1 but use zero LocalTone |
 
 The NR menu uses a clickable pre-SR flow chart. **Prepare NR input** contains model
-resolution, preprocessing and advanced input encoding/white point/DRS. **NR model**
-contains pass count, Pass 1 and enabled Pass 2/3, temporal history and prebuild
-capacity. **Apply NR edit** contains output adjustment and the shared intensity and
-stabilizer. The model page opens first; page buttons remain available when the chart
+resolution (WorkingScale), preprocessing and advanced input encoding/white point/DRS. **NR model**
+contains pass count, model response and enabled Pass 2/3, temporal history and prebuild
+capacity. **Apply NR edit** contains the after-the-model correction and the shared intensity and
+stabilizer. Processing order and the ACO checkbox sit above the pages. The model page opens first; page buttons remain available when the chart
 is collapsed. Compatibility and diagnostics remain separate tools below the page.
 Disabling a pass hides its controls without deleting its settings. Model resolution
 displays as a percentage; resolution, pass count and prebuild-pass edits commit on
@@ -167,7 +167,7 @@ outside this measurement. Display and timing log options default off; summaries
 are limited to one per ten seconds, and query reads never wait for the GPU.
 `mochizuki_nr.log` respects file logging and stops appending at 4 MiB.
 
-Under **Apply NR edit → Output adjustment**, **Model enlargement**
+Under **Apply NR edit → After the model**, **Model enlargement**
 (`MochizukiEnlargeMode`) offers matched residual (0, default), edge-aware (1) or
 classic (2). It applies only below 100% model scale. Edge-aware uses a 4×4
 neighbourhood guided by the original pixel's brightness. Classic uses
@@ -186,6 +186,7 @@ U8 output keeps its rounding path. Model scale 100% is unchanged. The control is
 owned by the INI/menu and does not follow `NR_*` environment variables.
 
 **ACO mode** (`MochizukiAcoMode=false`, default) asks for AMD pipeline binaries.
+The menu checkbox is **ACO fast mode (experimental)**, next to Processing order.
 The extension is chosen when the Vulkan device is created. Effective stays off
 until Install publishes the network that will run; a candidate discarded by its
 frame-buffer check leaves the installed network's effective state unchanged.

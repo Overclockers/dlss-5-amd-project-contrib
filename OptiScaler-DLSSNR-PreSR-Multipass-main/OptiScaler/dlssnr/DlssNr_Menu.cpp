@@ -168,14 +168,29 @@ static bool MochizukiOptionOnPage(std::string_view key, PipelineUi::Section page
     if (key == CfgKey::MochizukiDetailStrength || key == CfgKey::MochizukiColourStrength ||
         key == CfgKey::MochizukiMaxRatio || key == CfgKey::MochizukiApplyModel ||
         key == CfgKey::MochizukiEnlargeMode || key == CfgKey::MochizukiClassicScaler ||
-        key == CfgKey::MochizukiCompactTransfer || key == CfgKey::MochizukiAcoMode)
+        key == CfgKey::MochizukiCompactTransfer)
         return page == Section::Output;
     return page == Section::Model;
+}
+
+struct AcoMenuChoice
+{
+    bool captured = false;
+    bool session = false;
+    bool shown = false;
+};
+static AcoMenuChoice& AcoMenu()
+{
+    static AcoMenuChoice choice;
+    return choice;
 }
 
 static void ResetMochizuki(Config* config, int selectedGroup = -1,
     std::optional<PipelineUi::Section> page = std::nullopt)
 {
+    const bool resetAco = (selectedGroup < 0 || selectedGroup == 7) &&
+        (!page || *page == PipelineUi::Section::Model);
+    const bool sessionAco = config->MochizukiAcoMode.value_or_default();
 #define MZ_F(name, def, low, high, group, label, target) if ((selectedGroup < 0 || selectedGroup == group) && (!page || MochizukiOptionOnPage(CfgKey::name, *page))) config->name = std::optional<float>{};
 #define MZ_U(name, def, low, high, group, label, target) if ((selectedGroup < 0 || selectedGroup == group) && (!page || MochizukiOptionOnPage(CfgKey::name, *page))) config->name = std::optional<uint32_t>{};
 #define MZ_B(name, def, low, high, group, label, target) if ((selectedGroup < 0 || selectedGroup == group) && (!page || MochizukiOptionOnPage(CfgKey::name, *page))) config->name = std::optional<bool>{};
@@ -183,6 +198,23 @@ static void ResetMochizuki(Config* config, int selectedGroup = -1,
 #undef MZ_F
 #undef MZ_U
 #undef MZ_B
+    if (resetAco)
+    {
+        // Device creation already chose the compiler. Keep this session on it.
+        if (sessionAco)
+            config->MochizukiAcoMode = sessionAco;
+        config->MochizukiAcoMode.set_for_next_launch(false);
+        auto& choice = AcoMenu();
+        choice.captured = true;
+        choice.session = sessionAco;
+        choice.shown = false;
+    }
+    if ((selectedGroup < 0 || selectedGroup == 1) &&
+        (!page || *page == PipelineUi::Section::Model))
+    {
+        config->MochizukiUnlockPasses = std::optional<bool> {};
+        config->MochizukiLayerMode = std::optional<uint32_t> {};
+    }
     AmdBridge::InvalidateHistory();
 }
 
@@ -279,7 +311,7 @@ static void RenderSharedOutputEffects(Config* config)
     ImGui::EndDisabled();
     const auto personKind = Backend::ActiveKindFromConfig();
     const auto personPasses = personKind == Backend::Kind::Lmxxf ? config->LmxxfMultiPass.value_or_default() :
-        personKind == Backend::Kind::Mochizuki ? config->MochizukiPasses.value_or_default() : 0;
+        personKind == Backend::Kind::Mochizuki ? config->MochizukiEffectivePasses() : 0;
     const bool personSupported = personKind == Backend::Kind::Lmxxf || personKind == Backend::Kind::Mochizuki;
     bool person = config->NrPersonPartition.value_or_default();
     ImGui::BeginDisabled(!personSupported);
@@ -375,14 +407,14 @@ static void RenderEarlyCommandListWrap(Config* config)
 
 static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const std::string& status)
 {
-    static const char* groups[] = {"Pass 1", "Quality", "Temporal history", "Preprocessing", "Advanced", "Pass 2", "Pass 3", "Output adjustment"};
+    static const char* groups[] = {"Model response", "Quality", "Temporal history", "Before the model", "Advanced", "Pass 2", "Pass 3", "After the model"};
     static constexpr int order[] = {1, 0, 5, 6, 7, 2, 3, 4};
     for (int g : order)
     {
         const bool shown = page == PipelineUi::Section::Input ? (g == 1 || g == 3 || g == 4) :
             page == PipelineUi::Section::Model ? (g == 1 || g == 0 || g == 5 || g == 6 || g == 2 || g == 4) : g == 7;
         if (!shown) continue;
-        const auto passes = config->MochizukiPasses.value_or_default();
+        const auto passes = config->MochizukiEffectivePasses();
         if ((g == 5 && passes < 2) || (g == 6 && passes < 3)) continue;
         ImGui::PushID(g);
         const char* label = g == 1 ? (page == PipelineUi::Section::Input ? "Resolution" : "Model passes") :
@@ -390,30 +422,70 @@ static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const 
         if (MenuUi::TreeNodeEx(label, (g == 0 || g == 1 || g == 5 || g == 6) ? ImGuiTreeNodeFlags_DefaultOpen : 0))
         {
             bool changed = false;
+            if (g == 1 && page == PipelineUi::Section::Model)
+            {
+                bool unlock = config->MochizukiUnlockPasses.value_or_default();
+                if (MenuUi::Checkbox("Allow 30 layers", &unlock))
+                {
+                    config->MochizukiUnlockPasses = unlock;
+                    changed = true;
+                }
+                HelpMarker("Default off. Off keeps the 1-3 pass slider."
+                           "\nOn shows Layer mode. 30 layers runs the model thirty times with one history each, then composes once."
+                           "\nThat mode hides the slider. It rebuilds the network. The VRAM budget can refuse it."
+                           "\nINI: [DlssNr] MochizukiUnlockPasses.");
+                if (unlock)
+                {
+                    int mode = config->MochizukiLayerMode.value_or_default() == 1u ? 1 : 0;
+                    if (MenuUi::Combo("Layer mode", &mode, "Slider (1-3)\0" "30 layers\0"))
+                    {
+                        config->MochizukiLayerMode = static_cast<uint32_t>(mode);
+                        changed = true;
+                    }
+                    HelpMarker("Slider (1-3) uses the pass slider."
+                               "\n30 layers ignores the slider. Counts from 4 to 29 are not a mode."
+                               "\nPasses 2 and 3 can still override. Later layers inherit pass 1 with local tone 0."
+                               "\nINI: [DlssNr] MochizukiLayerMode.");
+                }
+                if (config->MochizukiEffectivePasses() == Config::kMochizukiLayerPasses)
+                    MenuUi::TextWrapped("30 layers. The pass slider is off in this mode.");
+                else
+                {
+                    int v = static_cast<int>(config->MochizukiPasses.value_or_default());
+                    if (v < 1) v = 1;
+                    if (v > 3) v = 3;
+                    if (MochizukiIntegerControl("Passes", CfgKey::MochizukiPasses, &v, 1, 3))
+                    {
+                        config->MochizukiPasses = static_cast<uint32_t>(v);
+                        changed = true;
+                    }
+                }
+            }
 #define MZ_F(name, def, low, high, group, label, target) if (g == group && MochizukiOptionOnPage(CfgKey::name, page)) { float v = config->name.value_or_default(); if (MochizukiFloatControl(label, CfgKey::name, &v, low, high)) { config->name = v; changed = true; } }
-#define MZ_U(name, def, low, high, group, label, target) if (g == group && MochizukiOptionOnPage(CfgKey::name, page)) { int v = static_cast<int>(config->name.value_or_default()); if (MochizukiIntegerControl(label, CfgKey::name, &v, low, high)) { config->name = static_cast<uint32_t>(v); changed = true; } }
+#define MZ_U(name, def, low, high, group, label, target) if (g == group && MochizukiOptionOnPage(CfgKey::name, page) && std::string_view(CfgKey::name) != CfgKey::MochizukiPasses && !(std::string_view(CfgKey::name) == CfgKey::MochizukiMaxPasses && config->MochizukiEffectivePasses() == Config::kMochizukiLayerPasses)) { int v = static_cast<int>(config->name.value_or_default()); if (MochizukiIntegerControl(label, CfgKey::name, &v, low, high)) { config->name = static_cast<uint32_t>(v); changed = true; } }
 #define MZ_B(name, def, low, high, group, label, target) if (g == group && MochizukiOptionOnPage(CfgKey::name, page)) { bool v = config->name.value_or_default(); if (MenuUi::Checkbox(label, &v)) { config->name = v; changed = true; } }
 #include "backend/MochizukiOptions.inc"
 #undef MZ_F
 #undef MZ_U
 #undef MZ_B
             if (changed) AmdBridge::InvalidateHistory();
-            if (g == 0 || g == 5 || g == 6) MenuUi::TextWrapped("Skin structure -1 follows Structure.");
+            if (g == 0 || g == 5 || g == 6) MenuUi::TextWrapped("Style is the official Style 0-2. Skin structure -1 follows Structure.");
             if (g == 1) MenuUi::TextWrapped(page == PipelineUi::Section::Input ?
-                "Resolution edits apply when editing finishes. 50% halves width and height." :
-                "Pass edits apply when editing finishes. More passes increase GPU cost and memory.");
-            if (g == 2) MenuUi::TextWrapped("History needs unjittered motion vectors. The separate Residual Stabilizer filters the final correction.");
-            if (g == 3) MenuUi::TextWrapped("Preprocessing changes what the model sees and reverses that transform from its answer.");
+                "Model scale (WorkingScale) is 25-100% of this stage. Edits apply when editing finishes. 50% halves width and height." :
+                "The slider covers passes 1-3 and applies when editing finishes. Allow 30 layers adds Layer mode. 30 layers hides the slider, costs about 30 model runs and can rebuild.");
+            if (g == 2) MenuUi::TextWrapped("NR -> SR uses unjittered motion. Mochizuki SR -> NR passes the game vectors through, including jittered ones, and the runtime scales render-resolution motion. The separate Residual Stabilizer filters the final correction.");
+            if (g == 3) MenuUi::TextWrapped("Runs before the network. Preprocessing changes what the model sees and reverses that transform from its answer.");
             if (g == 4) MenuUi::TextWrapped(page == PipelineUi::Section::Input ?
                 "DRS buckets reduce rebuilds when the render size changes. White point controls linear-input brightness." :
                 "Automatic prebuild capacity grows as needed and is retained on pass reduction. Capacity is not the active pass count.");
+            if (g == 4 && page == PipelineUi::Section::Model &&
+                config->MochizukiEffectivePasses() == Config::kMochizukiLayerPasses)
+                MenuUi::TextWrapped("30-layer mode builds capacity for all 30 layers. The 1-3 prebuild slider is hidden.");
             if (g == 7) {
-                MenuUi::TextWrapped("Detail and colour strength adjust the final correction. Apply model off still runs the network; disable NR to save GPU work.");
+                MenuUi::TextWrapped("After the network: detail strength (TransferStrength), colour strength (ColourStrength), highlight guard (MaxRatio) and apply model output (Transfer). Apply model off still runs the network; disable NR to save GPU work.");
                 HelpMarker("Model enlargement applies below 100% model scale. Matched residual is the default. "
-                           "Edge-aware costs more GPU time. Classic uses the scaler below; Catmull-Rom is its default."
-                           "\nReuse output buffer keeps one full-resolution float image when the frame is RGBA32F. Switching rebuilds the network."
-                           "\nACO mode uses AMD pipeline binaries when this build's records match and the driver accepts them. "
-                           "It applies on the next game start. A missing bundle or unsupported device keeps the driver's compiler.");
+                           "Edge-aware costs more GPU time. Classic uses the scaler below (ClassicScaler); Catmull-Rom is its default."
+                           "\nReuse output buffer keeps one full-resolution float image when the frame is RGBA32F. Switching rebuilds the network.");
             }
             if (g == 5 || g == 6) MenuUi::TextWrapped("Without override, later passes inherit pass 1 with Local tone set to zero.");
             if (MenuUi::Button("Reset this group")) ResetMochizuki(config, g, page);
@@ -551,13 +623,41 @@ void RenderMenu(Config* config, float menuResScale)
                 config->DlssNrRunBeforeSr = order == 0;
                 AmdBridge::InvalidateHistory();
             }
-            HelpMarker("Applies to Daniel, lmxxf and Mochizuki on DX12 and the DX11/Vulkan-to-DX12 bridges."
-                       "\nNR -> SR enhances the render-resolution input. SR -> NR enhances the upscaled output."
+            HelpMarker("NR -> SR enhances the render-resolution input. SR -> NR enhances the upscaled output."
+                       "\nMochizuki SR -> NR keeps the game's render-resolution motion and the runtime scales it."
+                       "\nDaniel and lmxxf SR -> NR resample depth and motion onto the output grid."
                        "\nThe model resolution setting is relative to the selected input; SR -> NR can cost much more GPU time and memory."
                        "\nSwitching clears history. If recording hooks were not enabled at startup, Save Settings and restart."
                        "\nNative Ray Reconstruction and native Vulkan are not added by this option."
-                       "\nJittered motion vectors use spatial NR in the experimental path. Unsupported buffers keep the SR image and show a status message."
+                       "\nMochizuki passes jittered motion through. Daniel and lmxxf use spatial NR for those vectors."
+                       "\nUnsupported buffers keep the SR image and show a status message."
                        "\nINI: [DlssNr] RunBeforeSR=true / false. Save Settings to keep the selection.");
+            if (kind == Backend::Kind::Mochizuki)
+            {
+                auto& choice = AcoMenu();
+                if (!choice.captured)
+                {
+                    choice.session = config->MochizukiAcoMode.value_or_default();
+                    choice.shown = choice.session;
+                    choice.captured = true;
+                }
+                bool aco = choice.shown;
+                if (MenuUi::Checkbox("ACO fast mode (experimental)", &aco))
+                {
+                    choice.shown = aco;
+                    if (aco == choice.session)
+                        config->MochizukiAcoMode = choice.session;
+                    else
+                        config->MochizukiAcoMode.set_for_next_launch(aco);
+                }
+                HelpMarker("Uses the shipped ACO machine code instead of the driver's compiler."
+                           "\nExperimental. Another driver may reject it; NR then keeps the driver's compiler."
+                           "\nSave Settings, then restart the game. This session does not switch."
+                           "\nINI: [DlssNr] MochizukiAcoMode.");
+                if (choice.shown != choice.session)
+                    MenuUi::TextColored(ImVec4(1.f, 0.f, 0.f, 1.f),
+                                        "Save Settings, then restart the game.");
+            }
             ImGui::PushID(static_cast<int>(kind));
             static PipelineUi::Section pages[3] {PipelineUi::Section::Model, PipelineUi::Section::Model, PipelineUi::Section::Model};
             auto& page = pages[static_cast<int>(kind)];
@@ -573,7 +673,7 @@ void RenderMenu(Config* config, float menuResScale)
                     view.model += MenuLocale::Translate(" (2 real + prediction)");
             } else if (kind == Backend::Kind::Mochizuki) {
                 view.input = MenuLocale::Translate("Model resolution: ") + std::to_string(int(std::lround(config->MochizukiModelScale.value_or_default() * 100))) + "%";
-                view.model = std::to_string(config->MochizukiPasses.value_or_default()) + MenuLocale::Translate(" pass(es) requested");
+                view.model = std::to_string(config->MochizukiEffectivePasses()) + MenuLocale::Translate(" pass(es) requested");
             } else {
                 view.input = MenuLocale::Translate("Model resolution: ") + std::to_string(int(std::lround(config->AmdNrScale.value_or_default() * 100))) + "%";
                 view.model = std::to_string(config->DlssNrPasses.value_or_default()) + MenuLocale::Translate(" pass(es) configured");

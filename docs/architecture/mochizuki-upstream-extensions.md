@@ -1,7 +1,7 @@
 # Mochizuki: upstream ownership and remaining interfaces
 
 The product follows official `a9b13dd4cdb5f4bf43db358492d72e6e5e2acd67` core,
-graph, shaders and recipes. The seven residual feature patches are now explicit in
+graph, shaders and recipes. The eight residual feature patches are now explicit in
 [the pin manifest](../../tools/mochizuki-sync/manifest.json), with a non-mutating
 [replay check](../../tools/mochizuki-sync/README.md). They reproduce the existing
 audited vendor snapshot; no inference arithmetic or runtime behavior was changed
@@ -10,8 +10,8 @@ claim that either backend directly loads the author's distributed binary.
 
 ## What belongs to the host
 
-Upstream proposal scope is **optional interfaces only**. The local seven-patch
-inventory records the current product integration, not seven implementations to
+Upstream proposal scope is **optional interfaces only**. The local eight-patch
+inventory records the current product integration, not eight implementations to
 transplant upstream. The upstream preparation branch has reverted the ACO,
 buffer-optimization and timing-calculation snapshots. Keep official ACO and timing
 behavior; request explicit configuration and result/observation APIs instead.
@@ -35,11 +35,12 @@ contains no person model, ONNX worker, game hook, menu or INI schema.
 | Output-buffer policy | Adapter maps `MochizukiCompactTransfer` to optional RGBA32F reuse / separate answer | Both new core flags default false; official native store remains first choice. Reuse only covers remaining RGBA32F fallback cases, not every format or mode | Conditional optimization, not essential architecture. Keep currently tested option; prove incremental memory savings and image equality beyond official native store before proposing; remove it if not justified |
 | ACO builder configuration | Adapter configures on the device thread and builder thread, reads import count, rejects mixed/empty graphs, classifies fatal Vulkan errors | Current local thread-local default differs from official process configuration. Official `nr_pe_config.cpp::configure_network` precedes `nr_pe_session.cpp`'s background builder | Keep for this integration, but do not submit the whole patch. First prepare generic typed Vulkan errors / fatal-cache-error propagation. Design opt-in scoped builder configuration preserving official host defaults; review cache identity per device before that PR |
 | Unused `up_shown` | Below full model scale the enlargement passes bound a second full-frame RGBA32F image they never read or write | The image and its bindings are removed. `up_result` still holds the classic enlargement | Local memory fix. Official still allocates it |
+| 30-layer cap | Host layer mode asks one network for 30 sequential passes | Default stays 1. Official core rejected above 16; the timing readback buffer was the same width. Slider stays 1–3 | Local cap for the host mode. Do not treat it as an upstream default |
 
 The actual residual modifications are the two `build_network.py` scripts,
 `nr_graph.cpp`, `nr_runtime.cpp/.hpp`, `nr_pipeline_binary.hpp`, and the
 `runtime_upscale` / `runtime_transfer` passes on both shader trees. The feature
-series separates those into seven reviewable patches. Official `nrvk.hpp` and
+series separates those into eight reviewable patches. Official `nrvk.hpp` and
 records remain unchanged. Old HDR/unroll/ViT,
 `NR_EDGE_BODIES=0`, progress callbacks and enlargement patches stay removed.
 

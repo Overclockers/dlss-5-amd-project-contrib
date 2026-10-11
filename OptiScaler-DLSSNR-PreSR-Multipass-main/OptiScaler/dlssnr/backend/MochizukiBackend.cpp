@@ -121,6 +121,7 @@ struct MochizukiBackend::Impl
 #undef MZ_F
 #undef MZ_U
 #undef MZ_B
+        frame.passes = Config::Instance()->MochizukiEffectivePasses();
         if (setControls(session, &controls) != LMXXF_NR_OK)
         { Error("controls rejected"); owner.reset(); return false; }
         if (api.PrepareSession(session) != LMXXF_NR_OK)
@@ -209,7 +210,8 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     if (logical->IsSplitIneligible()) logical->TraceOpenQueries();
     InlineRecording::StateScope inlineState;
     if (inlineMode) {
-        const bool motion = !input.motionJittered && Config::Instance()->MochizukiTemporal.value_or_default();
+        const bool motion = (input.nativeGuideScale || !input.motionJittered) &&
+            Config::Instance()->MochizukiTemporal.value_or_default();
         if (FAILED(inlineState.Begin(cmd, input, motion, false, false))) {
             p->Status(std::string("mochizuki: inline unavailable: ") + inlineState.Reason()); return nullptr;
         }
@@ -235,6 +237,7 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
 #undef MZ_F
 #undef MZ_U
 #undef MZ_B
+    frame.passes = cfg->MochizukiEffectivePasses();
     frame.struct_size = sizeof frame;
     frame.frame_id = frameId;
     frame.flags = LMXXF_NR_FRAME_FLAG_STRENGTH | (temporal ? MOCHIZUKI_NR_FRAME_FLAG_TEMPORAL : 0) |
@@ -244,8 +247,9 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     frame.color_width = input.width && input.width <= desc.Width ? input.width : UINT(desc.Width);
     frame.color_height = input.height && input.height <= desc.Height ? input.height : desc.Height;
     frame.color_state = input.colourState;
-    // Jittered vectors cannot be used as the unjittered history flow without conversion.
-    frame.motion = input.motionJittered ? nullptr : input.motion;
+    // Host-resampled SR -> NR has no jitter contract, so those vectors are dropped.
+    // Mochizuki's own post-SR path passes the game vectors through, as the runtime does.
+    frame.motion = input.motionJittered && !input.nativeGuideScale ? nullptr : input.motion;
     frame.motion_state = input.motionState;
     frame.motion_width = input.motionWidth;
     frame.motion_height = input.motionHeight;

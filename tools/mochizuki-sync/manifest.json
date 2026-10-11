@@ -249,6 +249,13 @@
         "windows/shaders/passes/runtime_upscale.comp",
         "windows/src/core/nr_runtime.cpp"
       ]
+    },
+    {
+      "feature": "thirty-layer-mode",
+      "path": "patches/08-thirty-layer-mode.patch",
+      "files": [
+        "windows/src/core/nr_runtime.cpp"
+      ]
     }
   ],
   "source_comment_policy": "omit-sample-address-annotations-v1"

@@ -72,6 +72,8 @@ inline constexpr const char *MochizukiCompactTransfer = "MochizukiCompactTransfe
 inline constexpr const char *MochizukiAcoMode = "MochizukiAcoMode";
 inline constexpr const char *MochizukiWhitePoint = "MochizukiWhitePoint";
 inline constexpr const char *MochizukiModelScale = "MochizukiModelScale";
+inline constexpr const char *MochizukiUnlockPasses = "MochizukiUnlockPasses";
+inline constexpr const char *MochizukiLayerMode = "MochizukiLayerMode";
 inline constexpr const char *MochizukiPasses = "MochizukiPasses";
 inline constexpr const char *MochizukiTemporal = "MochizukiTemporal";
 inline constexpr const char *MochizukiHistoryStrength = "MochizukiHistoryStrength";
@@ -234,6 +236,8 @@ inline constexpr const char *const kKnown[] = {
     MochizukiAcoMode,
     MochizukiWhitePoint,
     MochizukiModelScale,
+    MochizukiUnlockPasses,
+    MochizukiLayerMode,
     MochizukiPasses,
     MochizukiTemporal,
     MochizukiHistoryStrength,

@@ -580,9 +580,10 @@ float San(float v, float lo, float hi, float def) { return std::isfinite(v) ? st
 // network; 1 stays exactly 1, which keeps the model extent the frame's own.
 float ModelScale(float v) { return v == 0 ? 1.f : std::round(San(v, 0.25f, 1.f, 1.f) * 20.f) / 20.f; }
 
-// The most passes a frame can ask for (FrameInfo::passes; MochizukiNrControls::pass holds passes 2 and 3), and so the
-// most a network is built for: every pass it is built for costs a model-extent RGBA32F history image.
-constexpr uint32_t kMaxPasses = 3;
+// The most passes a frame can ask for. Passes 2 and 3 have MochizukiNrControls::pass overrides; later
+// layers inherit pass 1 with local tone 0. The host slider stops at 3. 30 is its separate layer mode.
+// Every pass the network is built for costs a model-extent RGBA32F history image.
+constexpr uint32_t kMaxPasses = 30;
 
 // What SetControls last gave, sanitised. Until it is called, the core's defaults: today's output.
 struct SessionControls
@@ -1485,8 +1486,15 @@ constexpr ULONGLONG kVramRetryMs = 10'000; // the VRAM check, after it refused
 // model pixel term adds 16 bytes to that calibration for the second RGBA32F history image a one-pass network keeps.
 constexpr UINT64 kNetworkFixedBytes = 160ull << 20;
 constexpr UINT64 kModelPixelBytes = 288;
-constexpr double kPassFactor[] = { 1.0, 1.2, 1.3 }; // by the passes built for (max_passes), 1 to kMaxPasses
-static_assert(std::size(kPassFactor) == kMaxPasses);
+constexpr double kPassFactor[] = { 1.0, 1.2, 1.3 }; // calibrated for 1..3 passes
+// Past that fit, repeat the 1->2 step so a 30-layer build is not under-budgeted.
+double PassMemoryFactor(uint32_t passes)
+{
+    passes = std::clamp(passes, 1u, kMaxPasses);
+    if (passes <= std::size(kPassFactor))
+        return kPassFactor[passes - 1];
+    return kPassFactor[std::size(kPassFactor) - 1] + 0.2 * double(passes - std::size(kPassFactor));
+}
 constexpr UINT64 kScaledFramePixelBytes = 36;
 constexpr UINT64 kFramePixelBytes = 48;
 constexpr UINT64 kVramMarginBytes = 64ull << 20;
@@ -2527,7 +2535,7 @@ struct Session
             const UINT scaled = key.scale >= 1.f ? v : std::max(8u, UINT(double(v) * key.scale + 0.5));
             return UINT64((scaled + 63) / 64 * 64);
         };
-        const double passes = kPassFactor[std::clamp(key.maxPasses, 1u, kMaxPasses) - 1];
+        const double passes = PassMemoryFactor(key.maxPasses);
         const UINT64 activations = UINT64(double(kModelPixelBytes * model(key.width) * model(key.height)) * passes);
         const UINT64 scaled = key.scale < 1.f ? kScaledFramePixelBytes * key.width * key.height : 0;
         return kNetworkFixedBytes + activations + scaled +

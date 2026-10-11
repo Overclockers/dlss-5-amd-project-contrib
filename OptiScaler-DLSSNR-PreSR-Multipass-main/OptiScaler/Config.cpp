@@ -433,7 +433,25 @@ bool Config::Reload(std::filesystem::path iniPath)
             MochizukiAcoMode.set_from_config(readBool(CfgKey::kSection, CfgKey::MochizukiAcoMode));
             MochizukiWhitePoint.set_from_config(readFloat(CfgKey::kSection, CfgKey::MochizukiWhitePoint));
             MochizukiModelScale.set_from_config(readFloat(CfgKey::kSection, CfgKey::MochizukiModelScale));
-            MochizukiPasses.set_from_config(readUInt(CfgKey::kSection, CfgKey::MochizukiPasses));
+            MochizukiUnlockPasses.set_from_config(readBool(CfgKey::kSection, CfgKey::MochizukiUnlockPasses));
+            {
+                auto layer = readUInt(CfgKey::kSection, CfgKey::MochizukiLayerMode);
+                if (layer && *layer > 1)
+                {
+                    LOG_WARN("DlssNr.{} must be 0 or 1; using 0", CfgKey::MochizukiLayerMode);
+                    layer = 0u;
+                }
+                MochizukiLayerMode.set_from_config(layer);
+            }
+            {
+                auto passes = readUInt(CfgKey::kSection, CfgKey::MochizukiPasses);
+                if (passes && (*passes < 1 || *passes > 3))
+                {
+                    LOG_WARN("DlssNr.{} must be 1..3; using {}", CfgKey::MochizukiPasses, *passes < 1 ? 1 : 3);
+                    passes = *passes < 1 ? 1u : 3u;
+                }
+                MochizukiPasses.set_from_config(passes);
+            }
             MochizukiTemporal.set_from_config(readBool(CfgKey::kSection, CfgKey::MochizukiTemporal));
             LmxxfModelHistory.set_from_config(readBool(CfgKey::kSection, CfgKey::LmxxfModelHistory));
             MochizukiHistoryStrength.set_from_config(readFloat(CfgKey::kSection, CfgKey::MochizukiHistoryStrength));
@@ -1696,6 +1714,8 @@ bool Config::SaveIni()
     ini.SetValue(CfgKey::kSection, CfgKey::MochizukiAcoMode, GetBoolValue(Instance()->MochizukiAcoMode.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::MochizukiWhitePoint, GetFloatValue(Instance()->MochizukiWhitePoint.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::MochizukiModelScale, GetFloatValue(Instance()->MochizukiModelScale.value_for_config()).c_str());
+    ini.SetValue(CfgKey::kSection, CfgKey::MochizukiUnlockPasses, GetBoolValue(Instance()->MochizukiUnlockPasses.value_for_config()).c_str());
+    ini.SetValue(CfgKey::kSection, CfgKey::MochizukiLayerMode, GetIntValue(Instance()->MochizukiLayerMode.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::MochizukiPasses, GetIntValue(Instance()->MochizukiPasses.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::MochizukiTemporal, GetBoolValue(Instance()->MochizukiTemporal.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::LmxxfModelHistory, GetBoolValue(Instance()->LmxxfModelHistory.value_for_config()).c_str());

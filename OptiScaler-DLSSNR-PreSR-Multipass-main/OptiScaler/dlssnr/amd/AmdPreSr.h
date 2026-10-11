@@ -24,6 +24,9 @@ struct Frame
     bool motionJittered = false, temporalInputsValid = false;
     float preExposure = 1, exposureScale = 1;
     bool reset = false, depthInverted = false;
+    // Mochizuki SR -> NR only. The runtime scales render-resolution motion itself.
+    // Daniel and lmxxf leave this false and consume the host's output-sized guides.
+    bool nativeGuideScale = false;
     D3D12_RESOURCE_STATES colourState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     D3D12_RESOURCE_STATES motionState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     D3D12_RESOURCE_STATES depthState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
