@@ -94,9 +94,10 @@ static void FillRow(unsigned char *dst, UINT y, UINT w, DXGI_FORMAT format)
 
 // Fills `tex` with FillRow. `tex` must start and end in NON_PIXEL_SHADER_RESOURCE.
 static void UploadColorPattern(ID3D12Device *device, ID3D12CommandQueue *queue, ID3D12Resource *tex,
-                               UINT exponentShift = 0)
+                               UINT exponentShift = UINT_MAX)
 {
-    g_patternExponentShift = exponentShift;
+    // UINT_MAX keeps the caller-selected g_patternExponentShift (legacy callers set it before calling).
+    if (exponentShift != UINT_MAX) g_patternExponentShift = exponentShift;
     const D3D12_RESOURCE_DESC td = tex->GetDesc();
     const UINT w = static_cast<UINT>(td.Width), h = td.Height;
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp {};
