@@ -86,7 +86,7 @@ tests\run-all.cmd --tier ci|device|gpu|all [--out 目录] [--skip-sync] [--keep-
 - **可能有并行写入者**（另一个 agent 或会话）在同一工作树或上游 clone 里改文件。动手写或做破坏性 git 操作前先 `git status` 全量看，并检查 mtime；它改过的措辞不要改回去。
 - 没推送的提交也不要改写：别的工作树可能已经合并了旧 SHA。改写前先 `git branch -a --contains <sha>`。
 - 提交时显式 `git add <路径>`，不用 `git add -A`：有文件按要求只留本地。提交后核对 `git show --stat`。
-- `.githooks/pre-commit` 拦两类：被 `.gitignore` 排除却用 `git add -f` 加进来的新文件；丢了 BOM 且含非 ASCII 的 `.ps1/.psm1`。`.githooks/commit-msg` 删除提交信息里所有 `Co-Authored-By:` 与 `*-Session:` 尾注（项目约定：提交不带这类尾注）。
+- `.githooks/pre-commit` 拦两类：被 `.gitignore` 排除却用 `git add -f` 加进来的新文件；丢了 BOM 且含非 ASCII 的 `.ps1/.psm1`。`.githooks/commit-msg` 只删除 `*-Session:` 尾注，`Co-Authored-By:` 保留。
 - 本地工作材料放在被忽略的目录（`work/`、`exports/` 等），tracked 文件不得引用它们。
 
 ## Mochizuki 工具
