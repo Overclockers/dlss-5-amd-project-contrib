@@ -428,7 +428,9 @@ bool Config::Reload(std::filesystem::path iniPath)
             MochizukiColourStrength.set_from_config(readFloat(CfgKey::kSection, CfgKey::MochizukiColourStrength));
             MochizukiMaxRatio.set_from_config(readFloat(CfgKey::kSection, CfgKey::MochizukiMaxRatio));
             MochizukiEnlargeMode.set_from_config(readUInt(CfgKey::kSection, CfgKey::MochizukiEnlargeMode));
+            MochizukiClassicScaler.set_from_config(readUInt(CfgKey::kSection, CfgKey::MochizukiClassicScaler));
             MochizukiCompactTransfer.set_from_config(readBool(CfgKey::kSection, CfgKey::MochizukiCompactTransfer));
+            MochizukiAcoMode.set_from_config(readBool(CfgKey::kSection, CfgKey::MochizukiAcoMode));
             MochizukiWhitePoint.set_from_config(readFloat(CfgKey::kSection, CfgKey::MochizukiWhitePoint));
             MochizukiModelScale.set_from_config(readFloat(CfgKey::kSection, CfgKey::MochizukiModelScale));
             MochizukiPasses.set_from_config(readUInt(CfgKey::kSection, CfgKey::MochizukiPasses));
@@ -1689,7 +1691,9 @@ bool Config::SaveIni()
     ini.SetValue(CfgKey::kSection, CfgKey::MochizukiColourStrength, GetFloatValue(Instance()->MochizukiColourStrength.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::MochizukiMaxRatio, GetFloatValue(Instance()->MochizukiMaxRatio.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::MochizukiEnlargeMode, GetIntValue(Instance()->MochizukiEnlargeMode.value_for_config()).c_str());
+    ini.SetValue(CfgKey::kSection, CfgKey::MochizukiClassicScaler, GetIntValue(Instance()->MochizukiClassicScaler.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::MochizukiCompactTransfer, GetBoolValue(Instance()->MochizukiCompactTransfer.value_for_config()).c_str());
+    ini.SetValue(CfgKey::kSection, CfgKey::MochizukiAcoMode, GetBoolValue(Instance()->MochizukiAcoMode.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::MochizukiWhitePoint, GetFloatValue(Instance()->MochizukiWhitePoint.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::MochizukiModelScale, GetFloatValue(Instance()->MochizukiModelScale.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::MochizukiPasses, GetIntValue(Instance()->MochizukiPasses.value_for_config()).c_str());

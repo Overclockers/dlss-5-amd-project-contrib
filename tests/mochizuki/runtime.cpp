@@ -130,23 +130,283 @@ int wmain(int argc,wchar_t**argv) try {
     MochizukiNrBuildProgress invalidProgress {sizeof invalidProgress};
     Require(getProgress(nullptr,&invalidProgress)==LMXXF_NR_INVALID_ARGUMENT,"progress accepted null session");
     Require(defaults&&set&&prepare&&getInfo,"missing controls/frame exports");Rc(defaults(&controls));
-    Require(controls.intensity==1&&controls.preprocess==0&&controls.compact_transfer==1&&controls.enlarge_mode==0,"control defaults");
+    Require(controls.intensity==1&&controls.preprocess==0&&controls.compact_transfer==1&&controls.enlarge_mode==0&&
+            controls.classic_scaler==1&&controls.aco_mode==0,"control defaults");
     MochizukiNrControls oldControls {sizeof controls-4};
     Require(defaults(&oldControls)==LMXXF_NR_INVALID_ARGUMENT,"partial controls accepted");
     if(argc==2) {puts("MOCHIZUKI_ABI_OK");FreeLibrary(dll);return 0;}
     reinterpret_cast<void(*)(uint32_t)>(GetProcAddress(dll,"MochizukiNrSetLogging"))(1);
     ComPtr<IDXGIFactory6> factory;Hr(CreateDXGIFactory1(IID_PPV_ARGS(&factory)));
     ComPtr<IDXGIAdapter1> adapter;ComPtr<ID3D12Device> device;
+    bool acoFallback=false, acoDevice=false, acoBudget=false, acoRapid=false;
+    for(int i=3;i<argc;++i) {
+        const std::wstring arg=argv[i];
+        acoFallback=acoFallback || arg==L"--aco-fallback";
+        acoDevice=acoDevice || arg==L"--aco-device";
+        acoBudget=acoBudget || arg==L"--aco-budget";
+        acoRapid=acoRapid || arg==L"--aco-rapid";
+    }
+    const bool acoMode=(argc>3 && std::wstring(argv[3])==L"--aco") || acoFallback || acoDevice || acoBudget || acoRapid;
+    DXGI_ADAPTER_DESC1 adapterDesc {};
     for(UINT i=0;factory->EnumAdapters1(i,&adapter)==S_OK;i++,adapter.Reset()) {
         DXGI_ADAPTER_DESC1 desc;adapter->GetDesc1(&desc);
-        if(desc.VendorId==0x1002&&!(desc.Flags&DXGI_ADAPTER_FLAG_SOFTWARE)&&SUCCEEDED(D3D12CreateDevice(adapter.Get(),D3D_FEATURE_LEVEL_12_0,IID_PPV_ARGS(&device)))) break;
+        const bool hardwareAmd=desc.VendorId==0x1002 && !(desc.Flags&DXGI_ADAPTER_FLAG_SOFTWARE);
+        if(!hardwareAmd) continue;
+        if(acoMode && !acoFallback && !wcsstr(desc.Description, L"9070 XT")) continue;
+        if(SUCCEEDED(D3D12CreateDevice(adapter.Get(),D3D_FEATURE_LEVEL_12_0,IID_PPV_ARGS(&device)))) { adapterDesc=desc; break; }
     }
-    Require(device!=nullptr,"AMD D3D12 adapter required");
+    Require(device!=nullptr, acoMode ? "RX 9070 XT D3D12 adapter required" : "AMD D3D12 adapter required");
+    if(acoMode) {
+        char adapterName[160] {};
+        WideCharToMultiByte(CP_UTF8, 0, adapterDesc.Description, -1, adapterName, sizeof adapterName, nullptr, nullptr);
+        printf("ACO_ADAPTER %s vendor=0x%04X device=0x%04X\n", adapterName, adapterDesc.VendorId, adapterDesc.DeviceId);
+        fflush(stdout);
+    }
     ComPtr<ID3D12CommandQueue> q[2]; D3D12_COMMAND_QUEUE_DESC qd {};qd.Type=D3D12_COMMAND_LIST_TYPE_DIRECT;
     for(auto& a:q)Hr(device->CreateCommandQueue(&qd,IID_PPV_ARGS(&a)));
     ComPtr<ID3D12Fence> tail;Hr(device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&tail)));uint64_t value=0;
     LmxxfNrCreateInfo ci {sizeof ci,device.Get(),q[0].Get(),argv[2],LMXXF_NR_CREATE_FLAG_RECORDING_LEASES};
-    Rc(api.Create(&ci,&context));Rc(api.PrepareSession(context));Rc(set(context,&controls));
+    Rc(api.Create(&ci,&context));
+    if(acoMode) {
+        auto readInfo=[&] {
+            MochizukiNrInfo info {sizeof info}; Rc(getInfo(context,&info)); return info;
+        };
+        auto open=[&](uint32_t aco) {
+            if(context) { Rc(api.Destroy(context)); context=nullptr; }
+            Rc(api.Create(&ci,&context));
+            controls.aco_mode=aco; Rc(set(context,&controls));
+            Rc(api.PrepareSession(context));
+            return readInfo();
+        };
+        controls.aco_mode=1; Rc(set(context,&controls));
+        Rc(api.PrepareSession(context));
+        MochizukiNrInfo started=readInfo();
+        Require(started.aco_requested==1, "ACO requested before device create");
+        Require(started.aco_effective==0, "ACO effective before a network is installed");
+        const bool driverRejected=started.aco_fallback[0]!=0;
+        auto runFrame=[&] {
+            Frame frame(device.Get(),256,256);
+            List upload(device.Get()); frame.Upload(upload.cmd.Get()); Hr(upload.cmd->Close());
+            Submit(q[0].Get(), upload); Hr(q[0]->Signal(tail.Get(), ++value)); Wait(tail.Get(), value);
+            MochizukiNrFrameInfo fi {}; fi.struct_size=sizeof fi; fi.color=frame.color.Get();
+            fi.color_width=frame.width; fi.color_height=frame.height;
+            fi.color_state=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            fi.flags=LMXXF_NR_FRAME_FLAG_STRENGTH; fi.transfer_strength=fi.color_strength=1; fi.model_scale=1; fi.passes=1;
+            LmxxfNrJob job {sizeof job}; const auto deadline=GetTickCount64()+300000;
+            for(;;) {
+                int rc=prepare(context,&fi,&job);
+                if(!rc) break;
+                if(rc!=LMXXF_NR_UNAVAILABLE || GetTickCount64()>deadline) Rc(rc);
+                Sleep(100);
+            }
+            List inputs(device.Get()), outputs(device.Get());
+            Rc(api.RecordInputs(context, job.handle, inputs.cmd.Get()));
+            Rc(api.RecordOutputs(context, job.handle, outputs.cmd.Get()));
+            frame.Read(outputs.cmd.Get(), static_cast<ID3D12Resource*>(job.private_output));
+            Hr(inputs.cmd->Close()); Hr(outputs.cmd->Close());
+            Rc(api.BeginRecordingExecution(context, job.handle, q[0].Get())); Submit(q[0].Get(), inputs);
+            Rc(api.EnqueueHip(context, job.handle, q[0].Get())); Submit(q[0].Get(), outputs);
+            auto signal=q[0]->Signal(tail.Get(), ++value);
+            Rc(api.EndRecordingExecution(context, job.handle, q[0].Get(), 3, tail.Get(), value, signal));
+            Wait(tail.Get(), value); frame.Check();
+            Rc(api.InvalidateRecording(context, job.handle)); Rc(api.CollectRecording(context, job.handle));
+        };
+        if(acoRapid) {
+            Require(!driverRejected && started.aco_fallback[0]==0, "rapid switch has no ACO device");
+            runFrame();
+            MochizukiNrInfo installed=readInfo();
+            Require(installed.aco_effective==1 && installed.aco_fallback[0]==0, "rapid switch did not install ACO");
+            printf("ACO_FRAME_OK 256x256\n");
+            MochizukiNrBuildProgress before{sizeof before}; Rc(getProgress(context,&before));
+            controls.aco_mode=0; Rc(set(context,&controls));
+            runFrame();
+            MochizukiNrInfo pending=readInfo();
+            Require(pending.building!=0, "native candidate did not start");
+            Require(pending.aco_requested==0 && pending.aco_effective==1, "turning ACO off changed the installed network");
+            controls.aco_mode=1; Rc(set(context,&controls));
+            const auto nativeDeadline=GetTickCount64()+300000;
+            for(;;) {
+                MochizukiNrBuildProgress prog{sizeof prog}; Rc(getProgress(context,&prog));
+                const bool thisBuild=prog.start_tick!=before.start_tick || prog.active!=0;
+                if(thisBuild && prog.active==0) break;
+                Require(GetTickCount64()<nativeDeadline, "native candidate did not finish");
+                Sleep(20);
+            }
+            // One prepare installs the finished native candidate. The request is ACO again, so the
+            // following ACO graph may start, but it is not installed by this call.
+            Frame once(device.Get(),256,256);
+            List onceUpload(device.Get()); once.Upload(onceUpload.cmd.Get()); Hr(onceUpload.cmd->Close());
+            Submit(q[0].Get(), onceUpload); Hr(q[0]->Signal(tail.Get(), ++value)); Wait(tail.Get(), value);
+            MochizukiNrFrameInfo onceInfo{}; onceInfo.struct_size=sizeof onceInfo; onceInfo.color=once.color.Get();
+            onceInfo.color_width=once.width; onceInfo.color_height=once.height;
+            onceInfo.color_state=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            onceInfo.flags=LMXXF_NR_FRAME_FLAG_STRENGTH; onceInfo.transfer_strength=onceInfo.color_strength=1;
+            onceInfo.model_scale=1; onceInfo.passes=1;
+            LmxxfNrJob onceJob{sizeof onceJob};
+            const int onceRc=prepare(context,&onceInfo,&onceJob);
+            MochizukiNrInfo reenabled=readInfo();
+            printf("ACO_RAPID_REENABLE requested=%u effective=%u building=%u\n",
+                   reenabled.aco_requested, reenabled.aco_effective, reenabled.building);
+            fflush(stdout);
+            if(!onceRc) {
+                List inputs(device.Get()), outputs(device.Get());
+                Rc(api.RecordInputs(context, onceJob.handle, inputs.cmd.Get()));
+                Rc(api.RecordOutputs(context, onceJob.handle, outputs.cmd.Get()));
+                once.Read(outputs.cmd.Get(), static_cast<ID3D12Resource*>(onceJob.private_output));
+                Hr(inputs.cmd->Close()); Hr(outputs.cmd->Close());
+                Rc(api.BeginRecordingExecution(context, onceJob.handle, q[0].Get())); Submit(q[0].Get(), inputs);
+                Rc(api.EnqueueHip(context, onceJob.handle, q[0].Get())); Submit(q[0].Get(), outputs);
+                auto signal=q[0]->Signal(tail.Get(), ++value);
+                Rc(api.EndRecordingExecution(context, onceJob.handle, q[0].Get(), 3, tail.Get(), value, signal));
+                Wait(tail.Get(), value);
+                Rc(api.InvalidateRecording(context, onceJob.handle)); Rc(api.CollectRecording(context, onceJob.handle));
+            } else {
+                Require(onceRc==LMXXF_NR_UNAVAILABLE, "native install prepare failed");
+            }
+            Require(reenabled.aco_requested==1 && reenabled.aco_effective==0, "native candidate installed after re-enable still reports ACO");
+            Require(std::strstr(reenabled.aco_fallback, "next game start")==nullptr, "re-enable asked for a new device");
+            const auto restoreDeadline=GetTickCount64()+300000;
+            MochizukiNrInfo restored{};
+            for(;;) {
+                runFrame();
+                restored=readInfo();
+                if(!restored.building && restored.aco_effective==1) break;
+                Require(GetTickCount64()<restoreDeadline, "re-enabled ACO network did not install");
+            }
+            Require(restored.aco_requested==1 && restored.aco_fallback[0]==0, "re-enabled ACO network kept a fallback");
+            printf("ACO_RAPID_OK\n");
+            fflush(stdout);
+            Rc(api.Destroy(context));
+            FreeLibrary(dll);
+            return 0;
+        }
+        if(acoDevice) {
+            Require(driverRejected, "pipeline-binary device create was accepted");
+            Require(std::strstr(started.aco_fallback, "rejected pipeline binaries")!=nullptr, "device rejection has no reason");
+            runFrame();
+            MochizukiNrInfo after=readInfo();
+            Require(after.aco_requested==1 && after.aco_effective==0, "rejected device installed an ACO network");
+            Require(std::strstr(after.aco_fallback, "rejected pipeline binaries")!=nullptr, "native frame cleared the device rejection");
+            printf("ACO_DEVICE_FALLBACK_OK %s\n", after.aco_fallback);
+            fflush(stdout);
+            Rc(api.Destroy(context));
+            FreeLibrary(dll);
+            return 0;
+        }
+        if(acoBudget) {
+            Require(!driverRejected, "budget test has no ACO device");
+            runFrame();
+            MochizukiNrInfo installed=readInfo();
+            Require(installed.aco_effective==1 && installed.aco_fallback[0]==0, "budget test did not install ACO");
+            controls.aco_mode=0; Rc(set(context,&controls));
+            Frame rejected(device.Get(),320,320);
+            List uploadRejected(device.Get()); rejected.Upload(uploadRejected.cmd.Get()); Hr(uploadRejected.cmd->Close());
+            Submit(q[0].Get(), uploadRejected); Hr(q[0]->Signal(tail.Get(), ++value)); Wait(tail.Get(), value);
+            MochizukiNrFrameInfo rejectedInfo {}; rejectedInfo.struct_size=sizeof rejectedInfo; rejectedInfo.color=rejected.color.Get();
+            rejectedInfo.color_width=rejected.width; rejectedInfo.color_height=rejected.height;
+            rejectedInfo.color_state=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            rejectedInfo.flags=LMXXF_NR_FRAME_FLAG_STRENGTH; rejectedInfo.transfer_strength=rejectedInfo.color_strength=1;
+            rejectedInfo.model_scale=1; rejectedInfo.passes=1;
+            const auto budgetDeadline=GetTickCount64()+180000;
+            MochizukiNrInfo failed {};
+            for(;;) {
+                LmxxfNrJob job {sizeof job};
+                const int rc=prepare(context,&rejectedInfo,&job);
+                failed=readInfo();
+                if(std::strstr(failed.last_error, "frame buffer")) {
+                    Require(rc==LMXXF_NR_UNAVAILABLE, "rejected candidate was installed");
+                    break;
+                }
+                Require(rc==LMXXF_NR_UNAVAILABLE, "budget frame completed before the refusal");
+                Require(GetTickCount64()<budgetDeadline, "budget refusal was not observed");
+                Sleep(100);
+            }
+            Require(failed.aco_requested==0 && failed.aco_effective==1, "failed candidate published a new mode");
+            printf("ACO_BUDGET_KEEP_OK effective=%u\n", failed.aco_effective);
+            fflush(stdout);
+            Rc(api.Destroy(context));
+            FreeLibrary(dll);
+            return 0;
+        }
+        if(acoFallback) {
+            Require(driverRejected, "fallback fixture configured ACO onto this device");
+            Require(started.aco_fallback[0]!=0, "native fallback has no reason");
+            runFrame();
+            MochizukiNrInfo after=readInfo();
+            Require(after.aco_effective==0, "fallback frame imported an ACO network");
+            Require(after.aco_fallback[0]!=0, "fallback frame cleared its reason");
+            printf("ACO_FALLBACK_OK %s\n", after.aco_fallback);
+            fflush(stdout);
+            Rc(api.Destroy(context));
+            FreeLibrary(dll);
+            return 0;
+        }
+        uint32_t installedEffective=0;
+        if(driverRejected) {
+            Require(std::strstr(started.aco_fallback, "do not match")==nullptr, "ACO preflight rejected the aco/shaders corpus");
+            Require(std::strstr(started.aco_fallback, "incomplete")==nullptr, "ACO bundle incomplete at device create");
+            Require(std::strstr(started.aco_fallback, "could not be read")==nullptr, "ACO bundle could not be read");
+            printf("ACO_DRIVER_REJECTED %s\n", started.aco_fallback);
+        } else {
+            Require(started.aco_fallback[0]==0, "unbuilt ACO device has a fallback");
+            runFrame();
+            MochizukiNrInfo after=readInfo();
+            Require(after.aco_effective==1 && after.aco_fallback[0]==0, "ACO frame neither imported nor fell back");
+            installedEffective=after.aco_effective;
+            printf("ACO_FRAME_OK 256x256\n");
+            controls.aco_mode=0; Rc(set(context,&controls));
+            MochizukiNrInfo toggledOff=readInfo();
+            Require(toggledOff.aco_requested==0 && toggledOff.aco_effective==1, "toggle off changed the installed network");
+            controls.aco_mode=1; Rc(set(context,&controls));
+            MochizukiNrInfo toggledOn=readInfo();
+            Require(toggledOn.aco_requested==1 && toggledOn.aco_effective==1 && toggledOn.aco_fallback[0]==0, "toggle on changed the installed network");
+            auto runInstalled=[&](uint32_t wantEffective) {
+                const auto deadline=GetTickCount64()+300000;
+                MochizukiNrInfo info {};
+                for(;;) {
+                    runFrame();
+                    info=readInfo();
+                    if(!info.building && info.aco_effective==wantEffective) return info;
+                    Require(GetTickCount64()<deadline, "installed ACO state did not follow the frame");
+                }
+            };
+            controls.aco_mode=0; Rc(set(context,&controls));
+            MochizukiNrInfo nativeFrame=runInstalled(0);
+            Require(nativeFrame.aco_requested==0 && nativeFrame.aco_effective==0 && nativeFrame.aco_fallback[0]==0, "native frame kept the ACO network");
+            printf("ACO_SWITCH_NATIVE_OK\n");
+            controls.aco_mode=1; Rc(set(context,&controls));
+            MochizukiNrInfo heldNative=readInfo();
+            Require(heldNative.aco_requested==1 && heldNative.aco_effective==0, "ACO request replaced the running native network");
+            MochizukiNrInfo restored=runInstalled(1);
+            Require(restored.aco_requested==1 && restored.aco_effective==1 && restored.aco_fallback[0]==0, "ACO frame did not replace the native network");
+            installedEffective=restored.aco_effective;
+            printf("ACO_SWITCH_ACO_OK\n");
+        }
+        fflush(stdout);
+        MochizukiNrInfo reopened=open(1);
+        Require(reopened.aco_requested==1 && reopened.aco_effective==0, "reopen published ACO before a network");
+        if(driverRejected) {
+            Require(reopened.aco_fallback[0]!=0, "reopen lost the driver rejection");
+            Require(std::strstr(reopened.aco_fallback, "do not match")==nullptr, "reopen fell back to a record mismatch");
+        } else {
+            Require(reopened.aco_fallback[0]==0, "reopen with ACO requested has a fallback");
+        }
+        MochizukiNrInfo switchedOff=open(0);
+        Require(switchedOff.aco_requested==0 && switchedOff.aco_effective==0, "a new device with ACO off stayed on the imported network");
+        Rc(api.Destroy(context));
+        printf("ACO_CONTRACT_OK effective=%u\n", installedEffective);
+        fflush(stdout);
+        FreeLibrary(dll);
+        return 0;
+    }
+    Rc(api.PrepareSession(context));Rc(set(context,&controls));
+    {
+        MochizukiNrControls aco=controls; aco.aco_mode=1; Rc(set(context,&aco));
+        MochizukiNrInfo acoInfo {sizeof acoInfo}; Rc(getInfo(context,&acoInfo));
+        Require(acoInfo.aco_requested==1 && acoInfo.aco_effective==0, "ACO request after device create stays off");
+        Require(std::strstr(acoInfo.aco_fallback, "next game start")!=nullptr, "ACO change after device create asks for a restart");
+        Rc(set(context,&controls));
+    }
     MochizukiNrBuildProgress wrongProgress {sizeof(MochizukiNrBuildProgress)-4};
     Require(getProgress(context,&wrongProgress)==LMXXF_NR_INVALID_ARGUMENT,"partial progress struct accepted");
     MochizukiNrInfo oldInfo {sizeof(MochizukiNrInfo)-16};
@@ -188,6 +448,90 @@ int wmain(int argc,wchar_t**argv) try {
         }
         return job;
     };
+    if(argc>3 && std::wstring(argv[3])==L"--first-pass") {
+        auto release=[&](LmxxfNrJob& job) {
+            Rc(api.InvalidateRecording(context,job.handle));
+            Rc(api.CollectRecording(context,job.handle));
+        };
+        auto open=[&](uint32_t passes, bool preprocess, bool apply) {
+            Rc(api.Destroy(context)); context=nullptr;
+            Rc(api.Create(&ci,&context)); Rc(api.PrepareSession(context));
+            controls.preprocess=preprocess?1u:0u; controls.preprocess_exposure=2;
+            controls.apply_model=apply?1u:0u; controls.compact_transfer=1; controls.enlarge_mode=0;
+            Rc(set(context,&controls));
+            MochizukiNrFrameInfo fi {}; fi.struct_size=sizeof fi; fi.frame_id=1;
+            fi.color=frame.color.Get(); fi.color_width=frame.width; fi.color_height=frame.height;
+            fi.color_state=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            fi.flags=LMXXF_NR_FRAME_FLAG_STRENGTH|LMXXF_NR_FRAME_FLAG_FIRST_PASS;
+            fi.model_scale=1; fi.passes=passes; fi.transfer_strength=fi.color_strength=1;
+            LmxxfNrJob job {sizeof job};
+            const auto deadline=GetTickCount64()+300000;
+            for(;;) {
+                int rc=prepare(context,&fi,&job);
+                if(!rc) {
+                    MochizukiNrInfo ready {sizeof ready}; Rc(getInfo(context,&ready));
+                    if(!ready.building) break;
+                    Rc(api.InvalidateRecording(context,job.handle));
+                    Rc(api.CollectRecording(context,job.handle));
+                    rc=LMXXF_NR_UNAVAILABLE;
+                }
+                if(rc!=LMXXF_NR_UNAVAILABLE || GetTickCount64()>deadline) Rc(rc);
+                Sleep(100);
+            }
+            return job;
+        };
+        auto single=open(1,false,true);
+        Require(single.first_pass_output==nullptr,"single-pass exported a first-pass image");
+        release(single);
+        auto pre=open(2,true,true);
+        Require(pre.first_pass_output==nullptr,"preprocess exported a first-pass image");
+        release(pre);
+        auto hidden=open(2,false,false);
+        Require(hidden.first_pass_output==nullptr,"apply-model off exported a first-pass image");
+        release(hidden);
+        auto two=open(2,false,true);
+        Require(two.first_pass_output!=nullptr,"two-pass first output missing");
+        List inputs(device.Get()),outputs(device.Get());
+        Rc(api.RecordInputs(context,two.handle,inputs.cmd.Get()));
+        Rc(api.RecordOutputs(context,two.handle,outputs.cmd.Get()));
+        frame.Read(outputs.cmd.Get(),static_cast<ID3D12Resource*>(two.private_output));
+        auto firstBack=Buffer(device.Get(),UINT64(frame.footprint.Footprint.RowPitch)*frame.height,D3D12_HEAP_TYPE_READBACK,D3D12_RESOURCE_STATE_COPY_DEST);
+        auto* firstImage=static_cast<ID3D12Resource*>(two.first_pass_output);
+        Barrier(outputs.cmd.Get(),firstImage,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_SOURCE);
+        D3D12_TEXTURE_COPY_LOCATION dst {firstBack.Get(),D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,{}}; dst.PlacedFootprint=frame.footprint;
+        D3D12_TEXTURE_COPY_LOCATION src {firstImage,D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,{}};
+        outputs.cmd->CopyTextureRegion(&dst,0,0,0,&src,nullptr);
+        Barrier(outputs.cmd.Get(),firstImage,D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        Hr(inputs.cmd->Close()); Hr(outputs.cmd->Close());
+        Rc(api.BeginRecordingExecution(context,two.handle,q[0].Get())); Submit(q[0].Get(),inputs);
+        Rc(api.EnqueueHip(context,two.handle,q[0].Get())); Submit(q[0].Get(),outputs);
+        Hr(q[0]->Signal(tail.Get(),++value));
+        Rc(api.EndRecordingExecution(context,two.handle,q[0].Get(),3,tail.Get(),value,S_OK)); Wait(tail.Get(),value);
+        auto grab=[&](ID3D12Resource* rb) {
+            void* ptr=nullptr; Hr(rb->Map(0,nullptr,&ptr));
+            const size_t row=size_t(frame.width)*8;
+            std::vector<unsigned char> bytes(row*frame.height);
+            for(UINT y=0;y<frame.height;++y)
+                memcpy(bytes.data()+y*row,static_cast<char*>(ptr)+y*frame.footprint.Footprint.RowPitch,row);
+            rb->Unmap(0,nullptr); return bytes;
+        };
+        const auto finalBytes=grab(frame.readback.Get()), firstBytes=grab(firstBack.Get());
+        Require(finalBytes!=firstBytes,"first pass matched the final two-pass output");
+        auto finite=[&](const std::vector<unsigned char>& bytes) {
+            double sum=0;
+            for(UINT y=0;y<frame.height;++y) for(UINT x=0;x<frame.width;++x) {
+                const auto* px=reinterpret_cast<const uint16_t*>(bytes.data()+(size_t(y)*frame.width+x)*8);
+                const float v=DirectX::PackedVector::XMConvertHalfToFloat(px[0]);
+                Require(std::isfinite(v)&&std::abs(v)<100.f,"non-finite first or final output");
+                sum+=std::abs(v);
+            }
+            Require(sum>0,"black first or final output");
+        };
+        finite(finalBytes); finite(firstBytes);
+        release(two); Rc(api.Destroy(context)); FreeLibrary(dll);
+        puts("MOCHIZUKI_FIRST_PASS_OK single=rejected preprocess=rejected apply_off=rejected two_pass=distinct");
+        return 0;
+    }
     if(argc>3 && std::wstring(argv[3])==L"--composition") {
         Frame motion(device.Get(),256,256);void* data=nullptr;
         Hr(motion.upload->Map(0,nullptr,&data));

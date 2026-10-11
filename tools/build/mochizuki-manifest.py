@@ -13,16 +13,22 @@ def digest(path):
 def sources():
     paths = []
     product = ROOT / 'OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler'
-    for folder in (ROOT / 'third_party/mochizuki/windows', product / 'dlssnr/backend/mochizuki_runtime'):
+    for folder in (ROOT / 'third_party/mochizuki/windows',
+                   ROOT / 'third_party/mochizuki/linux/shaders',
+                   ROOT / 'third_party/mochizuki/linux/build',
+                   product / 'dlssnr/backend/mochizuki_runtime'):
         paths.extend(p for p in folder.rglob('*') if p.is_file() and '__pycache__' not in p.parts)
     paths.extend([product / 'dlssnr/backend/lmxxf_runtime/LmxxfNrApi.h', product / 'dlssnr/NrPerformance.h'])
     paths.append(product / 'library/vulkan/vulkan-1.lib')
-    paths.extend(ROOT / 'tools/build' / f for f in ('build-mochizuki-runtime.py', 'build-mochizuki-runtime.cmd', 'mochizuki-deps.py', 'mochizuki-manifest.py'))
+    paths.extend(ROOT / 'tools/build' / f for f in ('build-mochizuki-runtime.py', 'build-mochizuki-runtime.cmd', 'mochizuki-deps.py', 'mochizuki-manifest.py', 'mochizuki-aco.py'))
     return {p.relative_to(ROOT).as_posix(): digest(p) for p in sorted(paths)}
 
 def artifacts(out):
     paths = [out / 'MochizukiNrRuntime.dll']
     paths.extend(p for p in (out / 'dlssnr-amd/shaders').rglob('*') if p.is_file())
+    aco = out / 'dlssnr-amd/aco'
+    if aco.is_dir():
+        paths.extend(p for p in aco.rglob('*') if p.is_file())
     return {p.relative_to(out).as_posix(): digest(p) for p in sorted(paths)}
 
 def cache_key():

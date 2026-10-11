@@ -9,7 +9,8 @@ Writes (default build/windows/<arch>/network):
     temporal/                                the temporal variants and the motion estimator
 
 LLPC leaves the large per-fragment loops of fswin_t.comp rolled and spills the arrays they
-index to scratch, so every fswin_t pipeline is preprocessed, its pair quantisation loops made
+index to scratch, so every fswin_t pipeline is preprocessed (ffwd3_t, attn and vit_attn too: UNROLLED below),
+its pair quantisation loops made
 four-wide (windows/build/quad_quant_glsl.py; --no-quad keeps them; it also drops the f32 -> f16 -> f32
 round trips RADV deletes anyway, NR_Q32_DIRECT=0 in the environment keeps them), fully unrolled
 (windows/build/unroll_glsl.py) and compiled from the result.
@@ -27,21 +28,25 @@ from pathlib import Path
 
 R = Path(__file__).resolve().parents[2]
 GLSLANG = R / 'toolchain/glslang/bin/glslang'
-RUNTIME = ['runtime_alpha', 'runtime_encode', 'runtime_transfer', 'runtime_prep', 'runtime_depth', 'cascade_lograt', 'cascade_blur', 'cascade_feed']
+RUNTIME = ['runtime_alpha', 'runtime_encode', 'runtime_transfer', 'runtime_upscale', 'runtime_prep', 'runtime_depth', 'cascade_lograt', 'cascade_blur', 'cascade_feed',
+           'runtime_downscale', 'runtime_taps']
+# runtime passes built from another pass's source with defines: name -> (source, defines)
+RUNTIME_VARIANTS = {'runtime_transfer_store': ('runtime_transfer', ['NR_STORE_NATIVE'])}
 MOTION = ['motion_luma', 'motion_estimate']
 
 
 QUAD = True   # --no-quad: the pair loops as written (A/B)
-# Sources unrolled before glslang. ffwd3_t, attn and vit_attn too: AMD's Windows driver 32.0.32015 crashes (access
-# violation in vkCreateComputePipelines) on their loops that index arrays of cooperative matrices with the loop
-# variable, or, in vit_attn, compiles them to a wrong answer (the context saturates at +-448).
+# The sources whose pipelines are unrolled (unroll_glsl.py) before glslang: fswin_t (LLPC spills the arrays its rolled
+# loops index), and ffwd3_t, attn and vit_attn, so that no loop indexes an array of cooperative matrices with its
+# loop variable.
 UNROLLED = {'fswin_t.comp', 'ffwd3_t.comp', 'attn.comp', 'vit_attn.comp'}
 
 
 def glslang(arch, src, defines, out, unroll=False, network=False):
     if unroll or (network and QUAD):
         pre = out.with_suffix('.pre.comp')
-        r = subprocess.run([str(GLSLANG), '-E', '-I' + str(R / 'windows/shaders' / arch / 'include')] + ['-D' + d for d in defines] + [str(src)],
+        r = subprocess.run([str(GLSLANG), '-E', '-I' + str(R / 'windows/shaders' / arch / 'include'),
+                            '-I' + str(R / 'windows/shaders/passes/include')] + ['-D' + d for d in defines] + [str(src)],
                            capture_output=True, text=True)
         if r.returncode:
             sys.exit(f'glslang -E failed on {src}:\n{r.stdout}{r.stderr}')
@@ -54,7 +59,7 @@ def glslang(arch, src, defines, out, unroll=False, network=False):
                            check=True, stdout=subprocess.DEVNULL)
         src, defines = pre, []
     cmd = [str(GLSLANG), '-V', '--target-env', 'vulkan1.3',
-           '-I' + str(R / 'windows/shaders' / arch / 'include')]
+           '-I' + str(R / 'windows/shaders' / arch / 'include'), '-I' + str(R / 'windows/shaders/passes/include')]
     cmd += ['-D' + d for d in defines] + [str(src), '-o', str(out)]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode:
@@ -64,18 +69,21 @@ def glslang(arch, src, defines, out, unroll=False, network=False):
 
 
 def main():
-    global QUAD, GLSLANG
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('arch')
     ap.add_argument('--out', type=Path)
-    ap.add_argument('--glslang', type=Path, default=GLSLANG)
     ap.add_argument('--define', action='append', default=[],
                     help='extra define for every network pipeline (diagnostics, e.g. NR_PROF_OFF=...)')
     ap.add_argument('--check', type=Path)
     ap.add_argument('--no-quad', action='store_true',
                     help='keep the pair quantisation loops (windows/build/quad_quant_glsl.py off)')
+    ap.add_argument('--glslang', type=Path, default=None,
+                    help='glslang binary (default: toolchain/glslang/bin/glslang beside this tree)')
     a = ap.parse_args()
-    GLSLANG = a.glslang
+    global GLSLANG
+    if a.glslang is not None:
+        GLSLANG = a.glslang
+    global QUAD
     QUAD = not a.no_quad
     table = json.loads((R / 'windows/shaders' / a.arch / 'pipelines.json').read_text())
     out = a.out or R / 'build/windows' / a.arch / 'network'
@@ -100,8 +108,12 @@ def main():
     shutil.copy2(out / 'shader-constants.txt', out / 'temporal' / 'shader-constants.txt')
     for k in RUNTIME:
         glslang(a.arch, R / 'windows/shaders/passes' / f'{k}.comp', [], out / 'runtime' / f'{k}.spv')
+    for k, (src, defines) in RUNTIME_VARIANTS.items():
+        glslang(a.arch, R / 'windows/shaders/passes' / f'{src}.comp', defines, out / 'runtime' / f'{k}.spv')
+    # runtime_upscale.spv carries AMD FidelityFX Super Resolution 1 (MIT): its notice goes with it
+    shutil.copy2(R / 'windows/shaders/passes/include/fsr1/LICENSE.txt', out / 'runtime' / 'FidelityFX-FSR1-LICENSE.txt')
     print(f'{out}: {len(pipelines)} network pipelines, {len(table["variants"]) + len(MOTION)} temporal, '
-          f'{len(RUNTIME)} runtime')
+          f'{len(RUNTIME) + len(RUNTIME_VARIANTS)} runtime')
 
     if a.check:
         bad = [p.name for p in sorted(out.iterdir()) if p.is_file()

@@ -439,6 +439,12 @@ class InstallerExitTests(unittest.TestCase):
         shaders = self.package / "dlssnr-amd/shaders"
         shaders.mkdir(parents=True)
         (shaders / "fixture.spv").write_bytes(b"fixture shader")
+        aco = self.package / "dlssnr-amd/aco"
+        (aco / "records").mkdir(parents=True)
+        (aco / "shaders").mkdir()
+        (aco / "records/0123456789abcdef.nrp").write_bytes(b"NRPAL fixture")
+        (aco / "shell-aliases.txt").write_bytes(b"g_from.spv g_attn.spv\n")
+        (aco / "shaders/shader-constants.txt").write_bytes(b"fixture\n")
         if model:
             (shaders.parent / "dlssnr.bin").write_bytes(b"NRMODEL1" + (599).to_bytes(4, "little") + bytes(20))
 
@@ -574,6 +580,24 @@ class InstallerExitTests(unittest.TestCase):
         self.assertFalse((self.package / 'native-game-tiled-assets').exists())
         self.assertEqual((outside / 'private.bin').read_bytes(), b'do not copy')
         self.assertFalse(list(self.package.glob('.amd-presr-model-*')))
+
+    def test_mochizuki_incomplete_aco_rejected_before_install_changes(self):
+        self.ready_mochizuki()
+        for relative in ("dlssnr-amd/aco/shaders/shader-constants.txt", "dlssnr-amd/aco/records",
+                         "dlssnr-amd/aco/shell-aliases.txt"):
+            path = self.package / relative
+            saved = self.root / "removed-aco-asset"
+            if saved.exists():
+                if saved.is_dir():
+                    shutil.rmtree(saved)
+                else:
+                    saved.unlink()
+            path.rename(saved)
+            code, output = self.run_direct(flags=("-NonInteractive", "-Backend", "mochizuki"))
+            self.assertNotEqual(code, 0, output)
+            self.assertIn("Incomplete Mochizuki package", output)
+            self.assertFalse((self.game / "MochizukiNrRuntime.dll").exists(), output)
+            saved.rename(path)
 
     def test_mochizuki_missing_model_reports_pending(self):
         self.ready_mochizuki()

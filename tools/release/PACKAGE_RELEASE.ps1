@@ -628,11 +628,34 @@ if (Test-Path -LiteralPath $personSrc -PathType Container) {
     Copy-Item -LiteralPath (Join-Path $root 'third_party/onnxruntime/YuNet_MIT.txt') -Destination (Join-Path $stage 'Licenses/YuNet_MIT.txt') -Force
 }
 
-# Explicit allowlist: never copy dlssnr.bin, the unpacked model or a local pipeline cache.
+# Exact pin: tools/install/mochizuki-owned.txt. A similar filename is not owned.
+$mochizukiPin = Join-Path $root 'tools/install/mochizuki-owned.txt'
+if (-not (Test-Path -LiteralPath $mochizukiPin -PathType Leaf)) {
+    throw "Mochizuki ownership pin missing at $mochizukiPin."
+}
+$mochizukiOwned = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+foreach ($line in [IO.File]::ReadAllLines($mochizukiPin)) {
+    $rel = $line.Trim().Replace('\', '/')
+    if ($rel.Length -eq 0 -or $rel.StartsWith('#')) { continue }
+    if ($rel.IndexOfAny([char[]]@('*', '?')) -ge 0) { throw "Mochizuki ownership pin contains a wildcard: $rel" }
+    [void]$mochizukiOwned.Add($rel)
+}
+if ($mochizukiOwned.Count -lt 1) { throw 'Mochizuki ownership pin is empty.' }
 Copy-Item -LiteralPath (Join-Path $mochizukiBuild 'MochizukiNrRuntime.dll') -Destination $stage
 $mzAssets = Join-Path $stage 'dlssnr-amd'
+$mzSource = Join-Path $mochizukiBuild 'dlssnr-amd'
 New-Item -ItemType Directory -Force $mzAssets | Out-Null
-Copy-Item -LiteralPath (Join-Path $mochizukiBuild 'dlssnr-amd/shaders') -Destination $mzAssets -Recurse
+foreach ($relative in $mochizukiOwned) {
+    $source = Join-Path $mzSource ($relative.Replace('/', '\'))
+    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+        throw "Mochizuki package is missing pinned file dlssnr-amd/$relative. Rebuild the runtime before packaging."
+    }
+    $dest = Join-Path $mzAssets ($relative.Replace('/', '\'))
+    $destDir = Split-Path -Parent $dest
+    if ($destDir) { New-Item -ItemType Directory -Force $destDir | Out-Null }
+    Copy-Item -LiteralPath $source -Destination $dest -Force
+}
+Copy-Item -LiteralPath $mochizukiPin -Destination (Join-Path $stage 'mochizuki-owned.txt') -Force
 Copy-Item -LiteralPath (Join-Path $root 'third_party/mochizuki/LICENSE') -Destination (Join-Path $stage 'Licenses/Mochizuki_MIT.txt')
 Copy-Item -LiteralPath (Join-Path $root 'third_party/mochizuki/UPSTREAM.md') -Destination (Join-Path $stage 'Licenses/Mochizuki_SOURCES.md')
 New-Item -ItemType Directory -Force (Join-Path $stage 'model-tools'), (Join-Path $stage 'docs') | Out-Null
@@ -758,6 +781,8 @@ if ($LocalTest) {
         [Text.UTF8Encoding]::new($false))
 }
 if (Test-Path (Join-Path $stage 'dlssnr-amd/dlssnr.bin')) { throw 'User model must never be packaged.' }
+if (Test-Path (Join-Path $stage 'dlssnr-amd/pipeline.cache')) { throw 'Pipeline cache must never be packaged.' }
+if (Test-Path (Join-Path $stage 'dlssnr-amd/aco-cache')) { throw 'ACO driver cache must never be packaged.' }
 # Source identity/freshness gates above certify the original build. Only staged copies are signed.
 # The signing helper proves executable bytes are unchanged and records original -> signed hashes.
 . (Join-Path $PSScriptRoot 'package-signing.ps1')

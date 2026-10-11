@@ -75,7 +75,13 @@ public class UninstallProxyFixture { }
         'shaders\user-custom.hlsl', 'shaders\shader-cache\notes.txt',
         'lmxxf-modules\shaders\user-custom.hlsl', 'lmxxf-modules\shaders\shader-cache\notes.txt',
         'dlssnr-amd\dlssnr.bin', 'native-game-tiled-assets\model.bin',
-        'dlssnr-amd\shaders\runtime\user.spv', 'dlssnr-amd\prewarm\user.txt',
+        'dlssnr-amd\shaders\runtime\user.spv', 'dlssnr-amd\shaders\old.spv',
+        'dlssnr-amd\shaders\g_user_custom.spv',
+        'dlssnr-amd\aco\shaders\user.spv', 'dlssnr-amd\aco\shaders\runtime\user.spv',
+        'dlssnr-amd\aco\shaders\g_user_custom.spv',
+        'dlssnr-amd\aco\records\notes.txt', 'dlssnr-amd\aco\records\ffffffffffffffff.nrp',
+        'dlssnr-amd\aco\records\0123456789abcdef.nrp', 'dlssnr-amd\aco\user-notes.txt',
+        'dlssnr-amd\aco-cache\local.nrb', 'dlssnr-amd\prewarm\user.txt',
         'backup-amd-presr-fixture\OptiScaler.ini',
         'backup-amd-presr-fixture\OptiScaler\libxess.dll'
     )
@@ -92,7 +98,19 @@ public class UninstallProxyFixture { }
         'OptiScaler\dlssnr\design\multi-point-anchoring.md', 'OptiScaler\dlssnr\design\pre-sr-multipass.md',
         'dlssnr-amd\pipeline.cache', 'dlssnr-amd\prewarm\manifest.txt',
         'dlssnr-amd\shaders\runtime\runtime_encode.spv',
+        'dlssnr-amd\shaders\runtime\runtime_upscale.spv',
+        'dlssnr-amd\shaders\runtime\runtime_downscale.spv',
+        'dlssnr-amd\shaders\runtime\runtime_taps.spv',
+        'dlssnr-amd\shaders\runtime\runtime_transfer_store.spv',
+        'dlssnr-amd\shaders\runtime\FidelityFX-FSR1-LICENSE.txt',
         'dlssnr-amd\shaders\temporal\motion_estimate.spv',
+        'dlssnr-amd\shaders\temporal\temporal_pre_fp32nh.spv',
+        'dlssnr-amd\aco\shell-aliases.txt',
+        'dlssnr-amd\aco\records\03aef996aaf9f54a.nrp',
+        'dlssnr-amd\aco\shaders\g_attn.spv',
+        'dlssnr-amd\aco\shaders\runtime\runtime_encode.spv',
+        'dlssnr-amd\aco\shaders\temporal\temporal_pre_fp32.spv',
+        'dlssnr-amd\aco\shaders\temporal\temporal_pre_fp32nh.spv',
         'lmxxf-modules\c32_fast.generated.hip', 'lmxxf-modules\c32_fast.hsaco.s',
         'lmxxf-modules\gfx1200\boundary-fast.generated.hip', 'lmxxf-modules\gfx1200\boundary-fast.hsaco.s',
         'lmxxf-modules\gfx1201\deep_fast.generated.hip', 'lmxxf-modules\gfx1201\deep_fast.hsaco.s',
@@ -124,6 +142,7 @@ public class UninstallProxyFixture { }
         foreach ($relative in $deps) { Assert-Removed (Join-Path $root ('OptiScaler\' + $relative)) }
     }
     Copy-Item -LiteralPath $uninstall -Destination (Join-Path $game 'Uninstall_OptiScaler_NR.ps1')
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\..\tools\install\mochizuki-owned.txt') -Destination (Join-Path $game 'mochizuki-owned.txt')
     $inPlace = & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $game 'Uninstall_OptiScaler_NR.ps1') -NonInteractive -NoPause 2>&1
     if ($LASTEXITCODE -ne 0) { throw "In-place uninstall exit $LASTEXITCODE : $($inPlace -join [Environment]::NewLine)" }
     if (($inPlace -join '') -notmatch 'Uninstall SUCCEEDED') { throw 'Missing in-place uninstall success result.' }
@@ -188,6 +207,24 @@ public class UninstallProxyFixture { }
         }
     }
     Write-Host 'PASS storage, dependency and Agility junction targets preserved'
+
+    foreach ($linkedTree in @('dlssnr-amd\shaders', 'dlssnr-amd\aco')) {
+        $id = [guid]::NewGuid().ToString('N')
+        $linkGame = Join-Path $testRoot ('linked-tree-' + $id)
+        $target = Join-Path $testRoot ('external-tree-' + $id)
+        foreach ($relative in @('runtime\user.spv', 'runtime\runtime_encode.spv', 'g_attn.spv',
+                'records\0123456789abcdef.nrp', 'shell-aliases.txt', 'old.spv')) {
+            Put-File (Join-Path $target $relative)
+        }
+        Make-Junction (Join-Path $linkGame $linkedTree) $target
+        $null = Run-Uninstall $linkGame
+        Assert-Exists (Join-Path $linkGame $linkedTree)
+        foreach ($relative in @('runtime\user.spv', 'runtime\runtime_encode.spv', 'g_attn.spv',
+                'records\0123456789abcdef.nrp', 'shell-aliases.txt', 'old.spv')) {
+            Assert-Exists (Join-Path $target $relative)
+        }
+    }
+    Write-Host 'PASS linked shader and ACO trees are not entered'
 
     $flagsGame = Join-Path $testRoot 'flags-game'
     Put-File (Join-Path $flagsGame 'DLSS5-AMD\native-game-flags.txt') "DLSS5_FIT_LARGE=1`r`n"

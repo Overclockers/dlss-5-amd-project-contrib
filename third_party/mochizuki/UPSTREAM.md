@@ -1,114 +1,59 @@
 # Mochizuki Vulkan NR core
 
 - Source: https://github.com/mochizuki0323/DLSSNR-AMD
-- Source snapshot: `9e4574e1812d7d0632d6db02721a20c9617be434` (v0.0.4).
-- Windows baseline: v0.0.3 (`82560c4fbfaac347fc5e22c22025191402ae916b`); upstream v0.0.4 is a Linux-only release.
-- License: MIT; original LICENSE retained here.
-- Closure: Windows core, Windows shader sources/recipe/generators, Linux model extraction tools.
-- Not imported: the official vkd3d/ReShade hosts, installers, Vulkan loader or model weights.
+- Source snapshot: `a9b13dd4cdb5f4bf43db358492d72e6e5e2acd67` (2026-10-11). Official summary: Windows native D3D10/11/12 with a Vulkan device of NR's own, ACO Mode, AMD 26.9.2 fixes, and the 0.0.4 feature set.
+- Previous pins, kept only as history: Linux-only v0.0.4 tag `9e4574e1812d7d0632d6db02721a20c9617be434`, and the old Windows v0.0.3 baseline `82560c4fbfaac347fc5e22c22025191402ae916b`. Do not mix those trees back in.
+- License: MIT for this core; the original LICENSE is retained. The product adapter under `dlssnr/backend/mochizuki_runtime/` comes from MatheusFerreiraS/neural-amd-opti `283fdb0a1df9e9c4c78de0d2d848e775cf6ae8ae` (GPL-3.0). The combined runtime is distributed under GPL-3.0, with the MIT notice retained.
+- Closure: `windows/src/core`, `windows/shaders`, `windows/build` (recipe, unroll, quad-quant, `arch/rdna4.sh`), `windows/data/aco` records and `shell-aliases.txt`, `linux/shaders`, `linux/build/build_network.py`, `linux/build/arch/rdna4.sh`. `linux/package/model-tools` was already identical and stays.
+- Not imported: `windows/src/pe`, official installers, the Vulkan loader, the ReShade add-on, OptiScaler-NR package scripts, DX9/DX10/DX11 hosts, and the INT4 host path.
 
-## v0.0.4 directed integration (2026-10-07)
+## Official behaviour taken as-is
 
-Reviewed the complete 337-path v0.0.3-to-v0.0.4 diff, including Linux calibration data,
-generators and hosts outside this closure. The four changed vendored Windows files
-only correct comments; there is no new Windows inference implementation in that tag.
-The Windows ReShade host's fifth changed file is also comment-only and is not vendored.
-Menu version and weight preparation remain on the official Windows v0.0.3 baseline.
+These local diffs were removed because the official tree now covers them:
 
-Ported the Linux HDR hue fix from `linux/shaders/passes/runtime_encode.comp` and the
-`soft_knee` function in `linux/shaders/passes/runtime_transfer.comp` to their Windows
-counterparts. After the luminance knee, RGB is scaled by its peak if a channel exceeds
-one, preserving RGB ratios instead of clipping channels separately. The reduced-model
-transfer uses the same rule. No descriptor layouts, controls, weights or history rules change.
-The standalone `tests/mochizuki/run.cmd hdr-shader` test executes both shipped shaders
-on GPU, covering saturated colours, ordinary brightness, white point, alpha, bounds,
-and full/reduced model resolution. It is also included in the Mochizuki GPU entrypoint.
+- HDR encode and transfer hue. The previous Windows `runtime_encode.comp` already matched official, so the continuing "HDR port" is gone with the shader replacement.
+- Driver 26.9.2 / 32.0.32015 cooperative-matrix unroll and ViT tail. Official `UNROLLED` covers `fswin_t`, `ffwd3_t`, `attn` and `vit_attn`. The local import of neural-amd-opti `be7bf0a` is not reapplied. Do not reuse old SPIR-V as ACO shells.
+- `NR_EDGE_BODIES=0`. Official `pipelines.json` sets the edge defines it wants, including `NR_EDGE_BODIES=1` and `NR_EDGE_FORM=2` on some pipelines. `rdna4.sh` adds `-DNR_TCHAIN_TILES=1`. The manifest allow-list accepts `tchain`.
+- Enlargement. `Controls::transfer` is 0 matched residual, 1 edge-aware, 2 classic. `classic_scaler` is 0 bilinear, 1 Catmull-Rom (official default), 2 Lanczos3, 3 FSR1. The push constant is the official 48-byte `TransferPush`. The old `enlarge_mode` field and 40-byte push are gone.
+- Native store. `store_native` writes the answer back into the kept frame for the formats official lists and skips `full_out` plus the alpha pass. `NR_KEEP_RGBA32F=1` would force the old RGBA32F keep; this product does not set it.
+- Build progress. Official atomics `g_build_stage`, `g_build_pipes_done` and `g_build_pipes_total` replace the local progress callback. The host overlays stage names while its own progress flag is active, and clears stage 0 around the runtime constructor so the later "Saving shader cache" text stays. The core is not reset at the end; official leaves stage 5.
+- Split GPU timing averages. `last_gpu_ms`, `average_gpu_ms` and the `average_network_ms` EMA stay official.
 
-| Upstream module | Disposition and follow-up |
-|---|---|
-| INT4 mixed: Linux core, shaders, recipes, calibration tables, weight converter and Vulkan layer | Deferred. `nrvk::Kernel::create_iu4` captures driver binaries and rewrites WMMA opcodes via `VK_KHR_pipeline_binary`; this is not a portable GLSL precision switch. Requires separate Windows driver/output validation, model preparation and package contracts, and INI-owned controls before integration. No calibration data or extra model is shipped here. |
-| Pipeline robustness override | Not applicable to this bridge. Upstream removes inherited DXVK/vkd3d-proton robust access; `Session::InitVk` creates a private Vulkan device without those enabled features. Do not inherit the Linux path's assumption that physical support alone permits per-pipeline overrides on a borrowed device. |
-| ReShade enlargement | Ported only the edge-aware lighting/colour function from the snapshot's Linux runtime_transfer.comp, with fixed guided weights and sigma 0.25. Optional host-owned MochizukiEnlargeMode=1; matched residual remains 0/default. Classic/Catmull-Rom/Lanczos/FSR1 remain deferred: separate quality/performance evidence and additional pipelines would be needed. |
-| Native-frame in-place I/O | Adapted narrowly: the private RGBA32F full-size copy may also receive final composition at reduced model resolution. MochizukiCompactTransfer defaults on; non-U8, non-native-compose paths only. Neighbour taps still read model-sized images; each full-size original pixel is read before its own store. No borrowed game texture views or fixed-frame retirement are introduced. Full native-format I/O remains deferred pending format/replay validation. |
-| Network/route split timings | Implemented locally for this bridge: per-pass network pairs plus core-total timestamps, nonblocking completed-query reads, masked timestamp wrap and the existing timing serial. Coordinated info ABI/host/UI changes report network and other core work over the same sample window. This does not measure bridge copies or total application latency. |
-| 32-bit staging/weight-memory reduction and host-memory retry | Deferred. This product is x64, and has its own budget/backoff/cancellation and retained-network logic. A future bounded-upload change should measure peak memory and build latency and validate failure cleanup; do not import the unrelated INT4 builder with it. |
-| Linux installer, Steam layer options, OptiScaler-NR 0.8.91 binary patches, DX10 ReShade routing, INI/hotkey/log controls | Not imported. These configure a different host and API route. Our three-backend host, native D3D12 bridge, authoritative INI/menu and bounded logging remain in control. |
+## Residual core patches
 
-The model extraction scripts and 599-entry source model did not change. The source
-snapshot above records the reviewed version; it does **not** claim Windows INT4 or
-all v0.0.4 Linux features are available.
+Each one is small, replayable, and off by default unless the note says the product host turns it on. Official callers that leave the new fields alone keep official behaviour.
 
-The two new product controls live in ConfigKeys.h, Config, the existing output-menu
-group and OptiScaler.ini. The exact current controls/info ABI is checked before
-preparing a session; host and runtime must be updated together. The frame lease owns
-the selected runtime, including either output-buffer layout, until completion and
-invalidation. Alpha is already restored by transfer; U8 output retains the separate
-alpha/rounding pass.
+1. Build cancel, only when `NR_NO_MAIN` is set (`nr_runtime.cpp` defines it before including `nr_graph.cpp`). `nr_runtime.hpp` holds `build_cancel` and `BuildCancelScope`. The pipeline loop saves the cache and throws `NR build cancelled` before the next pipeline. Official has no cancel. Upstream direction: a cancel flag in the official graph if one is added.
+2. `RuntimeConfig::compact_transfer` and `separate_answer`, both default false. After official `store_native` is computed, `separate_answer` forces it off, and `compact_rgba` reuses the RGBA32F keep when compact is requested and `store_native`, `keep_native`, 8-bit rounding and native compose are all off. The product host sets compact on (`MochizukiCompactTransfer=true`) and sets `separate_answer` when the user turns compact off.
+3. `RuntimeConfig::first_pass_output`, default false. A second `runtime_transfer` dispatch keeps pass 0 in a full-frame RGBA32F image, using the official 48-byte push. Create refuses native compose, mask and `max_passes < 2`. The host export stays opt-in.
+4. Timing serial. The timestamp pool masks deltas with `timestampValidBits`. A sample is accepted only when the slot has passes and every network delta is inside the total. `gpu_timing_serial()` advances only then. `last_network_ms()` and `last_other_ms()` expose that sample. The official EMA remains.
+5. `--glslang` on both `windows/build/build_network.py` and `linux/build/build_network.py`. The default path is still the official relative `toolchain/glslang/bin/glslang`. The product builder passes the pinned Windows glslang.
+6. `nr::binary::own_directory()`. When set, `directory()`, `cache_dir()` and `shell_dirs()` ignore `NR_ACO_DIR`, `NR_ACO_CACHE` and `NR_ACO_SHELL_DIR`. Official callers leave it false, so those variables still win. The product calls it before creating the device and does not set `NR_ACO_DIR`.
 
-Validation includes real shader comparisons for both composition modes, HDR/SDR,
-no-edit invariants, edges and in-place/separate byte equality. The composition GPU
-test also compares consecutive temporal frames across one/three passes,
-preprocessing, FP16/sRGB and replays a retained old recording after buffer switching.
-Profile and composition entrypoints are documented in docs/mochizuki.md.
+`generate_device_chain.py` is not run. The core translation unit does not include `nr_device_chain_sizes.hpp`. `quad_quant_glsl.py` is unchanged and still used by the official Windows recipe.
 
-## Retained local adaptations
+## Product ACO and device
 
-`windows/src/core/nr_runtime.hpp` and `nr_graph.cpp` carry the pipeline-build cancellation patch from
-[MatheusFerreiraS/neural-amd-opti](https://github.com/MatheusFerreiraS/neural-amd-opti)
-at `283fdb0a1df9e9c4c78de0d2d848e775cf6ae8ae` (GPL-3.0).
-It checks a host cancellation flag between pipeline builds and preserves the compiled cache before stopping.
-The native D3D12/Vulkan adapter and pipeline prewarm implementation under the product's
-`dlssnr/backend/mochizuki_runtime/` originate from that same GPL-3.0 snapshot and are adapted locally.
-The combined runtime is distributed under GPL-3.0, with this MIT core's notice retained.
+ACO is off unless `MochizukiAcoMode` is true. The host pushes the current INI into the session before `PrepareSession`, because the Vulkan device is created there. `own_directory()` always runs. `configure()` runs only when `aco/records`, `aco/shaders`, `aco/shaders/temporal`, `shell-aliases.txt` and the Windows `dlssnr-amd/shaders` tree are present, and every non-`nobda` network SPIR-V under `aco/shaders` and `aco/shaders/temporal` (`g_*`, `temporal_pre_fp32*`, `temporal_post_fp32*`) has a record whose `spv_hash` equals `pal::hash` of that SPIR-V (`records/%016llx.nrp`, offset basis `1469598103934665603`). A shell is the same name or its alias in `aco/shell` (if present), `dlssnr-amd/shaders` or `shaders/temporal`; otherwise the ACO SPIR-V is its own template. The cache is `dlssnr-amd/aco-cache`, created at runtime and not shipped.
 
-Local adapter changes replace the reference's single mutable job with stable v2 recording
-leases, retain geometry/network resources through replay and invalidation, and order the
-next producer after the actual D3D12 consumer tail. Controls use the exact current package
-contract and an explicit asset directory. Logging is opt-in and bounded. The core adds a
-completed timestamp-read serial accessor in `nr_runtime.hpp/.cpp` so UI polls do not
-duplicate GPU samples. No inference or shader math is changed by that accessor.
+`configure()` is thread-local and clears that thread's bundle, reason and import count. The product calls `own_directory()` on the session thread before device creation and again on the builder thread. Device enablement stays process-wide. A missing bundle, a hash mismatch, a driver that `Features::prepare` rejects, or an import that throws or imports nothing discards that graph and builds one native network on the builder thread. If `vkCreateDevice` rejects the optional pipeline-binary chain and the result is neither device loss nor out of memory, the product clears that thread's bundle and creates the device again without those extensions. Device loss and out of memory keep their original classification. GetInfo names the next game start only when ACO is requested on a device created without pipeline binaries. Requested, device capability, the candidate and the installed network stay separate. Effective is published in `Install` with the network and follows that candidate's mode when the request changed during the build. A candidate that does not install leaves the current effective state. The installed network keeps its pipelines until that publish.
 
-The shader recipe starts from upstream defaults and adapts MatheusFerreiraS's `NR_EDGE_BODIES=0` recipe on the eight
-pipelines that otherwise duplicate the Swin body for image-edge masks. A local RX 9070 XT fresh-executable
-1080p/R11G11B10 test reduced network construction from 133.7 s to 48.6 s; its output was byte-identical.
-This is startup evidence, not a claim of game FPS gains or all-game image equivalence.
-The core also reports build phases and completed main-network pipelines through a thread-local host
-callback. It changes no inference math. The host displays progress without a guessed total-time percentage.
-The build generator accepts an explicit shader compiler path; build tools and intermediate
-output live under exports, not this source tree.
+The product device enables `VK_EXT_pipeline_robustness` when the physical device lists the extension and the feature is on. `adopt()` reads that feature from the physical device, and `Kernel::create` then chains a robustness info. `Features::prepare` and `mark` run only after a bundle was configured. `MZ_PROBE_PIPELINE_BINARY` remains a test probe, not the ACO path.
 
-The Windows shader build also carries the cooperative-matrix driver workaround from
-[MatheusFerreiraS/neural-amd-opti be7bf0a](https://github.com/MatheusFerreiraS/neural-amd-opti/commit/be7bf0a3d542b96894b61f42f2c3a389592952c8).
-Only `unroll_glsl.py`, the four-source unroll selection in `build_network.py`, and
-the partial-key-chunk changes in `vit_attn_vt_chunk.glsl` are imported. The local
-`--glslang` option remains. Fixed-bound int/uint cooperative-matrix array loops,
-including continue and subgroup-32 matrix length loops, are expanded before glslang.
-The ViT tail avoids a loaded/zero matrix select and masks padding in scalar f16 values.
-This targets Windows driver 32.0.32015; it also corrects the original partial-chunk
-output on older drivers. Old output hashes at affected resolutions are not correctness
-references. The commit's async, input, menu and runtime changes are not imported.
-Rebuild with `tools/build/build-mochizuki-runtime.cmd` without `--skip-shaders`.
-Do not ship local pipeline caches or prewarm manifests; cached prewarm modules are
-validated against the installed SPIR-V bytes before use.
+The builder writes Linux SPIR-V to `dlssnr-amd/aco/shaders` and copies the official records and aliases beside it. Generation failure fails the build. Package and uninstall ownership is the exact relative list in `tools/install/mochizuki-owned.txt` (214 paths: the 58 official records, both shader trees' pinned outputs, and `aco/shell-aliases.txt`). The packager copies only those paths and ships the pin as `mochizuki-owned.txt`. It does not copy `dlssnr.bin`, `pipeline.cache`, `aco-cache`, `test.spv` or a file whose name merely resembles a package file. Uninstall deletes a shader or ACO file only when its path is on that pin, and removes a directory only when it is empty. A missing pin deletes no shader or ACO file. Unknown files stay. Linked paths stay. `dlssnr.bin` and `aco-cache` stay.
 
-Build inputs are pinned: Vulkan-Headers `e3b1eec08173d6b825cd3ac88c885a63b621504a` (1.4.357),
-glslang 16.5.0. Host compile constants are read from `windows/build/arch/rdna4.sh`, the same source the
-shader recipe documents. See tools/build/build-mochizuki-runtime.cmd.
+## Pins
 
-The 599-entry `dlssnr.bin` model must be extracted from a user's own `nvngx_dlssnr.dll` 310.8.0;
-neither that DLL nor the extracted model is part of this repository or public package.
+- Vulkan-Headers `e3b1eec08173d6b825cd3ac88c885a63b621504a` (1.4.357).
+- Windows glslang 16.5.0, archive SHA-256 `06b71298b750268c127f2ee7ae0ef7525e2068120c6c8a3a08b2f58ca6f325ce`.
+- The official Linux glslang tarball SHA-256 is `b9b1f96acb898a62251b171f7695efcecfc206a530299054071919b06820f657` (same 16.5.0, different archive). This build uses the Windows pin for both shader trees. The loaded ACO corpus is `dlssnr-amd/aco/shaders` (network and temporal). A 4-of-56 comparison against Windows `dlssnr-amd/shaders` is not that corpus: those Windows shaders are the native shell and runtime source. Preflight accepts the bundle only when every hashed ACO network SPIR-V matches its record contents. Device import is a separate result from `tests/mochizuki/run.cmd aco` on the selected adapter.
 
-## Optional first-pass export
+The 599-entry `dlssnr.bin` model still comes from the user's own `nvngx_dlssnr.dll` 310.8.0. Neither that DLL nor the extracted model is in this repository.
 
-The local core adds `RuntimeConfig::first_pass_output` (default false) and
-`Runtime::first_pass_output()`. An independent runtime_transfer dispatch preserves
-the first pass in frame-space RGBA32F before later passes overwrite surf0. It uses
-the same detail, colour, white point and enlargement controls as the final transfer.
-The host converts it to the frame format and retains both outputs in the same
-recording lease. No shader recipe or default inference path changes.
+## Measured
 
-This is for the host's opt-in person/scene partition. Preprocess, control-mask and
-native-compose paths do not export it. The host refuses export for active
-preprocessing and while the requested multi-pass network is still unavailable.
-Allocation size, model key and buffer retirement include the optional output.
-Local C++ build and ABI checks are separate from pending Vulkan image validation.
+On 2026-10-11, `tests/mochizuki/run.cmd aco` selected AMD Radeon RX 9070 XT (vendor 0x1002, device 0x7550). `exports/mochizuki-runtime/mochizuki_nr.log` recorded 58/58 record matches, Vulkan driver 26.8.1 (LLPC), driverVersion 0x0080018b, and `ACO network ready: 29 imported pipelines`. The graph builder counted 24 kernels. The test printed `ACO_FRAME_OK 256x256`, `ACO_SWITCH_NATIVE_OK`, `ACO_SWITCH_ACO_OK` and `ACO_CONTRACT_OK effective=1`. The same command then printed `ACO_DEVICE_FALLBACK_OK` for a forced pipeline-binary device rejection, `ACO_BUDGET_KEEP_OK effective=1` when the second frame-buffer admission was refused, and `ACO_FALLBACK_OK` for the missing-bundle, missing-alias and corrupt-record fixtures. The same adapter then ran `tests/mochizuki/run.cmd aco-rapid`: a native candidate that installed after ACO was requested again printed `ACO_RAPID_REENABLE requested=1 effective=0`, and the following ACO network printed `ACO_RAPID_OK`. The machine driver was left at 32.0.31041.1004.
+
+## Not claimed
+
+No game scene was part of this integration. Official timing numbers are not reused as local results. INT4 stays off. The same-repo draft's explicit barrier switch was not added.

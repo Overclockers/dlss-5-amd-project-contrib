@@ -80,7 +80,9 @@ extern "C"
         float preprocess_contrast;    /* about mid grey, 0.5..2, default 1 */
         float preprocess_saturation;  /* 0.05..2, default 1 */
         uint32_t compact_transfer; /* default 1; reduced-resolution non-U8 output buffer reuse; rebuilds */
-        uint32_t enlarge_mode;     /* 0 matched residual (default), 1 edge-aware; reduced model scale only */
+        uint32_t enlarge_mode;     /* 0 matched residual (default), 1 edge-aware, 2 classic; reduced model scale only */
+        uint32_t classic_scaler;   /* 0 bilinear, 1 Catmull-Rom (default), 2 Lanczos3, 3 FSR1; used when enlarge_mode is 2 */
+        uint32_t aco_mode;         /* 0 off (default), 1 ACO; fixed when the Vulkan device is created; a change needs a restart */
     } MochizukiNrControls;
 
     /* What the session is doing, for a menu. Safe to ask from any thread, at any rate. */
@@ -109,6 +111,9 @@ extern "C"
          * pre/post shaders count as network. Other includes core copies/composition only. */
         float gpu_ms_network_last, gpu_ms_other_last;
         float gpu_ms_network_mean, gpu_ms_other_mean;
+        uint32_t aco_requested; /* the setting last given to SetControls */
+        uint32_t aco_effective; /* 1 when this device was created with ACO and it stayed on */
+        char aco_fallback[128]; /* why ACO is off, or that a change waits for the next start; empty when unused */
         /* struct_size includes the current definition's tail padding. */
     } MochizukiNrInfo;
 

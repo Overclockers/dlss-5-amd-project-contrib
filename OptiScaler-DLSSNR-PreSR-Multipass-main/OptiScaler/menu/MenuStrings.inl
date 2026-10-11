@@ -918,8 +918,12 @@
 
 {"Model enlargement", "模型放大"},
 {"Edge-aware", "边缘引导"},
+{"Classic scaler", "经典缩放"},
+{"Bilinear", "两次线性"},
+{"ACO mode", "ACO 模式"},
 {"Reuse output buffer", "复用输出缓冲"},
-{"Model enlargement applies below 100% model scale. Matched residual is the default; edge-aware costs more GPU time.\nReuse output buffer saves one full-resolution float image on supported formats. Switching rebuilds the network; turn off to use separate buffers.", "模型分辨率低于 100% 时生效。默认使用匹配残差；边缘引导更耗时。\n支持的格式可复用输出缓冲，省去一张全分辨率浮点纹理。切换会重建网络；关闭可退回独立缓冲。"},
+{"Model enlargement applies below 100% model scale. Matched residual is the default. Edge-aware costs more GPU time. Classic uses the scaler below; Catmull-Rom is its default.\nReuse output buffer keeps one full-resolution float image when the frame is RGBA32F. Switching rebuilds the network.\nACO mode uses AMD pipeline binaries when this build's records match and the driver accepts them. It applies on the next game start. A missing bundle or unsupported device keeps the driver's compiler.", "模型分辨率低于 100% 时生效。默认使用匹配残差。边缘引导更耗时。经典模式使用下方缩放，默认 Catmull-Rom。\nRGBA32F 画面复用一张全分辨率浮点图像。切换会重建网络。\nACO 模式在本构建的记录匹配且驱动接受时使用 AMD 管线二进制。下次游戏启动生效。缺少数据包或不支持的设备继续使用驱动编译器。"},
+{"ACO requested, effective %u. %s", "已请求 ACO，实际生效 %u。%s"},
 {"Rendering", "渲染"},
 {"Upscaling", "超分辨率"},
 {"Latency & FPS", "延迟与帧率"},

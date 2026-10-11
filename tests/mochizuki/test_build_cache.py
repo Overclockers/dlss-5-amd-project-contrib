@@ -22,7 +22,7 @@ class BuildCacheTests(unittest.TestCase):
         paths = [self.source, *(self.root / (product + p) for p in (
             'dlssnr/backend/lmxxf_runtime/LmxxfNrApi.h', 'dlssnr/NrPerformance.h', 'library/vulkan/vulkan-1.lib')),
             *(self.root / 'tools/build' / f for f in ('build-mochizuki-runtime.py',
-              'build-mochizuki-runtime.cmd', 'mochizuki-deps.py', 'mochizuki-manifest.py'))]
+              'build-mochizuki-runtime.cmd', 'mochizuki-deps.py', 'mochizuki-manifest.py', 'mochizuki-aco.py'))]
         for p in paths:
             p.parent.mkdir(parents=True, exist_ok=True); p.write_bytes(b'fixture source')
         self.out = self.root / 'exports/mochizuki-runtime'

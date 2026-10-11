@@ -3,6 +3,7 @@ import argparse
 import importlib.util
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import runpy
@@ -52,6 +53,13 @@ def main():
     if not args.skip_shaders:
         subprocess.run([sys.executable, str(up / 'windows/build/build_network.py'), 'rdna4',
                         '--glslang', str(glslang), '--out', str(out / 'dlssnr-amd/shaders')], check=True)
+        aco = out / 'dlssnr-amd/aco'
+        if aco.exists():
+            shutil.rmtree(aco)
+        subprocess.run([sys.executable, str(up / 'linux/build/build_network.py'), 'rdna4',
+                        '--glslang', str(glslang), '--out', str(aco / 'shaders')], check=True)
+        shutil.copytree(up / 'windows/data/aco/records', aco / 'records')
+        shutil.copy2(up / 'windows/data/aco/shell-aliases.txt', aco / 'shell-aliases.txt')
     if not args.skip_shaders:
         if source_hashes != manifest['sources']():
             raise SystemExit('Sources changed during build; rebuild before using these artifacts')

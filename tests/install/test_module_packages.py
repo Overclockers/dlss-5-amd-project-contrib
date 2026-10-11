@@ -2,6 +2,7 @@
 import os
 import configparser
 import hashlib
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -54,6 +55,8 @@ Add-Type -TypeDefinition 'public static class PackageFixture { public static int
         self.root = Path(self.temp.name)
         (self.root / 'tools/release').mkdir(parents=True)
         (self.root / 'tools/lmxxf-sync').mkdir(parents=True)
+        (self.root / 'tools/install').mkdir(parents=True, exist_ok=True)
+        shutil.copy2(REPO / 'tools/install/mochizuki-owned.txt', self.root / 'tools/install/mochizuki-owned.txt')
         for name in ('release/PACKAGE_RELEASE.ps1', 'install-amd-presr.ps1', 'uninstall-amd-presr.ps1',
                      'lmxxf-module-package.ps1', 'stage-lmxxf-beside-optiscaler.cmd',
                      'stage-lmxxf-beside-optiscaler.ps1', 'release/check-module-contract.ps1',
@@ -98,6 +101,7 @@ Add-Type -TypeDefinition 'public static class PackageFixture { public static int
         for name in ('OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/library/vulkan/vulkan-1.lib',
                      'tools/build/mochizuki-manifest.py', 'tools/build/build-mochizuki-runtime.py',
                      'tools/build/build-mochizuki-runtime.cmd', 'tools/build/mochizuki-deps.py',
+                     'tools/build/mochizuki-aco.py',
                      'tools/install/mochizuki-model.py', 'tools/install/mochizuki-python.ps1', 'docs/mochizuki.md',
                      'OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/dlssnr/backend/lmxxf_runtime/LmxxfNrApi.h',
                      'OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/dlssnr/NrPerformance.h'):
@@ -108,8 +112,74 @@ Add-Type -TypeDefinition 'public static class PackageFixture { public static int
         (mz / 'dlssnr-amd/shaders').mkdir(parents=True)
         (mz / 'MochizukiNrRuntime.dll').write_bytes(self.pe_bytes)
         (mz / 'dlssnr-amd/shaders/test.spv').write_bytes(b'fixture SPIR-V, not executable')
+        aco = mz / 'dlssnr-amd/aco'
+        (aco / 'records').mkdir(parents=True)
+        (aco / 'shaders/runtime').mkdir(parents=True)
+        (aco / 'shaders/temporal').mkdir(parents=True)
+        (aco / 'records/0123456789abcdef.nrp').write_bytes(b'NRPAL fixture record')
+        (aco / 'shell-aliases.txt').write_text('g_from.spv g_attn.spv\n', encoding='utf-8')
+        (aco / 'shaders/shader-constants.txt').write_bytes(b'fixture constants\n')
+        (aco / 'shaders/g_attn.spv').write_bytes(b'fixture network SPIR-V')
+        (aco / 'shaders/runtime/runtime_encode.spv').write_bytes(b'fixture runtime SPIR-V')
+        (aco / 'shaders/temporal/temporal_pre_fp32.spv').write_bytes(b'fixture temporal SPIR-V')
+        (aco / 'shaders/user-unknown.txt').write_bytes(b'not a package shader')
+        (aco / 'shaders/runtime/user.spv').write_bytes(b'user shader')
+        (aco / 'shaders/g_user_custom.spv').write_bytes(b'user network name')
+        (aco / 'records/ffffffffffffffff.nrp').write_bytes(b'user record')
+        (mz / 'dlssnr-amd/shaders/g_user_custom.spv').write_bytes(b'user windows network name')
+        pin = (REPO / 'tools/install/mochizuki-owned.txt').read_text(encoding='utf-8').splitlines()
+        for relative in pin:
+            relative = relative.strip()
+            if not relative or relative.startswith('#'):
+                continue
+            path = mz / 'dlssnr-amd' / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not path.exists():
+                path.write_bytes(b'pinned fixture\n')
+        (mz / 'dlssnr-amd/dlssnr.bin').write_bytes(b'NRMODEL1 user model')
+        (mz / 'dlssnr-amd/pipeline.cache').write_bytes(b'local pipeline cache')
+        (mz / 'dlssnr-amd/aco-cache').mkdir()
+        (mz / 'dlssnr-amd/aco-cache/local.nrb').write_bytes(b'local aco cache')
         runpy.run_path(str(self.root / 'tools/build/mochizuki-manifest.py'))['write'](mz)
         (mz / 'abi-ci.sha256').write_text(hashlib.sha256((mz / 'MochizukiNrRuntime.dll').read_bytes()).hexdigest())
+
+    def test_package_binds_runtime_and_owned_aco_assets(self):
+        code, out = self.package()
+        self.assertEqual(code, 0, out)
+        build = self.root / 'exports/mochizuki-runtime'
+        owned = (
+            'dlssnr-amd/aco/records/03aef996aaf9f54a.nrp',
+            'dlssnr-amd/aco/shell-aliases.txt',
+            'dlssnr-amd/aco/shaders/g_attn.spv',
+            'dlssnr-amd/aco/shaders/runtime/runtime_encode.spv',
+            'dlssnr-amd/aco/shaders/temporal/temporal_pre_fp32.spv',
+        )
+        pin = (REPO / 'tools/install/mochizuki-owned.txt').read_text(encoding='utf-8').splitlines()
+        with zipfile.ZipFile(self.archive) as archive:
+            by_name = {entry.replace('\\', '/'): entry for entry in archive.namelist()}
+            def read(relative):
+                return archive.read(by_name[relative])
+            signatures = json.loads(read('SIGNATURES.json'))
+            runtime = next(item for item in signatures['binaries'] if item['file'] == 'MochizukiNrRuntime.dll')
+            self.assertEqual(runtime['inputSha256'].lower(),
+                             (build / 'abi-ci.sha256').read_text(encoding='utf-8').strip().lower())
+            self.assertEqual(runtime['signedSha256'].lower(), hashlib.sha256(read('MochizukiNrRuntime.dll')).hexdigest())
+            for relative in pin:
+                relative = relative.strip()
+                if relative:
+                    self.assertIn('dlssnr-amd/' + relative, by_name, relative)
+            for relative in owned:
+                self.assertEqual(read(relative), (build / relative).read_bytes(), relative)
+            self.assertNotIn('dlssnr-amd/aco/shaders/user-unknown.txt', by_name)
+            self.assertNotIn('dlssnr-amd/aco/shaders/runtime/user.spv', by_name)
+            self.assertNotIn('dlssnr-amd/aco/shaders/g_user_custom.spv', by_name)
+            self.assertNotIn('dlssnr-amd/shaders/g_user_custom.spv', by_name)
+            self.assertNotIn('dlssnr-amd/aco/records/ffffffffffffffff.nrp', by_name)
+            self.assertNotIn('dlssnr-amd/aco/records/0123456789abcdef.nrp', by_name)
+            self.assertNotIn('dlssnr-amd/shaders/test.spv', by_name)
+            self.assertNotIn('dlssnr-amd/dlssnr.bin', by_name)
+            self.assertNotIn('dlssnr-amd/pipeline.cache', by_name)
+            self.assertFalse(any('aco-cache' in name for name in by_name))
 
     def test_mochizuki_runtime_changed_after_abi_is_rejected(self):
         runtime = self.root / 'exports/mochizuki-runtime/MochizukiNrRuntime.dll'
@@ -303,10 +373,45 @@ Add-Type -TypeDefinition 'public static class PackageFixture { public static int
         parsed.read(game / 'OptiScaler.ini', encoding='utf-8-sig')
         self.assertEqual(parsed['DlssNr']['NrBackend'], 'mochizuki')
         self.assertEqual((game / 'dlssnr-amd/dlssnr.bin').read_bytes(), model.read_bytes())
+        owned_aco = (
+            'dlssnr-amd/aco/records/03aef996aaf9f54a.nrp',
+            'dlssnr-amd/aco/shell-aliases.txt',
+            'dlssnr-amd/aco/shaders/g_attn.spv',
+            'dlssnr-amd/aco/shaders/runtime/runtime_encode.spv',
+            'dlssnr-amd/aco/shaders/temporal/temporal_pre_fp32.spv',
+        )
+        build_aco = self.root / 'exports/mochizuki-runtime'
+        for relative in owned_aco:
+            self.assertEqual((game / relative).read_bytes(), (build_aco / relative).read_bytes(), relative)
+        self.assertFalse((game / 'dlssnr-amd/aco/shaders/user-unknown.txt').exists())
+        self.assertFalse((game / 'dlssnr-amd/aco-cache').exists())
+        self.assertFalse((game / 'dlssnr-amd/pipeline.cache').exists())
+        user_shader = game / 'dlssnr-amd/shaders/runtime/user.spv'
+        user_aco = game / 'dlssnr-amd/aco/shaders/runtime/user.spv'
+        user_shader.parent.mkdir(parents=True, exist_ok=True)
+        user_aco.parent.mkdir(parents=True, exist_ok=True)
+        user_shader.write_bytes(b'user shader')
+        user_aco.write_bytes(b'user aco shader')
+        lookalikes = {
+            'dlssnr-amd/shaders/g_user_custom.spv': b'user windows network name',
+            'dlssnr-amd/aco/shaders/g_user_custom.spv': b'user network name',
+            'dlssnr-amd/aco/records/ffffffffffffffff.nrp': b'user record',
+            'dlssnr-amd/aco/records/0123456789abcdef.nrp': b'NRPAL fixture record',
+        }
+        for relative, payload in lookalikes.items():
+            path = game / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(payload)
         code, out = self.run_ps(['-File', str(extracted / 'Uninstall_OptiScaler_NR.ps1'), '-GameDir', str(game), '-NonInteractive'])
         self.assertEqual(code, 0, out)
         self.assertFalse((game / 'MochizukiNrRuntime.dll').exists())
         self.assertEqual((game / 'dlssnr-amd/dlssnr.bin').read_bytes(), model.read_bytes())
+        self.assertEqual(user_shader.read_bytes(), b'user shader')
+        self.assertEqual(user_aco.read_bytes(), b'user aco shader')
+        for relative, payload in lookalikes.items():
+            self.assertEqual((game / relative).read_bytes(), payload, relative)
+        for relative in owned_aco:
+            self.assertFalse((game / relative).exists(), relative)
 
     def test_corrupt_module_never_produces_zip(self):
         self.assertIn('checksum mismatch', self.assert_rejected('corrupt'))

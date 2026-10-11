@@ -109,6 +109,20 @@ struct MochizukiBackend::Impl
         owner = LmxxfRecording::SessionOwner::Create(api, session);
         if (!owner) { api.Destroy(session); Status("mochizuki: session ownership allocation failed"); return false; }
         owner->onFailure = SubmissionFailure;
+        // ACO is chosen when the Vulkan device is created. Push the current ini before PrepareSession.
+        MochizukiNrControls controls {};
+        controls.struct_size = sizeof controls;
+        [[maybe_unused]] MochizukiNrFrameInfo frame {};
+        [[maybe_unused]] bool temporal = true;
+#define MZ_F(name, def, low, high, group, label, target) target = Config::Instance()->name.value_or_default();
+#define MZ_U MZ_F
+#define MZ_B MZ_F
+#include "MochizukiOptions.inc"
+#undef MZ_F
+#undef MZ_U
+#undef MZ_B
+        if (setControls(session, &controls) != LMXXF_NR_OK)
+        { Error("controls rejected"); owner.reset(); return false; }
         if (api.PrepareSession(session) != LMXXF_NR_OK)
         { Error("Vulkan unavailable"); owner.reset(); return false; }
         return true;

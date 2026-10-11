@@ -46,6 +46,7 @@
 
 #include "mz_interpose.h"
 #include "nr_log.hpp"
+#include "nr_pipeline_binary.hpp"
 #include "nr_runtime.hpp"
 
 #include <algorithm>
@@ -59,11 +60,15 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <new>
 #include <span>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -190,7 +195,9 @@ struct TestHooks
     uint64_t networkMb = 0;      // MZ_TEST_NETWORK_MB=N: the VRAM check estimates every network at N MB
     uint64_t upgradeRefusals = 0; // MZ_TEST_UPGRADE_REFUSALS=N: reject N capacity expansion attempts
     bool upgradeOomOnce = false; // MZ_TEST_UPGRADE_OOM_ONCE=1: fail the first multi-pass build
-    bool frameBudgetOnce = false; // MZ_TEST_FRAME_BUDGET_ONCE=1: refuse the first candidate's frame buffers
+    bool frameBudgetOnce = false; // MZ_TEST_FRAME_BUDGET_ONCE=1: refuse admission 1 when AT is unset
+    uint64_t frameBudgetAt = 0;  // MZ_TEST_FRAME_BUDGET_AT=N: refuse the Nth candidate frame-buffer admission
+    bool rejectAcoDevice = false; // MZ_TEST_REJECT_ACO_DEVICE=1: the first pipeline-binary device is treated as rejected
     uint64_t dropSubmitAt = 0;   // MZ_TEST_DROP_SUBMIT_AT=N: Enqueue N skips its Vulkan submit, the game still waits
 };
 
@@ -220,12 +227,18 @@ const TestHooks& Hooks()
         h.upgradeRefusals = number("MZ_TEST_UPGRADE_REFUSALS");
         h.upgradeOomOnce = on("MZ_TEST_UPGRADE_OOM_ONCE");
         h.frameBudgetOnce = on("MZ_TEST_FRAME_BUDGET_ONCE");
+        h.frameBudgetAt = number("MZ_TEST_FRAME_BUDGET_AT");
+        if (h.frameBudgetOnce && h.frameBudgetAt == 0)
+            h.frameBudgetAt = 1;
+        h.rejectAcoDevice = on("MZ_TEST_REJECT_ACO_DEVICE");
         h.dropSubmitAt = number("MZ_TEST_DROP_SUBMIT_AT");
         return h;
     }();
     return hooks;
 }
 std::atomic<bool> g_buildOomInjected { false }; // MZ_TEST_BUILD_OOM_ONCE: once per process
+std::atomic<uint64_t> g_frameBudgetAttempts { 0 }; // candidate frame-buffer admissions, from 1
+std::atomic<bool> g_rejectAcoDeviceInjected { false }; // MZ_TEST_REJECT_ACO_DEVICE: once per process
 
 // Adapters the network cannot run on: a Start that threw "[unsupported] ..." (a missing extension or feature, or
 // no Vulkan device for the adapter). That does not change while the process lives, so a later PrepareSession on the
@@ -579,6 +592,7 @@ struct SessionControls
     float white = 1.f;       // Runtime::set_white_point
     uint32_t linearMode = 0; // MochizukiNrControls::linear_input: 0 auto, 1 on, 2 off
     bool compactTransfer = true;
+    bool acoRequested = false;
     uint32_t maxPasses = 0;  // 0: the frame's passes
     uint32_t drsMode = 0;    // MochizukiNrControls::drs_mode: 0 exact, 1 auto, 2 always (Session::DrsExtent)
 };
@@ -607,8 +621,10 @@ void DefaultControls(MochizukiNrControls& c)
     c.preprocess_curve = uint32_t(prep.curve);
     c.preprocess_contrast = prep.contrast;
     c.preprocess_saturation = prep.saturation;
-    c.compact_transfer = nr::RuntimeConfig{}.compact_transfer;
-    c.enlarge_mode = model.enlarge_mode;
+    c.compact_transfer = 1; // product policy: reuse the RGBA32F keep when official store_native does not
+    c.enlarge_mode = uint32_t(std::clamp(model.transfer, 0, 2));
+    c.classic_scaler = uint32_t(std::clamp(model.classic_scaler, 0, 3));
+    c.aco_mode = 0;
     for (MochizukiNrPassControls& p : c.pass)
     {
         p.style = uint32_t(pass.style);
@@ -633,8 +649,10 @@ SessionControls Sanitise(const MochizukiNrControls& c)
     m.automatic_mask = c.automatic_mask != 0;
     m.max_ratio = San(c.max_ratio, 1.f, 8.f, 2.f);
     m.apply_model = c.apply_model != 0;
-    m.enlarge_mode = c.enlarge_mode <= 1 ? c.enlarge_mode : 0;
+    m.transfer = c.enlarge_mode <= 2 ? int(c.enlarge_mode) : 0;
+    m.classic_scaler = c.classic_scaler <= 3 ? int(c.classic_scaler) : 1;
     out.compactTransfer = c.compact_transfer != 0;
+    out.acoRequested = c.aco_mode != 0;
     out.history = San(c.history_strength, 0.f, 1.f, 1.f);
     out.white = San(c.white_point, 0.01f, 100.f, 1.f);
     out.linearMode = c.linear_input <= 2 ? c.linear_input : 0;
@@ -836,8 +854,28 @@ struct Vulkan
         // Optional: without it the network takes its descriptor reads.
         bufferDeviceAddress = has12.bufferDeviceAddress == VK_TRUE;
         f12.bufferDeviceAddress = bufferDeviceAddress ? VK_TRUE : VK_FALSE;
-        // MZ_PROBE_PIPELINE_BINARY=1 only (mz_interpose.h): two more extensions, and their features after wml.
+        // Official Kernel::create chains pipeline robustness when the physical device offers it.
+        // Enable the extension on the device this runtime creates, or that chain is illegal.
         std::vector<const char*> enabled(std::begin(extensions), std::end(extensions));
+        VkPhysicalDevicePipelineRobustnessFeaturesEXT robust {
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_ROBUSTNESS_FEATURES_EXT
+        };
+        {
+            VkPhysicalDevicePipelineRobustnessFeaturesEXT hasRobust {
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_ROBUSTNESS_FEATURES_EXT
+            };
+            VkPhysicalDeviceFeatures2 robustQuery { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &hasRobust };
+            vkGetPhysicalDeviceFeatures2(physical, &robustQuery);
+            const bool listed = std::any_of(offered.begin(), offered.end(), [](const VkExtensionProperties& p)
+            { return !std::strcmp(p.extensionName, VK_EXT_PIPELINE_ROBUSTNESS_EXTENSION_NAME); });
+            if (hasRobust.pipelineRobustness && listed)
+            {
+                robust.pipelineRobustness = VK_TRUE;
+                wml.pNext = &robust;
+                enabled.push_back(VK_EXT_PIPELINE_ROBUSTNESS_EXTENSION_NAME);
+            }
+        }
+        // MZ_PROBE_PIPELINE_BINARY=1 only (mz_interpose.h): two more extensions, and their features after wml.
         mzi::BinaryProbe probe;
         wml.pNext = probe.Prepare(physical, offered, enabled, wml.pNext);
 
@@ -853,9 +891,47 @@ struct Vulkan
         di.pQueueCreateInfos = &qi;
         di.enabledExtensionCount = uint32_t(enabled.size());
         di.ppEnabledExtensionNames = enabled.data();
-        VkDevice createdDevice {};
-        VkCheck(vkCreateDevice(physical, &di, nullptr, &createdDevice), "vkCreateDevice");
+        // prepare() adds pipeline-binary extensions only when a bundle was configured.
+        // Reassign the name pointer afterwards: push_back can move the vector.
+        // The native chain is kept so a recoverable ACO rejection can create the same device without it.
+        const void* const nativeNext = di.pNext;
+        const size_t nativeExtensions = enabled.size();
+        nr::binary::Features acoFeatures;
+        acoFeatures.prepare(physical, di, enabled);
+        di.enabledExtensionCount = uint32_t(enabled.size());
+        di.ppEnabledExtensionNames = enabled.data();
+        VkDevice createdDevice = VK_NULL_HANDLE;
+        VkResult deviceResult = vkCreateDevice(physical, &di, nullptr, &createdDevice);
+        if (deviceResult == VK_SUCCESS && hooks.rejectAcoDevice && acoFeatures.active &&
+            !g_rejectAcoDeviceInjected.exchange(true))
+        {
+            if (createdDevice)
+                vkDestroyDevice(createdDevice, nullptr);
+            createdDevice = VK_NULL_HANDLE;
+            deviceResult = VK_ERROR_INITIALIZATION_FAILED;
+            nr::logf("[mochizuki] MZ_TEST_REJECT_ACO_DEVICE: pipeline-binary device create is treated as rejected");
+        }
+        if (deviceResult != VK_SUCCESS && acoFeatures.active && KindOf(deviceResult) == NrError::Other)
+        {
+            if (createdDevice)
+                vkDestroyDevice(createdDevice, nullptr);
+            createdDevice = VK_NULL_HANDLE;
+            nr::logf("[mochizuki] vkCreateDevice rejected pipeline binaries (VkResult %d); creating the device with "
+                     "the driver's compiler",
+                     int(deviceResult));
+            nr::binary::configure("", {}, "", {});
+            nr::binary::disable("the driver rejected pipeline binaries; the driver's compiler is used");
+            acoFeatures.active = false;
+            di.pNext = nativeNext;
+            enabled.resize(nativeExtensions);
+            di.enabledExtensionCount = uint32_t(enabled.size());
+            di.ppEnabledExtensionNames = enabled.data();
+            deviceResult = vkCreateDevice(physical, &di, nullptr, &createdDevice);
+        }
+        VkCheck(deviceResult, "vkCreateDevice");
         device = createdDevice;
+        if (acoFeatures.active)
+            nr::binary::mark(device);
         probe.Report(device, physical);
         vkGetDeviceQueue(device, family, 0, &queue);
         buildQueue = queue;
@@ -1309,12 +1385,13 @@ struct NetworkKey
     bool prep = false; // RuntimeConfig::preprocess
     bool compactTransfer = true;
     bool firstPass = false;
+    bool aco = false; // this build imports the ACO network; the device must already expose pipeline binaries
     bool operator==(const NetworkKey&) const = default;
     bool SameModel(const NetworkKey& other) const
     {
         return width == other.width && height == other.height && format == other.format &&
                scale == other.scale && linear == other.linear && prep == other.prep &&
-               compactTransfer == other.compactTransfer && firstPass == other.firstPass;
+               compactTransfer == other.compactTransfer && firstPass == other.firstPass && aco == other.aco;
     }
 };
 
@@ -1634,7 +1711,7 @@ struct Session
     UINT64 buildBaseUsage = 0; // this process's VRAM use when the running build was admitted; 0 when unknown
     UINT64 buildGrowth = 0;    // what the finished build's network added to it; 0 when unknown
     uint64_t upgradeRefusals = 0;
-    std::atomic<bool> upgradeOomInjected { false }, frameBudgetInjected { false };
+    std::atomic<bool> upgradeOomInjected { false };
     std::atomic<uint32_t> infoRequestedPasses { 1 };
     // Host lifecycle calls serialize updates; GetStatus also reads under errorMutex.
     char networkDeferred[192] {};
@@ -1651,6 +1728,14 @@ struct Session
     // from another thread than the render thread.
     std::mutex controlsMutex;
     SessionControls controls;
+    bool deviceStarted = false;
+    bool acoAtDevice = false;
+    bool acoEffective = false;
+    char acoFallback[128] {};
+    // The builder's result for the network it is about to hand to Install. A discarded candidate leaves these unused.
+    bool candidateReady = false;
+    bool candidateOn = false;
+    char candidateWhy[128] {};
     uint32_t lastPasses = 0; // the previous frame's pass count; a change drops the history
 
     // What GetInfo reports: atomics and a copy of the last error, never the runtime, since it may ask from any thread.
@@ -2610,9 +2695,217 @@ struct Session
         UseBuffers(b);
     }
 
+    // ACO is process-wide and fixed at device creation. own_directory() keeps NR_ACO_* from
+    // overriding the product switch. The loaded network is aco/shaders plus aco/shaders/temporal.
+    // Windows dlssnr-amd/shaders is the native shell and runtime source, not the hashed corpus.
+    // Each network SPIR-V must have a record whose spv_hash matches pal::hash of those bytes.
+    // A shell is the same name or its alias under the native shader directories, or the ACO
+    // SPIR-V itself (the official fallback). An incomplete match does not configure.
+    bool ConfigureAco(bool requested, std::string& why)
+    {
+        // This thread only. The builder thread configures again for the network it is building.
+        nr::binary::own_directory();
+        nr::binary::configure("", {}, "", {});
+        why.clear();
+        if (!requested)
+            return false;
+        try
+        {
+            namespace fs = std::filesystem;
+            const fs::path root = fs::path(assets) / L"dlssnr-amd";
+            const fs::path bundle = root / L"aco";
+            const fs::path records = bundle / L"records";
+            const fs::path acoShaders = bundle / L"shaders";
+            const fs::path acoTemporal = acoShaders / L"temporal";
+            const fs::path native = root / L"shaders";
+            const fs::path nativeTemporal = native / L"temporal";
+            auto directory = [](const fs::path& path)
+            {
+                std::error_code ec;
+                return fs::is_directory(path, ec);
+            };
+            auto regular = [](const fs::path& path)
+            {
+                std::error_code ec;
+                return fs::is_regular_file(path, ec);
+            };
+            if (!directory(bundle) || !directory(records) || !directory(acoShaders) || !directory(acoTemporal) ||
+                !directory(native) || !regular(bundle / L"shell-aliases.txt"))
+            {
+                why = "ACO bundle is incomplete; the driver's compiler is used";
+                nr::logf("[mochizuki] %s", why.c_str());
+                return false;
+            }
+            std::map<std::string, std::string> aliases;
+            {
+                std::ifstream aliasFile(bundle / L"shell-aliases.txt");
+                std::string line;
+                while (std::getline(aliasFile, line))
+                {
+                    if (!line.empty() && line.back() == '\r')
+                        line.pop_back();
+                    if (line.empty() || line[0] == '#')
+                        continue;
+                    std::istringstream fields(line);
+                    std::string from, to, extra;
+                    if (!(fields >> from >> to) || (fields >> extra) || from.size() < 5 || to.size() < 5)
+                    {
+                        why = "ACO shell aliases could not be read; the driver's compiler is used";
+                        nr::logf("[mochizuki] %s", why.c_str());
+                        return false;
+                    }
+                    aliases.emplace(std::move(from), std::move(to));
+                }
+                if (aliasFile.bad())
+                {
+                    why = "ACO shell aliases could not be read; the driver's compiler is used";
+                    nr::logf("[mochizuki] %s", why.c_str());
+                    return false;
+                }
+            }
+            std::vector<fs::path> shellDirs;
+            if (directory(bundle / L"shell"))
+                shellDirs.push_back(bundle / L"shell");
+            shellDirs.push_back(native);
+            if (directory(nativeTemporal))
+                shellDirs.push_back(nativeTemporal);
+            auto shellFile = [&](const std::string& name)
+            {
+                for (const fs::path& dir : shellDirs)
+                    if (regular(dir / name))
+                        return true;
+                return false;
+            };
+            int checked = 0, matched = 0, nativeShells = 0, aliasShells = 0, selfShells = 0;
+            auto consider = [&](const fs::path& file)
+            {
+                const auto name = file.filename().string();
+                if (name.find("nobda") != std::string::npos || !nr::binary::network_path(name))
+                    return;
+                std::ifstream in(file, std::ios::binary);
+                std::vector<char> bytes;
+                if (in)
+                    bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+                ++checked;
+                if (bytes.empty())
+                    return;
+                const uint64_t hash = nr::pal::hash(bytes.data(), bytes.size());
+                char key[24];
+                std::snprintf(key, sizeof key, "%016llx.nrp", static_cast<unsigned long long>(hash));
+                std::ifstream recordFile(records / key, std::ios::binary);
+                std::vector<char> raw;
+                if (recordFile)
+                    raw.assign(std::istreambuf_iterator<char>(recordFile), std::istreambuf_iterator<char>());
+                bool content = false;
+                if (!raw.empty())
+                {
+                    try
+                    {
+                        const nr::pal::Bytes view(raw.begin(), raw.end());
+                        content = nr::pal::Record::parse(view).spv_hash == hash;
+                    }
+                    catch (const std::exception&)
+                    {
+                        content = false;
+                    }
+                }
+                if (content)
+                    ++matched;
+                if (shellFile(name))
+                    ++nativeShells;
+                else
+                {
+                    const auto alias = aliases.find(name);
+                    if (alias != aliases.end() && shellFile(alias->second))
+                        ++aliasShells;
+                    else
+                        ++selfShells;
+                }
+            };
+            std::error_code ec;
+            for (const auto& entry : fs::directory_iterator(acoShaders, ec))
+                if (!ec && entry.is_regular_file())
+                    consider(entry.path());
+            ec.clear();
+            for (const auto& entry : fs::directory_iterator(acoTemporal, ec))
+                if (!ec && entry.is_regular_file())
+                    consider(entry.path());
+            if (!checked || matched != checked)
+            {
+                char text[160];
+                std::snprintf(text, sizeof text,
+                              "ACO records do not match this build's network SPIR-V (%d/%d); the driver's compiler is used",
+                              matched, checked);
+                why = text;
+                nr::logf("[mochizuki] %s", why.c_str());
+                return false;
+            }
+            nr::logf("[mochizuki] ACO records %d/%d match aco/shaders; shells native=%d alias=%d self=%d", matched,
+                     checked, nativeShells, aliasShells, selfShells);
+            const fs::path cache = root / L"aco-cache";
+            fs::create_directories(cache, ec);
+            std::vector<std::string> shellUtf8;
+            shellUtf8.reserve(shellDirs.size());
+            for (const fs::path& dir : shellDirs)
+                shellUtf8.push_back(RootUtf8(dir.wstring()));
+            nr::binary::configure(RootUtf8(bundle.wstring()), std::move(shellUtf8), RootUtf8(cache.wstring()),
+                                  std::move(aliases));
+            return true;
+        }
+        catch (const std::exception& e)
+        {
+            nr::binary::configure("", {}, "", {});
+            why = "ACO bundle could not be read; the driver's compiler is used";
+            nr::logf("[mochizuki] %s: %s", why.c_str(), e.what());
+            return false;
+        }
+    }
+
     void Start()
     {
+        bool requested = false;
+        {
+            std::lock_guard lock(controlsMutex);
+            requested = controls.acoRequested;
+            acoAtDevice = false;
+            acoEffective = false;
+            acoFallback[0] = 0;
+        }
+        std::string acoWhy;
+        const bool configured = ConfigureAco(requested, acoWhy);
         vk.Create(device->GetAdapterLuid(), hooks);
+        deviceStarted = true;
+        // Bundle selection is this thread's. The extension is on only when this creation saw a bundle.
+        // effective stays false until Install publishes the network that actually runs.
+        const bool deviceAco = !nr::binary::directory().empty() && nr::binary::enabled(vk.device);
+        if (!requested && deviceAco)
+            acoWhy = "ACO mode applies on the next game start";
+        else if (requested && !(configured && deviceAco))
+        {
+            if (acoWhy.empty())
+            {
+                acoWhy = nr::binary::disabled_why();
+                if (acoWhy.empty())
+                    acoWhy = "ACO was not enabled on this device; the driver's compiler is used";
+            }
+        }
+        {
+            std::lock_guard lock(controlsMutex);
+            if (deviceAco)
+                acoAtDevice = true;
+            if (controls.acoRequested == requested)
+            {
+                if (deviceAco && requested)
+                    acoFallback[0] = 0;
+                else
+                    std::snprintf(acoFallback, sizeof acoFallback, "%s", acoWhy.c_str());
+            }
+            else
+                std::snprintf(acoFallback, sizeof acoFallback, "ACO mode applies on the next game start");
+            if (requested || deviceAco)
+                nr::logf("[mochizuki] ACO %s%s%s", deviceAco && controls.acoRequested == requested ? "requested" : "off",
+                         acoFallback[0] ? ": " : "", acoFallback);
+        }
         toVk.Create(device, vk, "toVk");
         fromVk.Create(device, vk, "fromVk");
         VkCommandPoolCreateInfo pi { VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
@@ -2709,6 +3002,31 @@ struct Session
             resetPending = true;
             historyBits = 0;
             historyCount = 0;
+        }
+        {
+            // Published with the network above. Effective is that candidate's mode.
+            // The latest request does not decide whether to publish it; a switch moved during the build
+            // only changes the request and, below, whether a native install clears the waiting reason.
+            // A candidate that never reaches here leaves the previous network's state.
+            std::lock_guard published(controlsMutex);
+            if (candidateReady)
+            {
+                const bool installedAco = buildKey.aco && candidateOn;
+                acoEffective = installedAco;
+                if (installedAco)
+                    acoFallback[0] = 0;
+                else if (buildKey.aco)
+                {
+                    if (candidateWhy[0])
+                        std::snprintf(acoFallback, sizeof acoFallback, "%s", candidateWhy);
+                    else
+                        std::snprintf(acoFallback, sizeof acoFallback,
+                                      "ACO was not enabled on this network; the driver's compiler is used");
+                }
+                else if (!controls.acoRequested)
+                    acoFallback[0] = 0;
+                candidateReady = false;
+            }
         }
         // The buffers made beside it wait for the next frame (MakeGeometry).
         if (prepared)
@@ -2908,6 +3226,7 @@ struct Session
             config.max_passes = key.maxPasses;
             config.preprocess = key.prep;
             config.compact_transfer = key.compactTransfer;
+            config.separate_answer = !key.compactTransfer;
             config.first_pass_output = key.firstPass;
             // The linear path's frame is a proxy made with the soft knee, which the preprocess undoes first.
             config.preprocess_unknee = key.linear;
@@ -2936,11 +3255,11 @@ struct Session
             gpuUsed = true;
             // The builder takes `old` over only once its thread exists: a failed start must not free it here.
             const auto handed = old;
+            const bool buildAco = key.aco;
             builder = std::thread(
-                [this, host, config, temporal, handed, oldFinished, buffers = std::move(buffers)]() mutable
+                [this, host, config, temporal, handed, oldFinished, buildAco, buffers = std::move(buffers)]() mutable
                 {
-                    Build(host, config, temporal, handed, oldFinished,
-                          std::move(buffers));
+                    Build(host, config, temporal, handed, oldFinished, std::move(buffers), buildAco);
                 });
             old.reset();
         }
@@ -2968,9 +3287,11 @@ struct Session
     // frame's buffers, when asked for: making them takes the render thread longer than a frame. When Destroy has given
     // the session up to this thread (Abandon), it ends it.
     void Build(const nr::HostDevice& host, const nr::RuntimeConfig& config, const nr::TemporalConfig& temporal,
-               std::shared_ptr<nr::Runtime> old, UINT64 oldFinished, std::unique_ptr<FrameBuffers> buffers)
+               std::shared_ptr<nr::Runtime> old, UINT64 oldFinished, std::unique_ptr<FrameBuffers> buffers,
+               bool buildAco)
     {
         const auto t0 = std::chrono::steady_clock::now();
+        nr::g_build_stage.store(0, std::memory_order_relaxed);
         {
             std::lock_guard lock(progressMutex);
             progress = {sizeof(progress), 1, 0, 0, GetTickCount64(), GetTickCount64()};
@@ -2992,6 +3313,8 @@ struct Session
         std::shared_ptr<nr::Runtime> made;
         char error[sizeof buildError] {};
         NrError::Kind kind = NrError::Other;
+        bool acoOn = false;
+        std::string acoWhy;
         try
         {
             ReportProgress(this, "Waiting for network builder", 0, 0);
@@ -3008,31 +3331,90 @@ struct Session
                 throw std::runtime_error("vkAllocateMemory (MZ_TEST_UPGRADE_OOM_ONCE test hook): VkResult=-2");
             if (hooks.buildOomOnce && !g_buildOomInjected.exchange(true))
                 throw std::runtime_error("vkAllocateMemory (MZ_TEST_BUILD_OOM_ONCE test hook): VkResult=-2");
-            // The pipelines an earlier build recorded are compiled on several threads first, into the pipeline.cache
-            // the core then loads; the capture records this build's for the next one, and Finish saves what the core
-            // compiled after its own save (mz_interpose.h).
-            mzi::Capture pipelines(host.device, host.physical, assets);
-            ReportProgress(this, "Prewarming cached shader descriptions", 0, 0);
-            pipelines.Prewarm(&abandon);
-            if (abandon)
-                throw std::runtime_error("stopped: the session is being destroyed");
+            // The compiler choice is local to this build thread. Pipelines already created stay with their
+            // recording. A failed import discards that graph and builds a complete native one.
+            // own_directory() keeps NR_ACO_* from selecting a bundle on this thread.
+            nr::binary::own_directory();
+            struct ClearAco
             {
+                ~ClearAco() { nr::binary::configure("", {}, "", {}); }
+            } clearAco;
+            auto useNative = [&](const std::string& reason)
+            {
+                acoOn = false;
+                acoWhy = reason;
+                nr::logf("[mochizuki] ACO unavailable: %s; using the driver compiler", reason.c_str());
+                nr::binary::configure("", {}, "", {});
+            };
+            if (buildAco)
+            {
+                try
+                {
+                    if (!nr::binary::enabled(host.device))
+                        useNative("this device does not support pipeline binaries");
+                    else if (!ConfigureAco(true, acoWhy))
+                        useNative(acoWhy);
+                }
+                catch (const std::exception& e)
+                {
+                    if (abandon || KindOf(e) != NrError::Other)
+                        throw;
+                    useNative(e.what());
+                }
+            }
+            if (!nr::binary::directory().empty())
+            {
+                try
+                {
+                    const nr::BuildCancelScope cancel(&abandon);
+                    nr::g_build_stage.store(1, std::memory_order_relaxed);
+                    ReportProgress(this, "Building ACO network", 0, 0);
+                    made = std::make_shared<nr::Runtime>(host, config, nr::ControlMaskConfig {}, temporal);
+                    nr::g_build_stage.store(0, std::memory_order_relaxed);
+                    const uint32_t imported = nr::binary::mode().imported;
+                    if (!imported)
+                        throw std::runtime_error("no ACO pipelines were imported");
+                    acoOn = true;
+                    acoWhy.clear();
+                    nr::logf("[mochizuki] ACO network ready: %u imported pipelines", imported);
+                }
+                catch (const std::exception& e)
+                {
+                    nr::g_build_stage.store(0, std::memory_order_relaxed);
+                    if (abandon || KindOf(e) != NrError::Other)
+                        throw;
+                    made.reset();
+                    useNative(e.what());
+                }
+            }
+            if (!made)
+            {
+                // Native description cache. It is not used for an ACO graph: those pipelines are imported,
+                // and a fallback reaches here only after the imported graph was discarded.
+                mzi::Capture pipelines(host.device, host.physical, assets);
+                ReportProgress(this, "Prewarming cached shader descriptions", 0, 0);
+                pipelines.Prewarm(&abandon);
+                if (abandon)
+                    throw std::runtime_error("stopped: the session is being destroyed");
                 const nr::BuildCancelScope cancel(&abandon);
-                const nr::BuildProgressScope report(ReportProgress, this);
+                nr::g_build_stage.store(1, std::memory_order_relaxed);
                 ReportProgress(this, "Preparing network graph", 0, 0);
                 made = std::make_shared<nr::Runtime>(host, config, nr::ControlMaskConfig {}, temporal);
+                nr::g_build_stage.store(0, std::memory_order_relaxed);
+                ReportProgress(this, "Saving shader cache", 0, 0);
+                pipelines.Finish();
             }
-            ReportProgress(this, "Saving shader cache", 0, 0);
-            pipelines.Finish();
         }
         catch (const std::exception& e)
         {
+            nr::g_build_stage.store(0, std::memory_order_relaxed);
             kind = KindOf(e);
             std::snprintf(error, sizeof error, "network build failed at %ux%u: %s", config.width, config.height,
                           e.what());
         }
         catch (...)
         {
+            nr::g_build_stage.store(0, std::memory_order_relaxed);
             std::snprintf(error, sizeof error, "network build failed at %ux%u: an unknown exception", config.width,
                           config.height);
         }
@@ -3057,7 +3439,8 @@ struct Session
                 std::string why;
                 const bool admitted = VramAdmits(FrameBytes(g) + kVramMarginBytes, g.width, g.height,
                                                  "the frame's buffers", why);
-                const bool injected = hooks.frameBudgetOnce && !frameBudgetInjected.exchange(true);
+                const uint64_t frameBudgetAttempt = g_frameBudgetAttempts.fetch_add(1, std::memory_order_relaxed) + 1;
+                const bool injected = hooks.frameBudgetAt != 0 && frameBudgetAttempt == hooks.frameBudgetAt;
                 if (!admitted || injected)
                     throw NrError(NrError::OutOfMemory, injected ? "frame buffer budget refused (test hook)" : why);
                 MakeBuffers(*buffers, g, buffers->resultDesc);
@@ -3090,6 +3473,12 @@ struct Session
             progress.active = 0;
         }
         std::unique_lock lock(buildMutex);
+        candidateReady = static_cast<bool>(made);
+        candidateOn = candidateReady && acoOn;
+        if (candidateReady)
+            std::snprintf(candidateWhy, sizeof candidateWhy, "%s", acoWhy.c_str());
+        else
+            candidateWhy[0] = 0;
         built = std::move(made);
         builtBuffers = std::move(buffers);
         buildGrowth = grown;
@@ -3942,7 +4331,7 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
             nr::Controls model;
             float history = 1.f, white = 1.f;
             uint32_t linearMode = 0, maxPassesSetting = 0, drsMode = 0;
-            bool compactTransfer = true;
+            bool compactTransfer = true, aco = false;
             {
                 std::lock_guard lock(s->controlsMutex);
                 model = s->controls.model;
@@ -3954,6 +4343,7 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
                 maxPassesSetting = s->controls.maxPasses;
                 drsMode = s->controls.drsMode;
                 compactTransfer = s->controls.compactTransfer;
+                aco = s->controls.acoRequested && s->acoAtDevice;
             }
             // Automatic capacity grows as needed and is retained when fewer passes run.
             // An explicit prebuild count requests that exact capacity, at least the frame's passes.
@@ -3974,7 +4364,8 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
             s->prepWanted = s->prepWanted || model.preprocess.active();
             g.firstPass = (info->flags & LMXXF_NR_FRAME_FLAG_FIRST_PASS) && passes > 1 &&
                 model.apply_model && !model.preprocess.active() && s->Blittable(cf.vk);
-            const NetworkKey key { g.width, g.height, cf.vk, scale, maxPasses, linear, s->prepWanted, compactTransfer, g.firstPass };
+            const NetworkKey key { g.width, g.height, cf.vk, scale, maxPasses, linear, s->prepWanted, compactTransfer,
+                                    g.firstPass, aco };
             std::string why;
             s->infoRequestedPasses = passes;
             if (!s->EnsureNetwork(key, g, colour, why, maxPassesSetting == 0, drsMode != 0 && !g.bucketed))
@@ -4318,15 +4709,17 @@ int32_t GetLastError(char* buf, uint32_t chars)
 // MochizukiNrControls.h. Every Controls field is 4 bytes and 4-aligned and the struct ends at its last field, so the
 // whole fields a caller's struct holds are its first struct_size & ~3 bytes.
 static_assert(alignof(MochizukiNrControls) == 4 &&
-              sizeof(MochizukiNrControls) == offsetof(MochizukiNrControls, enlarge_mode) +
-                                                 sizeof(MochizukiNrControls::enlarge_mode) &&
+              sizeof(MochizukiNrControls) == offsetof(MochizukiNrControls, aco_mode) +
+                                                 sizeof(MochizukiNrControls::aco_mode) &&
               offsetof(MochizukiNrControls, pass) == 72 && offsetof(MochizukiNrControls, preprocess) == 136 &&
               sizeof(MochizukiNrPassControls) == 32);
 // Info has no implicit padding (reserved0 fills the gap before frames), so its offsets do not depend on packing; its
 // sizeof does (tail padding after network_dispatches), which is why a filler reports the end of its last field.
 static_assert(offsetof(MochizukiNrInfo, reserved0) == 44 && offsetof(MochizukiNrInfo, frames) == 48 &&
               offsetof(MochizukiNrInfo, last_error) == 64 && offsetof(MochizukiNrInfo, network_dispatches) == 320 &&
-              offsetof(MochizukiNrInfo, preprocess_ev) == 324 && offsetof(MochizukiNrInfo, white_point) == 328);
+              offsetof(MochizukiNrInfo, preprocess_ev) == 324 && offsetof(MochizukiNrInfo, white_point) == 328 &&
+              offsetof(MochizukiNrInfo, aco_requested) ==
+                  offsetof(MochizukiNrInfo, gpu_ms_other_mean) + sizeof(MochizukiNrInfo::gpu_ms_other_mean));
 
 // The bytes GetInfo writes into a struct of `size` bytes: the whole fields that fit, never part of one, and never
 // Info's tail padding. A host that appends a field there (sizeof does not grow) then sees struct_size end before it.
@@ -4362,6 +4755,14 @@ int32_t SetControls(void* context, const MochizukiNrControls* in)
         SessionControls sanitised = Sanitise(c);
         std::lock_guard lock(s->controlsMutex);
         s->controls = std::move(sanitised);
+        // The device's pipeline-binary extension is fixed. Turning ACO on without it waits for a new device.
+        // Turning it off, or back on, rebuilds the next network; the one already installed keeps its pipelines.
+        if (s->deviceStarted && s->controls.acoRequested && !s->acoAtDevice)
+            std::snprintf(s->acoFallback, sizeof s->acoFallback, "ACO mode applies on the next game start");
+        else if (s->deviceStarted && !s->controls.acoRequested && !s->acoAtDevice)
+            s->acoFallback[0] = 0;
+        else if (s->deviceStarted && s->controls.acoRequested && s->acoEffective)
+            s->acoFallback[0] = 0;
         return int32_t(LMXXF_NR_OK);
     }
     catch (const std::exception& e)
@@ -4416,6 +4817,12 @@ int32_t GetInfo(void* context, MochizukiNrInfo* out)
         info.network_dispatches = s->dispatches;
         info.preprocess_ev = s->infoPrepEv;
         info.white_point = s->infoWhite;
+        {
+            std::lock_guard lock(s->controlsMutex);
+            info.aco_requested = s->controls.acoRequested ? 1u : 0u;
+            info.aco_effective = s->acoEffective ? 1u : 0u;
+            std::memcpy(info.aco_fallback, s->acoFallback, sizeof info.aco_fallback);
+        }
         {
             std::lock_guard lock(s->errorMutex);
             std::memcpy(info.last_error, s->lastError, sizeof info.last_error);
@@ -4527,6 +4934,29 @@ extern "C" __declspec(dllexport) int32_t MochizukiNrGetBuildProgress(void* conte
     auto* s = static_cast<Session*>(context);
     std::lock_guard lock(s->progressMutex);
     *out = s->progress;
+    if (out->active)
+    {
+        const int stage = nr::g_build_stage.load(std::memory_order_relaxed);
+        const char* name = nullptr;
+        switch (stage)
+        {
+        case 1: name = "Planning"; break;
+        case 2: name = "Reading weights"; break;
+        case 3: name = "Uploading weights"; break;
+        case 4: name = "Creating pipelines"; break;
+        case 5: name = "Finishing"; break;
+        default: break;
+        }
+        if (name)
+        {
+            std::snprintf(out->stage, sizeof out->stage, "%s", name);
+            if (stage == 4)
+            {
+                out->completed = nr::g_build_pipes_done.load(std::memory_order_relaxed);
+                out->total = nr::g_build_pipes_total.load(std::memory_order_relaxed);
+            }
+        }
+    }
     const auto now = GetTickCount64();
     if (out->active && now - s->progressLogTick >= 10000) {
         s->progressLogTick = now;

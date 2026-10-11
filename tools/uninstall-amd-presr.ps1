@@ -271,6 +271,51 @@ function Test-TreeReparse([string]$path) {
     return $false
 }
 
+# Package ownership is the exact RDNA4 pin, not a filename pattern.
+# tools/install/mochizuki-owned.txt ships beside this script or under install/.
+function Get-MochizukiOwnedSet {
+    $pin = $null
+    foreach ($candidate in @(
+        (Join-Path $PSScriptRoot 'install/mochizuki-owned.txt'),
+        (Join-Path $PSScriptRoot 'mochizuki-owned.txt')
+    )) {
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $pin = $candidate; break }
+    }
+    $set = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    if (-not $pin) { return $set }
+    foreach ($line in [IO.File]::ReadAllLines($pin)) {
+        $rel = $line.Trim().Replace('\', '/')
+        if ($rel.Length -eq 0 -or $rel.StartsWith('#')) { continue }
+        if ($rel.IndexOfAny([char[]]@('*', '?')) -ge 0) { throw "Mochizuki ownership pin contains a wildcard: $rel" }
+        [void]$set.Add($rel)
+    }
+    return $set
+}
+
+# Plan or delete only pin-listed shader and ACO files. A reparse point on the
+# path is refused by Test-UninstallPath. Directories are removed later, and only when empty.
+function Update-MochizukiOwned([string]$root, [string]$mode) {
+    $owned = Get-MochizukiOwnedSet
+    if ($owned.Count -eq 0) { return }
+    $apply = {
+        param($path, $why)
+        if ($mode -eq 'plan') { Add-PlannedFile $path $why } else { Remove-SafeFile $path $why }
+    }
+    $assetRoot = Join-Path $root 'dlssnr-amd'
+    foreach ($tree in @('shaders', 'aco')) {
+        $treeRoot = Join-Path $assetRoot $tree
+        if (!(Test-UninstallPath $treeRoot) -or !(Test-Path -LiteralPath $treeRoot -PathType Container)) { continue }
+        foreach ($file in @(Get-ChildItem -LiteralPath $treeRoot -Recurse -File -ErrorAction SilentlyContinue)) {
+            if (!(Test-UninstallPath $file.FullName)) { continue }
+            $rel = $file.FullName.Substring($assetRoot.Length).TrimStart('\', '/').Replace('\', '/')
+            if ($owned.Contains($rel)) {
+                $why = if ($tree -eq 'shaders') { 'mochizuki-shader' } else { 'mochizuki-aco' }
+                & $apply $file.FullName $why
+            }
+        }
+    }
+}
+
 function Add-PlannedFile([string]$path, [string]$why) {
     if (!(Test-UninstallPath $path)) { return }
     $leaf = Split-Path -Leaf $path
@@ -390,6 +435,7 @@ foreach ($root in $roots) {
     foreach ($name in $projectLeafNames) {
         Add-PlannedFile (Join-Path $root $name) 'project-file'
     }
+    Update-MochizukiOwned $root 'plan'
     Get-ChildItem -LiteralPath $root -File -Force -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -match $projectLogNamePattern } |
         ForEach-Object { Add-PlannedFile $_.FullName 'project-log' }
@@ -564,6 +610,7 @@ foreach ($root in $roots) {
         if ($selfLeafNames -contains $name) { continue }
         Remove-SafeFile (Join-Path $root $name) 'project-file'
     }
+    Update-MochizukiOwned $root 'delete'
     Get-ChildItem -LiteralPath $root -File -Force -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -match $projectLogNamePattern } |
         ForEach-Object { Remove-SafeFile $_.FullName 'project-log' }
@@ -670,7 +717,20 @@ foreach ($root in $roots) {
         }
     }
     Remove-EmptyDirectory (Join-Path $root 'lmxxf-modules')
+    # Owned shader and ACO files were removed above. Drop only directories that are now empty.
+    # dlssnr.bin and dlssnr-amd/aco-cache are not in the owned set.
+    foreach ($tree in @('dlssnr-amd/shaders', 'dlssnr-amd/aco')) {
+        $treePath = Join-Path $root $tree
+        if ((Test-UninstallPath $treePath) -and (Test-Path -LiteralPath $treePath -PathType Container)) {
+            Get-ChildItem -LiteralPath $treePath -Directory -Recurse -ErrorAction SilentlyContinue |
+                Sort-Object { $_.FullName.Length } -Descending |
+                ForEach-Object { Remove-EmptyDirectory $_.FullName }
+            Remove-EmptyDirectory $treePath
+        }
+    }
     foreach ($relative in @('dlssnr-amd/shaders/runtime', 'dlssnr-amd/shaders/temporal',
+            'dlssnr-amd/aco/shaders/runtime', 'dlssnr-amd/aco/shaders/temporal',
+            'dlssnr-amd/aco/shaders', 'dlssnr-amd/aco/records', 'dlssnr-amd/aco',
             'dlssnr-amd/shaders', 'dlssnr-amd/prewarm', 'dlssnr-amd', 'person-model')) {
         Remove-EmptyDirectory (Join-Path $root $relative)
     }

@@ -167,7 +167,8 @@ static bool MochizukiOptionOnPage(std::string_view key, PipelineUi::Section page
         return page == Section::Input;
     if (key == CfgKey::MochizukiDetailStrength || key == CfgKey::MochizukiColourStrength ||
         key == CfgKey::MochizukiMaxRatio || key == CfgKey::MochizukiApplyModel ||
-        key == CfgKey::MochizukiEnlargeMode || key == CfgKey::MochizukiCompactTransfer)
+        key == CfgKey::MochizukiEnlargeMode || key == CfgKey::MochizukiClassicScaler ||
+        key == CfgKey::MochizukiCompactTransfer || key == CfgKey::MochizukiAcoMode)
         return page == Section::Output;
     return page == Section::Model;
 }
@@ -190,7 +191,9 @@ static bool MochizukiChoice(const char* label, std::string_view key, int* value,
     if (key == CfgKey::MochizukiStyle || key == CfgKey::MochizukiPass2Style || key == CfgKey::MochizukiPass3Style)
         return MenuUi::Combo(label, value, "Standard\0Natural\0Cinematic\0");
     if (key == CfgKey::MochizukiEnlargeMode)
-        return MenuUi::Combo(label, value, "Matched residual\0Edge-aware\0");
+        return MenuUi::Combo(label, value, "Matched residual\0Edge-aware\0Classic\0");
+    if (key == CfgKey::MochizukiClassicScaler)
+        return MenuUi::Combo(label, value, "Bilinear\0Catmull-Rom\0Lanczos3\0FSR1\0");
     if (key == CfgKey::MochizukiPreprocessExposure)
         return MenuUi::Combo(label, value, "Off\0Auto\0Fixed\0");
     if (key == CfgKey::MochizukiPreprocessCurve)
@@ -406,8 +409,11 @@ static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const 
                 "Automatic prebuild capacity grows as needed and is retained on pass reduction. Capacity is not the active pass count.");
             if (g == 7) {
                 MenuUi::TextWrapped("Detail and colour strength adjust the final correction. Apply model off still runs the network; disable NR to save GPU work.");
-                HelpMarker("Model enlargement applies below 100% model scale. Matched residual is the default; edge-aware costs more GPU time."
-                           "\nReuse output buffer saves one full-resolution float image on supported formats. Switching rebuilds the network; turn off to use separate buffers.");
+                HelpMarker("Model enlargement applies below 100% model scale. Matched residual is the default. "
+                           "Edge-aware costs more GPU time. Classic uses the scaler below; Catmull-Rom is its default."
+                           "\nReuse output buffer keeps one full-resolution float image when the frame is RGBA32F. Switching rebuilds the network."
+                           "\nACO mode uses AMD pipeline binaries when this build's records match and the driver accepts them. "
+                           "It applies on the next game start. A missing bundle or unsupported device keeps the driver's compiler.");
             }
             if (g == 5 || g == 6) MenuUi::TextWrapped("Without override, later passes inherit pass 1 with Local tone set to zero.");
             if (MenuUi::Button("Reset this group")) ResetMochizuki(config, g, page);
@@ -423,6 +429,8 @@ static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const 
             MenuUi::TextWrapped("Vulkan core GPU: %.3f ms | Network: %.3f ms | Other: %.3f ms",
                 timing.gpu_ms_mean, timing.gpu_ms_network_mean, timing.gpu_ms_other_mean);
         }
+        if (timing.aco_requested)
+            MenuUi::TextWrapped("ACO requested, effective %u. %s", timing.aco_effective, timing.aco_fallback);
         MenuUi::TextWrapped("Completed-sample means. Network includes fused temporal shaders; Other covers core input, history copies and composition. Bridge copies, shared effects and whole-frame latency are excluded.");
         bool logging = config->NrTimingLog.value_or_default();
         if (MenuUi::Checkbox("Write timing summary to log", &logging)) config->NrTimingLog = logging;

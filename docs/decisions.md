@@ -692,3 +692,30 @@ verification; both models and their licenses remain in the package.
 - **验证**：RX 9070 XT 上真实 HIP/Vulkan 输出与切分基线哈希一致，跨队列重放、捕获前 Reset、双侧完成回收、查询保留、有限等待耗尽和第一层原帧回退通过。补丁在原官方 pin 上严格重放并与 vendor 逐字节匹配；内核及模块配方未变。
 - **边界**：红沙本体、其它驱动/适配器、完整 temporal/multi-pass 与长时间热切压力尚未验收；不宣称红沙已经兼容或可以正式发布。人物分区原有硬件/语义蒙版验收延期保留。
 - **落在**：[内联执行](architecture/nr-inline-recording.md)、`NrInlineRecording.h`、录制代理/所有权、`inline-side-queue.patch` 与已接入运行入口的专项测试。
+
+## 2026-10-11：Mochizuki 以官方 Windows 源 a9b13dd 为准
+
+官方提交 `a9b13dd4cdb5f4bf43db358492d72e6e5e2acd67`（2026-10-11）已包含 Windows
+原生 D3D12、NR 自有 Vulkan 设备、0.0.4 能力、AMD 26.9.2 着色器修复和 ACO。
+本产品的 D3D12 宿主接入该闭包。不再把 Windows 维持在 v0.0.3，也不再混用仅 Linux
+的 v0.0.4 标签 `9e4574e`。
+
+官方已经覆盖的本地差异删除：HDR 色相移植、`NR_EDGE_BODIES=0`、be7bf0a 的展开与
+ViT 尾块补丁、构建进度回调、旧的 `enlarge_mode` 和 40 字节 transfer push。
+放大使用官方 `transfer` 0 匹配残差、1 边缘引导、2 经典，以及 `classic_scaler`
+（0 双线性、1 Catmull-Rom 默认、2 Lanczos3、3 FSR1）。官方 `store_native` 负责
+列出的原生格式。产品仍默认开启 RGBA32F 紧凑复用（`MochizukiCompactTransfer=true`）；
+这是宿主策略，核心默认保持关闭，不改变官方调用方。
+
+ACO 默认关闭，由 INI/菜单拥有。扩展在创建设备时决定。设备创建时没有管线二进制时，
+再打开要等下次游戏启动。每个构建线程自己选择 bundle，已录制的命令保留自己的管线。
+预检哈希的是实际加载的 `aco/shaders` 及其 temporal 目录，并核对 record 内的
+`spv_hash` 与 shell/alias。Windows `dlssnr-amd/shaders` 是 native shell 和 runtime
+来源。包不完整、record 内容不匹配，或导入没有得到管线时，丢弃该图并完整重建一套
+驱动编译的网络。2026-10-11 在 AMD Radeon RX 9070 XT（device 0x7550，Vulkan 驱动
+26.8.1 LLPC，driverVersion 0x0080018b）上，记录 58/58 匹配，导入 29 条管线，
+一帧 256x256 得到 `ACO_FRAME_OK`。缺包、缺别名和损坏 record 都完成了原生帧。
+同日复审后的三处修正：有效状态只在 `Install` 与网络一起发布，候选帧缓冲失败时保留已安装网络的状态；`vkCreateDevice` 因可选管线二进制被拒绝时，除设备丢失和内存不足外，去掉该扩展后按普通设备重试；卸载和打包使用 `tools/install/mochizuki-owned.txt` 的 214 条精确路径，不再按 `g_*.spv` 或 16 位十六进制 `.nrp` 通配。复跑 `tests/mochizuki/run.cmd aco` 打印 `ACO_SWITCH_NATIVE_OK`、`ACO_SWITCH_ACO_OK`、`ACO_CONTRACT_OK effective=1`、`ACO_DEVICE_FALLBACK_OK` 和 `ACO_BUDGET_KEEP_OK effective=1`。构建过程中把请求改回 ACO 时，已开始的原生候选安装后有效状态仍取该候选的实际模式；`tests/mochizuki/run.cmd aco-rapid` 打印 `ACO_RAPID_REENABLE requested=1 effective=0` 和 `ACO_RAPID_OK`。
+未加入显式 barrier 开关。不接入官方 DX9/DX10/DX11、ReShade、PE 或 OptiScaler 钩子。三后端仍互斥。
+INT4 仍不启用。可重放的核心补丁和放弃项见
+[来源记录](../third_party/mochizuki/UPSTREAM.md)。

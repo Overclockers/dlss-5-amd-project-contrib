@@ -19,19 +19,20 @@ completion-based resource release. Its build-progress display and execution-hist
 handling are described below. Exact reused components, source pins, licenses and
 local changes are in [the source record](../third_party/mochizuki/UPSTREAM.md).
 
-Upstream **v0.0.4 is Linux-only**; its official Windows preview remains v0.0.3.
-This integration has reviewed the v0.0.4 source and ported its HDR hue fix: bright
-saturated linear-input colours are scaled together rather than clipped by channel,
-including the composition path when model resolution is below 100%. Existing weights,
-INI options and menu version remain valid. The additional optional edge-aware
-composition, private output-buffer reuse and split timings are described below.
-INT4 mixed and the separate Linux/ReShade hosts are not included.
+The vendored core follows official Windows source `a9b13dd4cdb5f4bf43db358492d72e6e5e2acd67`
+(2026-10-11): native D3D12 with a Vulkan device of NR's own, the 0.0.4 feature set,
+the 26.9.2 shader fixes, and ACO left off. The older statement that Windows stays on
+v0.0.3 is historical. INT4 mixed, the official DX9/DX10/DX11 hosts, ReShade and the
+official OptiScaler hooks are not included. Product recording, menus and packaging
+stay in this host. See [the source record](../third_party/mochizuki/UPSTREAM.md).
 
 ## Installation
 
 1. Install a current AMD display driver with Vulkan support. HIP is not used by this backend.
-2. Extract the complete OptiScaler package. It contains `MochizukiNrRuntime.dll` and
-   `dlssnr-amd/shaders/`; both must match the host in that package.
+2. Extract the complete OptiScaler package. It contains `MochizukiNrRuntime.dll`,
+   `dlssnr-amd/shaders/` and `dlssnr-amd/aco/` (records, shell aliases, and the ACO
+   network, runtime and temporal shaders). The runtime and those assets must match the host in that package.
+   ACO stays off until `MochizukiAcoMode` is turned on and the game is started again.
 3. Supply your own `nvngx_dlssnr.dll` **310.8.0**. Its SHA-256 is
    `e16bcf15e16e13f527491cdf7845b2fe6521a738d8f7c9c721866a8496e1fc8e`.
    The DLL and extracted weights are **not included** in our package.
@@ -167,20 +168,53 @@ are limited to one per ten seconds, and query reads never wait for the GPU.
 `mochizuki_nr.log` respects file logging and stops appending at 4 MiB.
 
 Under **Apply NR edit → Output adjustment**, **Model enlargement**
-(`MochizukiEnlargeMode`) offers matched residual (0, default) or edge-aware
-lighting/colour (1). It applies only below 100% model scale. Edge-aware uses a 4×4
-neighbourhood guided by the original pixel's brightness, which can keep an edit on
-its side of an edge. It costs more GPU time and needs scene-by-scene comparison;
-it is not a general quality upgrade or a replacement for temporal history.
+(`MochizukiEnlargeMode`) offers matched residual (0, default), edge-aware (1) or
+classic (2). It applies only below 100% model scale. Edge-aware uses a 4×4
+neighbourhood guided by the original pixel's brightness. Classic uses
+**Classic scaler** (`MochizukiClassicScaler`): bilinear (0), Catmull-Rom (1, default),
+Lanczos3 (2) or FSR1 (3). Edge-aware and classic cost more GPU time and need
+scene-by-scene comparison.
 
-**Reuse output buffer** (`MochizukiCompactTransfer=true`, default) reuses the
-private full-resolution input copy after all model/history work has finished.
-At reduced model resolution it removes one RGBA32F allocation and the redundant
-alpha pass for supported non-8-bit formats: 126.56 MiB of pixel storage at 4K.
-U8 output keeps its original rounding path. Model scale 100% is unchanged.
-Turning this off restores separate buffers and rebuilds the network. Both controls
-are owned by the INI/menu, reset with the output group/page and do not consult an
-upstream INI or environment override. Old recordings keep their original layout.
+**Reuse output buffer** (`MochizukiCompactTransfer=true`, default) is a product
+policy on top of the official native store. Official `store_native` already writes
+listed native formats back into the kept frame. When that path does not apply and
+the frame is kept as RGBA32F, the same private image is reused as the answer.
+Turning the option off forces a separate answer image and rebuilds the network.
+U8 output keeps its rounding path. Model scale 100% is unchanged. The control is
+owned by the INI/menu and does not follow `NR_*` environment variables.
+
+**ACO mode** (`MochizukiAcoMode=false`, default) asks for AMD pipeline binaries.
+The extension is chosen when the Vulkan device is created. Effective stays off
+until Install publishes the network that will run; a candidate discarded by its
+frame-buffer check leaves the installed network's effective state unchanged.
+Changing the request while a candidate is still building leaves that candidate
+alone. The effective state is the mode of the network Install publishes.
+If the driver rejects the optional pipeline-binary device for a reason other than
+device loss or out of memory, the same device is created without those extensions.
+Turning ACO on after a device created without binaries waits for the next game start.
+Each build thread selects its own bundle, so a later build can import ACO or return
+to the driver's compiler while an earlier recording keeps the pipelines it already has.
+The runtime configures ACO only when `dlssnr-amd/aco` is complete and every network
+SPIR-V under `aco/shaders` (including temporal) has a record whose contents match
+that SPIR-V. Windows `dlssnr-amd/shaders` supplies the native shell and runtime
+passes. A missing bundle, a record mismatch, or an import that produces no
+pipelines discards that graph and builds one complete native network.
+Diagnostics show requested, effective and the reason. `NR_ACO_DIR` does not
+select the bundle after `own_directory()`.
+On 2026-10-11, `tests/mochizuki/run.cmd aco` used AMD Radeon RX 9070 XT
+(vendor 0x1002, device 0x7550, Vulkan 26.8.1 LLPC, driverVersion 0x0080018b).
+The runtime log recorded 58/58 record matches and 29 imported pipelines. The
+graph builder counted 24 kernels. The test printed `ACO_FRAME_OK` for one
+256x256 frame, then `ACO_SWITCH_NATIVE_OK`, `ACO_SWITCH_ACO_OK` and
+`ACO_CONTRACT_OK effective=1`. A forced pipeline-binary device rejection completed
+one native frame (`ACO_DEVICE_FALLBACK_OK`). Refusing the second frame-buffer
+admission kept the installed ACO state (`ACO_BUDGET_KEEP_OK effective=1`).
+`tests/mochizuki/run.cmd aco-rapid` on the same adapter printed
+`ACO_RAPID_REENABLE requested=1 effective=0` when a native candidate installed
+after ACO had been requested again, then `ACO_RAPID_OK`.
+Missing, alias-less and corrupt bundles each completed one native frame
+(`ACO_FALLBACK_OK`). Package and uninstall ownership is the exact 214-path pin
+`tools/install/mochizuki-owned.txt`. No game scene was compared.
 
 The bridge does not sample the game's exposure texture on the CPU. WhitePoint is
 the manual linear-input setting; optional preprocessing has its own histogram
@@ -188,9 +222,12 @@ meter. Daniel/lmxxf exposure controls do not configure this backend.
 
 ## Build and verification
 
-`tools/build/build-mochizuki-runtime.cmd` builds the pinned core, adapter and shaders.
-It downloads pinned Vulkan headers and a hash-verified glslang compiler into
-`exports/mochizuki-toolchain`; no machine-wide Vulkan SDK is needed.
+`tools/build/build-mochizuki-runtime.cmd` builds the pinned core, adapter, Windows
+shaders and the ACO payload. The ACO step runs `linux/build/build_network.py` with
+the same pinned glslang into `dlssnr-amd/aco/shaders`, then copies
+`windows/data/aco/records` and `shell-aliases.txt`. A failed shader generation fails
+the build. The builder downloads pinned Vulkan headers and a hash-verified glslang
+16.5.0 compiler into `exports/mochizuki-toolchain`; no machine-wide Vulkan SDK is needed.
 `tools/build/mochizuki-manifest.py exports/mochizuki-runtime` verifies source and
 artifact hashes. The packager runs this same check.
 
@@ -231,12 +268,16 @@ For a focused 1080p R11G11B10 startup test, use
 `dlssnr-amd/shaders` and the user model. A fresh asset directory alone does not make
 the AMD driver cache cold; use a fresh test executable name for that comparison and
 record the actual cache conditions. The test checks progress, then executes and
-reads back the network output. The eight edge-specialized shader bodies are disabled
-to reduce first-build cost, following the patch documented in the upstream notice.
+reads back the network output. Shader defines follow the official `rdna4.sh` recipe,
+including `NR_TCHAIN_TILES`. The old `NR_EDGE_BODIES=0` override is not applied.
 
-Uninstall removes the runtime and known shipped shaders. It preserves the user's
-model and local pipeline cache. To reclaim those, remove `dlssnr-amd` after closing
-the game and confirming it is no longer needed.
+Uninstall removes the runtime and the package-owned files under `dlssnr-amd/shaders`
+and `dlssnr-amd/aco` (known shader names, `shell-aliases.txt`, and `records/*.nrp`).
+Files it does not recognize stay, including a shader added beside the package.
+It does not follow a linked directory. It preserves `dlssnr.bin` and `dlssnr-amd/aco-cache`,
+and still removes the driver `pipeline.cache` and prewarm manifest it already deleted.
+Empty directories are removed after those files. To reclaim the model or the ACO cache,
+remove those after closing the game.
 
 ## Session destruction and queue ownership
 

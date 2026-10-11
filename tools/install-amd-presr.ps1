@@ -705,6 +705,12 @@ $srcA = Find-AuthorRuntime
 $mochizukiRuntime = Find-FirstFile @((Join-Path $release 'MochizukiNrRuntime.dll'), (Join-Path $Root 'exports/mochizuki-runtime/MochizukiNrRuntime.dll'))
 $mochizukiAssets = if ($mochizukiRuntime) { Join-Path (Split-Path -Parent $mochizukiRuntime) 'dlssnr-amd' } else { $null }
 $canMochizuki = [bool]($mochizukiRuntime -and (Test-Path -LiteralPath (Join-Path $mochizukiAssets 'shaders') -PathType Container))
+if ($canMochizuki -and (
+    -not (Test-Path -LiteralPath (Join-Path $mochizukiAssets 'aco/shaders/shader-constants.txt') -PathType Leaf) -or
+    -not (Test-Path -LiteralPath (Join-Path $mochizukiAssets 'aco/records') -PathType Container) -or
+    -not (Test-Path -LiteralPath (Join-Path $mochizukiAssets 'aco/shell-aliases.txt') -PathType Leaf))) {
+    Fail 'Incomplete Mochizuki package: runtime, native shaders and ACO assets must be supplied together. Re-extract the complete update.'
+}
 $installMochizuki = $false
 $canLmxxf  = [bool]($lmxxfRuntime -and $lmxxfMods -and $lmxxfShaders)
 # Code and shaders must come from this update, even when Y will uninstall first.
@@ -1396,6 +1402,13 @@ if ($installMochizuki) {
         $relative = $file.FullName.Substring($shaderRoot.Length).TrimStart('\','/')
         Install-One $file.FullName (Join-Path 'dlssnr-amd/shaders' $relative)
     }
+    $acoRoot = Join-Path $mochizukiAssets 'aco'
+    if (Test-Path -LiteralPath $acoRoot -PathType Container) {
+        foreach ($file in @(Get-LmxxfUnlinkedFiles $acoRoot)) {
+            $relative = $file.FullName.Substring($acoRoot.Length).TrimStart('\','/')
+            Install-One $file.FullName (Join-Path 'dlssnr-amd/aco' $relative)
+        }
+    }
     if ($mochizukiModel) { Install-One $mochizukiModel 'dlssnr-amd/dlssnr.bin' }
     if (-not (Test-Path -LiteralPath (Join-Path $game 'dlssnr-amd/dlssnr.bin'))) {
         Write-Host 'Mochizuki model not installed. Run Mochizuki-Model.bat beside Setup.bat with your nvngx_dlssnr.dll, then run Setup again.' -ForegroundColor Yellow
@@ -1593,6 +1606,10 @@ if ($isInteractiveUser) {
 # targets that directory (no folder picker). Sources were resolved before install
 # and preserved if the automatic uninstall could remove them.
 Install-One $ps1Src 'Uninstall_OptiScaler_NR.ps1'
+$ownedPin = Join-Path $Root 'mochizuki-owned.txt'
+if (Test-Path -LiteralPath $ownedPin -PathType Leaf) {
+    Install-One $ownedPin 'mochizuki-owned.txt'
+}
 Install-One $moduleHelperSrc 'lmxxf-module-package.ps1'
 if ($batSrc) {
     Install-One $batSrc 'Uninstall_OptiScaler_NR.bat'

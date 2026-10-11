@@ -26,7 +26,7 @@ struct PassControls {
 
 // [Preprocess] in dlssnr-amd.ini: what the network is shown is changed before
 // it runs and every change is taken back out of its answer
-// (linux/shaders/passes/runtime_prep.comp). Opt-in; the defaults below are what
+// (windows/shaders/passes/runtime_prep.comp). Opt-in; the defaults below are what
 // Enabled=1 starts from (auto exposure, filmic curve), and each field has
 // a value that leaves the frame as the host handed it over (exposure off,
 // curve 0, contrast and saturation 1).
@@ -54,6 +54,9 @@ struct Preprocess {
 };
 
 // In-process interface shared by game adapters and the native menu.
+// Controls::transfer
+constexpr int kEnlargeMatched = 0, kEnlargeEdgeAware = 1, kEnlargeClassic = 2;
+
 struct Controls {
     bool enabled = true;
     bool apply_model = true;
@@ -65,7 +68,16 @@ struct Controls {
     float detail_strength = 1.0f;
     float colour_strength = 1.0f;
     float max_ratio = 2.0f;
-    uint32_t enlarge_mode = 0; // reduced model scale: 0 matched residual, 1 edge-aware
+    // Below 100% Model resolution, how the model's result is enlarged to the frame
+    // (runtime_transfer.comp), kEnlarge*: matched residual (the default), edge-aware
+    // lighting + colour, classic. Per frame; nothing is rebuilt.
+    int transfer = 0;
+    // Classic's scaler: 0 bilinear, 1 Catmull-Rom, 2 Lanczos3, 3 FSR 1 EASU.
+    int classic_scaler = 1;
+    // Edge-aware: the enlargement weighted by the full-resolution proxy (else plain
+    // bilinear), and the weight's range in stops. Not user settings.
+    bool transfer_guided = true;
+    float transfer_sigma = 0.25f;
     // How many times the network runs on the frame, 1..RuntimeConfig::max_passes.
     // Pass k+1 takes pass k's output as its colour, with the same motion and
     // depth, and its own history; the transfer pass runs once at the end
@@ -98,8 +110,9 @@ struct HostDevice {
     // submits only. Empty: the caller serialises the whole construction.
     std::function<void()> queue_lock, queue_unlock;
     // bufferDeviceAddress is enabled on `device` (vkd3d-proton's always; DXVK's and a Vulkan
-    // game's when the device watch added the network's features). The graph then reads the
-    // activation arena through a buffer_reference where that is faster (Windows network only).
+    // game's when the device watch added the network's features; the bridge's own device). The graph
+    // then reads the activation arena through a buffer_reference where that is faster (Windows
+    // network only).
     bool buffer_device_address = false;
 };
 
@@ -126,11 +139,6 @@ struct RuntimeConfig {
     // the cost tracks scale^2 while the game's own resolution is untouched.
     // The "Model Resolution" of the NVIDIA-side mods.
     float model_scale = 1.0f;
-    // Reuse the private full-size input copy for final composition at reduced
-    // model resolution. Non-8-bit outputs only; false retains the separate image.
-    bool compact_transfer = true;
-    // Optional decoded first pass for host person/scene composition. Default has no allocation.
-    bool first_pass_output = false;
     // The most passes Controls::passes may ask for; each one above the first
     // costs a history image at the model extent.
     uint32_t max_passes = 1;
@@ -160,30 +168,25 @@ struct RuntimeConfig {
     // (its linear-HDR encode, or linear_input's own): the preprocess undoes the
     // knee first, so its curve is the only one. False for an SDR frame.
     bool preprocess_unknee = false;
+    // Both default off: an upstream caller keeps official store_native / full_out.
+    // compact_transfer: at reduced model scale, when the frame is kept as RGBA32F
+    // (store_native does not apply), the output is not 8-bit, and native compose
+    // is off, reuse that keep image as the answer. runtime_transfer.comp reads
+    // keep at this pixel only, then writes the answer.
+    // separate_answer: do not use store_native; keep a distinct answer image.
+    bool compact_transfer = false;
+    bool separate_answer = false;
+    // Optional full-frame RGBA32F of pass 0, recorded before later passes
+    // overwrite it. Requires ordinary multi-pass transfer (no native compose,
+    // no mask, max_passes >= 2). The image lives as long as the runtime.
+    bool first_pass_output = false;
 };
 
 // A build on this thread stops before its next pipeline once *build_cancel is
 // set: it writes the pipeline cache it has so far and throws, so a host that is
-// going away does not wait out a cold compile, and its next start keeps what
-// was compiled. Null, the default, never stops a build. Set it around the
-// Runtime's constructor with BuildCancelScope.
-extern thread_local const std::atomic<bool>* build_cancel;
-// Host telemetry only; no shader or inference behavior changes. The callback
-// runs on the constructor thread and must never block on rendering or throw.
-using BuildProgressCallback = void (*)(void*, const char*, uint32_t, uint32_t) noexcept;
-inline thread_local BuildProgressCallback build_progress = nullptr;
-inline thread_local void* build_progress_context = nullptr;
-inline void report_build_progress(const char* stage, uint32_t done = 0, uint32_t total = 0) noexcept {
-    if (build_progress) build_progress(build_progress_context, stage, done, total);
-}
-struct BuildProgressScope {
-    BuildProgressCallback previous; void* context;
-    BuildProgressScope(BuildProgressCallback fn, void* user) noexcept
-        : previous(build_progress), context(build_progress_context) { build_progress = fn; build_progress_context = user; }
-    ~BuildProgressScope() { build_progress = previous; build_progress_context = context; }
-    BuildProgressScope(const BuildProgressScope&) = delete;
-    BuildProgressScope& operator=(const BuildProgressScope&) = delete;
-};
+// going away does not wait out a cold compile. Null, the default, never stops
+// a build. The standalone graph tool does not see the flag (NR_NO_MAIN).
+inline thread_local const std::atomic<bool>* build_cancel = nullptr;
 struct BuildCancelScope {
     explicit BuildCancelScope(const std::atomic<bool>* flag) noexcept : outer_(build_cancel) { build_cancel = flag; }
     ~BuildCancelScope() { build_cancel = outer_; }
@@ -334,6 +337,10 @@ struct EngineFrame {
     // its own history, latch and parity exactly as it would with NVIDIA's DLL,
     // where a feature IS the object that owns them.
     uint64_t feature = 0;
+    // where the answer goes when it is not `colour` itself (same format and
+    // extent, one pass, the model applied). `colour` is then only read, and the
+    // host's seed copy of the colour into the target is not needed.
+    ColourFrame target;
 };
 
 struct EngineResult {
@@ -341,6 +348,12 @@ struct EngineResult {
     bool history_consumed{};
     const char* motion_provider = "engine";
 };
+
+// Diagnostics, off by default: every ~600 recordings of an engine frame, read back what the
+// network is handed (colour, the game's motion vectors, depth) and what it hands back, score it
+// on a background thread and log the result; the first `pictures` captures also as PNGs in
+// `folder`. See nr_input_check.hpp.
+void set_input_check(bool on, const std::string& folder, int pictures = 4);
 
 class Runtime {
 public:
@@ -371,14 +384,19 @@ public:
     // Requires a runtime built with TemporalConfig::enable, whose extent matches
     // the render resolution rather than the display one.
     EngineResult record_engine(VkCommandBuffer, const EngineFrame&, const Controls&);
+    // whether record_engine can take EngineFrame::target with these controls
+    // (the model applied, one pass). A host asks before it skips its own seed copy.
+    bool takes_target(const Controls&) const;
     // Drop a feature's temporal state (EngineFrame::feature). The images are not
     // freed here: the caller's last use of them may still be executing and this
     // is called from a render thread, so they are retired and destroyed a fixed
     // number of later recordings on, which is the same reasoning as OptiScaler's
     // own 32-evaluate parking of a retired feature. Never blocks.
     void release_feature(uint64_t feature);
-    // Full-frame RGBA32F in GENERAL, same decode domain as final output. No preprocess/mask/native-compose.
-    VkImage first_pass_output() const;
+    // A recording of this runtime was never executed (the host dropped it): no feature's temporal
+    // state can be trusted. Each feature's next frame runs as its first (no history, seed 0). Call
+    // between recordings.
+    void drop_history();
     // How many features currently hold temporal state, for the log.
     uint32_t live_features() const;
 
@@ -415,15 +433,23 @@ public:
     // standing. Zero until the first pair comes back, and zero for the whole
     // life of a device whose queue family reports no timestamp bits.
     float last_gpu_ms() const;
-    // Host bridge: count completed query reads so UI polling never invents samples.
-    uint64_t gpu_timing_serial() const;
-    // Same completed sample as last_gpu_ms(): network includes fused history shaders;
-    // other is core input/history copies/composition. Excludes host/API bridge work.
-    float last_network_ms() const;
-    float last_other_ms() const;
     // The same, smoothed over recent frames - what to put in a UI, because the
     // instantaneous number moves too much to read.
     float average_gpu_ms() const;
+    // The network's share of average_gpu_ms (every pass's dispatches), the same average; the rest is
+    // the work around it (input, composition, copies). Zero until the first result is back.
+    float average_network_ms() const;
+    // Increases only when a timestamp sample is accepted. Hosts use it to avoid
+    // counting one GPU sample twice. Zero until the first accepted sample.
+    uint64_t gpu_timing_serial() const;
+    // Instantaneous network and other parts of the last accepted sample.
+    // Other is the core total minus the network. Zero until that sample.
+    float last_network_ms() const;
+    float last_other_ms() const;
+    // Pass-0 answer when RuntimeConfig::first_pass_output built one; otherwise null.
+    // Owned by the runtime. Valid until the runtime is destroyed, including while
+    // a recording that writes it is still executing.
+    VkImage first_pass_output() const;
     // The preprocess meter as the GPU last left it: {smoothed EV, this frame's
     // target EV}, bias not included. For the log; NaN until it has metered.
     std::pair<float, float> preprocess_meter() const;
