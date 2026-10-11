@@ -60,6 +60,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -1432,6 +1433,36 @@ struct FrameBuffers
     ID3D12Resource* firstResult {};
     ID3D12Resource* result {};
 
+    // Default move copies the raw handles and would free them twice. Steal leaves
+    // the source empty. Copy stays shallow: the heap allocation owns the handles.
+    FrameBuffers() = default;
+    FrameBuffers(const FrameBuffers&) = default;
+    FrameBuffers& operator=(const FrameBuffers&) = default;
+    FrameBuffers(FrameBuffers&& other) noexcept { Steal(other); }
+    FrameBuffers& operator=(FrameBuffers&& other) noexcept { Steal(other); return *this; }
+
+    void Steal(FrameBuffers& other) noexcept
+    {
+        if (this == &other) return;
+        allocation = std::move(other.allocation);
+        geometry = std::exchange(other.geometry, {});
+        resultDesc = std::exchange(other.resultDesc, {});
+        colourFootprint = std::exchange(other.colourFootprint, {});
+        motionFootprint = std::exchange(other.motionFootprint, {});
+        colourVk = std::exchange(other.colourVk, VK_FORMAT_UNDEFINED);
+        motionVk = std::exchange(other.motionVk, VK_FORMAT_UNDEFINED);
+        input = std::exchange(other.input, {});
+        output = std::exchange(other.output, {});
+        firstOutput = std::exchange(other.firstOutput, {});
+        firstColour = std::exchange(other.firstColour, {});
+        firstResult = std::exchange(other.firstResult, nullptr);
+        motionBuffer = std::exchange(other.motionBuffer, {});
+        colourImage = std::exchange(other.colourImage, {});
+        motionImage = std::exchange(other.motionImage, {});
+        motionScaled = std::exchange(other.motionScaled, {});
+        result = std::exchange(other.result, nullptr);
+    }
+
     void Release(VkDevice device)
     {
         if (allocation) { *this = {}; return; }
@@ -1598,6 +1629,12 @@ struct Session
     std::wstring assets;
     std::shared_ptr<FrameBuffers> allocation;
     std::unordered_map<void*, std::unique_ptr<Recording>> recordings;
+    static constexpr uint32_t kRecordingSlots = 4;
+    std::vector<FrameBuffers> recordingPool;
+    uint32_t recordingBuffersOutstanding = 0;
+    D3D12_RESOURCE_DESC bufferResultDesc {};
+    // Tokens whose Begin ran while `executing` was already set. Oldest is next.
+    std::deque<void*> enqueueOrder;
     Microsoft::WRL::ComPtr<ID3D12Fence> previousTail;
     uint64_t previousTailValue = 0;
     void* executing = nullptr;
@@ -2506,6 +2543,7 @@ struct Session
         FrameBuffers b;
         b.allocation = std::move(allocation);
         b.geometry = std::exchange(geometry, {});
+        b.resultDesc = bufferResultDesc;
         b.colourFootprint = colourFootprint;
         b.motionFootprint = motionFootprint;
         b.colourVk = colourVk;
@@ -2661,7 +2699,7 @@ struct Session
                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, IID_PPV_ARGS(&b.firstResult)),
                 "first pass output texture");
         }
-        // The active geometry and all closed recordings share this one allocation.
+        // The caller owns this set. Session geometry keeps one; each in-flight recording checks out its own.
         auto* raw = new FrameBuffers(b);
         b.allocation = std::shared_ptr<FrameBuffers>(raw, [dev = vk.device](FrameBuffers* p) {
             p->Release(dev); delete p;
@@ -2672,6 +2710,7 @@ struct Session
     void UseBuffers(FrameBuffers& b)
     {
         allocation = std::move(b.allocation);
+        bufferResultDesc = b.resultDesc;
         colourFootprint = b.colourFootprint;
         motionFootprint = b.motionFootprint;
         colourVk = b.colourVk;
@@ -2687,6 +2726,54 @@ struct Session
         motionScaled = std::exchange(b.motionScaled, {});
         result = std::exchange(b.result, nullptr);
         geometry = b.geometry;
+    }
+
+    // A physical set for one in-flight recording. The session template stays installed
+    // so EnsureNetwork can keep building; BoundRecording swaps this set in for Record/Enqueue.
+    bool CheckoutRecordingBuffers(FrameBuffers& out)
+    {
+        if (!geometry.width) return false;
+        auto take = [&](FrameBuffers& slot)
+        {
+            out = std::move(slot);
+            ++recordingBuffersOutstanding;
+            return out.result != nullptr || out.input.resource != nullptr;
+        };
+        for (size_t i = 0; i < recordingPool.size(); ++i)
+        {
+            if (!(recordingPool[i].geometry == geometry) || !SameDesc(recordingPool[i].resultDesc, bufferResultDesc))
+                continue;
+            if (recordingBuffersOutstanding >= kRecordingSlots) return false;
+            const bool ok = take(recordingPool[i]);
+            recordingPool.erase(recordingPool.begin() + static_cast<std::ptrdiff_t>(i));
+            return ok;
+        }
+        while (!recordingPool.empty() &&
+               recordingBuffersOutstanding + static_cast<uint32_t>(recordingPool.size()) >= kRecordingSlots)
+        {
+            FrameBuffers extra = std::move(recordingPool.back());
+            recordingPool.pop_back();
+            extra.Release(vk.device);
+        }
+        if (recordingBuffersOutstanding >= kRecordingSlots) return false;
+        FrameBuffers made;
+        try { MakeBuffers(made, geometry, bufferResultDesc); }
+        catch (...) { made.Release(vk.device); throw; }
+        return take(made);
+    }
+
+    void RecycleRecordingBuffers(FrameBuffers& b)
+    {
+        if (recordingBuffersOutstanding) --recordingBuffersOutstanding;
+        const bool live = static_cast<bool>(b.allocation) || b.result || b.input.resource;
+        if (!live) return;
+        const bool same = b.geometry == geometry && SameDesc(b.resultDesc, bufferResultDesc);
+        if (!same || recordingPool.size() >= kRecordingSlots)
+        {
+            b.Release(vk.device);
+            return;
+        }
+        recordingPool.push_back(std::move(b));
     }
 
     void CreateGeometry(const Geometry& g, ID3D12Resource* colour)
@@ -4100,6 +4187,8 @@ struct Session
             Quarantine(built);
             Quarantine(allocation);
             for (auto& b : buried) Quarantine(b.buffers.allocation);
+            for (auto& b : recordingPool) Quarantine(b.allocation);
+            recordingPool.clear();
             if (builtBuffers) Quarantine(builtBuffers->allocation);
             if (prepared) Quarantine(prepared->allocation);
             for (Retired& r : retired)
@@ -4115,6 +4204,8 @@ struct Session
         built.reset();
         retired.clear();
         ReleaseGeometry();
+        for (auto& pooled : recordingPool) pooled.Release(vk.device);
+        recordingPool.clear();
         FreeBuried(true);
         for (std::unique_ptr<FrameBuffers>* b : { &builtBuffers, &prepared })
             if (*b)

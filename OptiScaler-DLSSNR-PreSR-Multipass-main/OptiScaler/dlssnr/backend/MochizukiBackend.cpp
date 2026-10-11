@@ -223,7 +223,7 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
         return nullptr;
     }
     if (!p->Ensure()) return nullptr;
-    if (p->owner->InlineBusy()) { p->owner->InlineBypassed(); p->Status("mochizuki: previous inline execution pending; original frame"); return nullptr; }
+    if (p->owner->InlineBusy()) { p->owner->InlineBypassed(); p->Status("mochizuki: inline ahead cap reached; original frame"); return nullptr; }
     auto* cfg = Config::Instance();
     p->setLogging(cfg->LogToFile.value_or_default());
     MochizukiNrFrameInfo frame {};

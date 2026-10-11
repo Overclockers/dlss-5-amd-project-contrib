@@ -3,6 +3,8 @@
 #include "../NrSessionActivity.h"
 #include "lmxxf_runtime/LmxxfNrApi.h"
 #include "NrInlineRecording.h"
+#include <algorithm>
+#include <deque>
 #include <memory>
 #include <vector>
 #include <array>
@@ -27,34 +29,75 @@ struct SessionOwner
     HMODULE module = nullptr;
     std::atomic<bool> failed { false };
     NrSessionActivity activity;
-    std::shared_ptr<InlineRecording::Resources> pendingInline;
+    // Reserved at Attach, including recordings whose command list is not submitted yet.
+    // Completion of one recording is reclaim, not permission to record the next.
+    static constexpr size_t kInlineAhead = 4;
+    std::vector<std::shared_ptr<InlineRecording::Resources>> inlineInFlight;
+    std::deque<void*> inlineEnqueueOrder;
     std::shared_ptr<InlineRecording::Pipelines> inlinePipelines;
-    uint64_t inlineActivityToken = 0;
     uint64_t inlineApplied = 0, inlineTimeouts = 0, inlineAborted = 0, inlineBypassed = 0;
+    uint64_t inlineAdmitted = 0, inlineTurnWaits = 0;
     std::atomic<uint64_t> liveRecordings {0};
-    void InlineBypassed() { ++inlineBypassed; }
-    bool InlineBusy() {
-        if (!pendingInline) return false;
-        if (!pendingInline->Complete()) return true;
-        if (!pendingInline->Succeeded()) {
-            activity.Reset(); api.ResetHistory(context);
-            if (pendingInline->WasAborted()) ++inlineAborted;
-            else {
-                ++inlineTimeouts;
-                if (inlineTimeouts <= 5 || inlineTimeouts % 120 == 0)
-                    LOG_WARN("NR inline wait exhausted; original frame selected, history reset (timeouts={})", inlineTimeouts);
+    void ReclaimInlineLocked() {
+        void* side = nullptr;
+        uint64_t spun = 0;
+        for (auto it = inlineInFlight.begin(); it != inlineInFlight.end();) {
+            auto& pending = *it;
+            // A fresh reservation reports Complete because it has not started.
+            if (!pending || !pending->Started() || !pending->Complete()) { ++it; continue; }
+            if (!pending->Succeeded()) {
+                activity.Reset(); api.ResetHistory(context);
+                if (pending->WasAborted()) ++inlineAborted;
+                else {
+                    ++inlineTimeouts;
+                    if (inlineTimeouts <= 5 || inlineTimeouts % 120 == 0)
+                        LOG_WARN("NR inline wait exhausted; original frame selected, history reset (timeouts={})", inlineTimeouts);
+                }
+            } else {
+                ++inlineApplied;
+                if (!failed) activity.Succeeded(pending->activityToken);
             }
-        } else {
-            ++inlineApplied;
-            if (!failed) activity.Succeeded(inlineActivityToken);
+            side = pending->SideQueue();
+            spun = pending->WasAborted() ? 0 : pending->LastSpinCount();
+            it = inlineInFlight.erase(it);
         }
         const auto completed = inlineApplied + inlineTimeouts + inlineAborted;
-        if (completed <= 3 || completed % 120 == 0)
-            LOG_INFO("NR inline completed={} applied={} timeouts={} aborted={} bypassed={} live_recordings={} side_queue={} last_slice_spins={}",
-                     completed, inlineApplied, inlineTimeouts, inlineAborted, inlineBypassed, liveRecordings.load(std::memory_order_relaxed),
-                     static_cast<void*>(pendingInline->SideQueue()), pendingInline->WasAborted() ? 0 : pendingInline->LastSpinCount());
-        pendingInline.reset();
-        return false;
+        if (side && (completed <= 3 || completed % 120 == 0))
+            LOG_INFO("NR inline completed={} applied={} timeouts={} aborted={} bypassed={} live_recordings={} in_flight={} side_queue={} last_slice_spins={}",
+                     completed, inlineApplied, inlineTimeouts, inlineAborted, inlineBypassed,
+                     liveRecordings.load(std::memory_order_relaxed), inlineInFlight.size(), side, spun);
+    }
+    bool InlineBusy() {
+        ReclaimInlineLocked();
+        return inlineInFlight.size() >= kInlineAhead;
+    }
+    void InlineBypassed() {
+        ++inlineBypassed;
+        if (inlineBypassed > 5 && inlineBypassed % 120 != 0) return;
+        size_t unstarted = 0;
+        for (const auto& pending : inlineInFlight)
+            if (pending && !pending->Started()) ++unstarted;
+        LOG_WARN("NR inline bypass: cap {} in_flight {} unstarted {} bypassed {}",
+                 kInlineAhead, inlineInFlight.size(), unstarted, inlineBypassed);
+    }
+    void AdmitInline(const std::shared_ptr<InlineRecording::Resources>& resources) {
+        if (resources) inlineInFlight.push_back(resources);
+    }
+    void ForgetUnstarted(const std::shared_ptr<InlineRecording::Resources>& resources) {
+        if (!resources || resources->Started()) return;
+        auto it = std::find(inlineInFlight.begin(), inlineInFlight.end(), resources);
+        if (it != inlineInFlight.end()) inlineInFlight.erase(it);
+    }
+    void NoteInlineEnqueue(void* job) { if (job) inlineEnqueueOrder.push_back(job); }
+    bool InlineEnqueueTurn(void* job) const {
+        return !inlineEnqueueOrder.empty() && inlineEnqueueOrder.front() == job;
+    }
+    bool InlineEnqueueQueued(void* job) const {
+        return std::find(inlineEnqueueOrder.begin(), inlineEnqueueOrder.end(), job) != inlineEnqueueOrder.end();
+    }
+    void PopInlineEnqueue(void* job) {
+        auto it = std::find(inlineEnqueueOrder.begin(), inlineEnqueueOrder.end(), job);
+        if (it != inlineEnqueueOrder.end()) inlineEnqueueOrder.erase(it);
     }
     // Accessed under RecordingMutex. Preserve the first error on the callback
     // thread: GetLastError is thread-local and cannot be queried by the menu.
@@ -134,7 +177,9 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
             owner->RecordFailure("identity", E_UNEXPECTED, e.queue, "invalidated or mismatched recording");
             return E_UNEXPECTED;
         }
-        if (inlineResources && owner->InlineBusy()) return E_PENDING;
+        // Replay of this same recording while its fences are open. Another frame
+        // in flight is not a reason to drop this submission.
+        if (inlineResources && inlineResources->Started() && !inlineResources->Complete()) return E_PENDING;
         tracing = traceId && traceExecutions < 2;
         if (tracing) ++traceExecutions;
         Trace("execute.begin", e.queue);
@@ -146,16 +191,38 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
                 owner->RecordFailure("inline reset", E_FAIL, e.queue, error.what()); owner->failed = true; return E_FAIL;
             }
             inlineEnqueueFinished = executionReported = false;
-            owner->pendingInline = inlineResources;
-            owner->inlineActivityToken = activityToken;
+            inlineResources->activityToken = activityToken;
         }
         const int32_t rc = owner->api.BeginRecordingExecution(owner->context, job, e.queue);
         if (rc != LMXXF_NR_OK) owner->RecordFailure("BeginRecordingExecution", rc, e.queue);
         Trace("execute.admitted", e.queue, rc);
         begun = rc == LMXXF_NR_OK;
-        if (begun) activeExecutionSerial = e.serial;
+        if (begun) {
+            activeExecutionSerial = e.serial;
+            if (inlineResources) {
+                owner->NoteInlineEnqueue(job);
+                ++owner->inlineAdmitted;
+                if (owner->inlineAdmitted <= 5 || owner->inlineAdmitted % 120 == 0)
+                    LOG_INFO("NR inline admit serial={} queue={} in_flight={} enqueue_depth={}",
+                             static_cast<unsigned long long>(e.serial), static_cast<const void*>(e.queue),
+                             owner->inlineInFlight.size(), owner->inlineEnqueueOrder.size());
+            }
+        }
         if (!begun) owner->failed = true;
         return begun ? S_OK : E_FAIL;
+    }
+    // Host enqueue order, without holding RecordingMutex while sleeping.
+    bool WaitInlineTurn() {
+        const auto start = GetTickCount64();
+        for (;;) {
+            {
+                std::lock_guard lock(Submission::RecordingMutex());
+                if (!owner || owner->InlineEnqueueTurn(job)) return true;
+                if (!owner->InlineEnqueueQueued(job)) return false;
+            }
+            if (GetTickCount64() - start > 10000) return false;
+            Sleep(1);
+        }
     }
     struct Work { std::shared_ptr<Lease> lease; HMODULE module = nullptr; };
     static void CALLBACK InlineCallback(PTP_CALLBACK_INSTANCE instance, void* context)
@@ -164,12 +231,27 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
         auto lease = work->lease;
         try {
             const bool captured = lease->inlineResources->WaitCapture();
-            std::lock_guard lock(Submission::RecordingMutex());
+            bool ordered = false;
+            unsigned waitedMs = 0;
             if (captured) {
+                const auto turnStart = GetTickCount64();
+                ordered = lease->WaitInlineTurn();
+                waitedMs = static_cast<unsigned>(GetTickCount64() - turnStart);
+            }
+            std::lock_guard lock(Submission::RecordingMutex());
+            if (captured && ordered) {
+                if (waitedMs >= 2) {
+                    ++lease->owner->inlineTurnWaits;
+                    if (lease->owner->inlineTurnWaits <= 5 || lease->owner->inlineTurnWaits % 120 == 0)
+                        LOG_INFO("NR inline enqueue waited {} ms for the previous frame", waitedMs);
+                }
                 Submission::RecordingExecution side {}; side.queue = lease->inlineResources->SideQueue();
                 lease->Between(side);
-            } else {
+            } else if (!captured) {
                 lease->owner->RecordFailure("inline capture", E_FAIL, nullptr, "input capture was not observed; network was not started");
+                lease->owner->failed = true;
+            } else {
+                lease->owner->RecordFailure("inline order", E_FAIL, nullptr, "inline enqueue turn timed out");
                 lease->owner->failed = true;
             }
             lease->inlineResources->NetworkQueued(lease->enqueued);
@@ -212,6 +294,8 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
         // The consumer was recorded in the same submitted native list as its capture.
         facts.continuationSubmitted = facts.producerSubmitted && ready;
         FinishExecution(facts);
+        // Pop after End so the next frame's Enqueue sees the runtime head advance.
+        if (inlineResources) owner->PopInlineEnqueue(job);
         inlineQueue.Reset(); inlineFence.Reset();
         if (invalidated) {
             owner->api.InvalidateRecording(owner->context, job);
@@ -256,6 +340,7 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
         if (inlineResources && inlineResetSerial == e.serial && (!ready || !e.producerSubmitted))
             inlineResources->CertifyWithoutNetwork(e.producerSubmitted ? e.fence : nullptr, e.fenceValue, e.status);
         FinishExecution(e);
+        if (inlineResources) owner->PopInlineEnqueue(job);
     }
     void FinishExecution(const Submission::RecordingExecution& e) noexcept
     {
@@ -308,7 +393,7 @@ inline bool CollectLocked()
     for (auto it = leases.begin(); it != leases.end();)
     {
         auto& lease = *it;
-        lease->owner->InlineBusy();
+        lease->owner->ReclaimInlineLocked();
         if (!lease->invalidated) { ++it; continue; }
         if (lease->begun || (lease->inlineResources && !lease->inlineResources->Complete())) { pending = true; ++it; continue; }
         const int32_t rc = lease->owner->api.CollectRecording(lease->owner->context, lease->job);
@@ -376,19 +461,28 @@ inline std::shared_ptr<Lease> Attach(const std::shared_ptr<SessionOwner>& owner,
     std::shared_ptr<Lease> lease;
     try
     {
+        owner->ReclaimInlineLocked();
+        if (inlineResources && owner->inlineInFlight.size() >= SessionOwner::kInlineAhead) {
+            owner->api.InvalidateRecording(owner->context, job);
+            owner->api.CollectRecording(owner->context, job);
+            return {};
+        }
         lease = std::make_shared<Lease>(owner, job, logical->Identity());
-        lease->inlineResources = std::move(inlineResources);
+        lease->inlineResources = inlineResources;
+        if (inlineResources) owner->AdmitInline(inlineResources);
         Registry().push_back(lease);
     }
     catch (...)
     {
         // No command has been appended yet and no observer owns this token.
+        owner->ForgetUnstarted(inlineResources);
         owner->api.InvalidateRecording(owner->context, job);
         owner->api.CollectRecording(owner->context, job);
         return {};
     }
     if (FAILED(logical->ObserveRecording(lease)))
     {
+        owner->ForgetUnstarted(inlineResources);
         lease->Invalidated(lease->identity);
         return {};
     }

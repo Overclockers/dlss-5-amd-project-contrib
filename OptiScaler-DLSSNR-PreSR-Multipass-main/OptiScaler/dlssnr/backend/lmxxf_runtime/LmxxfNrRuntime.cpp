@@ -1081,6 +1081,7 @@ struct RecordingJob : Job
     std::shared_ptr<LmxxfRuntime::ExposureRecording> exposure;
     std::vector<std::shared_ptr<LmxxfRuntime::RecordingCompletion>> completions;
     bool valid = true, sealed = false, executing = false, unconfirmed = false, started = false;
+    bool bridgeDeferred = false;
     ID3D12CommandQueue* executionQueue = nullptr;
     ~RecordingJob() { if (executionQueue) executionQueue->Release(); }
 };
@@ -2559,6 +2560,12 @@ int32_t EnqueueHip(void *context, void *job, void *command_queue)
                 auto* bridge = lease->chain->bridge.get();
                 session->CollectTiming(bridge);
                 session->ConfigureNetworkTiming(bridge, j->frameId);
+                // Only the job whose Begin was deferred may arm the bridge. The job
+                // that already owns recording_active must not consume that count.
+                if (lease->bridgeDeferred) {
+                    bridge->CommitDeferredBegin(lease->temporal && !j->hip_passthrough);
+                    lease->bridgeDeferred = false;
+                }
                 if (j->hip_passthrough)
                 {
                     bridge->PauseNetworkTiming();
@@ -2861,7 +2868,8 @@ int32_t BeginRecordingExecution(void* context, void* job, void* actualQueue)
             j->chain->bridge->CancelUnsubmitted();
         }
         else {
-            if (!j->codec_passthrough) j->chain->bridge->BeginRecordedExecution(queue,j->temporal);
+            if (!j->codec_passthrough)
+                j->bridgeDeferred = j->chain->bridge->BeginRecordedExecution(queue, j->temporal);
         }
         if (j->gpuTiming) j->gpuTiming->BeforeExecution(session->performance);
         j->started = true;
@@ -2912,7 +2920,11 @@ int32_t EndRecordingExecution(void* context, void* job, void* actualQueue,
             if (j->gpuTiming && session->performance.Enabled())
                 j->gpuTiming->Submitted(certificate, consumer, j->frameId, j->executionId, session->performance.Epoch());
         }
-        if (j->sealed && !j->codec_passthrough) j->chain->bridge->EndRecordedExecution(queue, producer, consumer);
+        if (j->sealed && !j->codec_passthrough) {
+            if (j->bridgeDeferred) j->chain->bridge->AbandonDeferredBegin();
+            else j->chain->bridge->EndRecordedExecution(queue, producer, consumer);
+            j->bridgeDeferred = false;
+        }
         if (producer) j->unconfirmed = j->chain->unconfirmed = false;
         if(j->temporal){
             auto& h=*j->chain;

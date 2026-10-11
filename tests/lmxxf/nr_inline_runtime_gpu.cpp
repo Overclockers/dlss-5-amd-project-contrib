@@ -18,9 +18,11 @@ int main(int argc, char** argv) {
     bool timeoutMode = false;
     bool large = false;
     bool temporalRequested = false, temporalMode = false;
+    bool ahead = false;
     for (int i = 3; i < argc; ++i) timeoutMode |= std::strcmp(argv[i], "--timeout") == 0;
     for (int i = 3; i < argc; ++i) large |= std::strcmp(argv[i], "--large") == 0;
     for (int i = 3; i < argc; ++i) temporalRequested |= std::strcmp(argv[i], "--temporal") == 0;
+    for (int i = 3; i < argc; ++i) ahead |= std::strcmp(argv[i], "--ahead") == 0;
     Ptr<ID3D12Debug> debug;
     if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug)))) debug->EnableDebugLayer();
     HMODULE dll = LoadLibraryW(Widen(argv[1]).c_str()); Require(dll != nullptr, "runtime load");
@@ -73,7 +75,8 @@ int main(int argc, char** argv) {
         Check(l->Close(), "motion close"); In::Execute(game.Get(), l.Get()); WaitQueue(device.Get(), game.Get());
     }
     auto mzPrepare = reinterpret_cast<PFN_MochizukiNrPrepareFrame>(GetProcAddress(dll, "MochizukiNrPrepareFrame"));
-    auto prepare = [&](ID3D12GraphicsCommandList* list, UINT64 tag = 1) {
+    auto prepare = [&](ID3D12GraphicsCommandList* list, UINT64 tag = 1, ID3D12Resource* source = nullptr) {
+        if (!source) source = colour.Get();
         LmxxfNrJob job {}; job.struct_size = sizeof job;
         const auto deadline = GetTickCount64() + 180000;
         for (;;) {
@@ -81,7 +84,7 @@ int main(int argc, char** argv) {
             if (mochi) {
                 Require(mzPrepare != nullptr, "Mochizuki prepare export");
                 MochizukiNrFrameInfo f {}; f.struct_size = sizeof f; f.frame_id = tag;
-                f.color = colour.Get(); f.color_width = width; f.color_height = height;
+                f.color = source; f.color_width = width; f.color_height = height;
                 f.color_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
                 f.flags = LMXXF_NR_FRAME_FLAG_STRENGTH; f.transfer_strength = f.color_strength = f.model_scale = 1; f.passes = 1;
                 if (temporalMode) {
@@ -92,7 +95,7 @@ int main(int argc, char** argv) {
                 rc = mzPrepare(context, &f, &job);
             } else {
                 LmxxfNrFrameInfo f {}; f.struct_size = sizeof f; f.frame_id = tag; f.command_list = list;
-                f.color = colour.Get(); f.color_width = width; f.color_height = height;
+                f.color = source; f.color_width = width; f.color_height = height;
                 f.color_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
                 f.flags = LMXXF_NR_FRAME_FLAG_STRENGTH;
                 f.transfer_strength = f.color_strength = f.model_scale = f.paper_white = f.pre_exposure = f.exposure_scale = 1;
@@ -205,7 +208,7 @@ int main(int argc, char** argv) {
     lease.reset(); resources.reset();
     // Fresh recordings, not just closed-list replay: the old implementation
     // created/retained a new runtime producer queue on every iteration.
-    const unsigned count = large ? 30 : 120;
+    const unsigned count = (ahead && !temporalRequested) ? 0 : (large ? 30 : 120);
     temporalMode = mochi && temporalRequested;
     for (unsigned n = 0; n < count; ++n) {
         Ptr<ID3D12CommandAllocator> alloc; Ptr<ID3D12GraphicsCommandList> raw; Ptr<Sub::CommandListProxy> list;
@@ -236,12 +239,260 @@ int main(int argc, char** argv) {
         list.Reset(); raw.Reset();
         Own::Collect(); Require(owner->liveRecordings == 0, "completed invalidated recordings do not accumulate");
     }
-    std::printf("%u fresh inline recordings at %ux%u: stable queue and bounded leases PASS\n", count, width, height);
+    if (count)
+        std::printf("%u fresh inline recordings at %ux%u: stable queue and bounded leases PASS\n", count, width, height);
     if (temporalMode && !timeoutMode) {
         auto getInfo = reinterpret_cast<PFN_MochizukiNrGetInfo>(GetProcAddress(dll, "MochizukiNrGetInfo"));
         MochizukiNrInfo info {}; info.struct_size = sizeof info; Require(getInfo && getInfo(context, &info) == 0, "history info");
         Require(info.history_consumed_pct >= 80, "history survives continuous new inline recordings");
         std::printf("inline temporal history consumed=%u%% PASS\n", info.history_consumed_pct);
+    }
+    if (ahead && !temporalRequested) {
+        constexpr unsigned kPatterns = 4;
+        Ptr<ID3D12Resource> patterns[kPatterns];
+        uint64_t originalHashByPattern[kPatterns] {};
+        uint64_t neuralHashByPattern[kPatterns] {};
+        for (unsigned i = 0; i < kPatterns; ++i) {
+            Check(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &desc,
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, IID_PPV_ARGS(&patterns[i])), "ahead colour");
+            UploadColorPattern(device.Get(), game.Get(), patterns[i].Get(), i + 1);
+            originalHashByPattern[i] = HashTexture(device.Get(), game.Get(), patterns[i].Get());
+            for (unsigned earlier = 0; earlier < i; ++earlier)
+                Require(originalHashByPattern[i] != originalHashByPattern[earlier], "ahead patterns are distinguishable");
+        }
+        auto retire = [&](Ptr<Sub::CommandListProxy>& list, std::shared_ptr<Own::Lease>& recorded,
+                           const std::shared_ptr<In::Resources>& frame) {
+            const auto until = GetTickCount64() + 20000;
+            for (;;) {
+                bool done;
+                {
+                    std::lock_guard lock(Sub::RecordingMutex());
+                    done = frame->Complete() && !recorded->begun;
+                }
+                if (done) break;
+                Require(GetTickCount64() < until, "ahead completion");
+                Sleep(1);
+            }
+            Ptr<ID3D12CommandAllocator> replacement;
+            Check(device->CreateCommandAllocator(q.Type, IID_PPV_ARGS(&replacement)), "ahead reset allocator");
+            Check(list->Reset(replacement.Get(), nullptr), "ahead reset");
+            Check(list->Close(), "ahead replacement close");
+            recorded.reset();
+            const auto collectUntil = GetTickCount64() + 10000;
+            for (;;) {
+                {
+                    std::lock_guard lock(Sub::RecordingMutex());
+                    Own::Collect();
+                }
+                if (owner->liveRecordings.load() == 0) break;
+                Require(GetTickCount64() < collectUntil, "ahead collection");
+                Sleep(1);
+            }
+        };
+        if (!timeoutMode) {
+            for (unsigned i = 0; i < kPatterns; ++i) {
+                Ptr<ID3D12CommandAllocator> alloc; Ptr<ID3D12GraphicsCommandList> raw; Ptr<Sub::CommandListProxy> list;
+                Check(device->CreateCommandAllocator(q.Type, IID_PPV_ARGS(&alloc)), "ahead baseline allocator");
+                Check(device->CreateCommandList(0, q.Type, alloc.Get(), nullptr, IID_PPV_ARGS(&raw)), "ahead baseline native");
+                Check(Sub::CommandListProxy::Create(device.Get(), alloc.Get(), raw.Get(), &list), "ahead baseline proxy");
+                auto job = prepare(list.Get(), 1000 + i, patterns[i].Get());
+                auto resources = std::make_shared<In::Resources>(device.Get(), patterns[i].Get(),
+                    static_cast<ID3D12Resource*>(job.private_output), nullptr, width, height, owner->inlinePipelines);
+                std::shared_ptr<Own::Lease> recorded;
+                {
+                    std::lock_guard lock(Sub::RecordingMutex());
+                    ID3D12Resource* sources[] {patterns[i].Get()};
+                    D3D12_RESOURCE_STATES states[] {D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE};
+                    Check(list->BeginInlineState(1, sources, states), "ahead baseline state");
+                    recorded = Own::Attach(owner, job.handle, list.Get(), resources);
+                    Require(bool(recorded), "ahead baseline lease");
+                    ok(api.RecordInputs(context, job.handle, list.Get()), "ahead baseline inputs");
+                    resources->RecordCapture(list.Get()); resources->RecordWait(list.Get(), 64);
+                    ok(api.RecordOutputs(context, job.handle, list.Get()), "ahead baseline outputs");
+                    resources->RecordSelect(list.Get(), states[0]); recorded->ready = true;
+                    list->EndInlineState(); Check(list->Close(), "ahead baseline close");
+                }
+                Check(list->ExecuteOn(game.Get()), "ahead baseline execute");
+                WaitQueue(device.Get(), game.Get());
+                neuralHashByPattern[i] = HashTexture(device.Get(), game.Get(), resources->OutputTexture());
+                Require(neuralHashByPattern[i] != originalHashByPattern[i], "ahead baseline changed the frame");
+                retire(list, recorded, resources);
+            }
+        }
+        auto burst = [&](unsigned n) {
+            Require(n >= 2 && n <= kPatterns, "ahead depth");
+            struct Frame {
+                Ptr<ID3D12CommandAllocator> alloc;
+                Ptr<ID3D12GraphicsCommandList> raw;
+                Ptr<Sub::CommandListProxy> list;
+                std::shared_ptr<In::Resources> resources;
+                std::shared_ptr<Own::Lease> lease;
+            };
+            Frame frames[kPatterns] {};
+            for (unsigned i = 0; i < n; ++i) {
+                Check(device->CreateCommandAllocator(q.Type, IID_PPV_ARGS(&frames[i].alloc)), "ahead allocator");
+                Check(device->CreateCommandList(0, q.Type, frames[i].alloc.Get(), nullptr, IID_PPV_ARGS(&frames[i].raw)), "ahead native");
+                Check(Sub::CommandListProxy::Create(device.Get(), frames[i].alloc.Get(), frames[i].raw.Get(), &frames[i].list), "ahead proxy");
+                auto job = prepare(frames[i].list.Get(), 2000 + n * 10 + i, patterns[i].Get());
+                frames[i].resources = std::make_shared<In::Resources>(device.Get(), patterns[i].Get(),
+                    static_cast<ID3D12Resource*>(job.private_output), nullptr, width, height, owner->inlinePipelines);
+                {
+                    std::lock_guard lock(Sub::RecordingMutex());
+                    ID3D12Resource* sources[] {patterns[i].Get()};
+                    D3D12_RESOURCE_STATES states[] {D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE};
+                    Check(frames[i].list->BeginInlineState(1, sources, states), "ahead state");
+                    frames[i].lease = Own::Attach(owner, job.handle, frames[i].list.Get(), frames[i].resources);
+                    Require(bool(frames[i].lease), "ahead lease");
+                    ok(api.RecordInputs(context, job.handle, frames[i].list.Get()), "ahead inputs");
+                    frames[i].resources->RecordCapture(frames[i].list.Get());
+                    frames[i].resources->RecordWait(frames[i].list.Get(), timeoutMode ? 0 : 64);
+                    ok(api.RecordOutputs(context, job.handle, frames[i].list.Get()), "ahead outputs");
+                    frames[i].resources->RecordSelect(frames[i].list.Get(), states[0]);
+                    frames[i].lease->ready = true;
+                    frames[i].list->EndInlineState();
+                    Check(frames[i].list->Close(), "ahead close");
+                }
+            }
+            if (n == kPatterns) {
+                if (mochi) {
+                    MochizukiNrFrameInfo extra {}; extra.struct_size = sizeof extra; extra.frame_id = 9000;
+                    extra.color = patterns[0].Get(); extra.color_width = width; extra.color_height = height;
+                    extra.color_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+                    extra.flags = LMXXF_NR_FRAME_FLAG_STRENGTH; extra.transfer_strength = extra.color_strength = extra.model_scale = 1; extra.passes = 1;
+                    LmxxfNrJob rejected {}; rejected.struct_size = sizeof rejected;
+                    const int rc = mzPrepare(context, &extra, &rejected);
+                    char message[256] {}; api.GetLastError(message, sizeof message);
+                    Require(rc == LMXXF_NR_UNAVAILABLE && std::strstr(message, "inline slots are full"),
+                            "fifth ahead recording is rejected before history advances");
+                } else {
+                    Ptr<ID3D12CommandAllocator> alloc; Ptr<ID3D12GraphicsCommandList> raw; Ptr<Sub::CommandListProxy> list;
+                    Check(device->CreateCommandAllocator(q.Type, IID_PPV_ARGS(&alloc)), "fifth allocator");
+                    Check(device->CreateCommandList(0, q.Type, alloc.Get(), nullptr, IID_PPV_ARGS(&raw)), "fifth native");
+                    Check(Sub::CommandListProxy::Create(device.Get(), alloc.Get(), raw.Get(), &list), "fifth proxy");
+                    auto job = prepare(list.Get(), 9000, patterns[0].Get());
+                    auto resources = std::make_shared<In::Resources>(device.Get(), patterns[0].Get(),
+                        static_cast<ID3D12Resource*>(job.private_output), nullptr, width, height, owner->inlinePipelines);
+                    std::shared_ptr<Own::Lease> rejected;
+                    {
+                        std::lock_guard lock(Sub::RecordingMutex());
+                        rejected = Own::Attach(owner, job.handle, list.Get(), resources);
+                    }
+                    Require(!rejected, "fifth ahead attach is rejected while four reservations are open");
+                    list.Reset(); raw.Reset();
+                }
+            }
+            for (unsigned i = 0; i < n; ++i)
+                Check(frames[i].list->ExecuteOn(game.Get()), "ahead execute without draining the queue");
+            WaitQueue(device.Get(), game.Get());
+            for (unsigned i = 0; i < n; ++i) {
+                const auto until = GetTickCount64() + 20000;
+                for (;;) {
+                    bool done;
+                    {
+                        std::lock_guard lock(Sub::RecordingMutex());
+                        done = frames[i].resources->Complete() && !frames[i].lease->begun;
+                    }
+                    if (done) break;
+                    Require(GetTickCount64() < until, "ahead completion");
+                    Sleep(1);
+                }
+                const auto selected = timeoutMode ? originalHashByPattern[i] : neuralHashByPattern[i];
+                Require(HashTexture(device.Get(), game.Get(), frames[i].resources->OutputTexture()) == selected,
+                        "ahead output matches that frame's own colour");
+            }
+            for (unsigned i = 0; i < n; ++i) {
+                Ptr<ID3D12CommandAllocator> replacement;
+                Check(device->CreateCommandAllocator(q.Type, IID_PPV_ARGS(&replacement)), "ahead reset allocator");
+                Check(frames[i].list->Reset(replacement.Get(), nullptr), "ahead reset");
+                Check(frames[i].list->Close(), "ahead replacement close");
+                frames[i].lease.reset();
+            }
+            const auto collectUntil = GetTickCount64() + 10000;
+            for (;;) {
+                {
+                    std::lock_guard lock(Sub::RecordingMutex());
+                    Own::Collect();
+                }
+                if (owner->liveRecordings.load() == 0) break;
+                Require(GetTickCount64() < collectUntil, "ahead collection");
+                Sleep(1);
+            }
+            std::printf("inline ahead %u timeout=%u PASS\n", n, timeoutMode);
+        };
+        burst(2); burst(3); burst(4);
+        // Game order: submit frame 0, then record frame 1 while that execution is still open.
+        {
+            struct Frame {
+                Ptr<ID3D12CommandAllocator> alloc;
+                Ptr<ID3D12GraphicsCommandList> raw;
+                Ptr<Sub::CommandListProxy> list;
+                std::shared_ptr<In::Resources> resources;
+                std::shared_ptr<Own::Lease> lease;
+            };
+            Frame frames[2] {};
+            auto recordOne = [&](unsigned i) {
+                Check(device->CreateCommandAllocator(q.Type, IID_PPV_ARGS(&frames[i].alloc)), "stagger allocator");
+                Check(device->CreateCommandList(0, q.Type, frames[i].alloc.Get(), nullptr, IID_PPV_ARGS(&frames[i].raw)), "stagger native");
+                Check(Sub::CommandListProxy::Create(device.Get(), frames[i].alloc.Get(), frames[i].raw.Get(), &frames[i].list), "stagger proxy");
+                auto job = prepare(frames[i].list.Get(), 3000 + i, patterns[i].Get());
+                frames[i].resources = std::make_shared<In::Resources>(device.Get(), patterns[i].Get(),
+                    static_cast<ID3D12Resource*>(job.private_output), nullptr, width, height, owner->inlinePipelines);
+                std::lock_guard lock(Sub::RecordingMutex());
+                ID3D12Resource* sources[] {patterns[i].Get()};
+                D3D12_RESOURCE_STATES states[] {D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE};
+                Check(frames[i].list->BeginInlineState(1, sources, states), "stagger state");
+                frames[i].lease = Own::Attach(owner, job.handle, frames[i].list.Get(), frames[i].resources);
+                Require(bool(frames[i].lease), "stagger lease");
+                ok(api.RecordInputs(context, job.handle, frames[i].list.Get()), "stagger inputs");
+                frames[i].resources->RecordCapture(frames[i].list.Get());
+                frames[i].resources->RecordWait(frames[i].list.Get(), timeoutMode ? 0 : 64);
+                ok(api.RecordOutputs(context, job.handle, frames[i].list.Get()), "stagger outputs");
+                frames[i].resources->RecordSelect(frames[i].list.Get(), states[0]);
+                frames[i].lease->ready = true;
+                frames[i].list->EndInlineState();
+                Check(frames[i].list->Close(), "stagger close");
+            };
+            recordOne(0);
+            Check(frames[0].list->ExecuteOn(game.Get()), "stagger execute first");
+            recordOne(1);
+            Check(frames[1].list->ExecuteOn(game.Get()), "stagger execute second");
+            WaitQueue(device.Get(), game.Get());
+            for (unsigned i = 0; i < 2; ++i) {
+                const auto until = GetTickCount64() + 20000;
+                for (;;) {
+                    bool done;
+                    {
+                        std::lock_guard lock(Sub::RecordingMutex());
+                        done = frames[i].resources->Complete() && !frames[i].lease->begun;
+                    }
+                    if (done) break;
+                    Require(GetTickCount64() < until, "stagger completion");
+                    Sleep(1);
+                }
+                const auto selected = timeoutMode ? originalHashByPattern[i] : neuralHashByPattern[i];
+                Require(HashTexture(device.Get(), game.Get(), frames[i].resources->OutputTexture()) == selected,
+                        "stagger output matches that frame's own colour");
+            }
+            for (unsigned i = 0; i < 2; ++i) {
+                Ptr<ID3D12CommandAllocator> replacement;
+                Check(device->CreateCommandAllocator(q.Type, IID_PPV_ARGS(&replacement)), "stagger reset allocator");
+                Check(frames[i].list->Reset(replacement.Get(), nullptr), "stagger reset");
+                Check(frames[i].list->Close(), "stagger replacement close");
+                frames[i].lease.reset();
+            }
+            const auto collectUntil = GetTickCount64() + 10000;
+            for (;;) {
+                {
+                    std::lock_guard lock(Sub::RecordingMutex());
+                    Own::Collect();
+                }
+                if (owner->liveRecordings.load() == 0) break;
+                Require(GetTickCount64() < collectUntil, "stagger collection");
+                Sleep(1);
+            }
+            std::printf("inline stagger timeout=%u PASS\n", timeoutMode);
+        }
+        g_patternExponentShift = 0;
     }
     owner.reset();
     FreeLibrary(dll); std::puts("actual inline runtime PASS"); return 0;

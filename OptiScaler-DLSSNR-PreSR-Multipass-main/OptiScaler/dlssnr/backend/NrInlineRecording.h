@@ -283,6 +283,9 @@ cbuffer Size : register(b0) { uint width; uint height; }
         Barrier(list, decision.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         decisionReadable = true;
     }
+    bool Started() const { return started; }
+    // Set under RecordingMutex from the lease that admitted this recording.
+    uint64_t activityToken = 0;
     bool Complete() const {
         if (!started) return true;
         if (uncertain || !scheduled.load(std::memory_order_acquire) || !finalValue || !gameFence || !gameValue) return false;

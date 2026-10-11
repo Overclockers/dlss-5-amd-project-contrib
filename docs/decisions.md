@@ -728,6 +728,14 @@ ACO 默认关闭，由 INI/菜单拥有。扩展在创建设备时决定。设�
 INT4 仍不启用。可重放的核心补丁和放弃项见
 [来源记录](../third_party/mochizuki/UPSTREAM.md)。
 
+## 2026-10-11 · 内联提前录制不再把上一帧完成当成准入
+
+宿主最多保留 4 帧未回收的内联录制。两侧 fence 都完成后才回收；未提交的预约不占完成名额，槽满时本帧走原图，不等待。同一条闭合列表在自己的 fence 未完成时重放仍返回 `E_PENDING`。网络按入队顺序提交，排队不持有 `RecordingMutex`。ABI 仍是 5。
+
+Mochizuki 每个在途录制使用自己的帧缓冲，池上限 4。lmxxf 用 `inline-ahead-capture.patch` 把下一帧的拷贝记到独立捕获相位，只在该帧轮到入队时武装桥；跨队列提前录制直接拒绝。lmxxf 的 codec 和桥接缓冲仍是一套，靠同一条游戏队列的 GPU 顺序。超时后迟到的网络仍可能碰到这套共享缓冲。Vulkan 网络命令缓冲槽仍是 3，第 4 笔入队可能在锁里做最多 250 ms 的 `vkWaitForFences`。
+
+RX 9070 XT 上 `tests\lmxxf\run.cmd inline-gpu` 和 `tests\mochizuki\run.cmd inline` 通过：连续 120 帧、强制超时、提前 2/3/4 帧、先提交再录下一帧，以及 Mochizuki 2560×1440 连续时序（history 85%）。没有同一场景的切分/内联游戏计时，不能据此说网络区间已经不再翻倍。提前录制下的时序历史、跳帧、尺寸或层数变化、跨队列、失效 fence 和设备丢失没有测。游戏安装和已有 1.12.0 包都不含这次改动。
+
 ## 2026-10-11 Crimson Desert inline follow-up
 
 Reuse one side compute queue per NR session, retaining independent recording buffers and both completion proofs. Keep real queue/history discontinuity resets. Route the lmxxf HIP 7 loader through the existing controlled product search using an explicit replayable vendor hook; no HIP 6 fallback or global DLL directory mutation. Add throttled selection/lifetime diagnostics and explicit Mochizuki history-reset reasons. See [inline architecture](architecture/nr-inline-recording.md#crimson-desert-follow-up-fixes-2026-10-11) for focused tests and outstanding game/performance acceptance.

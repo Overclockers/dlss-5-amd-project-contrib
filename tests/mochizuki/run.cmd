@@ -60,6 +60,10 @@ exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%
 if errorlevel 1 exit /b 1
 exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --timeout
 if errorlevel 1 exit /b 1
+exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --ahead
+if errorlevel 1 exit /b 1
+exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --timeout --ahead
+if errorlevel 1 exit /b 1
 exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --large --temporal
 exit /b %errorlevel%
 

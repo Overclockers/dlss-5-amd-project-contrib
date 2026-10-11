@@ -11,10 +11,12 @@ last completed integration; `sync-state.json` records any pending attempt.
 
 ## Current ownership after PR #12
 
-The product adds two explicit, opt-in interface patches (`first-pass-output.patch`
-and `inline-side-queue.patch`) on this unchanged upstream base. The latter lets
+The product adds three explicit, opt-in interface patches (`first-pass-output.patch`,
+`inline-side-queue.patch`, and `inline-ahead-capture.patch`) on this unchanged upstream base. The side-queue patch lets
 recording leases use a same-device side queue after host capture proof; game and
-side completion remain host-owned. See [inline recording](../../docs/architecture/nr-inline-recording.md).
+side completion remain host-owned. The ahead-capture patch records the next frame
+while one lease is still executing, and only arms that deferred execution when the
+host enqueues it. See [inline recording](../../docs/architecture/nr-inline-recording.md).
 `hip-runtime-loader.patch` adds a product-only HIP loader hook. The wrapper selects
 HIP 7 using the shared controlled search; other upstream consumers retain System32
 loading. The source pin, network options and inference modules are unchanged.
@@ -28,7 +30,7 @@ final-pass auxiliary interface. The current integration targets its corrective
 follow-up `48a41fccb89300cd6636b16bc7b86010384c4cc1`.
 [Review, exact-source proof and validation](../../docs/lmxxf-pr12-merged-review.md).
 
-`tools/lmxxf-sync/manifest.json` has no pinned files; it replays the two optional
+`tools/lmxxf-sync/manifest.json` has no pinned files; it replays the three optional
 interface patches described above.
 All selected headers (including `hip_d3d12_bridge.h`), top-level HIP sources and
 includes, and top-level HLSL follow the resolved official SHA. Missing required

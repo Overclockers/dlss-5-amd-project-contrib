@@ -640,7 +640,7 @@ ID3D12Resource* LmxxfBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, const
     ReTrace(reTraceId, "session.begin", session, 0);
     if (!EnsureSession())
         return nullptr;
-    if (sessionOwner->InlineBusy()) { sessionOwner->InlineBypassed(); SetStatus("lmxxf: previous inline execution pending; original frame"); return nullptr; }
+    if (sessionOwner->InlineBusy()) { sessionOwner->InlineBypassed(); SetStatus("lmxxf: inline ahead cap reached; original frame"); return nullptr; }
     ReTrace(reTraceId, "session.end", session, 0);
     UpdateTiming();
 

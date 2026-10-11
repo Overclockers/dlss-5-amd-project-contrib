@@ -107,6 +107,8 @@ call :Runtime || goto fail
 %CXX% /I"%INC%" tests\lmxxf\nr_inline_runtime_gpu.cpp /Fe"%OUT%\nr_inline_runtime_gpu.exe" /Fo"%OUT%\nr_inline_runtime_gpu.obj" /link %D3D% d3dcompiler.lib "%DETOURS%" || goto fail
 "%OUT%\nr_inline_runtime_gpu.exe" "%LMXXF_TEST_RUNTIME%" "%MODS%" || goto fail
 "%OUT%\nr_inline_runtime_gpu.exe" "%LMXXF_TEST_RUNTIME%" "%MODS%" --timeout || goto fail
+"%OUT%\nr_inline_runtime_gpu.exe" "%LMXXF_TEST_RUNTIME%" "%MODS%" --ahead || goto fail
+"%OUT%\nr_inline_runtime_gpu.exe" "%LMXXF_TEST_RUNTIME%" "%MODS%" --timeout --ahead || goto fail
 goto pass
 
 :RunInlineFixture
