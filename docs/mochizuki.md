@@ -85,14 +85,24 @@ ACO shaders, records and aliases are all included in the build hash proof.
 
 **ACO explicit barriers** is a separate checkbox beside ACO mode (Chinese:
 **ACO 显式同步**). Its INI key is `MochizukiAcoExplicitBarriers=true` by default.
-Uncheck it, or set the key to `false`, to test upstream tile-counter scheduling.
+Uncheck it, or set the key to `false`, to test optimized tile-counter scheduling.
 This only affects ACO; the control is disabled while ACO mode is off. Changing it
 rebuilds the network, and the menu reports the barrier policy of the installed
 network while old recordings retain their original policy. Save Settings persists
-the choice. To return to the validated default, check it again.
+the choice. To return to the validated default, check it again. The experimental
+schedule still keeps the required dependency from the C=64 persistent decoder
+run to the fused C=32 run; disabling this checkbox does not remove that boundary.
 
 Explicit inter-dispatch barriers remain the default: upstream counter-only ordering
-failed temporal output equality on the local driver. See the [source review](../third_party/mochizuki/UPSTREAM.md#windows-aco-directed-integration-2026-10-11)
+failed temporal output equality on the local driver. An initial C=512/decoder entry
+barrier restored the reported Where Winds Meet effect, as confirmed by the user,
+but larger synthetic inputs still exposed errors at the decoder tail. Keeping
+the C=64/C=32 boundary instead passes byte comparisons with the entry and earlier
+decoder chains enabled, including 128 moving frames at 512x512 and 16 moving
+frames at 1129x635, 2258x1270 and 2560x1440. The user also confirmed that the final
+decoder-tail local test package passed in-game. The running status reports execution,
+not image correctness.
+See the [source review](../third_party/mochizuki/UPSTREAM.md#windows-aco-directed-integration-2026-10-11)
 for the reproducible failure and conditions for making it the default later. ACO still uses
 the upstream optimized machine code. It is not bit-identical to native compilation.
 
@@ -116,6 +126,28 @@ the rest of the game frame. ACO imported 29/30 pipelines respectively. On the
 error 0.023438 (unit-range PSNR 52.08 dB). ACO/native output is not byte-identical;
 this synthetic comparison is not a visual-quality guarantee for game content.
 
+After closing the game, a sustained decoder-tail comparison used the same production
+DLL at 2258x1270, one pass, 100% model scale and no history. Each run warmed 128
+frames and sampled 512 GPU timings; three interleaved runs per mode gave:
+
+| ACO scheduling | Median core | Run range |
+|---|---:|---:|
+| Explicit barriers | 9.019 ms | 8.941–9.036 ms |
+| Experimental, retaining the decoder-tail boundary | 8.238 ms | 8.213–8.277 ms |
+
+All six output hashes matched. The experimental schedule reduced core time by
+8.7% in this fixture; this excludes bridge copies and the rest of the game frame.
+Earlier 16-warmup/64-sample measurements varied substantially, including after
+the game was closed, and are not the basis of this comparison.
+
+Execution-only at the tail also passed the expanded temporal tests, but short
+comparisons did not establish an additional benefit; it was not adopted or included
+in the sustained production comparison above. The product retains the existing
+compute-to-compute barrier with destination shader read/write invalidation.
+Removing execution ordering at the tail, including an invalidate-only probe without
+a producer-stage wait, failed byte equality. This identifies a sufficient additional
+boundary on this driver, not a globally minimal synchronization contract.
+
 `tests/mochizuki/run.cmd abi` includes the no-GPU ACO parser/cache/isolation tests.
 After a full runtime build and supplying the user model, `tests/mochizuki/run.cmd aco`
 checks actual import, compiler switching, temporal composition and asset fallback.
@@ -123,9 +155,16 @@ It also compares the first-pass output exported from three-pass inference agains
 independent single-pass output at 100% and 50% model resolution.
 Use `aco-profile` with the same arguments as `profile` for a matched performance run;
 it asserts that imported pipelines are actually active.
-`aco-upstream-profile` uses the same arguments with explicit barriers disabled.
+`aco-upstream-profile` uses the same arguments with the experimental schedule
+(including the required C=64/C=32 decoder boundary).
 `aco-barriers` checks on/off/on switching at the same frame size and retained
-recordings. It does not assert temporal image equivalence for the experimental mode.
+recordings. `aco-temporal` checks experimental scheduling at 50% model scale and
+then 128 consecutive temporal frames at 100%, across eight format/pass/composition
+combinations. It compares compact/separate output and explicit/optimized
+scheduling byte for byte, rejects a return to unchanged input, verifies continuing
+history use, and replays an older recording. Additional moving-input comparisons
+cover 512x512 for 128 frames, 2258x1270 for 16 frames and an odd 1129x635 extent
+for eight frames. Each comparison covers all eight format/pass/composition cases.
 
 ## ReShade compatibility
 

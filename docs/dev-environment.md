@@ -101,6 +101,7 @@ tests\run-all.cmd --tier ci|device|gpu|all [--out 目录] [--skip-sync] [--keep-
 - `tests/mochizuki/run.cmd abi|gpu`：无 GPU ABI 与实际 D3D12/Vulkan 生命周期回归。
 - `tests/mochizuki/run.cmd aco|aco-profile`：实际 ACO 导入、切换及回退 GPU 专项；ACO 性能参数与 `profile` 相同。
 - `tests/mochizuki/run.cmd aco-barriers|aco-upstream-profile`：显式同步开关及旧录制 GPU 回归；后者用于关闭显式 barrier 的对照计时，参数与 `profile` 相同。
+- `tests/mochizuki/run.cmd aco-temporal`：实验调度的半分辨率对照、完整模型分辨率下连续 128 帧及 512/2258/1129 尺寸动态输入回归，检查逐字节输出、历史连续性和旧录制重放；保留 decoder C64→C32 的必要同步。
 
 - `tools/build/build-ci.ps1`：Actions的宿主/CI并行入口，需已配置MSVC环境与pwsh。
 - `tools/lmxxf-sync/test-cache.py`：同步工具回归的内容/环境/UTC周成功记录；通过tests/sync/run.cmd使用。

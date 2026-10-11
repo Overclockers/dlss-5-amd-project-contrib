@@ -698,3 +698,15 @@ was satisfactory; three-pass clothing flicker remains unresolved and is not
 claimed fixed. Shared Overall Intensity still applies after person composition.
 The release asset preparer fetches the fixed OpenCV Zoo PP model with SHA256
 verification; both models and their licenses remain in the package.
+
+## 2026-10-11: Retain the ACO decoder-tail dependency
+
+When experimental ACO scheduling is selected, retain the C=64 persistent decoder
+to fused C=32 barrier in `tchain_pair`; keep the C=512 entry and preceding decoder
+chains available. The first entry-barrier fix restored the user's NR effect but
+missed errors at larger extents. The tail boundary passed expanded byte comparisons
+against explicit scheduling, including moving temporal input, multiple passes and
+retained recordings; omitting it failed. Keep the existing barrier semantics:
+execution-only passed locally but has no established additional performance benefit. Keep explicit
+barriers default-on and preserve the user's switch/INI choice. Hardware scope,
+timings and reproducible tests are recorded in [the backend guide](mochizuki.md).

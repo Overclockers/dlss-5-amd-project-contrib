@@ -33,11 +33,33 @@ buffer equality test (7,634 differing bytes in a 256x256 FP16 frame at model sca
 0.5). Disabling tile chains, or keeping explicit inter-dispatch barriers with the
 same imported code and chain layout, restored byte equality. The product retains
 explicit barriers for ACO by default in `Runtime::record_all`; native scheduling follows the
-new graph. `MochizukiAcoExplicitBarriers=false` opts into upstream ordering for user
+new graph. `MochizukiAcoExplicitBarriers=false` opts into experimental ordering for user
 comparison, with network rebuild and installed-mode reporting. Before disabling
 these barriers by default, identify the dependency/driver cause
 and pass the same temporal, multipass, retained-recording and dynamic-input tests
 on supported drivers. Do not infer safety from a successful flat-input benchmark.
+
+Follow-up (2026-10-11): a Where Winds Meet report described NR becoming visually
+ineffective after about half a second with explicit barriers off while execution
+continued. Initial 256x256 GPU isolation reproduced a temporal mismatch when C=512
+tile chains (kind 1) joined decoder chains (kind 32); each alone passed. Disabling arena
+reuse did not fix it. A test-only, fence-completed readback found all 1,039 counters
+and persistent-run epochs correct, with no timeout flags, while output still
+differed. The initial entry-barrier fix passed small static tests and the user
+confirmed restored NR effect in-game. Expanded 512x512 and 1080p tests nevertheless
+found remaining errors; it was not a sufficient synchronization boundary.
+
+Decoder edge isolation then identified C=64 persistent -> fused C=32 as the failing
+chain, also with arena reuse disabled. `tchain_pair` now preserves that barrier
+while restoring the C=512 -> decoder chain and retaining C=256 -> C=128 -> C=64
+chains. This single retained boundary passed all eight FP16/sRGB, one/three-pass,
+composition combinations against explicit scheduling: 128 moving frames at
+512x512, 16 at 256x256, 1129x635, 2258x1270 and 2560x1440, and eight static frames
+at 1920x1080, including temporal history and retained recordings. These are local
+RX 9070 XT/32.0.31041.1004 results, not proof for all drivers.
+The precise underlying visibility/ordering cause remains unproven. The switch and
+default-on policy are retained. The user subsequently confirmed that the final
+decoder-tail local test package passed in-game.
 
 Validation: MSVC host/runtime builds, record parser/corruption/cache/thread isolation,
 ABI and resource hash checks; actual ACO import, compiler switching with retained
@@ -45,7 +67,7 @@ recordings, eight temporal/composition combinations, first-pass export at full/h
 model resolution, and missing/corrupt-asset
 fallback on GPU. Packaging/install/uninstall checks include ACO assets. Timings and
 output-equivalence limits are recorded in [the backend guide](../../docs/mochizuki.md).
-No full release certification or new game acceptance is implied.
+No full release certification or broader game/driver coverage is implied.
 
 ## v0.0.4 directed integration (2026-10-07)
 

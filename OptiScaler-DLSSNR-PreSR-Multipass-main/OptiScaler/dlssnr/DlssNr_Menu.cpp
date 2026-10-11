@@ -395,7 +395,7 @@ static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const 
                 bool v = config->name.value_or_default(); \
                 if (MenuUi::Checkbox(label, &v)) { config->name = v; changed = true; } \
                 ImGui::EndDisabled(); \
-                if (barriers) HelpMarker("On: retain explicit barriers (default). Off: test upstream scheduling, which may change the image. ACO only; switching rebuilds the network."); \
+                if (barriers) HelpMarker("On: explicit barriers (default). Off: optimized scheduling with required barriers retained (experimental). ACO only; switching rebuilds the network."); \
             }
 #include "backend/MochizukiOptions.inc"
 #undef MZ_F
@@ -414,7 +414,7 @@ static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const 
                     if (info.aco_state == 1) {
                         MenuUi::TextDisabled("Active compiler: ACO (%u pipelines)", info.aco_pipelines);
                         MenuUi::TextDisabled(info.aco_explicit_barriers ? "Active ACO barriers: explicit" :
-                                                                        "Active ACO barriers: upstream (experimental)");
+                                                                        "Active ACO barriers: optimized (experimental)");
                     }
                     else if (info.aco_state == 2) {
                         MenuUi::TextWrapped("Active compiler: native (ACO unavailable)");

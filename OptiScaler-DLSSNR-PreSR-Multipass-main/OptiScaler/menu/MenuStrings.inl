@@ -1,9 +1,9 @@
 // English source text is a UI lookup key, never a config identifier.
 {"ACO mode", "ACO 模式"},
 {"ACO explicit barriers", "ACO 显式同步"},
-{"On: retain explicit barriers (default). Off: test upstream scheduling, which may change the image. ACO only; switching rebuilds the network.", "开启：保留显式同步（默认）。关闭：测试上游调度，可能出现画面差异。仅对 ACO 生效；切换会重建网络。"},
+{"On: explicit barriers (default). Off: optimized scheduling with required barriers retained (experimental). ACO only; switching rebuilds the network.", "开启：显式同步（默认）。关闭：优化调度，仍保留必要同步（实验性）。仅对 ACO 生效；切换会重建网络。"},
 {"Active ACO barriers: explicit", "当前 ACO 同步：显式"},
-{"Active ACO barriers: upstream (experimental)", "当前 ACO 同步：上游调度（实验性）"},
+{"Active ACO barriers: optimized (experimental)", "当前 ACO 同步：优化调度（实验性）"},
 {"ACO mode is off by default. Switching rebuilds the network. Unsupported drivers or failed imports use the native compiler.", "ACO 模式默认关闭。切换时会重建网络。驱动不支持或导入失败时使用原生编译器。"},
 {"Rebuilding network...", "正在重建网络……"},
 {"Active compiler: ACO (%u pipelines)", "当前编译器：ACO（%u 条管线）"},

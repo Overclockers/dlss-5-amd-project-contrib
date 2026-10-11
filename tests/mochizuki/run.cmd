@@ -20,6 +20,7 @@ if /i "%~1"=="aco-profile" goto profile
 if /i "%~1"=="aco-upstream-profile" set "ACO_PROFILE=--aco-upstream-barriers"
 if /i "%~1"=="aco-upstream-profile" goto profile
 if /i "%~1"=="aco-barriers" goto acobarriers
+if /i "%~1"=="aco-temporal" goto acotemporal
 if /i "%~1"=="composition" goto composition
 if /i "%~1"=="aco" goto aco
 if /i "%~1"=="shader-tail" goto shadertail
@@ -101,4 +102,15 @@ exit /b %errorlevel%
 
 :acobarriers
 exports\mochizuki-tests\runtime.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" --aco-barrier-switch
+exit /b %errorlevel%
+
+:acotemporal
+rem The experimental schedule must preserve temporal output and the active NR effect.
+exports\mochizuki-tests\runtime.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" --composition --aco-upstream-barriers || exit /b 1
+exports\mochizuki-tests\runtime.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" --composition-long --aco-upstream-barriers || exit /b 1
+exports\mochizuki-tests\runtime.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" --composition-long --aco-reference || exit /b 1
+rem Small static inputs miss the decoder-tail dependency. Exercise changing input and padded extents.
+exports\mochizuki-tests\runtime.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" --composition-long --aco-reference --composition-size 512 512 --moving-input || exit /b 1
+exports\mochizuki-tests\runtime.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" --composition-long --aco-reference --composition-size 2258 1270 --composition-frames 16 --moving-input || exit /b 1
+exports\mochizuki-tests\runtime.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" --composition-long --aco-reference --composition-size 1129 635 --composition-frames 8 --moving-input
 exit /b %errorlevel%

@@ -136,13 +136,14 @@ int wmain(int argc,wchar_t**argv) try {
     Require(defaults(&oldControls)==LMXXF_NR_INVALID_ARGUMENT,"partial controls accepted");
     if(argc==2) {puts("MOCHIZUKI_ABI_OK");FreeLibrary(dll);return 0;}
     bool aco=false,acoFallback=false,acoSwitch=false,firstPass=false;
-    bool acoBarrierSwitch=false;
+    bool acoBarrierSwitch=false,acoReference=false;
     for(int i=3;i<argc;++i) {
         aco |= std::wstring(argv[i])==L"--aco";
         acoFallback |= std::wstring(argv[i])==L"--aco-fallback";
         acoSwitch |= std::wstring(argv[i])==L"--aco-switch";
         firstPass |= std::wstring(argv[i])==L"--first-pass";
         acoBarrierSwitch |= std::wstring(argv[i])==L"--aco-barrier-switch";
+        if(std::wstring(argv[i])==L"--aco-reference") {aco=true;acoReference=true;}
         if(std::wstring(argv[i])==L"--aco-upstream-barriers") {aco=true;controls.aco_explicit_barriers=0;}
     }
     controls.aco=aco || acoFallback || acoSwitch || acoBarrierSwitch;
@@ -221,8 +222,25 @@ int wmain(int argc,wchar_t**argv) try {
         if(firstPass)Require(job.first_pass_output!=nullptr,"first-pass output missing");
         return job;
     };
-    if(argc>3 && std::wstring(argv[3])==L"--composition") {
-        Frame motion(device.Get(),256,256);void* data=nullptr;
+    const bool longComposition=argc>3 && std::wstring(argv[3])==L"--composition-long";
+    if(argc>3 && (std::wstring(argv[3])==L"--composition" || longComposition)) {
+        UINT compositionWidth=256,compositionHeight=256;
+        unsigned temporalFrames=longComposition?128u:3u;
+        bool movingInput=false;
+        for(int i=4;i<argc;++i) {
+            const std::wstring option=argv[i];
+            if(option==L"--composition-size") {
+                Require(i+2<argc,"composition size needs width and height");
+                compositionWidth=UINT(_wtoi(argv[++i]));compositionHeight=UINT(_wtoi(argv[++i]));
+            } else if(option==L"--composition-frames") {
+                Require(i+1<argc,"composition frames needs a count");
+                temporalFrames=unsigned(_wtoi(argv[++i]));
+            } else if(option==L"--moving-input") movingInput=true;
+        }
+        Require(compositionWidth>=128 && compositionWidth<=3840 && compositionHeight>=128 &&
+                compositionHeight<=2160 && temporalFrames>=3 && temporalFrames<=128,
+                "invalid composition dimensions/frame count");
+        Frame motion(device.Get(),compositionWidth,compositionHeight);void* data=nullptr;
         Hr(motion.upload->Map(0,nullptr,&data));
         std::memset(data,0,size_t(motion.footprint.Footprint.RowPitch)*motion.height);
         motion.upload->Unmap(0,nullptr);
@@ -234,7 +252,7 @@ int wmain(int argc,wchar_t**argv) try {
         };
         uint64_t id=0;
         for(auto format:{DXGI_FORMAT_R16G16B16A16_FLOAT,DXGI_FORMAT_R8G8B8A8_UNORM_SRGB}) {
-            Frame f(device.Get(),256,256,format);List uploadFrame(device.Get());
+            Frame f(device.Get(),compositionWidth,compositionHeight,format);List uploadFrame(device.Get());
             f.Upload(uploadFrame.cmd.Get());Hr(uploadFrame.cmd->Close());Submit(q[0].Get(),uploadFrame);
             Hr(q[0]->Signal(tail.Get(),++value));Wait(tail.Get(),value);
             const size_t inputRow=f.width*(format==DXGI_FORMAT_R16G16B16A16_FLOAT?8:4);
@@ -243,6 +261,30 @@ int wmain(int argc,wchar_t**argv) try {
             for(UINT y=0;y<f.height;++y)
                 memcpy(original.data()+y*inputRow,static_cast<char*>(source)+y*f.footprint.Footprint.RowPitch,inputRow);
             f.upload->Unmap(0,nullptr);
+            auto updateInput=[&](unsigned n) {
+                void* mapped=nullptr;Hr(f.upload->Map(0,nullptr,&mapped));
+                for(UINT y=0;y<f.height;++y) for(UINT x=0;x<f.width;++x) {
+                    const float base=.05f+.65f*float((x+3*n)%f.width)/f.width +
+                        (((x+n)/8+(y+2*n)/8)%2)*.10f;
+                    auto* row=static_cast<char*>(mapped)+f.footprint.Footprint.RowPitch*y;
+                    if(format==DXGI_FORMAT_R16G16B16A16_FLOAT) {
+                        auto* pixel=reinterpret_cast<uint16_t*>(row)+x*4;
+                        for(int k=0;k<3;++k)pixel[k]=DirectX::PackedVector::XMConvertFloatToHalf(base*(1.f-.2f*k));
+                        pixel[3]=0x3c00;
+                    } else {
+                        auto* pixel=reinterpret_cast<uint8_t*>(row)+x*4;
+                        for(int k=0;k<3;++k)pixel[k]=uint8_t(std::round(base*(1.f-.2f*k)*255));
+                        pixel[3]=255;
+                    }
+                }
+                for(UINT y=0;y<f.height;++y)
+                    memcpy(original.data()+y*inputRow,static_cast<char*>(mapped)+y*f.footprint.Footprint.RowPitch,inputRow);
+                f.upload->Unmap(0,nullptr);
+                List changing(device.Get());
+                Barrier(changing.cmd.Get(),f.color.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_DEST);
+                f.Upload(changing.cmd.Get());Hr(changing.cmd->Close());Submit(q[0].Get(),changing);
+                Hr(q[0]->Signal(tail.Get(),++value));Wait(tail.Get(),value);
+            };
             for(uint32_t passes:{1u,3u}) for(uint32_t mode:{0u,1u}) {
                 Rc(api.Destroy(context));context=nullptr;
                 Rc(api.Create(&ci,&context));Rc(api.PrepareSession(context));
@@ -265,15 +307,18 @@ int wmain(int argc,wchar_t**argv) try {
                 };
                 for(uint32_t compact:{0u,1u}) {
                     lastConsumed=0;
-                    controls.compact_transfer=compact;controls.enlarge_mode=mode;
+                    controls.compact_transfer=acoReference?0u:compact;controls.enlarge_mode=mode;
+                    if(acoReference) controls.aco_explicit_barriers=1u-compact;
                     controls.apply_model=1;
                     controls.preprocess=passes==3;controls.preprocess_exposure=2;
                     Rc(set(context,&controls));Rc(api.ResetHistory(context));
                     // Warm lazy driver work before comparing consecutive history:
                     // the runtime intentionally resets after a >250 ms gap.
-                    for(unsigned n=0;n<7;++n) {
+                    const unsigned passthroughFrame=temporalFrames+3;
+                    for(unsigned n=0;n<=passthroughFrame;++n) {
                         if(n==3) Rc(api.ResetHistory(context));
-                        if(n==6) { controls.apply_model=0;Rc(set(context,&controls)); }
+                        if(n==passthroughFrame) { controls.apply_model=0;Rc(set(context,&controls)); }
+                        if(movingInput) updateInput(n);
                         auto r=std::make_unique<Recording>(device.Get());
                         MochizukiNrFrameInfo fi{};fi.struct_size=sizeof fi;fi.frame_id=++id;
                         fi.color=f.color.Get();fi.color_width=f.width;fi.color_height=f.height;
@@ -281,13 +326,14 @@ int wmain(int argc,wchar_t**argv) try {
                         fi.color_state=fi.motion_state=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
                         fi.motion_scale_x=fi.motion_scale_y=1;
                         fi.flags=LMXXF_NR_FRAME_FLAG_STRENGTH|MOCHIZUKI_NR_FRAME_FLAG_TEMPORAL;
-                        fi.model_scale=.5f;fi.passes=passes;fi.transfer_strength=fi.color_strength=1;
+                        fi.model_scale=longComposition?1.f:.5f;fi.passes=passes;fi.transfer_strength=fi.color_strength=1;
                         auto deadline=GetTickCount64()+300000;
                         for(;;) {
                             int rc=prepare(context,&fi,&r->job);
                             if(!rc) {
                                 MochizukiNrInfo ready{sizeof ready};Rc(getInfo(context,&ready));
-                                if(!ready.building) break;
+                                if(!ready.building && (!acoReference ||
+                                    (ready.aco_state==1 && ready.aco_explicit_barriers==controls.aco_explicit_barriers))) break;
                                 // The host may keep serving the old layout during
                                 // rebuild. Compare only after the new one is installed.
                                 Rc(api.InvalidateRecording(context,r->job.handle));
@@ -303,40 +349,49 @@ int wmain(int argc,wchar_t**argv) try {
                         Hr(r->in.cmd->Close());Hr(r->out.cmd->Close());
                         auto bytes=execute(*r);
                         MochizukiNrInfo sample{sizeof sample};Rc(getInfo(context,&sample));
-                        Require(sample.frames<64,"composition history observation exceeded its window");
+                        if(!longComposition) Require(sample.frames<64,"composition history observation exceeded its window");
                         // History statistics reset on network replacement; the
                         // session's overall frame counter does not.
-                        const auto consumed=uint32_t(std::lround(sample.history_consumed_pct*(n+1)/100.0));
-                        if(n>=3 && consumed!=lastConsumed+(n>3?1u:0u)) {
+                        // Percentages are truncated integers: recovering a count
+                        // from them loses a frame once the window grows past 50.
+                        const auto consumed=n>=3 ? lastConsumed+(n>3?1u:0u) :
+                            uint32_t(std::lround(sample.history_consumed_pct*(n+1)/100.0));
+                        if(n>=3 && n<64 && sample.history_consumed_pct!=consumed*100/(n+1)) {
                             fprintf(stderr,"HISTORY_MISMATCH format=%u passes=%u mode=%u compact=%u sample=%u frames=%llu pct=%u consumed=%u previous=%u\n",
                                     unsigned(format),passes,mode,compact,n,static_cast<unsigned long long>(sample.frames),
                                     sample.history_consumed_pct,consumed,lastConsumed);
                             throw std::runtime_error("comparison did not use the intended temporal history");
                         }
-                        lastConsumed=consumed;
-                        if(n==6) {
+                        if(n>=67) Require(sample.history_consumed_pct==100,"continuous sequence unexpectedly reset temporal history");
+                        lastConsumed=std::min(consumed,64u);
+                        if(n==passthroughFrame) {
                             Require(bytes==original,"Apply model off changed the original image");
                             held.push_back(std::move(r));continue;
                         }
                         if(n<3) { held.push_back(std::move(r)); continue; }
+                        if(longComposition) Require(bytes!=original,"continuous NR output reverted to passthrough");
                         if(!compact) reference.push_back(bytes);
                         else if(bytes!=reference[n-3]) {
                             size_t changed=0;for(size_t k=0;k<bytes.size();++k) changed+=bytes[k]!=reference[n-3][k];
                             MochizukiNrInfo state{sizeof state};Rc(getInfo(context,&state));
                             fprintf(stderr,"MISMATCH format=%u passes=%u mode=%u frame=%u changed_bytes=%zu/%zu history_pct=%u\n",
                                     unsigned(format),passes,mode,n,changed,bytes.size(),state.history_consumed_pct);
-                            throw std::runtime_error("compact/separate temporal output mismatch");
+                            throw std::runtime_error(acoReference?"explicit/optimized temporal output mismatch":
+                                "compact/separate temporal output mismatch");
                         }
                         held.push_back(std::move(r));
                     }
                 }
                 Rc(api.ResetHistory(context));
+                // Retained recordings read current input: restore the reference's first frame.
+                if(movingInput) updateInput(3);
                 Require(execute(*held[3],1)==reference.front(),"retained old recording changed after buffer-mode switch");
                 for(auto& r:held) {
                     Rc(api.InvalidateRecording(context,r->job.handle));Rc(api.CollectRecording(context,r->job.handle));
                 }
-                printf("COMPOSITION_OK format=%u passes=%u edge=%u preprocess=%u temporal_frames=3 old_recording=passed\n",
-                       unsigned(format),passes,mode,controls.preprocess);
+                printf("COMPOSITION_OK format=%u passes=%u edge=%u preprocess=%u size=%ux%u moving=%u temporal_frames=%u comparison=%s old_recording=passed\n",
+                       unsigned(format),passes,mode,controls.preprocess,compositionWidth,compositionHeight,unsigned(movingInput),temporalFrames,
+                       acoReference?"explicit/optimized":"compact/separate");
                 checkAco();
             }
         }
