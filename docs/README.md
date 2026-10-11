@@ -9,6 +9,7 @@
 | [architecture/menu-navigation.md](architecture/menu-navigation.md) | 独立NR页面、窄窗口导航、卡片布局与菜单背景模糊的资源约束 |
 | [architecture/optiscaler-upstream.md](architecture/optiscaler-upstream.md) | OptiScaler定向整合来源、已接模块、生命周期边界与延期 |
 | [mochizuki.md](mochizuki.md) | 第三后端：安装、模型提取、菜单、生命周期、构建和验证范围 |
+| [architecture/mochizuki-upstream-extensions.md](architecture/mochizuki-upstream-extensions.md) | Mochizuki 核心扩展的必要性、固定来源补丁与上游提案边界 |
 | [post-sr-nr.md](post-sr-nr.md) | 三后端实验性 SR → NR：设置、分辨率、输入限制和验收 |
 | [architecture/overview.md](architecture/overview.md) | 管线、两个后端怎么加载与选择、代码归属与许可证、日志位置、如何查看 wilsjo2 上游 |
 | [architecture/lmxxf-c-abi.md](architecture/lmxxf-c-abi.md) | `LmxxfNrRuntime.dll` 的 C ABI：为什么有 DLL 边界、`struct_size` 分档、四条演进规则、资源查找 |

@@ -2,7 +2,9 @@
 
 当前还增加显式 `inline-side-queue.patch`，仅在录制租约和产品许可下允许同设备独立队列提交；
 输入捕获、有限等待与双队列完成证明由宿主管理，见 [内联执行](../../docs/architecture/nr-inline-recording.md)。
-原上游 SHA 和内核模块保持不变。人物分区实验的 `first-pass-output.patch` 仅提供可选第一层输出，
+原上游 SHA 和内核模块保持不变。人物分区实验的 `first-pass-output.patch` 仅提供可选第一层输出。
+`hip-runtime-loader.patch` 提供产品专用 HIP 7 加载钩子；宿主 wrapper 必须在任何 vendor
+头文件之前定义钩子。搜索、错误码和加载日志由产品共享加载器负责，上游默认 System32 策略保留。
 没有恢复整文件 pin。下方 PR #12 零补丁段落是该次合入的历史基线；当前接口、验证及未测范围
 见 [人物分区架构](../../docs/architecture/nr-person-partition.md)。同步必须重放清单中的新补丁。
 

@@ -15,6 +15,9 @@ The product adds two explicit, opt-in interface patches (`first-pass-output.patc
 and `inline-side-queue.patch`) on this unchanged upstream base. The latter lets
 recording leases use a same-device side queue after host capture proof; game and
 side completion remain host-owned. See [inline recording](../../docs/architecture/nr-inline-recording.md).
+`hip-runtime-loader.patch` adds a product-only HIP loader hook. The wrapper selects
+HIP 7 using the shared controlled search; other upstream consumers retain System32
+loading. The source pin, network options and inference modules are unchanged.
 No inference module/arithmetic change is involved. No file pins are
 restored. The zero-source-patch description below records the PR #12 baseline;
 current ownership and hardware acceptance limits are documented in

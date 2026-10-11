@@ -63,6 +63,8 @@ inline Ptr<ID3DBlob> Compile(const char* source, const char* entry) {
 // The game wait is a finite sequence of small dispatches, allowing the side queue to progress.
 struct Pipelines {
     Ptr<ID3D12Device> device;
+    // Session-owned queue identity; recording-local buffers/fences remain independent.
+    Ptr<ID3D12CommandQueue> sideQueue;
     Ptr<ID3D12RootSignature> controlRoot, composeRoot;
     Ptr<ID3D12PipelineState> controlPso, composePso;
 };
@@ -180,7 +182,10 @@ public:
         if (!options.TypedUAVLoadAdditionalFormats) throw std::runtime_error("inline typed UAV support unavailable");
         Submission::SuppressProxyWrap suppress;
         D3D12_COMMAND_QUEUE_DESC q {}; q.Type = D3D12_COMMAND_LIST_TYPE_COMPUTE;
-        Check(device->CreateCommandQueue(&q, IID_PPV_ARGS(&side)), "inline side queue");
+        if (cached && cached->device.Get() == dev && cached->sideQueue)
+            side = cached->sideQueue;
+        else
+            Check(device->CreateCommandQueue(&q, IID_PPV_ARGS(&side)), "inline side queue");
         Check(device->CreateCommandAllocator(q.Type, IID_PPV_ARGS(&sampleAlloc)), "inline sample allocator");
         Check(device->CreateCommandAllocator(q.Type, IID_PPV_ARGS(&doneAlloc)), "inline completion allocator");
         Check(device->CreateCommandList(0, q.Type, sampleAlloc.Get(), nullptr, IID_PPV_ARGS(&sampleList)), "inline sample list");
@@ -193,7 +198,7 @@ public:
         decision = Buffer(D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
         readback = Buffer(D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST, false);
         decisionReadback = Buffer(D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST, false);
-        if (cached && cached->device.Get() == dev) {
+        if (cached && cached->device.Get() == dev && cached->sideQueue) {
             pipelines = std::move(cached);
             controlRoot = pipelines->controlRoot; composeRoot = pipelines->composeRoot;
             controlPso = pipelines->controlPso; composePso = pipelines->composePso;
@@ -243,7 +248,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
  else colour = original.Load(int3(id.xy, 0));
  output[id.xy] = colour;
 })");
-            pipelines = std::make_shared<Pipelines>(); pipelines->device = device;
+            pipelines = std::make_shared<Pipelines>(); pipelines->device = device; pipelines->sideQueue = side;
             pipelines->controlRoot = controlRoot; pipelines->composeRoot = composeRoot;
             pipelines->controlPso = controlPso; pipelines->composePso = composePso;
         }
@@ -293,7 +298,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
     }
     UINT LastSpinCount() const {
         void* p = nullptr; D3D12_RANGE range {0,16};
-        Check(decisionReadback->Map(0, &range, &p), "inline diagnostic map");
+        if (!Complete() || !decisionReadable || FAILED(decisionReadback->Map(0, &range, &p)) || !p) return 0;
         const auto count = static_cast<const UINT*>(p)[2];
         D3D12_RANGE none {0,0}; decisionReadback->Unmap(0, &none); return count;
     }

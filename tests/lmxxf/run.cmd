@@ -45,6 +45,8 @@ echo usage: tests\lmxxf\run.cmd abi^|warp^|device^|inline^|inline-gpu^|early-uni
 exit /b 2
 
 :abi
+%CXX% tests\lmxxf\hip_runtime_load.cpp /Fe"%OUT%\hip_runtime_load.exe" /Fo"%OUT%\hip_runtime_load.obj" || goto fail
+"%OUT%\hip_runtime_load.exe" || goto fail
 call :Runtime || goto fail
 cl /nologo /std:c++17 /EHsc /W4 /utf-8 tests\lmxxf\lmxxf_nr_abi.cpp /Fe"%OUT%\lmxxf_nr_abi.exe" /Fo"%OUT%\lmxxf_nr_abi.obj" || goto fail
 "%OUT%\lmxxf_nr_abi.exe" "%LMXXF_TEST_RUNTIME%" "%MODS%" || goto fail

@@ -4,6 +4,12 @@ cd /d "%~dp0..\.."
 if /i "%~1"=="abi" (
   python -B tests\mochizuki\test_build_cache.py
   if errorlevel 1 exit /b 1
+  python -B tests\mochizuki\test_source_pin.py
+  if errorlevel 1 exit /b 1
+)
+if /i "%~1"=="source-pin" (
+  python -B tests\mochizuki\test_source_pin.py || exit /b 1
+  exit /b 0
 )
 call tests\_lib\msvc-env.cmd || exit /b 1
 if not exist exports\mochizuki-tests mkdir exports\mochizuki-tests
@@ -53,6 +59,8 @@ cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /I OptiScaler-DLSSNR-PreSR-Multipass-
 exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki
 if errorlevel 1 exit /b 1
 exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --timeout
+if errorlevel 1 exit /b 1
+exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --large --temporal
 exit /b %errorlevel%
 
 :startup

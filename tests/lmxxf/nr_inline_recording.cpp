@@ -99,10 +99,13 @@ struct Gpu {
 };
 
 static void Run(Gpu& gpu, bool timeout, bool enhanced = false, bool fullBudget = false, bool highRange = false) {
+    static std::shared_ptr<In::Pipelines> cache;
     const float red[] {highRange ? 100000.f : .25f,.5f,.75f,1}, blue[] {.75f,.25f,.5f,1}, black[] {0,0,0,1};
     const UINT16 redHalf[] {0x3400,0x3800,0x3a00,0x3c00}, blueHalf[] {0x3a00,0x3400,0x3800,0x3c00};
     auto original = gpu.Texture(red), network = gpu.Texture(blue), decoded = gpu.Texture(black);
-    auto resources = std::make_shared<In::Resources>(gpu.device.Get(), original.Get(), decoded.Get(), decoded.Get(), 8, 8);
+    auto resources = std::make_shared<In::Resources>(gpu.device.Get(), original.Get(), decoded.Get(), decoded.Get(), 8, 8, cache);
+    if (cache) Require(resources->SideQueue() == cache->sideQueue.Get(), "new recordings reuse the session queue");
+    cache = resources->PipelineCache();
     Require(resources->OutputTexture()->GetDesc().Format == original->GetDesc().Format, "FP32 fallback preserves source range");
     Ptr<ID3D12CommandAllocator> a; Ptr<ID3D12GraphicsCommandList> raw; Ptr<Sub::CommandListProxy> proxy;
     Check(gpu.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&a)), "allocator");

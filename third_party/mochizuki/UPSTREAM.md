@@ -7,6 +7,13 @@
 - Closure: `windows/src/core`, `windows/shaders`, `windows/build` (recipe, unroll, quad-quant, `arch/rdna4.sh`), `windows/data/aco` records and `shell-aliases.txt`, `linux/shaders`, `linux/build/build_network.py`, `linux/build/arch/rdna4.sh`. `linux/package/model-tools` was already identical and stays.
 - Not imported: `windows/src/pe`, official installers, the Vulkan loader, the ReShade add-on, OptiScaler-NR package scripts, DX9/DX10/DX11 hosts, and the INT4 host path.
 
+The source pin and six feature patches are now machine-readable in
+[tools/mochizuki-sync/manifest.json](../../tools/mochizuki-sync/manifest.json).
+[Replay verification](../../tools/mochizuki-sync/README.md) reproduces all 173
+closure files from the pinned Git objects plus these patches, without overwriting
+vendor. [Extension decisions](../../docs/architecture/mochizuki-upstream-extensions.md)
+record their consumers, upstream suitability and missing validation.
+
 ## Official behaviour taken as-is
 
 These local diffs were removed because the official tree now covers them:
@@ -21,14 +28,18 @@ These local diffs were removed because the official tree now covers them:
 
 ## Residual core patches
 
-Each one is small, replayable, and off by default unless the note says the product host turns it on. Official callers that leave the new fields alone keep official behaviour.
+The cancellation pointer and new output policy flags are opt-in; the compiler path
+keeps the official default. Timing validation changes diagnostics. The current local
+ACO thread-local configuration changes the official process-wide semantics and must
+be redesigned as an explicit scoped override before proposing it upstream; the
+official PE's configure-before-background-build route must keep working.
 
 1. Build cancel, only when `NR_NO_MAIN` is set (`nr_runtime.cpp` defines it before including `nr_graph.cpp`). `nr_runtime.hpp` holds `build_cancel` and `BuildCancelScope`. The pipeline loop saves the cache and throws `NR build cancelled` before the next pipeline. Official has no cancel. Upstream direction: a cancel flag in the official graph if one is added.
 2. `RuntimeConfig::compact_transfer` and `separate_answer`, both default false. After official `store_native` is computed, `separate_answer` forces it off, and `compact_rgba` reuses the RGBA32F keep when compact is requested and `store_native`, `keep_native`, 8-bit rounding and native compose are all off. The product host sets compact on (`MochizukiCompactTransfer=true`) and sets `separate_answer` when the user turns compact off.
 3. `RuntimeConfig::first_pass_output`, default false. A second `runtime_transfer` dispatch keeps pass 0 in a full-frame RGBA32F image, using the official 48-byte push. Create refuses native compose, mask and `max_passes < 2`. The host export stays opt-in.
 4. Timing serial. The timestamp pool masks deltas with `timestampValidBits`. A sample is accepted only when the slot has passes and every network delta is inside the total. `gpu_timing_serial()` advances only then. `last_network_ms()` and `last_other_ms()` expose that sample. The official EMA remains.
 5. `--glslang` on both `windows/build/build_network.py` and `linux/build/build_network.py`. The default path is still the official relative `toolchain/glslang/bin/glslang`. The product builder passes the pinned Windows glslang.
-6. `nr::binary::own_directory()`. When set, `directory()`, `cache_dir()` and `shell_dirs()` ignore `NR_ACO_DIR`, `NR_ACO_CACHE` and `NR_ACO_SHELL_DIR`. Official callers leave it false, so those variables still win. The product calls it before creating the device and does not set `NR_ACO_DIR`.
+6. ACO builder state (`06-aco-builder-state.patch`): thread-local bundle selection, `own_directory()` to ignore external selection and diagnostic mixing, import count, shared cache identity, typed Vulkan errors and propagation of fatal cached-import errors. The product configures both device and builder threads. This adapts Overclockers' PR #5 design; it is not a drop-in replacement for the official process-wide header. Upstream preparation must separate generic error fixes from an opt-in isolation API and review device-specific cache identity.
 
 `generate_device_chain.py` is not run. The core translation unit does not include `nr_device_chain_sizes.hpp`. `quad_quant_glsl.py` is unchanged and still used by the official Windows recipe.
 

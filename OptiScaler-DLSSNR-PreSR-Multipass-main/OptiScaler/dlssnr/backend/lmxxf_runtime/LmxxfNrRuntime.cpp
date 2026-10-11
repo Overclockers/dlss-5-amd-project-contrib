@@ -10,6 +10,8 @@
 #include <d3d12.h>
 
 #include "../../../ConfigKeys.h"
+#include "LmxxfHipRuntimeLoad.h"
+#define HIP_PROBE_RUNTIME_MODULE(version) LmxxfHipRuntimeLoad::Load(version)
 #include "LmxxfProductionOptions.h"
 #include "LmxxfExposureMeter.h"
 #include "native_device_identity.h"
@@ -20,6 +22,7 @@
 #include "native_config_layers.h"
 #include "native_rgb_texture.h"
 #include "hip_d3d12_bridge.h"
+#undef HIP_PROBE_RUNTIME_MODULE
 #include "LmxxfRecordingLease.h"
 #include "RecordingGpuTiming.h"
 

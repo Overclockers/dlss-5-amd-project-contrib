@@ -143,6 +143,17 @@ int32_t EnqueueHip(void* context, void* token, void* queue)
         r->job.width == s->historyWidth && r->job.height == s->historyHeight &&
         r->job.controls.passes == s->historyPasses;
     const bool reset = s->resetPending.exchange(false);
+    if (s->inlineQueue && (r->job.reset || reset || !continuous)) {
+        const auto n = ++s->recordingHistoryResets;
+        if (n <= 5 || n % 120 == 0)
+            nr::logf("[mochizuki] inline history reset %llu: frame=%llu previous=%llu requested=%u pending=%u motion=%u networkChanged=%u frameGap=%u timeGap=%u geometryChanged=%u passesChanged=%u",
+                     static_cast<unsigned long long>(n), static_cast<unsigned long long>(r->frameId),
+                     static_cast<unsigned long long>(s->historyFrame), unsigned(r->job.reset), unsigned(reset),
+                     unsigned(s->historyMotion), unsigned(s->historyNetwork.lock() != r->network),
+                     unsigned(r->frameId != s->historyFrame + 1), unsigned(now - s->historyTick >= 250),
+                     unsigned(r->job.width != s->historyWidth || r->job.height != s->historyHeight),
+                     unsigned(r->job.controls.passes != s->historyPasses));
+    }
     r->job.reset = r->job.reset || reset || !continuous;
     const int32_t rc = WithRecording(context, token, [queue](Session* s, void* j) { return CoreEnqueueHip(s, j, queue); });
     if (rc == LMXXF_NR_OK)

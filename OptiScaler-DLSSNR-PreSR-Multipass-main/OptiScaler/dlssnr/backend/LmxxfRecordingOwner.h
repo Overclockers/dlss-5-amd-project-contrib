@@ -7,6 +7,9 @@
 #include <vector>
 #include <array>
 #include <cstdio>
+#ifndef LOG_INFO
+#define LOG_INFO(...) ((void)0)
+#endif
 
 namespace DlssNr::Backend::LmxxfRecording
 {
@@ -27,13 +30,29 @@ struct SessionOwner
     std::shared_ptr<InlineRecording::Resources> pendingInline;
     std::shared_ptr<InlineRecording::Pipelines> inlinePipelines;
     uint64_t inlineActivityToken = 0;
+    uint64_t inlineApplied = 0, inlineTimeouts = 0, inlineAborted = 0, inlineBypassed = 0;
+    std::atomic<uint64_t> liveRecordings {0};
+    void InlineBypassed() { ++inlineBypassed; }
     bool InlineBusy() {
         if (!pendingInline) return false;
         if (!pendingInline->Complete()) return true;
         if (!pendingInline->Succeeded()) {
             activity.Reset(); api.ResetHistory(context);
-            if (!pendingInline->WasAborted()) LOG_WARN("NR inline wait exhausted; original frame selected, history reset");
-        } else if (!failed) activity.Succeeded(inlineActivityToken);
+            if (pendingInline->WasAborted()) ++inlineAborted;
+            else {
+                ++inlineTimeouts;
+                if (inlineTimeouts <= 5 || inlineTimeouts % 120 == 0)
+                    LOG_WARN("NR inline wait exhausted; original frame selected, history reset (timeouts={})", inlineTimeouts);
+            }
+        } else {
+            ++inlineApplied;
+            if (!failed) activity.Succeeded(inlineActivityToken);
+        }
+        const auto completed = inlineApplied + inlineTimeouts + inlineAborted;
+        if (completed <= 3 || completed % 120 == 0)
+            LOG_INFO("NR inline completed={} applied={} timeouts={} aborted={} bypassed={} live_recordings={} side_queue={} last_slice_spins={}",
+                     completed, inlineApplied, inlineTimeouts, inlineAborted, inlineBypassed, liveRecordings.load(std::memory_order_relaxed),
+                     static_cast<void*>(pendingInline->SideQueue()), pendingInline->WasAborted() ? 0 : pendingInline->LastSpinCount());
         pendingInline.reset();
         return false;
     }
@@ -107,7 +126,8 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
     bool neural = false, enqueued = false;
     uint64_t activityToken = 0;
     Lease(std::shared_ptr<SessionOwner> session, void* token, Submission::RecordingIdentity id)
-        : owner(std::move(session)), job(token), identity(id), activityToken(owner->activity.Token()) {}
+        : owner(std::move(session)), job(token), identity(id), activityToken(owner->activity.Token()) { ++owner->liveRecordings; }
+    ~Lease() override { --owner->liveRecordings; }
     HRESULT BeforeExecute(const Submission::RecordingExecution& e) noexcept override
     {
         if (invalidated || !(e.identity == identity)) {

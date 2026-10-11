@@ -1,0 +1,73 @@
+--- a/linux/build/build_network.py
++++ b/linux/build/build_network.py
+@@ -23,6 +23,7 @@
+ from pathlib import Path
+ 
+ R = Path(__file__).resolve().parents[2]
++GLSLANG = R / 'toolchain/glslang/bin/glslang'
+ RUNTIME = ['runtime_alpha', 'runtime_encode', 'runtime_transfer', 'runtime_upscale', 'runtime_prep', 'runtime_depth', 'cascade_lograt', 'cascade_blur', 'cascade_feed',
+            'runtime_downscale', 'runtime_taps']
+ # runtime passes built from another pass's source with defines: name -> (source, defines)
+@@ -31,7 +32,7 @@
+ 
+ 
+ def glslang(arch, src, defines, out):
+-    cmd = [str(R / 'toolchain/glslang/bin/glslang'), '-V', '--target-env', 'vulkan1.3',
++    cmd = [str(GLSLANG), '-V', '--target-env', 'vulkan1.3',
+            '-I' + str(R / 'linux/shaders' / arch / 'include'), '-I' + str(R / 'linux/shaders/passes/include')]
+     cmd += ['-D' + d for d in defines] + [str(src), '-o', str(out)]
+     r = subprocess.run(cmd, capture_output=True, text=True)
+@@ -45,7 +46,12 @@
+     ap.add_argument('--int4', action='store_true')
+     ap.add_argument('--out', type=Path)
+     ap.add_argument('--check', type=Path)
++    ap.add_argument('--glslang', type=Path, default=None,
++                    help='glslang binary (default: toolchain/glslang/bin/glslang beside this tree)')
+     a = ap.parse_args()
++    global GLSLANG
++    if a.glslang is not None:
++        GLSLANG = a.glslang
+     table = json.loads((R / 'linux/shaders' / a.arch / 'pipelines.json').read_text())
+     if a.int4:
+         i4 = json.loads((R / 'linux/shaders' / a.arch / 'pipelines-int4.json').read_text())
+--- a/windows/build/build_network.py
++++ b/windows/build/build_network.py
+@@ -27,6 +27,7 @@
+ from pathlib import Path
+ 
+ R = Path(__file__).resolve().parents[2]
++GLSLANG = R / 'toolchain/glslang/bin/glslang'
+ RUNTIME = ['runtime_alpha', 'runtime_encode', 'runtime_transfer', 'runtime_upscale', 'runtime_prep', 'runtime_depth', 'cascade_lograt', 'cascade_blur', 'cascade_feed',
+            'runtime_downscale', 'runtime_taps']
+ # runtime passes built from another pass's source with defines: name -> (source, defines)
+@@ -44,7 +45,7 @@
+ def glslang(arch, src, defines, out, unroll=False, network=False):
+     if unroll or (network and QUAD):
+         pre = out.with_suffix('.pre.comp')
+-        r = subprocess.run([str(R / 'toolchain/glslang/bin/glslang'), '-E', '-I' + str(R / 'windows/shaders' / arch / 'include'),
++        r = subprocess.run([str(GLSLANG), '-E', '-I' + str(R / 'windows/shaders' / arch / 'include'),
+                             '-I' + str(R / 'windows/shaders/passes/include')] + ['-D' + d for d in defines] + [str(src)],
+                            capture_output=True, text=True)
+         if r.returncode:
+@@ -57,7 +58,7 @@
+             subprocess.run([sys.executable, str(R / 'windows/build/unroll_glsl.py'), str(pre), str(pre)],
+                            check=True, stdout=subprocess.DEVNULL)
+         src, defines = pre, []
+-    cmd = [str(R / 'toolchain/glslang/bin/glslang'), '-V', '--target-env', 'vulkan1.3',
++    cmd = [str(GLSLANG), '-V', '--target-env', 'vulkan1.3',
+            '-I' + str(R / 'windows/shaders' / arch / 'include'), '-I' + str(R / 'windows/shaders/passes/include')]
+     cmd += ['-D' + d for d in defines] + [str(src), '-o', str(out)]
+     r = subprocess.run(cmd, capture_output=True, text=True)
+@@ -76,7 +77,12 @@
+     ap.add_argument('--check', type=Path)
+     ap.add_argument('--no-quad', action='store_true',
+                     help='keep the pair quantisation loops (windows/build/quad_quant_glsl.py off)')
++    ap.add_argument('--glslang', type=Path, default=None,
++                    help='glslang binary (default: toolchain/glslang/bin/glslang beside this tree)')
+     a = ap.parse_args()
++    global GLSLANG
++    if a.glslang is not None:
++        GLSLANG = a.glslang
+     global QUAD
+     QUAD = not a.no_quad
+     table = json.loads((R / 'windows/shaders' / a.arch / 'pipelines.json').read_text())

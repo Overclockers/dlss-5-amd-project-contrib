@@ -1597,6 +1597,7 @@ struct Session
     // History belongs to actual execution order, not PrepareFrame order.
     std::weak_ptr<nr::Runtime> historyNetwork;
     uint64_t historyFrame = 0, historyTick = 0;
+    uint64_t recordingHistoryResets = 0; // Under RecordingMutex; diagnostic only.
     UINT historyWidth = 0, historyHeight = 0;
     int historyPasses = 0;
     bool historyMotion = false;

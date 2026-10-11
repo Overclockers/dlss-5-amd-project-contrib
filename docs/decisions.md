@@ -719,3 +719,17 @@ ACO 默认关闭，由 INI/菜单拥有。扩展在创建设备时决定。设�
 未加入显式 barrier 开关。不接入官方 DX9/DX10/DX11、ReShade、PE 或 OptiScaler 钩子。三后端仍互斥。
 INT4 仍不启用。可重放的核心补丁和放弃项见
 [来源记录](../third_party/mochizuki/UPSTREAM.md)。
+
+## 2026-10-11 Crimson Desert inline follow-up
+
+Reuse one side compute queue per NR session, retaining independent recording buffers and both completion proofs. Keep real queue/history discontinuity resets. Route the lmxxf HIP 7 loader through the existing controlled product search using an explicit replayable vendor hook; no HIP 6 fallback or global DLL directory mutation. Add throttled selection/lifetime diagnostics and explicit Mochizuki history-reset reasons. See [inline architecture](architecture/nr-inline-recording.md#crimson-desert-follow-up-fixes-2026-10-11) for focused tests and outstanding game/performance acceptance.
+
+## 2026-10-11 Mochizuki 接口扩展采用显式补丁队列
+
+固定官方 SHA 与源码闭包，六项本地扩展以功能补丁重放，不保留旧整文件覆盖。
+产品策略、录制生命周期、人物合成和整包校验留在 adapter。编译器路径和构建取消
+先准备独立上游提案；计时、首层输出、缓冲复用按实际消费者和所缺验证决定后续提交。
+当前 ACO 线程局部配置改变官方跨线程默认行为，必须整理成显式可选隔离接口，不能
+将本地整份 header 直接送上游。作者接受后更新 pin 并删除被覆盖的补丁。
+见[逐项扩展决策](architecture/mochizuki-upstream-extensions.md)与
+[只读来源复核流程](../tools/mochizuki-sync/README.md)。这不代表游戏或发布验收完成。

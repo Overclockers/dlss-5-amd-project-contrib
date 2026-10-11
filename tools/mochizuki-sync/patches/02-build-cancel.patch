@@ -1,0 +1,46 @@
+--- a/windows/src/core/nr_graph.cpp
++++ b/windows/src/core/nr_graph.cpp
+@@ -4244,6 +4244,14 @@
+     }
+     for (const Disp& d : disp) {
+         if (kern.count(d.kern)) continue;
++#ifdef NR_NO_MAIN
++        // Host shutdown (nr::build_cancel) stops between pipelines and keeps
++        // the cache written so far. The standalone graph tool has no flag.
++        if (nr::build_cancel && nr::build_cancel->load(std::memory_order_relaxed)) {
++            ctx.save_pipeline_cache();
++            throw std::runtime_error("NR build cancelled");
++        }
++#endif
+         struct Tick { ~Tick() { ++nr::g_build_pipes_done; } } tick;
+         std::string p = spv_dir + "/g_" + d.kern + ".spv";
+         // The Windows network's vitattn and residual GEMMs read through the arena's device
+--- a/windows/src/core/nr_runtime.hpp
++++ b/windows/src/core/nr_runtime.hpp
+@@ -1,4 +1,5 @@
+ #pragma once
++#include <atomic>
+ #include <utility>
+ #include <vector>
+ #include <vulkan/vulkan.h>
+@@ -169,6 +170,20 @@
+     bool preprocess_unknee = false;
+ };
+ 
++// A build on this thread stops before its next pipeline once *build_cancel is
++// set: it writes the pipeline cache it has so far and throws, so a host that is
++// going away does not wait out a cold compile. Null, the default, never stops
++// a build. The standalone graph tool does not see the flag (NR_NO_MAIN).
++inline thread_local const std::atomic<bool>* build_cancel = nullptr;
++struct BuildCancelScope {
++    explicit BuildCancelScope(const std::atomic<bool>* flag) noexcept : outer_(build_cancel) { build_cancel = flag; }
++    ~BuildCancelScope() { build_cancel = outer_; }
++    BuildCancelScope(const BuildCancelScope&) = delete;
++    BuildCancelScope& operator=(const BuildCancelScope&) = delete;
++private:
++    const std::atomic<bool>* outer_;
++};
++
+ // SDR encoded RGB, source-sized and upright. Accepts RGBA32F and 8-bit RGBA/BGRA
+ // UNORM or SRGB. For SRGB images, copy the encoded bits through a private UNORM
+ // transfer image; do not apply a transfer function or require mutable game views.

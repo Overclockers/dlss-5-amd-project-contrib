@@ -36,7 +36,8 @@
   "pinned": [],
   "local_patches": [
     "first-pass-output.patch",
-    "inline-side-queue.patch"
+    "inline-side-queue.patch",
+    "hip-runtime-loader.patch"
   ],
   "hip_files": [
     "build-modules.ps1",

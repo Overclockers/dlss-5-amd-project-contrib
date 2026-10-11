@@ -16,7 +16,11 @@ int main(int argc, char** argv) {
     if (argc < 3) return 2;
     const bool mochi = argc > 3 && std::strcmp(argv[3], "--mochizuki") == 0;
     bool timeoutMode = false;
+    bool large = false;
+    bool temporalRequested = false, temporalMode = false;
     for (int i = 3; i < argc; ++i) timeoutMode |= std::strcmp(argv[i], "--timeout") == 0;
+    for (int i = 3; i < argc; ++i) large |= std::strcmp(argv[i], "--large") == 0;
+    for (int i = 3; i < argc; ++i) temporalRequested |= std::strcmp(argv[i], "--temporal") == 0;
     Ptr<ID3D12Debug> debug;
     if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug)))) debug->EnableDebugLayer();
     HMODULE dll = LoadLibraryW(Widen(argv[1]).c_str()); Require(dll != nullptr, "runtime load");
@@ -43,7 +47,7 @@ int main(int argc, char** argv) {
     void* context = nullptr; ok(api.Create(&ci, &context), "Create"); ok(api.PrepareSession(context), "PrepareSession");
     auto owner = Own::SessionOwner::Create(api, context); Require(bool(owner), "module/session owner");
     if (!mochi) { LmxxfNrTimings timing {sizeof timing}; ok(api.GetTimings(context, &timing), "enable physical HIP event timing"); }
-    const UINT width = mochi ? 256 : 1280, height = mochi ? 256 : 720;
+    const UINT width = large ? 2560 : (mochi ? 256 : 1280), height = large ? 1440 : (mochi ? 256 : 720);
     D3D12_RESOURCE_DESC desc {}; desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     desc.Width = width; desc.Height = height; desc.DepthOrArraySize = desc.MipLevels = 1;
     desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; desc.SampleDesc.Count = 1; desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
@@ -52,6 +56,22 @@ int main(int argc, char** argv) {
     Check(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &desc,
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, IID_PPV_ARGS(&colour)), "colour");
     UploadColorPattern(device.Get(), game.Get(), colour.Get());
+    Ptr<ID3D12Resource> motion;
+    if (mochi && temporalRequested) {
+        Check(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                              nullptr, IID_PPV_ARGS(&motion)), "zero motion");
+        Ptr<ID3D12DescriptorHeap> heap; D3D12_DESCRIPTOR_HEAP_DESC hd {};
+        hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.NumDescriptors = 1; hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        Check(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&heap)), "motion heap");
+        device->CreateUnorderedAccessView(motion.Get(), nullptr, nullptr, heap->GetCPUDescriptorHandleForHeapStart());
+        Ptr<ID3D12CommandAllocator> a; Ptr<ID3D12GraphicsCommandList> l;
+        Check(device->CreateCommandAllocator(q.Type, IID_PPV_ARGS(&a)), "motion allocator");
+        Check(device->CreateCommandList(0, q.Type, a.Get(), nullptr, IID_PPV_ARGS(&l)), "motion list");
+        auto* h = heap.Get(); l->SetDescriptorHeaps(1, &h); const float zero[4] {};
+        l->ClearUnorderedAccessViewFloat(heap->GetGPUDescriptorHandleForHeapStart(), heap->GetCPUDescriptorHandleForHeapStart(), motion.Get(), zero, 0, nullptr);
+        In::Barrier(l.Get(), motion.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        Check(l->Close(), "motion close"); In::Execute(game.Get(), l.Get()); WaitQueue(device.Get(), game.Get());
+    }
     auto mzPrepare = reinterpret_cast<PFN_MochizukiNrPrepareFrame>(GetProcAddress(dll, "MochizukiNrPrepareFrame"));
     auto prepare = [&](ID3D12GraphicsCommandList* list, UINT64 tag = 1) {
         LmxxfNrJob job {}; job.struct_size = sizeof job;
@@ -64,6 +84,11 @@ int main(int argc, char** argv) {
                 f.color = colour.Get(); f.color_width = width; f.color_height = height;
                 f.color_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
                 f.flags = LMXXF_NR_FRAME_FLAG_STRENGTH; f.transfer_strength = f.color_strength = f.model_scale = 1; f.passes = 1;
+                if (temporalMode) {
+                    f.flags |= MOCHIZUKI_NR_FRAME_FLAG_TEMPORAL; f.motion = motion.Get();
+                    f.motion_width = width; f.motion_height = height; f.motion_scale_x = f.motion_scale_y = 1;
+                    f.motion_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+                }
                 rc = mzPrepare(context, &f, &job);
             } else {
                 LmxxfNrFrameInfo f {}; f.struct_size = sizeof f; f.frame_id = tag; f.command_list = list;
@@ -108,6 +133,7 @@ int main(int argc, char** argv) {
     proxy->BeginQuery(queries.Get(), D3D12_QUERY_TYPE_PIPELINE_STATISTICS, 0);
     auto job = prepare(proxy.Get(), 2);
     auto resources = std::make_shared<In::Resources>(device.Get(), colour.Get(), static_cast<ID3D12Resource*>(job.private_output), nullptr, width, height);
+    owner->inlinePipelines = resources->PipelineCache();
     std::shared_ptr<Own::Lease> lease;
     {
         std::lock_guard lock(Sub::RecordingMutex());
@@ -176,6 +202,47 @@ int main(int argc, char** argv) {
     std::puts("inline Reset-before-capture and deferred invalidation/collection PASS");
     proxy.Reset(); native.Reset(); queries.Reset(); Own::Collect();
     Require(lease->job == nullptr, "invalidated inline lease collected after both queues");
-    lease.reset(); resources.reset(); owner.reset();
+    lease.reset(); resources.reset();
+    // Fresh recordings, not just closed-list replay: the old implementation
+    // created/retained a new runtime producer queue on every iteration.
+    const unsigned count = large ? 30 : 120;
+    temporalMode = mochi && temporalRequested;
+    for (unsigned n = 0; n < count; ++n) {
+        Ptr<ID3D12CommandAllocator> alloc; Ptr<ID3D12GraphicsCommandList> raw; Ptr<Sub::CommandListProxy> list;
+        Check(device->CreateCommandAllocator(q.Type, IID_PPV_ARGS(&alloc)), "continuous allocator");
+        Check(device->CreateCommandList(0, q.Type, alloc.Get(), nullptr, IID_PPV_ARGS(&raw)), "continuous native");
+        Check(Sub::CommandListProxy::Create(device.Get(), alloc.Get(), raw.Get(), &list), "continuous proxy");
+        auto next = prepare(list.Get(), 10 + n);
+        auto in = std::make_shared<In::Resources>(device.Get(), colour.Get(), static_cast<ID3D12Resource*>(next.private_output), nullptr,
+                                                width, height, owner->inlinePipelines);
+        Require(in->SideQueue() == owner->inlinePipelines->sideQueue.Get(), "stable producer queue across new recordings");
+        {
+            std::lock_guard lock(Sub::RecordingMutex());
+            ID3D12Resource* sources[] {colour.Get()}; D3D12_RESOURCE_STATES states[] {D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE};
+            Check(list->BeginInlineState(1, sources, states), "continuous state");
+            auto nextLease = Own::Attach(owner, next.handle, list.Get(), in); Require(bool(nextLease), "continuous lease");
+            ok(api.RecordInputs(context, next.handle, list.Get()), "continuous inputs");
+            in->RecordCapture(list.Get()); in->RecordWait(list.Get(), timeoutMode ? 0 : 64);
+            ok(api.RecordOutputs(context, next.handle, list.Get()), "continuous outputs");
+            in->RecordSelect(list.Get(), states[0]); nextLease->ready = true;
+            list->EndInlineState(); Check(list->Close(), "continuous close");
+        }
+        Check(list->ExecuteOn(game.Get()), "continuous execute"); WaitQueue(device.Get(), game.Get());
+        const auto until = GetTickCount64() + 10000;
+        while (!in->Complete()) { Require(GetTickCount64() < until, "continuous completion"); Sleep(1); }
+        Require(in->Succeeded() != timeoutMode, "continuous selected output");
+        if (!temporalMode && (n == 0 || n + 1 == count))
+            Require(HashTexture(device.Get(), game.Get(), in->OutputTexture()) == (timeoutMode ? originalHash : expected), "continuous pixels");
+        list.Reset(); raw.Reset();
+        Own::Collect(); Require(owner->liveRecordings == 0, "completed invalidated recordings do not accumulate");
+    }
+    std::printf("%u fresh inline recordings at %ux%u: stable queue and bounded leases PASS\n", count, width, height);
+    if (temporalMode && !timeoutMode) {
+        auto getInfo = reinterpret_cast<PFN_MochizukiNrGetInfo>(GetProcAddress(dll, "MochizukiNrGetInfo"));
+        MochizukiNrInfo info {}; info.struct_size = sizeof info; Require(getInfo && getInfo(context, &info) == 0, "history info");
+        Require(info.history_consumed_pct >= 80, "history survives continuous new inline recordings");
+        std::printf("inline temporal history consumed=%u%% PASS\n", info.history_consumed_pct);
+    }
+    owner.reset();
     FreeLibrary(dll); std::puts("actual inline runtime PASS"); return 0;
 }

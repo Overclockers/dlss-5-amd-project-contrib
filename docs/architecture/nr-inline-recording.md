@@ -78,7 +78,44 @@ queues finish. Uncertain signals or enqueue failure poison further NR and retain
 resources without inventing completion proof. No GPU completion wait occurs under
 the host recording mutex.
 
-## Validation (2026-10-11)
+## Crimson Desert follow-up fixes (2026-10-11)
+
+Each session now retains one compute side queue in its pipeline cache. New recordings
+reuse that queue identity while keeping their own flags, allocators, fences and output
+textures. The session's single-pending-execution admission rule still applies. This
+prevents artificial Mochizuki producer switches, history resets and retained producer
+queues from growing with the number of new recordings. Actual game queue changes and
+history discontinuities retain their safety checks.
+
+The product lmxxf loader uses the same controlled HIP 7 search as our Daniel adapter: default
+directories, absolute HIP_PATH/bin, then absolute PATH directories with dependency-aware
+DLL flags. It does not mutate process-wide search paths or fall back to HIP 6. The explicit
+`hip-runtime-loader.patch` supplies a product loader hook before any vendor header is
+included, including LmxxfProductionOptions. Unmodified upstream users retain their
+System32 policy. Attempts, selected path and queried version are written to
+`lmxxf_runtime.log` beside the runtime DLL; load failures retain Windows error codes.
+
+Host logs periodically report actual applied/timeout/aborted decisions, pending bypasses,
+live recordings, side queue identity and the last wait slice's iteration count. These
+decisions are read only after both queues complete. Mochizuki logs requested/pending
+resets and missing motion, network/frame/time/geometry/pass discontinuities separately.
+Counters do not suppress necessary history resets or change the GPU wait budget.
+
+Focused validation: host CI, HIP loader fixtures (including Unicode/space paths and
+same-directory dependencies), HIP injection/export validation, HIP 6 rejection, ABI
+C/C++ and 23 runtime checks, host and both runtime builds. Hardware/WARP mechanism
+tests retain open queries, enhanced layout restoration, replay, immutable timeout
+selection and dual completion. Actual HIP 1280x720 and Vulkan 256x256 each passed 120
+fresh recordings in success and forced-timeout modes with stable queue identity and
+zero retained invalidated leases after collection. Vulkan 2560x1440 passed 30 fresh
+recordings; non-temporal output hash `12cf1e45fb84c1b8` matched split, and zero-motion
+temporal validation reported 85% history consumption including earlier reset/replay
+negative cases. `tests/mochizuki/run.cmd inline` includes the large temporal fixture.
+
+These fixtures do not certify Crimson Desert frame pacing, long-run VRAM use, all
+feature combinations, ACO mode or other drivers. Game retesting remains required.
+
+## Initial validation (2026-10-11)
 
 RX 9070 XT / gfx1201: bounded success and exhaustion, original/current-frame and
 first-pass selection, immutable late-completion decision, query preservation,
