@@ -2,7 +2,7 @@
 #extension GL_GOOGLE_include_directive : require
 // Classic enlargement with a scaler other than bilinear: the model's answer, model-sized, enlarged to the
 // frame for runtime_transfer.comp. Display-encoded values (an SDR frame's own, or the proxy of a linear
-// one). up_shown is bound but not written.
+// one).
 //
 //   scaler 1  Catmull-Rom: separable 4x4, B = 0, C = 0.5
 //   scaler 2  Lanczos3: separable 6x6
@@ -14,7 +14,6 @@ layout(local_size_x = 8, local_size_y = 8) in;
 layout(set = 0, binding = 0, rgba32f) uniform readonly image2D result;     // the model's answer, model-sized
 layout(set = 0, binding = 1) uniform sampler2D shown;                      // what it was shown, model-sized
 layout(set = 0, binding = 2, rgba32f) uniform writeonly image2D up_result; // frame-sized
-layout(set = 0, binding = 3, rgba32f) uniform writeonly image2D up_shown;  // frame-sized
 layout(push_constant) uniform Push {
     uint width, height;       // the frame
     uint model_w, model_h;    // `result` and `shown`

@@ -26,7 +26,6 @@ layout(set = 0, binding = 3, rgba32f) uniform image2D result_full;  // the answe
 #endif
 // Transfer = classic with a scaler other than bilinear: `result` and `shown` enlarged by runtime_upscale.comp.
 layout(set = 0, binding = 4, rgba32f) uniform readonly image2D up_result;
-layout(set = 0, binding = 5, rgba32f) uniform readonly image2D up_shown;
 layout(push_constant) uniform Push {
     uint width, height;       // the frame
     uint model_w, model_h;    // `result` and `shown`

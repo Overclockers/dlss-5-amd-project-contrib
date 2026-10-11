@@ -238,6 +238,17 @@
       "files": [
         "windows/src/core/nr_pipeline_binary.hpp"
       ]
+    },
+    {
+      "feature": "drop-unused-up-shown",
+      "path": "patches/07-drop-unused-up-shown.patch",
+      "files": [
+        "linux/shaders/passes/runtime_transfer.comp",
+        "linux/shaders/passes/runtime_upscale.comp",
+        "windows/shaders/passes/runtime_transfer.comp",
+        "windows/shaders/passes/runtime_upscale.comp",
+        "windows/src/core/nr_runtime.cpp"
+      ]
     }
   ],
   "source_comment_policy": "omit-sample-address-annotations-v1"

@@ -1,0 +1,147 @@
+diff --git a/linux/shaders/passes/runtime_transfer.comp b/linux/shaders/passes/runtime_transfer.comp
+index 7dc4e2c3..5a7d69c0 100644
+--- a/linux/shaders/passes/runtime_transfer.comp
++++ b/linux/shaders/passes/runtime_transfer.comp
+@@ -26,7 +26,6 @@ layout(set = 0, binding = 3, rgba32f) uniform image2D result_full;  // the answe
+ #endif
+ // Transfer = classic with a scaler other than bilinear: `result` and `shown` enlarged by runtime_upscale.comp.
+ layout(set = 0, binding = 4, rgba32f) uniform readonly image2D up_result;
+-layout(set = 0, binding = 5, rgba32f) uniform readonly image2D up_shown;
+ layout(push_constant) uniform Push {
+     uint width, height;       // the frame
+     uint model_w, model_h;    // `result` and `shown`
+diff --git a/linux/shaders/passes/runtime_upscale.comp b/linux/shaders/passes/runtime_upscale.comp
+index c7493dc4..cadb3352 100644
+--- a/linux/shaders/passes/runtime_upscale.comp
++++ b/linux/shaders/passes/runtime_upscale.comp
+@@ -2,7 +2,7 @@
+ #extension GL_GOOGLE_include_directive : require
+ // Classic enlargement with a scaler other than bilinear: the model's answer, model-sized, enlarged to the
+ // frame for runtime_transfer.comp. Display-encoded values (an SDR frame's own, or the proxy of a linear
+-// one). up_shown is bound but not written.
++// one).
+ //
+ //   scaler 1  Catmull-Rom: separable 4x4, B = 0, C = 0.5
+ //   scaler 2  Lanczos3: separable 6x6
+@@ -14,7 +14,6 @@ layout(local_size_x = 8, local_size_y = 8) in;
+ layout(set = 0, binding = 0, rgba32f) uniform readonly image2D result;     // the model's answer, model-sized
+ layout(set = 0, binding = 1) uniform sampler2D shown;                      // what it was shown, model-sized
+ layout(set = 0, binding = 2, rgba32f) uniform writeonly image2D up_result; // frame-sized
+-layout(set = 0, binding = 3, rgba32f) uniform writeonly image2D up_shown;  // frame-sized
+ layout(push_constant) uniform Push {
+     uint width, height;       // the frame
+     uint model_w, model_h;    // `result` and `shown`
+diff --git a/windows/shaders/passes/runtime_transfer.comp b/windows/shaders/passes/runtime_transfer.comp
+index 7dc4e2c3..5a7d69c0 100644
+--- a/windows/shaders/passes/runtime_transfer.comp
++++ b/windows/shaders/passes/runtime_transfer.comp
+@@ -26,7 +26,6 @@ layout(set = 0, binding = 3, rgba32f) uniform image2D result_full;  // the answe
+ #endif
+ // Transfer = classic with a scaler other than bilinear: `result` and `shown` enlarged by runtime_upscale.comp.
+ layout(set = 0, binding = 4, rgba32f) uniform readonly image2D up_result;
+-layout(set = 0, binding = 5, rgba32f) uniform readonly image2D up_shown;
+ layout(push_constant) uniform Push {
+     uint width, height;       // the frame
+     uint model_w, model_h;    // `result` and `shown`
+diff --git a/windows/shaders/passes/runtime_upscale.comp b/windows/shaders/passes/runtime_upscale.comp
+index c7493dc4..cadb3352 100644
+--- a/windows/shaders/passes/runtime_upscale.comp
++++ b/windows/shaders/passes/runtime_upscale.comp
+@@ -2,7 +2,7 @@
+ #extension GL_GOOGLE_include_directive : require
+ // Classic enlargement with a scaler other than bilinear: the model's answer, model-sized, enlarged to the
+ // frame for runtime_transfer.comp. Display-encoded values (an SDR frame's own, or the proxy of a linear
+-// one). up_shown is bound but not written.
++// one).
+ //
+ //   scaler 1  Catmull-Rom: separable 4x4, B = 0, C = 0.5
+ //   scaler 2  Lanczos3: separable 6x6
+@@ -14,7 +14,6 @@ layout(local_size_x = 8, local_size_y = 8) in;
+ layout(set = 0, binding = 0, rgba32f) uniform readonly image2D result;     // the model's answer, model-sized
+ layout(set = 0, binding = 1) uniform sampler2D shown;                      // what it was shown, model-sized
+ layout(set = 0, binding = 2, rgba32f) uniform writeonly image2D up_result; // frame-sized
+-layout(set = 0, binding = 3, rgba32f) uniform writeonly image2D up_shown;  // frame-sized
+ layout(push_constant) uniform Push {
+     uint width, height;       // the frame
+     uint model_w, model_h;    // `result` and `shown`
+diff --git a/windows/src/core/nr_runtime.cpp b/windows/src/core/nr_runtime.cpp
+index 7817ac45..5c2584e1 100644
+--- a/windows/src/core/nr_runtime.cpp
++++ b/windows/src/core/nr_runtime.cpp
+@@ -439,8 +439,8 @@ struct Runtime::Impl {
+         return &f;
+     }
+     // Classic with a scaler other than bilinear: the model's answer enlarged to the frame by
+-    // runtime_upscale.comp.
+-    nrvk::Context::Image up_result{}, up_shown{};
++    // runtime_upscale.comp. The shown image stays the sampled model input.
++    nrvk::Context::Image up_result{};
+     nrvk::Kernel upscale_pass, upscale_prep;
+     // Multi-pass: what the first pass was shown, kept for the transfer pass
+     // because later passes overwrite tex_in; and one history per pass.
+@@ -999,7 +999,6 @@ struct Runtime::Impl {
+             if (f.pool) vkDestroyDescriptorPool(s.ctx.device, f.pool, nullptr);
+         }
+         if (up_result.handle) session.ctx.destroy(up_result);
+-        if (up_shown.handle) session.ctx.destroy(up_shown);
+         if (upscale_pass.device) upscale_pass.destroy();
+         if (upscale_prep.device) upscale_prep.destroy();
+         if (full_out.handle) session.ctx.destroy(full_out);
+@@ -1348,10 +1347,8 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
+             impl_->full_out = s.ctx.image(config.width, config.height, VK_FORMAT_R32G32B32A32_SFLOAT, false);
+             s.ctx.transition(impl_->full_out, VK_IMAGE_LAYOUT_GENERAL);
+         }
+-        for (auto* im : {&impl_->up_result, &impl_->up_shown}) {
+-            *im = s.ctx.image(config.width, config.height, VK_FORMAT_R32G32B32A32_SFLOAT, false);
+-            s.ctx.transition(*im, VK_IMAGE_LAYOUT_GENERAL);
+-        }
++        impl_->up_result = s.ctx.image(config.width, config.height, VK_FORMAT_R32G32B32A32_SFLOAT, false);
++        s.ctx.transition(impl_->up_result, VK_IMAGE_LAYOUT_GENERAL);
+         if (impl_->keep_native) {
+             // Where the blit samples: a frame-sized probe holding each texel's column and row,
+             // blitted down as the frame would be, read back into `taps` on the GPU. Frame and
+@@ -1463,22 +1460,21 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
+         nrvk::Context::Image* shown = config.max_passes > 1 ? &impl_->shown_keep : &s.tex_in;
+         nrvk::Context::Image* keep = impl_->scaled ? &impl_->keep_full
+                                      : impl_->linear ? &impl_->keep : shown;
+-        // Unscaled, the two enlargement bindings are never read; the answer stands in.
++        // Unscaled, the enlargement binding is never read; the answer stands in.
+         nrvk::Context::Image* up_r = impl_->scaled ? &impl_->up_result : answer;
+-        nrvk::Context::Image* up_s = impl_->scaled ? &impl_->up_shown : answer;
+         impl_->transfer_pass.create(s.ctx, (adapters / transfer_spv).string(), {}, sizeof(TransferPush),
+-                               {&s.surf0, shown, keep, answer, up_r, up_s});
+-        impl_->transfer_binds = {s.surf0, *shown, *keep, *answer, *up_r, *up_s};
++                               {&s.surf0, shown, keep, answer, up_r});
++        impl_->transfer_binds = {s.surf0, *shown, *keep, *answer, *up_r};
+         if (impl_->scaled)
+             impl_->upscale_pass.create(s.ctx, (adapters / "runtime_upscale.spv").string(), {}, 20,
+-                                       {&s.surf0, shown, &impl_->up_result, &impl_->up_shown});
++                                       {&s.surf0, shown, &impl_->up_result});
+         if (config.first_pass_output) {
+             if (config.native_compose || mask_config.width || config.max_passes < 2)
+                 throw std::runtime_error("first pass output requires ordinary multi-pass transfer");
+             impl_->first_full = s.ctx.image(config.width, config.height, VK_FORMAT_R32G32B32A32_SFLOAT, false);
+             s.ctx.transition(impl_->first_full, VK_IMAGE_LAYOUT_GENERAL);
+             impl_->first_transfer.create(s.ctx, (adapters / "runtime_transfer.spv").string(), {}, sizeof(TransferPush),
+-                                         {&s.surf0, shown, keep, &impl_->first_full, up_r, up_s});
++                                         {&s.surf0, shown, keep, &impl_->first_full, up_r});
+         }
+     }
+     if (config.preprocess && !mask_config.width) {
+@@ -1509,13 +1505,12 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
+             nrvk::Context::Image* answer = impl_->store_native || impl_->compact_rgba ? &keep_full_storage
+                                            : impl_->scaled ? &impl_->full_out : &s.surf0;
+             nrvk::Context::Image* up_r = impl_->scaled ? &impl_->up_result : answer;
+-            nrvk::Context::Image* up_s = impl_->scaled ? &impl_->up_shown : answer;
+             impl_->transfer_prep.create(s.ctx, (adapters / transfer_spv).string(), {},
+-                                        sizeof(TransferPush), {&s.surf0, &impl_->prep_keep, keep, answer, up_r, up_s});
+-            impl_->transfer_prep_binds = {s.surf0, impl_->prep_keep, *keep, *answer, *up_r, *up_s};
++                                        sizeof(TransferPush), {&s.surf0, &impl_->prep_keep, keep, answer, up_r});
++            impl_->transfer_prep_binds = {s.surf0, impl_->prep_keep, *keep, *answer, *up_r};
+             if (impl_->scaled)
+                 impl_->upscale_prep.create(s.ctx, (adapters / "runtime_upscale.spv").string(), {}, 20,
+-                                           {&s.surf0, &impl_->prep_keep, &impl_->up_result, &impl_->up_shown});
++                                           {&s.surf0, &impl_->prep_keep, &impl_->up_result});
+         }
+     }
+     auto require_variant_profile = [&](const std::filesystem::path& directory) {

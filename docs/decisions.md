@@ -715,7 +715,7 @@ ACO 默认关闭，由 INI/菜单拥有。扩展在创建设备时决定。设�
 驱动编译的网络。2026-10-11 在 AMD Radeon RX 9070 XT（device 0x7550，Vulkan 驱动
 26.8.1 LLPC，driverVersion 0x0080018b）上，记录 58/58 匹配，导入 29 条管线，
 一帧 256x256 得到 `ACO_FRAME_OK`。缺包、缺别名和损坏 record 都完成了原生帧。
-同日复审后的三处修正：有效状态只在 `Install` 与网络一起发布，候选帧缓冲失败时保留已安装网络的状态；`vkCreateDevice` 因可选管线二进制被拒绝时，除设备丢失和内存不足外，去掉该扩展后按普通设备重试；卸载和打包使用 `tools/install/mochizuki-owned.txt` 的 214 条精确路径，不再按 `g_*.spv` 或 16 位十六进制 `.nrp` 通配。复跑 `tests/mochizuki/run.cmd aco` 打印 `ACO_SWITCH_NATIVE_OK`、`ACO_SWITCH_ACO_OK`、`ACO_CONTRACT_OK effective=1`、`ACO_DEVICE_FALLBACK_OK` 和 `ACO_BUDGET_KEEP_OK effective=1`。构建过程中把请求改回 ACO 时，已开始的原生候选安装后有效状态仍取该候选的实际模式；`tests/mochizuki/run.cmd aco-rapid` 打印 `ACO_RAPID_REENABLE requested=1 effective=0` 和 `ACO_RAPID_OK`。
+同日复审后的三处修正：有效状态只在 `Install` 与网络一起发布，候选帧缓冲失败时保留已安装网络的状态；`vkCreateDevice` 因可选管线二进制被拒绝时，除设备丢失和内存不足外，去掉该扩展后按普通设备重试；卸载和打包使用 `tools/install/mochizuki-owned.txt` 的 214 条精确路径，不再按 `g_*.spv` 或 16 位十六进制 `.nrp` 通配。复跑 `tests/mochizuki/run.cmd aco` 打印 `ACO_SWITCH_NATIVE_OK`、`ACO_SWITCH_ACO_OK`、`ACO_CONTRACT_OK effective=1`、`ACO_DEVICE_FALLBACK_OK` 和 `ACO_BUDGET_KEEP_OK effective=1`。构建过程中把请求改回 ACO 时，已开始的原生候选安装后有效状态仍取该候选的实际模式；`tests/mochizuki/run.cmd aco-rapid` 打印 `ACO_RAPID_REENABLE requested=1 effective=0` 和 `ACO_RAPID_OK`。模型分辨率低于全帧时，官方会再分配一张从不读写的全帧 RGBA32F `up_shown`；本产品去掉这张图和它的绑定，经典放大仍写入 `up_result`。
 未加入显式 barrier 开关。不接入官方 DX9/DX10/DX11、ReShade、PE 或 OptiScaler 钩子。三后端仍互斥。
 INT4 仍不启用。可重放的核心补丁和放弃项见
 [来源记录](../third_party/mochizuki/UPSTREAM.md)。

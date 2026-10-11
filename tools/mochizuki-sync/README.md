@@ -1,7 +1,7 @@
 # Mochizuki source pin and interface patches
 
 The runtime uses official core/shaders at the full SHA in `manifest.json`, plus
-six explicit feature patches. There are no whole-file preservation overlays.
+seven explicit feature patches. There are no whole-file preservation overlays.
 The host loads our `MochizukiNrRuntime.dll`, which wraps that core; this does not
 claim binary compatibility with an official distributed runtime.
 
@@ -26,6 +26,7 @@ Those tests also run in `run.cmd abi`.
 | 04 first-pass-output | Export pass 0 for host composition, including person protection | Add independent single-pass equality and retained recording tests |
 | 05 output-buffer-policy | Optional RGBA32F reuse, or force separate answer | Prove incremental memory benefit beyond official store_native first |
 | 06 ACO-builder-state | Current temporary product adaptation | Request optional configuration/result interfaces; do not transplant this implementation upstream |
+| 07 drop-unused-up-shown | Below full model scale, do not allocate the unread full-frame `up_shown` image | Official binds it and never reads or writes it; drop the binding with the image |
 
 The patches replay sequentially against `manifest.json`'s commit. Patches 02-05
 share header/implementation context, so do not assume their patch files apply
@@ -33,7 +34,7 @@ independently to an arbitrary upstream checkout. For each upstream proposal,
 apply its preceding series in a disposable checkout and reduce the proposal to
 its own API requirements; do not send all local policy changes as one PR.
 
-This six-patch series records the product snapshot; it is not the upstream PR
+This seven-patch series records the product snapshot; it is not the upstream PR
 series. The upstream preparation branch has reverted the ACO, buffer-optimization
 and timing-calculation snapshots and retains only optional interface proposals.
 

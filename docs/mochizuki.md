@@ -173,7 +173,9 @@ classic (2). It applies only below 100% model scale. Edge-aware uses a 4×4
 neighbourhood guided by the original pixel's brightness. Classic uses
 **Classic scaler** (`MochizukiClassicScaler`): bilinear (0), Catmull-Rom (1, default),
 Lanczos3 (2) or FSR1 (3). Edge-aware and classic cost more GPU time and need
-scene-by-scene comparison.
+scene-by-scene comparison. Below full model scale the runtime does not allocate
+a second full-frame image for the enlargement pass; classic enlargement writes
+`up_result` only.
 
 **Reuse output buffer** (`MochizukiCompactTransfer=true`, default) is a product
 policy on top of the official native store. Official `store_native` already writes
