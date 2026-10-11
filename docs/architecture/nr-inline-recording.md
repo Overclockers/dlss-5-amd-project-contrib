@@ -115,6 +115,17 @@ negative cases. `tests/mochizuki/run.cmd inline` includes the large temporal fix
 These fixtures do not certify Crimson Desert frame pacing, long-run VRAM use, all
 feature combinations, ACO mode or other drivers. Game retesting remains required.
 
+## Unsubmitted recording retirement (2026-10-12)
+
+An inline reservation is relinquished when its recording is invalidated before
+execution. Successful collection also removes any remaining unstarted reservation.
+`ForgetUnstarted` leaves started resources alone; their normal dual-completion
+reclaim still owns them. This prevents four discarded command lists from permanently
+occupying the admission cap. `tests/lmxxf/run.cmd inline-discard` uses WARP and a mock
+runtime to exercise 12 alternating real proxy Reset/Release operations, verify exact
+job retirement and capacity reuse, and retain a started reservation until its
+certified side-reset completion. No model or hardware GPU run is needed.
+
 ## Initial validation (2026-10-11)
 
 RX 9070 XT / gfx1201: bounded success and exhaustion, original/current-frame and

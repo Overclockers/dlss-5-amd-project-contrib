@@ -374,6 +374,9 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
     {
         if (invalidated || !(id == identity)) return;
         invalidated = true;
+        // Reset/Release before execution relinquishes admission immediately.
+        // Started recordings still retain their reservation until both queue proofs finish.
+        owner->ForgetUnstarted(inlineResources);
         // A Reset may follow submission before the worker reaches Enqueue. Keep
         // the runtime job executable until its deferred End event has been recorded.
         if (inlineResources && begun) return;
@@ -399,6 +402,7 @@ inline bool CollectLocked()
         const int32_t rc = lease->owner->api.CollectRecording(lease->owner->context, lease->job);
         if (rc == LMXXF_NR_OK || rc == LMXXF_NR_DEVICE_LOST)
         {
+            lease->owner->ForgetUnstarted(lease->inlineResources);
             lease->job = nullptr;
             it = leases.erase(it);
         }

@@ -17,6 +17,72 @@ MENU = (ROOT / "OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/dlssnr/DlssNr_
 
 
 class ConfigPriorityTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt" and shutil.which("cl"), "requires MSVC")
+    def test_unlocked_mochizuki_passes_reload(self):
+        # Compile the actual Reload statements with a real SimpleIni reader;
+        # an independently expected round-trip catches the old unconditional clamp.
+        start = CONFIG.index('MochizukiUnlockPasses.set_from_config(')
+        end = CONFIG.index('MochizukiTemporal.set_from_config(', start)
+        statements = CONFIG[start:end]
+        header = (ROOT / 'OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/Config.h').read_text(encoding='utf-8')
+        ceiling = re.search(r'kMochizukiLayerPasses\s*=\s*(\d+)', header).group(1)
+        source = r'''
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <cassert>
+#include <iostream>
+#include "SimpleIni.h"
+#include "ConfigKeys.h"
+#define LOG_WARN(...) ((void)0)
+template<class T> struct Option {
+    std::optional<T> value;
+    void set_from_config(std::optional<T> v) { value=v; }
+    T value_or_default() const { return value.value_or(T{}); }
+};
+struct ConfigFixture {
+    CSimpleIniA ini;
+    Option<bool> MochizukiUnlockPasses;
+    Option<uint32_t> MochizukiLayerMode, MochizukiPasses;
+    static constexpr uint32_t kMochizukiLayerPasses=@@CEILING@@;
+    std::optional<bool> readBool(const char* section,const char* key) {
+        return ini.GetValue(section,key)?std::optional<bool>(ini.GetBoolValue(section,key)):std::nullopt;
+    }
+    std::optional<uint32_t> readUInt(const char* section,const char* key) {
+        return ini.GetValue(section,key)?std::optional<uint32_t>(uint32_t(ini.GetLongValue(section,key))):std::nullopt;
+    }
+    void Reload() { @@RELOAD@@ }
+};
+int main() {
+    for(bool unlocked:{false,true}) for(unsigned passes:{0u,1u,3u,4u,15u,30u,31u}) {
+        ConfigFixture saved;
+        saved.ini.SetBoolValue(CfgKey::kSection,CfgKey::MochizukiUnlockPasses,unlocked);
+        saved.ini.SetLongValue(CfgKey::kSection,CfgKey::MochizukiPasses,passes);
+        std::string text; assert(saved.ini.Save(text)>=0);
+        ConfigFixture fresh; assert(fresh.ini.LoadData(text.data(),text.size())>=0); fresh.Reload();
+        const unsigned limit=unlocked?30u:3u;
+        const unsigned expected=passes<1?1u:passes>limit?limit:passes;
+        assert(fresh.MochizukiPasses.value && *fresh.MochizukiPasses.value==expected);
+        assert(fresh.MochizukiUnlockPasses.value_or_default()==unlocked);
+    }
+    ConfigFixture missing; missing.Reload(); assert(!missing.MochizukiPasses.value);
+    std::cout<<"MOCHIZUKI_PASS_RELOAD_OK 14 saved/reloaded cases plus absent key\n";
+}
+'''.replace('@@CEILING@@', ceiling).replace('@@RELOAD@@', statements)
+        work = ROOT / 'exports/config-pass-reload'
+        work.mkdir(parents=True, exist_ok=True)
+        cpp, exe = work / 'reload.cpp', work / 'reload.exe'
+        cpp.write_text(source, encoding='utf-8')
+        product = ROOT / 'OptiScaler-DLSSNR-PreSR-Multipass-main'
+        command = ['cl', '/nologo', '/std:c++20', '/EHsc', '/utf-8',
+                   '/I' + str(product / 'external/simpleini'), '/I' + str(product / 'OptiScaler'),
+                   str(cpp), '/Fo' + str(work / 'reload.obj'), '/Fe' + str(exe)]
+        result = subprocess.run(command, capture_output=True, text=True, errors='replace', timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        run = subprocess.run([str(exe)], capture_output=True, text=True, errors='replace', timeout=10)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertIn('MOCHIZUKI_PASS_RELOAD_OK', run.stdout)
+
     @unittest.skipUnless(os.name == "nt" and shutil.which("cl"), "requires an x64 MSVC developer environment")
     def test_host_updates_cross_independent_crt_caches(self):
         source = ROOT / "tests/host/lmxxf_config_crt.cpp"

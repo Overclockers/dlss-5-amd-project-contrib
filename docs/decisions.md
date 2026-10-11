@@ -758,3 +758,11 @@ Reuse one side compute queue per NR session, retaining independent recording buf
 本地只运行实际风险所需的 GPU 对照与短 ABI/来源核验；不跑完整发布 CI。
 这次全矩阵按用户要求中止，已完成 28 个对照用例和一个 inline ACO 时域用例。
 详见 [ACO 依赖与验证](mochizuki.md#aco-decoder-tail-dependency-2026-10-12)。
+
+## 2026-10-12 补审：层数持久化与未执行 inline 回收
+
+读取已保存层数时使用解锁状态对应的 3/30 上限，保持 4–30 的明确选择；无效值仍有界。
+未开始执行的 inline 录制在 Reset/Release 失效时归还名额，并在成功收集时兜底清理。
+已开始的录制保持既有队列完成证明与延迟回收，不提前释放。
+针对性验证使用真实 INI 保存再加载及实际 Reload 片段（14 个边界用例、缺键），
+WARP/mock runtime 下 12 次实际命令列表丢弃与已开始资源保留验证；不运行完整 CI。

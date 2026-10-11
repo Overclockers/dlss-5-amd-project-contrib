@@ -445,10 +445,11 @@ bool Config::Reload(std::filesystem::path iniPath)
             }
             {
                 auto passes = readUInt(CfgKey::kSection, CfgKey::MochizukiPasses);
-                if (passes && (*passes < 1 || *passes > 3))
+                const uint32_t maxPasses = MochizukiUnlockPasses.value_or_default() ? kMochizukiLayerPasses : 3u;
+                if (passes && (*passes < 1 || *passes > maxPasses))
                 {
-                    LOG_WARN("DlssNr.{} must be 1..3; using {}", CfgKey::MochizukiPasses, *passes < 1 ? 1 : 3);
-                    passes = *passes < 1 ? 1u : 3u;
+                    LOG_WARN("DlssNr.{} must be 1..{}; using {}", CfgKey::MochizukiPasses, maxPasses, *passes < 1 ? 1u : maxPasses);
+                    passes = *passes < 1 ? 1u : maxPasses;
                 }
                 MochizukiPasses.set_from_config(passes);
             }

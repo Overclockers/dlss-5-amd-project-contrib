@@ -1,6 +1,6 @@
 @echo off
 rem lmxxf runtime and submission tests. Every test in tests\lmxxf belongs to exactly one tier below.
-rem Usage: tests\lmxxf\run.cmd abi^|warp^|device^|inline^|inline-gpu^|early-unity^|hip-passthrough^|gpu [out-dir]
+rem Usage: tests\lmxxf\run.cmd abi^|warp^|device^|inline^|inline-discard^|inline-gpu^|early-unity^|hip-passthrough^|gpu [out-dir]
 rem   abi    : lmxxf_nr_abi, lmxxf_zero_fallback_abi.c, test_runtime_validation.py (no GPU)
 rem   warp   : lmxxf_same_frame_boundary, lmxxf_color_probe (D3D12 WARP; no GPU)
 rem   device : lmxxf_list_split, lmxxf_list1_wrap, lmxxf_create_execute, lmxxf_evaluate_cut
@@ -40,8 +40,9 @@ if /i "%TIER%"=="early-unity" goto early-unity
 if /i "%TIER%"=="gpu" goto gpu
 if /i "%TIER%"=="hip-passthrough" goto hip-passthrough
 if /i "%TIER%"=="inline" goto inline
+if /i "%TIER%"=="inline-discard" goto inline-discard
 if /i "%TIER%"=="inline-gpu" goto inline-gpu
-echo usage: tests\lmxxf\run.cmd abi^|warp^|device^|inline^|inline-gpu^|early-unity^|hip-passthrough^|gpu [out-dir]
+echo usage: tests\lmxxf\run.cmd abi^|warp^|device^|inline^|inline-discard^|inline-gpu^|early-unity^|hip-passthrough^|gpu [out-dir]
 exit /b 2
 
 :abi
@@ -112,8 +113,18 @@ call :Runtime || goto fail
 goto pass
 
 :RunInlineFixture
+call :RunInlineDiscard || exit /b 1
 %CXX% /I"%INC%" tests\lmxxf\nr_inline_recording.cpp /Fe"%OUT%\nr_inline_recording.exe" /Fo"%OUT%\nr_inline_recording.obj" /link %D3D% d3dcompiler.lib || exit /b 1
 if /i "%~1"=="hardware" ("%OUT%\nr_inline_recording.exe" --hardware) else ("%OUT%\nr_inline_recording.exe")
+exit /b %errorlevel%
+
+:inline-discard
+call :RunInlineDiscard || goto fail
+goto pass
+
+:RunInlineDiscard
+%CXX% /I"%INC%" tests\lmxxf\nr_inline_discard.cpp /Fe"%OUT%\nr_inline_discard.exe" /Fo"%OUT%\nr_inline_discard.obj" /link %D3D% d3dcompiler.lib "%DETOURS%" || exit /b 1
+"%OUT%\nr_inline_discard.exe"
 exit /b %errorlevel%
 
 :EarlyUnity
