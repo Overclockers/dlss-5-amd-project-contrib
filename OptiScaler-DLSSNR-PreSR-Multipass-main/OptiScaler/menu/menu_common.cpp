@@ -7492,7 +7492,14 @@ void MenuCommon::RenderMainMenuBottomBar(RenderMenuContext& ctx)
     if (MenuUi::Button("...")) ImGui::OpenPopup("Window actions");
     if (ImGui::BeginPopup("Window actions"))
     {
-        if (MenuUi::Button("Reset window layout"))
+        // An auto-sized popup has ~0 width on its first frame; MenuUi::Button would then wrap the
+        // label one character per line and the popup stays that narrow. Size each to its label.
+        const auto popupButton = [](const char* label) {
+            const float width = ImGui::CalcTextSize(MenuLocale::Label(label).c_str(), nullptr, true).x +
+                                2 * ImGui::GetStyle().FramePadding.x;
+            return MenuUi::Button(label, ImVec2(width, 0));
+        };
+        if (popupButton("Reset window layout"))
         {
             config->MenuWindowWidth.reset();
             config->MenuWindowHeight.reset();
@@ -7500,7 +7507,7 @@ void MenuCommon::RenderMainMenuBottomBar(RenderMenuContext& ctx)
             resetMenuWindow = true;
         }
 
-        if (MenuUi::Button("Wiki"))
+        if (popupButton("Wiki"))
             ImGui::GetPlatformIO().Platform_OpenInShellFn(ImGui::GetCurrentContext(), "https://github.com/optiscaler/OptiScaler/wiki");
 
         ImGui::EndPopup();
