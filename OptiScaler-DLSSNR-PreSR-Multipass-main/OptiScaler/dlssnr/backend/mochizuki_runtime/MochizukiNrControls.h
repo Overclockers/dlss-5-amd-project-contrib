@@ -83,7 +83,7 @@ extern "C"
         uint32_t compact_transfer; /* default 1; reduced-resolution non-U8 output buffer reuse; rebuilds */
         uint32_t enlarge_mode;     /* 0 matched residual (default), 1 edge-aware, 2 classic; reduced model scale only */
         uint32_t classic_scaler;   /* 0 bilinear, 1 Catmull-Rom (default), 2 Lanczos3, 3 FSR1; used when enlarge_mode is 2 */
-        uint32_t aco_mode;         /* 0 off (default), 1 ACO; fixed when the Vulkan device is created; a change needs a restart */
+        uint32_t aco_mode;         /* 0 off, 1 ACO (default; falls back to the driver compiler when unavailable); fixed when the Vulkan device is created; a change needs a restart */
     } MochizukiNrControls;
 
     /* What the session is doing, for a menu. Safe to ask from any thread, at any rate. */

@@ -421,7 +421,7 @@ class Config
     CustomOptional<bool> MochizukiCompactTransfer { true };
     CustomOptional<uint32_t> MochizukiEnlargeMode { 0u };
     CustomOptional<uint32_t> MochizukiClassicScaler { 1u };
-    CustomOptional<bool> MochizukiAcoMode { false };
+    CustomOptional<bool> MochizukiAcoMode { true };
     CustomOptional<float> MochizukiWhitePoint { 1.f };
     CustomOptional<float> MochizukiModelScale { 1.f };
     CustomOptional<bool> MochizukiUnlockPasses { false };

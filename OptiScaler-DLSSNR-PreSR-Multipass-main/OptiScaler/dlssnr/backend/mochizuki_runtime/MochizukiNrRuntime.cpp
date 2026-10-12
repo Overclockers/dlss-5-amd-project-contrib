@@ -631,7 +631,7 @@ void DefaultControls(MochizukiNrControls& c)
     c.compact_transfer = 1; // product policy: reuse the RGBA32F keep when official store_native does not
     c.enlarge_mode = uint32_t(std::clamp(model.transfer, 0, 2));
     c.classic_scaler = uint32_t(std::clamp(model.classic_scaler, 0, 3));
-    c.aco_mode = 0;
+    c.aco_mode = 1;
     for (MochizukiNrPassControls& p : c.pass)
     {
         p.style = uint32_t(pass.style);

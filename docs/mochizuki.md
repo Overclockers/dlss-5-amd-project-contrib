@@ -32,7 +32,8 @@ stay in this host. See [the source record](../third_party/mochizuki/UPSTREAM.md)
 2. Extract the complete OptiScaler package. It contains `MochizukiNrRuntime.dll`,
    `dlssnr-amd/shaders/` and `dlssnr-amd/aco/` (records, shell aliases, and the ACO
    network, runtime and temporal shaders). The runtime and those assets must match the host in that package.
-   ACO stays off until `MochizukiAcoMode` is turned on and the game is started again.
+   ACO is on by default (`MochizukiAcoMode=true`); a change applies on the next game start.
+   A missing or rejected bundle, or a device/driver without ACO, keeps the driver's compiler.
 3. Supply your own `nvngx_dlssnr.dll` **310.8.0**. Its SHA-256 is
    `e16bcf15e16e13f527491cdf7845b2fe6521a738d8f7c9c721866a8496e1fc8e`.
    The DLL and extracted weights are **not included** in our package.
@@ -185,7 +186,7 @@ Turning the option off forces a separate answer image and rebuilds the network.
 U8 output keeps its rounding path. Model scale 100% is unchanged. The control is
 owned by the INI/menu and does not follow `NR_*` environment variables.
 
-**ACO mode** (`MochizukiAcoMode=false`, default) asks for AMD pipeline binaries.
+**ACO mode** (`MochizukiAcoMode=true`, default) asks for AMD pipeline binaries.
 The menu checkbox is **ACO fast mode (experimental)**, next to Processing order.
 The extension is chosen when the Vulkan device is created. Effective stays off
 until Install publishes the network that will run; a candidate discarded by its

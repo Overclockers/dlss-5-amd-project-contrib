@@ -203,7 +203,7 @@ static void ResetMochizuki(Config* config, int selectedGroup = -1,
         // Device creation already chose the compiler. Keep this session on it.
         if (sessionAco)
             config->MochizukiAcoMode = sessionAco;
-        config->MochizukiAcoMode.set_for_next_launch(false);
+        config->MochizukiAcoMode.set_for_next_launch(true); // the default
         auto& choice = AcoMenu();
         choice.captured = true;
         choice.session = sessionAco;
