@@ -26,15 +26,23 @@ class ForwardingLayer final : public IUnknown
     ULONG refs = 1;
     ComPtr<IUnknown> original;
     bool forward;
+    bool nativeOnly;
 public:
     inline static unsigned live = 0;
-    ForwardingLayer(IUnknown* wrapped, bool enabled = true) : original(wrapped), forward(enabled) { ++live; }
+    ForwardingLayer(IUnknown* wrapped, bool enabled = true, bool native = false)
+        : original(wrapped), forward(enabled), nativeOnly(native) { ++live; }
     ~ForwardingLayer() { --live; }
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override
     {
         if (!out) return E_POINTER;
         *out = nullptr;
         if (iid == IID_IUnknown) { *out = static_cast<IUnknown*>(this); AddRef(); return S_OK; }
+        if (nativeOnly) {
+            static constexpr GUID nativeIid = {0xADEC44E2, 0x61F0, 0x45C3,
+                {0xAD, 0x9F, 0x1B, 0x37, 0x37, 0x92, 0x84, 0xFF}};
+            if (iid != nativeIid) return E_NOINTERFACE;
+            *out = original.Get(); original->AddRef(); return S_OK;
+        }
         return forward ? original->QueryInterface(iid, out) : E_NOINTERFACE;
     }
     ULONG STDMETHODCALLTYPE AddRef() override { return ++refs; }
@@ -94,7 +102,7 @@ static void WINAPI ExecuteNative(ID3D12CommandQueue* queue, UINT count, ID3D12Co
     queue->ExecuteCommandLists(count, lists);
 }
 
-static void Run(ID3D12Device* device, ID3D12CommandQueue* queue, unsigned layers, bool split)
+static void Run(ID3D12Device* device, ID3D12CommandQueue* queue, unsigned layers, bool split, bool nativeOnly = false)
 {
     ComPtr<ID3D12CommandAllocator> alloc;
     ComPtr<ID3D12GraphicsCommandList> native;
@@ -104,13 +112,13 @@ static void Run(ID3D12Device* device, ID3D12CommandQueue* queue, unsigned layers
     Require(!S::QueryLogicalCommandList(native.Get()), "ordinary lists remain unchanged");
     {
         ComPtr<IUnknown> foreign;
-        foreign.Attach(new ForwardingLayer(native.Get()));
+        foreign.Attach(new ForwardingLayer(native.Get(), true, nativeOnly));
         Require(!S::QueryLogicalCommandList(foreign.Get()), "wrapper without our proxy remains unchanged");
     }
     ComPtr<S::CommandListProxy> proxy;
     Check(S::CommandListProxy::Create(device, alloc.Get(), native.Get(), proxy.GetAddressOf()), "proxy");
     ComPtr<IUnknown> outer = static_cast<ID3D12GraphicsCommandList*>(proxy.Get());
-    for (unsigned i = 0; i < layers; ++i) outer.Attach(new ForwardingLayer(outer.Get()));
+    for (unsigned i = 0; i < layers; ++i) outer.Attach(new ForwardingLayer(outer.Get(), true, nativeOnly));
     {
         ComPtr<IUnknown> opaque;
         opaque.Attach(new ForwardingLayer(outer.Get(), false));
@@ -195,5 +203,6 @@ int main()
     Check(device->CreateCommandQueue(&desc, IID_PPV_ARGS(&queue)), "queue");
     for (unsigned layers = 0; layers <= 2; ++layers)
         for (bool split : {false, true}) Run(device.Get(), queue.Get(), layers, split);
-    std::puts("wrapped command list: PASS (identity, queue discovery, split copies, scoped references; WARP)");
+    for (bool split : {false, true}) Run(device.Get(), queue.Get(), 1, split, true);
+    std::puts("wrapped command list: PASS (forwarded/native-only identity, queue discovery, split copies, scoped references; WARP)");
 }

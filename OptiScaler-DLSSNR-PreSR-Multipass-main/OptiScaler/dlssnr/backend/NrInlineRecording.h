@@ -18,6 +18,18 @@ class StateScope {
     std::string reason = "recording_proxy_unavailable";
 public:
     const std::string& Reason() const { return reason; }
+    template<class Frame> void TraceFailure(const char* backend, uint64_t frameId,
+                                            ID3D12GraphicsCommandList* list, const Frame& frame,
+                                            bool motion = true, bool depth = true, bool exposure = true) const {
+        LOG_WARN("{} NR input rejected: frame={} list={:p} reason={}",
+                 backend, frameId, static_cast<void*>(list), reason);
+        Ptr<Submission::IRecordingResources> diagnostic;
+        if (FAILED(list->QueryInterface(IID_PPV_ARGS(&diagnostic)))) return;
+        diagnostic->TraceNrInputState(backend, frameId, "colour", frame.colour, frame.colourState);
+        if (motion) diagnostic->TraceNrInputState(backend, frameId, "motion", frame.motion, frame.motionState);
+        if (depth) diagnostic->TraceNrInputState(backend, frameId, "depth", frame.depth, frame.depthState);
+        if (exposure) diagnostic->TraceNrInputState(backend, frameId, "exposure", frame.exposure, frame.exposureState);
+    }
     template<class Frame> HRESULT Begin(ID3D12GraphicsCommandList* list, Frame& frame,
                                        bool motion = true, bool depth = true, bool exposure = true,
                                        bool split = false) {

@@ -59,9 +59,20 @@ Any observed enhanced SYNC_SPLIT still rejects the recording conservatively.
 For sources actually consumed by the selected backend, the proxy admits known
 whole-resource enhanced layouts and records a transition to COMMON before legacy
 runtime operations. It returns each source to COMMON and restores the original
-enhanced layout/access afterward. Partial/pending layouts and unknown source state
-refuse recording. Unused depth, exposure or motion inputs are not normalized.
-This is deliberately not a complete D3D12 resource/subresource state tracker.
+enhanced layout/access afterward. Partial/pending layouts and observations invalidated
+by aliasing refuse recording until a complete transition establishes state again.
+Untouched inputs retain the caller's Frame/INI legacy-state contract, including states
+established on a prior submitted list; unrelated GLOBAL/texture barriers do not invalidate
+that contract. No cross-list pointer cache or inferred COMMON state is used. This does
+not discover enhanced layouts established only on another list; callers must supply a
+valid legacy interop state for unobserved inputs. Ordinary legacy split recordings skip
+the input scan and private binding restore; enhanced recordings with only legacy inputs
+also skip the private scope. Unused depth, exposure or motion inputs are not normalized.
+This is deliberately not a complete D3D12 resource/subresource state tracker. Both backends
+rate-limit input rejection logs with frame/list/generation, resource role, requested range,
+last observed range/layout/access and invalidation status. Last observations marked unknown
+are diagnostic evidence, not current-state assertions. AS Build/EmitPostbuild/Copy retain
+their existing `rtas` rejection; relaxing those guards requires a separate DXR review.
 
 Current composition admits single-sample, single-array textures with explicit
 FP16/FP32, R11G11B10, R10G10B10A2, RGBA8 or BGRA8 views. Typeless and unsupported

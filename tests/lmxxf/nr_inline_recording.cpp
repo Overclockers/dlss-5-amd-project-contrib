@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <dxgi1_6.h>
 #include <d3d12.h>
+#include <d3d12sdklayers.h>
 #include <wrl/client.h>
 #include <thread>
 #include <atomic>
@@ -16,8 +17,14 @@ static void Require(bool b, const char* msg) { if (!b) { std::fprintf(stderr, "F
 static void Check(HRESULT hr, const char* msg) { Require(SUCCEEDED(hr), msg); }
 struct Gpu {
     Ptr<ID3D12Device> device; Ptr<ID3D12CommandQueue> queue; Ptr<ID3D12Fence> fence;
+    Ptr<ID3D12InfoQueue> messages;
     UINT64 serial = 0;
-    Gpu(bool hardware) {
+    Gpu(bool hardware, bool debug = false) {
+        if (debug) {
+            Ptr<ID3D12Debug> layer;
+            if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&layer)))) layer->EnableDebugLayer();
+            else std::puts("debug layer SKIP: Graphics Tools not installed");
+        }
         Ptr<IDXGIFactory4> factory; Check(CreateDXGIFactory1(IID_PPV_ARGS(&factory)), "factory");
         Ptr<IDXGIAdapter1> adapter;
         if (hardware) {
@@ -36,6 +43,7 @@ struct Gpu {
         }
         D3D12_COMMAND_QUEUE_DESC q {}; Check(device->CreateCommandQueue(&q, IID_PPV_ARGS(&queue)), "queue");
         Check(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)), "fence");
+        if (debug) device.As(&messages);
     }
     UINT64 Signal() { const auto v = ++serial; Check(queue->Signal(fence.Get(), v), "signal"); return v; }
     void Wait(UINT64 v) {
@@ -97,6 +105,107 @@ struct Gpu {
         D3D12_RANGE none {0,0}; buffer->Unmap(0, &none);
     }
 };
+
+static void RunSplitState(Gpu& gpu) {
+    D3D12_FEATURE_DATA_D3D12_OPTIONS12 options {};
+    Check(gpu.device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS12, &options, sizeof options), "options12");
+    Require(options.EnhancedBarriersSupported, "split-state regression requires enhanced barriers");
+    SetAllowEnhancedBarriers(true);
+    const float red[] {.25f, .5f, .75f, 1}, black[] {0, 0, 0, 1};
+    const UINT16 redHalf[] {0x3400, 0x3800, 0x3a00, 0x3c00};
+    // These helpers submit AND wait on an earlier list, matching the review repro.
+    auto source = gpu.Texture(red), other = gpu.Texture(black), output = gpu.Texture(black);
+    Ptr<ID3D12CommandAllocator> allocator; Ptr<ID3D12GraphicsCommandList> native;
+    Ptr<Sub::CommandListProxy> proxy;
+    Check(gpu.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)), "allocator");
+    Check(gpu.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&native)), "list");
+    Check(Sub::CommandListProxy::Create(gpu.device.Get(), allocator.Get(), native.Get(), &proxy), "proxy");
+    ID3D12Resource* sources[] {source.Get()};
+    D3D12_RESOURCE_STATES states[] {D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE};
+    auto acceptLegacy = [&] {
+        Check(proxy->BeginSplitState(1, sources, states), "cross-list legacy source accepted");
+        Require(states[0] == D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, "caller legacy state unchanged");
+        proxy->EndInlineState();
+    };
+    acceptLegacy();
+    D3D12_GLOBAL_BARRIER global {};
+    global.SyncBefore = global.SyncAfter = D3D12_BARRIER_SYNC_ALL;
+    global.AccessBefore = global.AccessAfter = D3D12_BARRIER_ACCESS_COMMON;
+    D3D12_BARRIER_GROUP group {}; group.Type = D3D12_BARRIER_TYPE_GLOBAL;
+    group.NumBarriers = 1; group.pGlobalBarriers = &global;
+    proxy->Barrier(1, &group);
+    Require(!proxy->IsSplitIneligible(), "global barrier does not forbid split");
+    acceptLegacy(); // Previously failed with source_layout_unknown / 0x80070032.
+    Check(proxy->BeginInlineState(1, sources, states), "same inherited legacy contract for inline");
+    proxy->EndInlineState();
+    auto enhanced = [&](ID3D12Resource* resource, D3D12_BARRIER_LAYOUT before, D3D12_BARRIER_LAYOUT after,
+                        UINT subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES) {
+        D3D12_TEXTURE_BARRIER b {}; b.SyncBefore = b.SyncAfter = D3D12_BARRIER_SYNC_ALL;
+        b.AccessBefore = before == D3D12_BARRIER_LAYOUT_COMMON ? D3D12_BARRIER_ACCESS_COMMON : D3D12_BARRIER_ACCESS_SHADER_RESOURCE;
+        b.AccessAfter = after == D3D12_BARRIER_LAYOUT_COMMON ? D3D12_BARRIER_ACCESS_COMMON : D3D12_BARRIER_ACCESS_SHADER_RESOURCE;
+        b.LayoutBefore = before; b.LayoutAfter = after; b.pResource = resource;
+        b.Subresources.IndexOrFirstMipLevel = subresource;
+        D3D12_BARRIER_GROUP g {}; g.Type = D3D12_BARRIER_TYPE_TEXTURE; g.NumBarriers = 1; g.pTextureBarriers = &b;
+        proxy->Barrier(1, &g);
+    };
+    In::Barrier(proxy.Get(), other.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON);
+    enhanced(other.Get(), D3D12_BARRIER_LAYOUT_COMMON, D3D12_BARRIER_LAYOUT_DIRECT_QUEUE_SHADER_RESOURCE);
+    acceptLegacy(); // Unrelated TEXTURE barriers must not invalidate this source either.
+    SetAllowEnhancedBarriers(false);
+    Require(FAILED(proxy->BeginSplitState(1, sources, states)), "explicit opt-out still rejects enhanced lists");
+    SetAllowEnhancedBarriers(true);
+    In::Barrier(proxy.Get(), source.Get(), states[0], D3D12_RESOURCE_STATE_COMMON);
+    enhanced(source.Get(), D3D12_BARRIER_LAYOUT_COMMON, D3D12_BARRIER_LAYOUT_DIRECT_QUEUE_SHADER_RESOURCE);
+
+    // A valid, partial transition on a two-mip guide must fail atomically when
+    // consumed, even when the preceding colour input has a known enhanced layout.
+    D3D12_HEAP_PROPERTIES hp {}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+    auto desc = source->GetDesc(); desc.MipLevels = 2;
+    Ptr<ID3D12Resource> guide;
+    Check(gpu.device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COMMON,
+                                              nullptr, IID_PPV_ARGS(&guide)), "partial guide");
+    enhanced(guide.Get(), D3D12_BARRIER_LAYOUT_COMMON, D3D12_BARRIER_LAYOUT_DIRECT_QUEUE_SHADER_RESOURCE, 0);
+    ID3D12Resource* mixed[] {source.Get(), guide.Get()};
+    D3D12_RESOURCE_STATES mixedStates[] {states[0], states[0]};
+    Require(FAILED(proxy->BeginSplitState(2, mixed, mixedStates)), "consumed partial guide rejected");
+    Require(mixedStates[0] == states[0] && mixedStates[1] == states[0], "rejection changes no caller states");
+    Require(std::strcmp(proxy->InlineRejectionReason(), "enhanced_layout_partial_or_pending") == 0, "partial rejection reason");
+    proxy->EndInlineState(); // Failed Begin must not open a restoring scope.
+    Check(proxy->BeginSplitState(1, sources, states), "unused partial guide does not reject colour");
+    Require(states[0] == D3D12_RESOURCE_STATE_COMMON, "observed enhanced colour normalized");
+    In::Barrier(proxy.Get(), source.Get(), states[0], D3D12_RESOURCE_STATE_COPY_SOURCE);
+    In::Barrier(proxy.Get(), output.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+    proxy->CopyResource(output.Get(), source.Get());
+    In::Barrier(proxy.Get(), source.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
+    Check(proxy->SplitSegments(), "split with enhanced scope");
+    Require(proxy->RecordingNativeList() != native.Get(), "continuation receives subsequent work");
+    In::Barrier(proxy.Get(), output.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    proxy->EndInlineState();
+    // Exact LayoutBefore verifies restoration on the continuation under the debug layer.
+    enhanced(source.Get(), D3D12_BARRIER_LAYOUT_DIRECT_QUEUE_SHADER_RESOURCE, D3D12_BARRIER_LAYOUT_COMMON);
+    In::Barrier(proxy.Get(), source.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    enhanced(other.Get(), D3D12_BARRIER_LAYOUT_DIRECT_QUEUE_SHADER_RESOURCE, D3D12_BARRIER_LAYOUT_COMMON);
+    Check(proxy->Close(), "split close"); Check(proxy->ExecuteOn(gpu.queue.Get()), "split execute"); gpu.Wait(gpu.Signal());
+    gpu.Pixels(source.Get(), redHalf); gpu.Pixels(output.Get(), redHalf);
+    Check(proxy->Reset(allocator.Get(), nullptr), "reset clears observed layouts");
+    states[0] = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE; acceptLegacy();
+    Check(proxy->Close(), "reset close");
+    if (gpu.messages) {
+        const auto count = gpu.messages->GetNumStoredMessagesAllowedByRetrievalFilter();
+        for (UINT64 i = 0; i < count; ++i) {
+            SIZE_T size = 0; Check(gpu.messages->GetMessage(i, nullptr, &size), "debug message size");
+            std::vector<unsigned char> storage(size);
+            auto* message = reinterpret_cast<D3D12_MESSAGE*>(storage.data());
+            Check(gpu.messages->GetMessage(i, message, &size), "debug message");
+            if (message->Severity <= D3D12_MESSAGE_SEVERITY_ERROR) {
+                std::fprintf(stderr, "%s\n", message->pDescription); Require(false, "D3D12 debug-layer error");
+            }
+        }
+        std::puts("split-state debug layer: no errors");
+    }
+    SetAllowEnhancedBarriers(false);
+    std::puts("split-state PASS: inherited legacy state, unrelated barriers, partial rejection, enhanced round trip, split pixels, Reset");
+}
 
 static void Run(Gpu& gpu, bool timeout, bool enhanced = false, bool fullBudget = false, bool highRange = false) {
     static std::shared_ptr<In::Pipelines> cache;
@@ -196,6 +305,9 @@ static void Run(Gpu& gpu, bool timeout, bool enhanced = false, bool fullBudget =
 }
 int main(int argc, char** argv) {
     try {
+        if (argc > 1 && std::strcmp(argv[1], "--split-state") == 0) {
+            Gpu gpu(false, true); RunSplitState(gpu); return 0;
+        }
         Gpu gpu(argc > 1 && std::strcmp(argv[1], "--hardware") == 0); Run(gpu, false); Run(gpu, true); Run(gpu, true, false, true);
         Run(gpu, true, false, false, true);
         D3D12_FEATURE_DATA_D3D12_OPTIONS12 options {};
