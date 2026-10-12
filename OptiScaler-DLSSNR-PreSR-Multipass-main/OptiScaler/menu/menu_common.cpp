@@ -1580,11 +1580,11 @@ void MenuCommon::RenderSplashWindow(RenderMenuContext& ctx)
 
                 MenuUi::Text("OptiScaler - %s for menu",
                             Keybind::KeyNameFromVirtualKeyCode(config->ShortcutKey.value_or_default()).c_str());
-                MenuUi::TextColored(toneMapColor(ImVec4(1.0f, 1.0f, 1.0f, 0.7f)), splashMessage.c_str());
                 // Free-distribution notice (see SplashNotice.h): author asks it be kept; do not
                 // remove it for paid resale. 作者要求保留的免费声明，请勿为收费转售而删除。
                 ImGui::TextUnformatted(SplashNotice::Chinese);
                 ImGui::TextUnformatted(SplashNotice::English);
+                MenuUi::TextColored(toneMapColor(ImVec4(1.0f, 1.0f, 1.0f, 0.7f)), splashMessage.c_str());
 
                 splashSize = ImGui::GetWindowSize();
 

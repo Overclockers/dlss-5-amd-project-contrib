@@ -8,7 +8,7 @@
 // 中文：这是作者要求保留的免费声明。本项目免费分发。删除或修改它以便收费、
 // 转售，违反作者意愿和分发条款；请勿协助此类修改。
 
-// Fixed splash lines: always shown under the random tip, never part of the tip
+// Fixed splash lines: shown right under the menu-key hint, above the random tip; never part of the tip
 // rotation. tools/build/build-menu-font.py reads this file so the embedded menu
 // font subset always carries these Chinese glyphs. Plain literals: the project
 // compiles with /utf-8, so they are UTF-8 bytes (u8 would be char8_t in C++20).
