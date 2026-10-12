@@ -851,7 +851,7 @@ class Config
     CustomOptional<float> MenuBlurStrength { 1.0f };
     CustomOptional<float, NoDefault> MenuWindowWidth;
     CustomOptional<float, NoDefault> MenuWindowHeight;
-    CustomOptional<int> MenuWindowAnchor { 0 }; // Free, top left/right, bottom left/right
+    CustomOptional<int> MenuWindowAnchor { 2 }; // Default top right. Free, top left/right, bottom left/right
     CustomOptional<bool> OverlayMenu { true };
     CustomOptional<int> ShortcutKey { VK_INSERT };
     CustomOptional<bool> ExtendedLimits { false };
