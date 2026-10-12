@@ -1581,6 +1581,8 @@ void MenuCommon::RenderSplashWindow(RenderMenuContext& ctx)
                 MenuUi::Text("OptiScaler - %s for menu",
                             Keybind::KeyNameFromVirtualKeyCode(config->ShortcutKey.value_or_default()).c_str());
                 MenuUi::TextColored(toneMapColor(ImVec4(1.0f, 1.0f, 1.0f, 0.7f)), splashMessage.c_str());
+                // Free-distribution notice (see SplashNotice.h): author asks it be kept; do not
+                // remove it for paid resale. 作者要求保留的免费声明，请勿为收费转售而删除。
                 ImGui::TextUnformatted(SplashNotice::Chinese);
                 ImGui::TextUnformatted(SplashNotice::English);
 
@@ -7849,6 +7851,29 @@ void MenuCommon::RenderMainMenuWindow(RenderMenuContext& ctx)
     ImGui::SetNextWindowSizeConstraints({layout.minimum.x, layout.minimum.y}, {layout.maximum.x, layout.maximum.y});
     if (!moving && !resizing) ImGui::SetNextWindowPos({layout.pos.x, layout.pos.y});
     const bool visible = MenuUi::Begin(windowTitle.c_str(), nullptr, flags);
+    if (visible)
+    {
+        // Free-distribution notice (see SplashNotice.h): the author asks it be kept;
+        // do not remove it for paid resale. 作者要求保留的免费声明，请勿为收费转售而删除。
+        // Drawn right-aligned in the title bar; skipped when it would touch the title.
+        ImGuiWindow* window = ImGui::GetCurrentWindow();
+        const ImRect bar = window->TitleBarRect();
+        const ImGuiStyle& style = ImGui::GetStyle();
+        const char* notice = MenuLocale::Translate(SplashNotice::TitleBar);
+        const std::string title = MenuLocale::Label(windowTitle.c_str());
+        const ImVec2 titleSize = ImGui::CalcTextSize(title.c_str(), nullptr, true);
+        const ImVec2 noticeSize = ImGui::CalcTextSize(notice);
+        const float right = bar.Max.x - style.FramePadding.x;
+        const float left = right - noticeSize.x;
+        const float titleEnd = bar.Min.x + style.FramePadding.x + titleSize.x + style.ItemSpacing.x * 2;
+        if (left >= titleEnd)
+        {
+            window->DrawList->PushClipRect(bar.Min, bar.Max, false);
+            window->DrawList->AddText({left, bar.Min.y + style.FramePadding.y},
+                                      ImGui::GetColorU32(ImGuiCol_Text, 0.75f), notice);
+            window->DrawList->PopClipRect();
+        }
+    }
     const auto actualSize = ImGui::GetWindowSize();
     // Only user resizing changes the requested size during Begin. Viewport clamping
     // must not overwrite the user's preferred size for a larger display.
