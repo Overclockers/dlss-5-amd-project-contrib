@@ -114,6 +114,10 @@ struct HostDevice {
     // then reads the activation arena through a buffer_reference where that is faster (Windows
     // network only).
     bool buffer_device_address = false;
+    // Optional second family accessing core images/buffers through segments.
+    // The caller orders both families and supplies compatible external images.
+    // Appended to preserve existing source aggregate initializers.
+    uint32_t secondary_family = VK_QUEUE_FAMILY_IGNORED;
 };
 
 struct RuntimeConfig {
@@ -420,6 +424,11 @@ public:
     // Change the white point (RuntimeConfig::white_point) between frames. No-op
     // unless the runtime was built with linear_input.
     void set_white_point(float);
+    // Optional host recording boundary around each pass's network dispatches.
+    // true enters the network, false leaves it. The host ends the old buffer
+    // and returns a recording buffer on the same device. Core never submits;
+    // a null callback preserves the original single-buffer behavior.
+    void set_network_segments(std::function<VkCommandBuffer(VkCommandBuffer, bool)>);
 
     // **What the pass costs on the GPU**, from a timestamp pair around the work
     // this runtime records - everything between the first barrier and the last,

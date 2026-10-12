@@ -20,12 +20,15 @@ int main(int argc, char** argv) {
     bool temporalRequested = false, temporalMode = false;
     bool ahead = false;
     bool aco = false;
+    bool threePasses = false;
     for (int i = 3; i < argc; ++i) timeoutMode |= std::strcmp(argv[i], "--timeout") == 0;
     for (int i = 3; i < argc; ++i) large |= std::strcmp(argv[i], "--large") == 0;
     for (int i = 3; i < argc; ++i) temporalRequested |= std::strcmp(argv[i], "--temporal") == 0;
     for (int i = 3; i < argc; ++i) ahead |= std::strcmp(argv[i], "--ahead") == 0;
     for (int i = 3; i < argc; ++i) aco |= std::strcmp(argv[i], "--aco") == 0;
+    for (int i = 3; i < argc; ++i) threePasses |= std::strcmp(argv[i], "--three-passes") == 0;
     Require(!aco || mochi, "ACO fixture requires Mochizuki");
+    Require(!threePasses || mochi, "three-pass fixture requires Mochizuki");
     Ptr<ID3D12Debug> debug;
     if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug)))) debug->EnableDebugLayer();
     HMODULE dll = LoadLibraryW(Widen(argv[1]).c_str()); Require(dll != nullptr, "runtime load");
@@ -98,7 +101,7 @@ int main(int argc, char** argv) {
                 f.color = source; f.color_width = width; f.color_height = height;
                 f.color_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
                 f.flags = LMXXF_NR_FRAME_FLAG_STRENGTH | MOCHIZUKI_NR_FRAME_FLAG_INLINE_EXECUTION;
-                f.transfer_strength = f.color_strength = f.model_scale = 1; f.passes = 1;
+                f.transfer_strength = f.color_strength = f.model_scale = 1; f.passes = threePasses ? 3 : 1;
                 if (temporalMode) {
                     f.flags |= MOCHIZUKI_NR_FRAME_FLAG_TEMPORAL; f.motion = motion.Get();
                     f.motion_width = width; f.motion_height = height; f.motion_scale_x = f.motion_scale_y = 1;
@@ -260,6 +263,14 @@ int main(int argc, char** argv) {
     }
     if (count)
         std::printf("%u fresh inline recordings at %ux%u: stable queue and bounded leases PASS\n", count, width, height);
+    if (threePasses && !timeoutMode) {
+        auto getInfo = reinterpret_cast<PFN_MochizukiNrGetInfo>(GetProcAddress(dll, "MochizukiNrGetInfo"));
+        MochizukiNrInfo info {}; info.struct_size = sizeof info;
+        Require(getInfo && getInfo(context, &info) == 0, "three-pass info");
+        Require(info.max_passes >= 3 && info.network_dispatches > 250,
+                "three-pass request fell back to fewer network executions");
+        std::printf("inline three passes: capacity=%u dispatches=%u PASS\n", info.max_passes, info.network_dispatches);
+    }
     if (temporalMode && !timeoutMode) {
         auto getInfo = reinterpret_cast<PFN_MochizukiNrGetInfo>(GetProcAddress(dll, "MochizukiNrGetInfo"));
         MochizukiNrInfo info {}; info.struct_size = sizeof info; Require(getInfo && getInfo(context, &info) == 0, "history info");
@@ -378,7 +389,7 @@ int main(int argc, char** argv) {
                     extra.color = patterns[0].Get(); extra.color_width = width; extra.color_height = height;
                     extra.color_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
                     extra.flags = LMXXF_NR_FRAME_FLAG_STRENGTH | MOCHIZUKI_NR_FRAME_FLAG_INLINE_EXECUTION;
-                    extra.transfer_strength = extra.color_strength = extra.model_scale = 1; extra.passes = 1;
+                    extra.transfer_strength = extra.color_strength = extra.model_scale = 1; extra.passes = threePasses ? 3 : 1;
                     LmxxfNrJob rejected {}; rejected.struct_size = sizeof rejected;
                     const int rc = mzPrepare(context, &extra, &rejected);
                     char message[256] {}; api.GetLastError(message, sizeof message);

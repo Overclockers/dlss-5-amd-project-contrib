@@ -21,6 +21,7 @@ if /i "%~1"=="inline" goto inline
 if /i "%~1"=="aco-inline" goto inline
 if /i "%~1"=="aco-temporal" goto acotemporal
 if /i "%~1"=="hdr-shader" goto hdrshader
+if /i "%~1"=="phase-failure" goto phasefailure
 cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /I OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler tests/mochizuki/runtime.cpp /Foexports/mochizuki-tests/runtime.obj /Feexports/mochizuki-tests/runtime.exe /link d3d12.lib dxgi.lib || exit /b 1
 if /i "%~1"=="destroy-tail" goto destroytail
 if /i "%~1"=="startup" goto startup
@@ -60,6 +61,14 @@ if /i "%~2"=="frame-budget" set "MZ_TEST_FRAME_BUDGET_ONCE=1"
 exports\mochizuki-tests\runtime.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" --pass-switch "%MOCHI_PASS_MODE%"
 exit /b %errorlevel%
 
+:phasefailure
+cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /I OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler tests/mochizuki/queue_segments.cpp /Foexports/mochizuki-tests/queue_segments.obj /Feexports/mochizuki-tests/queue_segments.exe /link d3d12.lib dxgi.lib dxguid.lib || exit /b 1
+for %%P in (2 3) do (
+  set "MZ_TEST_PHASE_SUBMIT_FAIL_AT=%%P"
+  exports\mochizuki-tests\queue_segments.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" || exit /b 1
+)
+exit /b 0
+
 :inline
 set "MOCHI_ACO_ARG="
 if /i "%~1"=="aco-inline" set "MOCHI_ACO_ARG=--aco"
@@ -76,6 +85,8 @@ if errorlevel 1 exit /b 1
 exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --timeout --ahead %MOCHI_ACO_ARG%
 if errorlevel 1 exit /b 1
 exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --large --temporal %MOCHI_ACO_ARG%
+if errorlevel 1 exit /b 1
+exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --large --temporal --three-passes %MOCHI_ACO_ARG%
 exit /b %errorlevel%
 
 :startup

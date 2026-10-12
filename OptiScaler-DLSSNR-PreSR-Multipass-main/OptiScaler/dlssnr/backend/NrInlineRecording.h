@@ -9,6 +9,8 @@
 #include <cstdio>
 #include <thread>
 #include <algorithm>
+#include <memory>
+#include <vector>
 
 namespace DlssNr::Backend::InlineRecording
 {
@@ -85,6 +87,13 @@ class Resources
     Ptr<ID3D12PipelineState> controlPso, composePso;
     Ptr<ID3D12Resource> control, capture, sample, readback, decision, decisionReadback;
     Ptr<ID3D12Fence> sideFence, gameFence;
+    struct KernelHandle {
+        HANDLE value = nullptr;
+        ~KernelHandle() { if (value) CloseHandle(value); }
+    };
+    // Unique registrations are never reused for another fence value. Retain
+    // even timed-out registrations until this recording's completion proof.
+    std::vector<std::unique_ptr<KernelHandle>> captureEvents;
     UINT64 serial = 0, finalValue = 0, gameValue = 0;
     std::atomic<bool> scheduled {false};
     bool started = false, uncertain = false;
@@ -312,6 +321,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
     }
     void BeforeExecute(ID3D12CommandQueue* game) {
         if (!Complete()) throw std::runtime_error("inline recording still executing");
+        captureEvents.clear();
         started = true; uncertain = noNetwork = false; sideUncertain = true;
         finalValue = gameValue = 0; gameFence.Reset();
         scheduled.store(false, std::memory_order_release);
@@ -338,19 +348,32 @@ cbuffer Size : register(b0) { uint width; uint height; }
     }
     bool WaitCapture() {
         const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-        // Read the fence itself: no outstanding auto-reset event can wake a later wait.
+        // The event wakes this worker promptly; the fence remains the proof.
+        // Reusing one event across values can let a late signal wake a new wait.
         auto waitFence = [&](UINT64 value) {
-            for (;;) {
-                const auto done = sideFence->GetCompletedValue();
-                if (done == UINT64_MAX) return false;
-                if (done >= value) return true;
-                if (std::chrono::steady_clock::now() >= until) return false;
-                Sleep(1);
-            }
+            const auto done = sideFence->GetCompletedValue();
+            if (done == UINT64_MAX) return false;
+            if (done >= value) return true;
+            auto event = std::make_unique<KernelHandle>();
+            event->value = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+            Check(event->value ? S_OK : HRESULT_FROM_WIN32(GetLastError()), "inline capture event");
+            const auto handle = event->value;
+            captureEvents.push_back(std::move(event));
+            Check(sideFence->SetEventOnCompletion(value, handle), "inline capture event registration");
+            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(until - std::chrono::steady_clock::now()).count();
+            if (remaining <= 0) return false;
+            const auto result = WaitForSingleObject(handle, DWORD(remaining));
+            if (result == WAIT_FAILED) Check(HRESULT_FROM_WIN32(GetLastError()), "inline capture event wait");
+            const auto finished = sideFence->GetCompletedValue();
+            return result == WAIT_OBJECT_0 && finished != UINT64_MAX && finished >= value;
         };
         // The reset list must retire before reusing the sampling allocator.
         const auto reset = serial;
         if (!waitFence(reset)) return false;
+        auto timer = std::make_unique<KernelHandle>();
+        timer->value = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_MODIFY_STATE | SYNCHRONIZE);
+        if (!timer->value) timer->value = CreateWaitableTimerExW(nullptr, nullptr, 0, TIMER_MODIFY_STATE | SYNCHRONIZE);
+        Check(timer->value ? S_OK : HRESULT_FROM_WIN32(GetLastError()), "inline capture backoff timer");
         auto backoff = std::chrono::microseconds(50);
         for (unsigned polls = 0; polls < 2048 && std::chrono::steady_clock::now() < until; ++polls) {
             Check(sampleAlloc->Reset(), "inline poll allocator"); Check(sampleList->Reset(sampleAlloc.Get(), nullptr), "inline poll list");
@@ -365,7 +388,12 @@ cbuffer Size : register(b0) { uint width; uint height; }
             void* p = nullptr; D3D12_RANGE range {0, 4}; Check(readback->Map(0, &range, &p), "inline poll map");
             const UINT captured = *static_cast<const UINT*>(p); D3D12_RANGE none {0, 0}; readback->Unmap(0, &none);
             if (captured) return true;
-            std::this_thread::sleep_for(backoff);
+            // sleep_for(50us) can sleep a whole Windows timer tick. Use a
+            // private timer, without changing the process/system timer period.
+            LARGE_INTEGER due {}; due.QuadPart = -10 * backoff.count();
+            Check(SetWaitableTimer(timer->value, &due, 0, nullptr, nullptr, FALSE) ? S_OK : HRESULT_FROM_WIN32(GetLastError()), "inline capture timer arm");
+            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(until - std::chrono::steady_clock::now()).count();
+            if (remaining <= 0 || WaitForSingleObject(timer->value, DWORD(remaining)) != WAIT_OBJECT_0) return false;
             backoff = (std::min)(backoff * 2, std::chrono::microseconds(5000));
         }
         return false;

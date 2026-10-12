@@ -773,3 +773,24 @@ Reuse one side compute queue per NR session, retaining independent recording buf
 已开始的录制保持既有队列完成证明与延迟回收，不提前释放。
 针对性验证使用真实 INI 保存再加载及实际 Reload 片段（14 个边界用例、缺键），
 WARP/mock runtime 下 12 次实际命令列表丢弃与已开始资源保留验证；不运行完整 CI。
+
+## 2026-10-12：Mochizuki 内联网络使用独立计算队列
+
+隔离实验复现同尺寸一层网络在内联中经过时间翻倍；只改变 CPU fence 唤醒或
+移出轮询循环内的屏障不能解决。独立计算队列使 FP32 网络恢复至切分基线，
+分段的 FP16 路径也恢复网络时间并保持完整输出字节一致。
+
+`NrInline` 默认仍为 false。Mochizuki 内联作业在有兼容计算队列时，把每个 pass 的
+网络循环录在 compute-only family，格式转换、缩放和历史操作保留原 graphics family。
+同设备资源声明并发 family 访问，时间线信号量串起所有阶段；最后一个 graphics
+fence 才是 slot 复用和整个网络链回收的证明。普通切分不改变原有队列路线。
+无兼容计算 family 或设备拒绝该可选队列时，保留原 graphics 路线。
+未确认的分段提交失败保留资源；跨段录制失败不自动重试已改变的核心状态。
+
+宿主捕获使用唯一 fence event 和私有高精度回退 timer，避免微秒 sleep 退化为整 tick；
+保留完成 fence 值核对及录制资源生命周期，不复用仍可能迟到的通知。
+GPU 等待仍是 64×32768 的工作预算，未扩大预算，也不承诺通用 GPU 时间上界。
+
+验证：真实 WARP/硬件丢弃与迟到结果冻结；原生/ACO 的重放、提前 Reset、2–4 ahead、
+2560×1440 时序和三层（实际369 dispatch）通过。提交第2/3阶段失败仍拒绝单凭D3D12
+尾部回收；官方173文件闭包和10项补丁回放一致。未做其他GPU/驱动与完整游戏验收。

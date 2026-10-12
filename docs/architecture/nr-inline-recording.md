@@ -12,8 +12,12 @@ recorded normally, followed by a D3D12 capture flag. A Windows threadpool worker
 samples that flag through an independent D3D12 compute queue (50 microseconds
 exponential backoff to 5 ms, at most 2048 samples and a 10 s deadline); readback is read only
 after that queue's fence completes. Sampling and completion use separate buffers.
-No HIP/Vulkan shader is expected to see a D3D12 shader flag. Fence waits poll the
-actual completed value at 1 ms intervals, never reusing an outstanding event.
+No HIP/Vulkan shader is expected to see a D3D12 shader flag. Unique fence events
+wake the worker; the completed fence value remains the proof. Registrations stay
+owned by that recording until completion and are never reused across fence values.
+Sampling backoff uses a private high-resolution waitable timer (ordinary timer
+fallback), without changing the global timer period. This avoids 50-us sleeps
+turning into whole Windows timer ticks.
 Enqueue ordering uses a condition variable notified after the preceding runtime End.
 
 After observing capture, the worker calls the current recording ABI's Enqueue on
@@ -22,6 +26,17 @@ remains: side queue input Signal, network wait/run/signal, side queue output Wai
 A side-queue shader then publishes the D3D12 completion flag. Putting the input
 Signal behind the entire waiting game list would create a circular dependency;
 the side queue and capture proof are essential.
+
+For Mochizuki inline jobs, an available compute-only Vulkan family executes the
+network dispatch loop. Graphics-required conversion, scaling and history work
+remain on the original family. A timeline semaphore orders each pre/network/post
+segment; core resources and adapter images support both families concurrently.
+The final graphics fence certifies the entire chain before a slot can be reused.
+Partial or unconfirmed submission fails closed and retains resources. A recording
+failure after crossing a segment boundary poisons the session instead of retrying
+potentially stale core layout/history state. The ordinary game-list split path
+continues to use its original Vulkan queue. This changes network queue selection,
+not the compute/pixel stage of the D3D12 waiting shader.
 
 The game list contains 64 bounded wait dispatches, each limited to 32768 iterations.
 UAV barriers serialize slices and the final success snapshot. This is a work budget,

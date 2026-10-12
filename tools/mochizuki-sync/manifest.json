@@ -265,6 +265,15 @@
       ],
       "source_commit": "60f9202fd6bc0384d1d4615658cee2ddca9b3004",
       "author": "Overclockers"
+    },
+    {
+      "feature": "inline-compute-segments",
+      "path": "patches/10-inline-compute-segments.patch",
+      "files": [
+        "windows/src/core/nr_runtime.cpp",
+        "windows/src/core/nr_runtime.hpp",
+        "windows/src/core/nrvk.hpp"
+      ]
     }
   ],
   "source_comment_policy": "omit-sample-address-annotations-v1"

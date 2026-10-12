@@ -579,6 +579,7 @@ struct Runtime::Impl {
     // format-converting blit (alpha pass or the post block's store).
     bool round_u8{};
     Transfer transfer{Transfer::Identical};
+    std::function<VkCommandBuffer(VkCommandBuffer, bool)> network_segments;
     // The network's input image is in the frame's own format (its UNORM twin
     // for *_SRGB) and a plain copy fills it; see the graph's --tex-in-format.
     bool direct_in{};
@@ -1211,6 +1212,10 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
     if (!s.ctx.adopt(host.instance, host.physical, host.device, host.queue, host.queue_family, &why))
         throw std::runtime_error("NR device unsupported: " + why);
     s.ctx.queue_lock = host.queue_lock; s.ctx.queue_unlock = host.queue_unlock;
+    if (host.secondary_family != VK_QUEUE_FAMILY_IGNORED &&
+        (host.secondary_family >= count || !(props[host.secondary_family].queueFlags & VK_QUEUE_COMPUTE_BIT)))
+        throw std::invalid_argument("NR secondary queue must support compute");
+    s.ctx.secondary_family = host.secondary_family;
     s.ctx.buffer_device_address = host.buffer_device_address;
     s.ctx.require_matrix_config();
     // Where the pass's own cost is measured. Two queries per ring slot. A queue
@@ -1756,6 +1761,9 @@ Runtime::~Runtime() = default;
 uint32_t Runtime::model_width() const { return impl_->mw; }
 uint32_t Runtime::model_height() const { return impl_->mh; }
 
+void Runtime::set_network_segments(std::function<VkCommandBuffer(VkCommandBuffer, bool)> callback) {
+    impl_->network_segments = std::move(callback);
+}
 void Runtime::set_white_point(float v) {
     if (impl_->linear) impl_->white_point = v > 1e-4f ? v : 1e-4f;
 }
@@ -2454,6 +2462,7 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
             if (temporal) copy_general(impl_->history_store[pass], t.history);
         }
+        if (impl_->network_segments) cmd = impl_->network_segments(cmd, true);
         const bool time_net = impl_->timing_ok && impl_->split_timing;
         const uint32_t net_query = timing_slot * impl_->timing_stride + 2 + 2 * pass;
         if (time_net) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, impl_->timing, net_query);
@@ -2503,6 +2512,7 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
                             s.runner.inv_barrier && !last);
         }
         if (time_net) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, impl_->timing, net_query + 1);
+        if (impl_->network_segments) cmd = impl_->network_segments(cmd, false);
         if (temporal && !t.pingpong) {
             // History is a copy of what the MODEL wrote - the temporal post variant
             // puts that on the second surface, before the application strength -

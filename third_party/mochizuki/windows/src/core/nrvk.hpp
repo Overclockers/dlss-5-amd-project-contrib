@@ -64,6 +64,7 @@ struct Context {
     VkDevice device{};
     VkQueue queue{};
     uint32_t family{};
+    uint32_t secondary_family = VK_QUEUE_FAMILY_IGNORED;
     VkPhysicalDeviceMemoryProperties mem{};
     float timestamp_period{};
     // bufferDeviceAddress is enabled on the device: kernels may read the activation arena through
@@ -479,6 +480,10 @@ struct Context {
         device_address = device_address && buffer_device_address;
         VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         info.size = bytes;
+        const uint32_t queueFamilies[] {family, secondary_family};
+        if (secondary_family != VK_QUEUE_FAMILY_IGNORED && secondary_family != family) {
+            info.sharingMode = VK_SHARING_MODE_CONCURRENT; info.queueFamilyIndexCount = 2; info.pQueueFamilyIndices = queueFamilies;
+        }
         info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         if (device_address) info.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
@@ -634,6 +639,10 @@ struct Context {
         // which need not be storage-capable - *_SRGB's UNORM twin, 11/11/10).
         if (!storage) ii.usage &= ~VkImageUsageFlags(VK_IMAGE_USAGE_STORAGE_BIT);
         ii.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        const uint32_t queueFamilies[] {family, secondary_family};
+        if (secondary_family != VK_QUEUE_FAMILY_IGNORED && secondary_family != family) {
+            ii.sharingMode = VK_SHARING_MODE_CONCURRENT; ii.queueFamilyIndexCount = 2; ii.pQueueFamilyIndices = queueFamilies;
+        }
         ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         NRVK_CHECK(vkCreateImage(device, &ii, nullptr, &im.handle));
         VkMemoryRequirements req;

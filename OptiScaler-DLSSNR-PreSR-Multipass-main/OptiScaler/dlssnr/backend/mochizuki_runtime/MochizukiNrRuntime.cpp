@@ -200,6 +200,7 @@ struct TestHooks
     uint64_t frameBudgetAt = 0;  // MZ_TEST_FRAME_BUDGET_AT=N: refuse the Nth candidate frame-buffer admission
     bool rejectAcoDevice = false; // MZ_TEST_REJECT_ACO_DEVICE=1: the first pipeline-binary device is treated as rejected
     uint64_t dropSubmitAt = 0;   // MZ_TEST_DROP_SUBMIT_AT=N: Enqueue N skips its Vulkan submit, the game still waits
+    uint64_t phaseSubmitFailAt = 0; // MZ_TEST_PHASE_SUBMIT_FAIL_AT=N: fail phase N of an inline chain
 };
 
 const TestHooks& Hooks()
@@ -233,6 +234,7 @@ const TestHooks& Hooks()
             h.frameBudgetAt = 1;
         h.rejectAcoDevice = on("MZ_TEST_REJECT_ACO_DEVICE");
         h.dropSubmitAt = number("MZ_TEST_DROP_SUBMIT_AT");
+        h.phaseSubmitFailAt = number("MZ_TEST_PHASE_SUBMIT_FAIL_AT");
         return h;
     }();
     return hooks;
@@ -695,6 +697,8 @@ struct Vulkan
     VkQueue queue {};      // the frames'
     VkQueue buildQueue {}; // the network builds': a second queue of the family at a lower priority, else `queue`
     uint32_t family = 0;
+    uint32_t computeFamily = VK_QUEUE_FAMILY_IGNORED;
+    VkQueue computeQueue {};
     bool bufferDeviceAddress = false; // enabled on `device`; the network reads its arena through it where faster
     VkPhysicalDeviceMemoryProperties memory {};
     PFN_vkGetMemoryWin32HandlePropertiesKHR memoryHandleProperties {};
@@ -761,6 +765,10 @@ struct Vulkan
             }
         if (family == count)
             throw std::runtime_error("[unsupported] no graphics and compute queue family");
+        for (uint32_t i = 0; i < count; ++i)
+            if ((families[i].queueFlags & VK_QUEUE_COMPUTE_BIT) && !(families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) &&
+                families[i].timestampValidBits >= families[family].timestampValidBits) { computeFamily = i; break; }
+
 
         // What nrvk::Context::create enables, plus the timeline semaphores the game's fences are imported as.
         VkPhysicalDeviceCooperativeMatrixFeaturesKHR coop {
@@ -889,8 +897,10 @@ struct Vulkan
         qi.queueCount = std::min<uint32_t>(families[family].queueCount, uint32_t(std::size(priorities)));
         qi.pQueuePriorities = priorities;
         VkDeviceCreateInfo di { VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, &coop };
-        di.queueCreateInfoCount = 1;
-        di.pQueueCreateInfos = &qi;
+        VkDeviceQueueCreateInfo queues[2] { qi, {VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO} };
+        queues[1].queueFamilyIndex = computeFamily; queues[1].queueCount = 1; queues[1].pQueuePriorities = priorities;
+        di.queueCreateInfoCount = computeFamily == VK_QUEUE_FAMILY_IGNORED ? 1 : 2;
+        di.pQueueCreateInfos = queues;
         di.enabledExtensionCount = uint32_t(enabled.size());
         di.ppEnabledExtensionNames = enabled.data();
         // prepare() adds pipeline-binary extensions only when a bundle was configured.
@@ -930,12 +940,24 @@ struct Vulkan
             di.ppEnabledExtensionNames = enabled.data();
             deviceResult = vkCreateDevice(physical, &di, nullptr, &createdDevice);
         }
+        if (deviceResult != VK_SUCCESS && computeFamily != VK_QUEUE_FAMILY_IGNORED &&
+            KindOf(deviceResult) != NrError::DeviceLost) {
+            if (createdDevice) vkDestroyDevice(createdDevice, nullptr);
+            createdDevice = VK_NULL_HANDLE;
+            nr::logf("[mochizuki] device rejected the optional compute family (%d); inline keeps the graphics queue",
+                     int(deviceResult));
+            computeFamily = VK_QUEUE_FAMILY_IGNORED;
+            di.queueCreateInfoCount = 1;
+            di.pQueueCreateInfos = &qi;
+            deviceResult = vkCreateDevice(physical, &di, nullptr, &createdDevice);
+        }
         VkCheck(deviceResult, "vkCreateDevice");
         device = createdDevice;
         if (acoFeatures.active)
             nr::binary::mark(device);
         probe.Report(device, physical);
         vkGetDeviceQueue(device, family, 0, &queue);
+        if (computeFamily != VK_QUEUE_FAMILY_IGNORED) vkGetDeviceQueue(device, computeFamily, 0, &computeQueue);
         buildQueue = queue;
         if (qi.queueCount > 1)
             vkGetDeviceQueue(device, family, 1, &buildQueue);
@@ -1189,6 +1211,10 @@ struct Image
         ci.samples = VK_SAMPLE_COUNT_1_BIT;
         ci.tiling = VK_IMAGE_TILING_OPTIMAL;
         ci.usage = kImageUsage;
+        // Native pre/post blocks may directly sample/store this adapter image.
+        // The phase timeline orders accesses across both queue families.
+        const uint32_t queueFamilies[] {vk.family, vk.computeFamily};
+        if (vk.computeQueue) {ci.sharingMode = VK_SHARING_MODE_CONCURRENT; ci.queueFamilyIndexCount = 2; ci.pQueueFamilyIndices = queueFamilies;}
         ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         VkCheck(vkCreateImage(vk.device, &ci, nullptr, &image), "vkCreateImage");
         VkMemoryRequirements req {};
@@ -1340,6 +1366,7 @@ struct Job
     };
     uint32_t state = LMXXF_NR_JOB_NONE;
     bool firstPass = false;
+    bool inlineExecution = false;
     bool enqueued = false; // EnqueueHip ran for it: a second call does nothing
     ID3D12Resource* colour {};
     D3D12_RESOURCE_STATES colourState {};
@@ -1703,6 +1730,14 @@ struct Session
     std::atomic<bool> released { false }; // Lose's signal of fromVk to its maximum was made
     uint32_t rereleases = 0;              // Rerelease's signals: the watchdog's, then ~Session's
     VkCommandPool pool {};
+    VkCommandPool computePool {};
+    VkSemaphore phaseSemaphore {};
+    uint64_t phaseValue = 0;
+    size_t loggedPhaseCount = 0;
+    struct PhaseCommand {VkCommandBuffer command; bool compute;};
+    // A slot's final graphics fence certifies every preceding compute segment.
+    // Retained game recordings still own their normal buffers independently.
+    std::vector<VkCommandBuffer> phaseGraphics[kSlots], phaseCompute[kSlots];
     VkCommandBuffer commands[kSlots] {};
     VkFence done[kSlots] {};
     bool inFlight[kSlots] {};
@@ -2485,6 +2520,10 @@ struct Session
         std::fill(std::begin(commands), std::end(commands), VkCommandBuffer {});
         std::fill(std::begin(fallbackCommands), std::end(fallbackCommands), VkCommandBuffer {});
         pool = {};
+        if (computePool) vkDestroyCommandPool(vk.device, computePool, nullptr);
+        if (phaseSemaphore) vkDestroySemaphore(vk.device, phaseSemaphore, nullptr);
+        computePool = {}; phaseSemaphore = {}; phaseValue = 0;
+        for (auto& x : phaseGraphics) x.clear(); for (auto& x : phaseCompute) x.clear();
         toVk.Release(vk.device);
         fromVk.Release(vk.device);
         vk.Destroy();
@@ -3055,6 +3094,15 @@ struct Session
         fromVk.Create(device, vk, "fromVk");
         VkCommandPoolCreateInfo pi { VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
         pi.queueFamilyIndex = vk.family;
+        if (vk.computeQueue) {
+            pi.queueFamilyIndex = vk.computeFamily;
+            pi.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+            VkCheck(vkCreateCommandPool(vk.device, &pi, nullptr, &computePool), "compute command pool");
+            VkSemaphoreTypeCreateInfo type {VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO}; type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+            VkSemaphoreCreateInfo si {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO, &type};
+            VkCheck(vkCreateSemaphore(vk.device, &si, nullptr, &phaseSemaphore), "phase semaphore");
+            pi.queueFamilyIndex = vk.family;
+        }
         pi.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
         VkCheck(vkCreateCommandPool(vk.device, &pi, nullptr, &pool), "vkCreateCommandPool");
         VkCommandBufferAllocateInfo ai { VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
@@ -3394,6 +3442,7 @@ struct Session
             host.device = vk.device;
             host.queue = vk.buildQueue;
             host.queue_family = vk.family;
+            host.secondary_family = vk.computeFamily;
             host.buffer_device_address = vk.bufferDeviceAddress;
             char options[64] = {};
             if (key.scale != 1.f || key.maxPasses > 1)
@@ -3882,6 +3931,7 @@ struct Session
         bool followed = false;             // Follow ran for the producer
         bool signalled = false;            // the producer's Signal(toVk, produced) is on the game queue
         bool submitted = false;            // the network's vkQueueSubmit went through
+        bool segmentedRecording = false;   // core layout/history state crossed a new command buffer
     };
 
     // One frame, between the halves of the game's list, from any game queue: the network, or its colour passed
@@ -3902,6 +3952,13 @@ struct Session
         catch (const std::exception& e)
         {
             const NrError::Kind kind = KindOf(e);
+            if (sub.segmentedRecording && !sub.submitted) {
+                // Recording changed the core's tracked layouts/history. Do not
+                // silently retry that state after a partially recorded chain.
+                // Actual queued work retains its ordinary retirement proofs.
+                failed = true;
+                throw;
+            }
             if (!zeroOutputFallback || !input.buffer || kind == NrError::DeviceLost || sub.submitted)
                 throw;
             Passthrough(producer, sub);
@@ -3971,6 +4028,50 @@ struct Session
         RequestHistoryReset(ResetPassthrough);
     }
 
+    VkCommandBuffer PhaseBuffer(uint32_t slot, bool compute, size_t index) {
+        auto& buffers = compute ? phaseCompute[slot] : phaseGraphics[slot];
+        if (index >= buffers.size()) {
+            VkCommandBufferAllocateInfo ai {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+            ai.commandPool = compute ? computePool : pool; ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; ai.commandBufferCount = 1;
+            VkCommandBuffer buffer {}; VkCheck(vkAllocateCommandBuffers(vk.device, &ai, &buffer), "phase allocate"); buffers.push_back(buffer);
+        }
+        auto result = buffers[index]; VkCheck(vkResetCommandBuffer(result, 0), "phase reset");
+        VkCommandBufferBeginInfo bi {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO}; bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        VkCheck(vkBeginCommandBuffer(result, &bi), "phase begin"); return result;
+    }
+    void SubmitPhases(const std::vector<PhaseCommand>& phases, UINT64 produced, UINT64 finished, VkFence fence) {
+        if (deviceLost) throw NrError(NrError::DeviceLost, "phase submit after device loss");
+        if (phaseValue > UINT64_MAX - (phases.size() - 1))
+            throw NrError(NrError::DeviceLost, "network phase timeline exhausted");
+        const auto base = phaseValue; phaseValue += phases.size() - 1;
+        const VkPipelineStageFlags stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+        gpuUsed = true;
+        // Semaphore memory dependencies cover all prior writes. Concurrent
+        // resources avoid exclusive ownership transfers; FIFO post->next pre
+        // on graphics also serializes the shared temporal/activation state.
+        for (size_t i = 0; i < phases.size(); ++i) {
+            const UINT64 wait = i ? base + i : produced;
+            const UINT64 signal = i + 1 == phases.size() ? finished : base + i + 1;
+            VkSemaphore waiting = i ? phaseSemaphore : toVk.semaphore;
+            VkSemaphore signalling = i + 1 == phases.size() ? fromVk.semaphore : phaseSemaphore;
+            VkTimelineSemaphoreSubmitInfo values {VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
+            values.waitSemaphoreValueCount = values.signalSemaphoreValueCount = 1; values.pWaitSemaphoreValues = &wait; values.pSignalSemaphoreValues = &signal;
+            VkSubmitInfo si {VK_STRUCTURE_TYPE_SUBMIT_INFO, &values}; si.waitSemaphoreCount = si.signalSemaphoreCount = si.commandBufferCount = 1;
+            si.pWaitSemaphores = &waiting; si.pWaitDstStageMask = &stage; si.pCommandBuffers = &phases[i].command; si.pSignalSemaphores = &signalling;
+            const auto r = deviceLost ? VK_ERROR_DEVICE_LOST :
+                (hooks.phaseSubmitFailAt == i + 1 ? VK_ERROR_OUT_OF_HOST_MEMORY :
+                 vkQueueSubmit(phases[i].compute ? vk.computeQueue : vk.queue, 1, &si,
+                               i + 1 == phases.size() ? fence : VK_NULL_HANDLE));
+            if (r != VK_SUCCESS) {
+                uncertainExecution = true;
+                char message[192] {};
+                std::snprintf(message, sizeof message, "inline network phase %zu/%zu submit failed (%d); resources retained",
+                              i + 1, phases.size(), int(r));
+                throw NrError(NrError::DeviceLost, message, r);
+            }
+        }
+        Submitted(produced, finished);
+    }
     void RunNetwork(ID3D12CommandQueue* producer, uint64_t call, Submission& sub)
     {
         if (!runtime)
@@ -4098,6 +4199,19 @@ struct Session
         if (call == hooks.enqueueThrowAt)
             throw std::runtime_error("MZ_TEST_ENQUEUE_THROW_AT: recording the network failed (test hook)");
 
+        // Record the whole chain before submitting any segment. Conversion and
+        // history work stay on graphics; only the network loop changes engines.
+        std::vector<PhaseCommand> phases;
+        struct ClearSegments {nr::Runtime* runtime; ~ClearSegments() { runtime->set_network_segments({}); }} clearSegments {runtime.get()};
+        if (job.inlineExecution && vk.computeQueue) {
+            phases.push_back({c, false}); size_t graphics = 0, compute = 0;
+            runtime->set_network_segments([&, graphics, compute](VkCommandBuffer previous, bool enter) mutable {
+                sub.segmentedRecording = true;
+                VkCheck(vkEndCommandBuffer(previous), "phase end");
+                auto next = PhaseBuffer(slot, enter, enter ? compute++ : graphics++);
+                phases.push_back({next, enter}); c = next; return next;
+            });
+        }
         nr::EngineFrame frame {};
         frame.colour.image = colour.image;
         frame.colour.format = colourVk;
@@ -4205,7 +4319,15 @@ struct Session
         }
         else
         {
-            VkCheck(Submit(c, sub.produced, sub.finished, done[slot]), "vkQueueSubmit");
+            if (phases.size() > 1) {
+                if (loggedPhaseCount != phases.size()) {
+                    loggedPhaseCount = phases.size();
+                    nr::logf("[mochizuki] inline network: compute family %u, conversion family %u, %zu segments for %d passes",
+                             vk.computeFamily, vk.family, phases.size(), job.controls.passes);
+                }
+                SubmitPhases(phases, sub.produced, sub.finished, done[slot]);
+            }
+            else VkCheck(Submit(c, sub.produced, sub.finished, done[slot]), "vkQueueSubmit");
             inFlight[slot] = true;
         }
         sub.submitted = true;
@@ -4276,6 +4398,8 @@ struct Session
             DestroyFences();
             if (pool)
                 vkDestroyCommandPool(vk.device, pool, nullptr);
+            if (computePool) vkDestroyCommandPool(vk.device, computePool, nullptr);
+            if (phaseSemaphore) vkDestroySemaphore(vk.device, phaseSemaphore, nullptr);
         }
         toVk.Release(vk.device);
         fromVk.Release(vk.device);
@@ -4616,6 +4740,7 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
             }
             else
                 s->RequestHistoryReset(Session::ResetNoMotion); // consumed at execution
+            next.inlineExecution = (info->flags & MOCHIZUKI_NR_FRAME_FLAG_INLINE_EXECUTION) != 0;
             next.firstPass = g.firstPass && s->net.firstPass && served > 1 && s->firstResult;
             job->first_pass_output = next.firstPass ? s->firstResult : nullptr;
             next.state = LMXXF_NR_JOB_PREPARED;
