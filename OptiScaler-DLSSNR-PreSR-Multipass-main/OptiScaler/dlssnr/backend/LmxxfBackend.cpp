@@ -28,6 +28,14 @@ namespace
 std::atomic<unsigned> g_lastColorH { 0 };
 // Bounded phase evidence for the two reported RE titles, not a per-frame trace.
 thread_local uint64_t reTraceId = 0;
+void RecordingFailure(const LmxxfRecording::SessionOwner::Failure& failure) noexcept
+{
+    try {
+        LOG_ERROR("lmxxf recording stopped: phase={} result={} (0x{:08X}) queue={:p}: {}",
+                  failure.phase, failure.result, static_cast<uint32_t>(failure.result),
+                  failure.queue, failure.error.data());
+    } catch (...) {}
+}
 void ReTrace(uint64_t id, const char* phase, const void* object, int32_t result) noexcept
 {
     if (!id) return;
@@ -461,6 +469,7 @@ bool LmxxfBackend::EnsureSession()
         return false;
     }
     session = ctx;
+    sessionOwner->onFailure = RecordingFailure;
     timingConfigured = false;
     activityOwner.store(sessionOwner, std::memory_order_release);
     sessionReady = true;
@@ -483,8 +492,13 @@ bool LmxxfBackend::NoteEnqueueRecoveries()
     if (!sessionOwner || !sessionOwner->failed) return true;
     recoveryDisabled = true;
     activityOwner.store({}, std::memory_order_release);
+    const auto failure = sessionOwner->failure;
+    char message[512] {};
+    std::snprintf(message, sizeof message, "lmxxf: recording failed at %s (rc=%d); NR off: %s",
+                  failure.phase ? failure.phase : "unknown stage", failure.result,
+                  failure.error[0] ? failure.error.data() : "see log");
     sessionOwner.reset(); session = nullptr; sessionReady = false;
-    SetStatus("lmxxf: recording execution failed; NR off (see log)");
+    SetStatus(message);
     return false;
 }
 
@@ -531,8 +545,10 @@ ID3D12Resource *LmxxfBackend::FinishRecord(ID3D12GraphicsCommandList *recordCmd,
     lease->trace = &ReTrace;
     ReTrace(reTraceId, "inputs.begin", jobHandle, 0);
     lease->neural = diagnostic == LmxxfProbe::Mode::Off;
-    if (api->table.RecordInputs(session, jobHandle, recordCmd) != LMXXF_NR_OK)
+    const auto inputsRc = api->table.RecordInputs(session, jobHandle, recordCmd);
+    if (inputsRc != LMXXF_NR_OK)
     {
+        sessionOwner->RecordFailure("RecordInputs", inputsRc, nullptr);
         sessionOwner->failed = true;
         SetStatus("lmxxf: RecordInputs failed");
         return nullptr;
@@ -543,6 +559,7 @@ ID3D12Resource *LmxxfBackend::FinishRecord(ID3D12GraphicsCommandList *recordCmd,
     ReTrace(reTraceId, "split.end", recordCmd, splitHr);
     if (splitHr != S_OK)
     {
+        sessionOwner->RecordFailure("Split", splitHr, nullptr, "command-list split failed");
         const auto eligibility = DlssNr::Submission::ReadSplitEligibility(recordCmd);
         sessionOwner->failed = true;
         char state[768] {};
@@ -553,8 +570,10 @@ ID3D12Resource *LmxxfBackend::FinishRecord(ID3D12GraphicsCommandList *recordCmd,
         return nullptr;
     }
     ReTrace(reTraceId, "outputs.begin", jobHandle, 0);
-    if (api->table.RecordOutputs(session, jobHandle, recordCmd) != LMXXF_NR_OK)
+    const auto outputsRc = api->table.RecordOutputs(session, jobHandle, recordCmd);
+    if (outputsRc != LMXXF_NR_OK)
     {
+        sessionOwner->RecordFailure("RecordOutputs", outputsRc, nullptr);
         sessionOwner->failed = true;
         SetStatus("lmxxf: RecordOutputs failed");
         return nullptr;

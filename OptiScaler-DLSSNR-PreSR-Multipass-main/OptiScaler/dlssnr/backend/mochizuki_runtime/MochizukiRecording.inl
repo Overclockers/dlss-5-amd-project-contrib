@@ -200,13 +200,14 @@ int32_t EnqueueHip(void* context, void* token, void* queue)
         r->job.width == s->historyWidth && r->job.height == s->historyHeight &&
         r->job.controls.passes == s->historyPasses;
     const bool reset = s->resetPending.exchange(false);
+    const uint32_t resetReasons = reset ? s->resetReasons.exchange(0) : 0;
     if (r->job.reset || reset || !continuous) {
         const auto n = ++s->recordingHistoryResets;
         if (n <= 5 || n % 120 == 0)
-            nr::logf("[mochizuki] history reset mode=%s %llu: frame=%llu previous=%llu requested=%u pending=%u motion=%u networkChanged=%u frameGap=%u timeGap=%u geometryChanged=%u passesChanged=%u recipe=%u in_flight=%u physical=%u",
+            nr::logf("[mochizuki] history reset mode=%s %llu: frame=%llu previous=%llu requested=%u pending=%u reasons=0x%X (startup=1 queue=2 network=4 extent=8 passes=16 noMotion=32 passthrough=64 cancel=128 external=256 enqueue=512) motion=%u networkChanged=%u frameGap=%u timeGap=%u geometryChanged=%u passesChanged=%u recipe=%u in_flight=%u physical=%u",
                      r->inlineExecution ? "inline" : "split",
                      static_cast<unsigned long long>(n), static_cast<unsigned long long>(r->frameId),
-                     static_cast<unsigned long long>(s->historyFrame), unsigned(r->job.reset), unsigned(reset),
+                     static_cast<unsigned long long>(s->historyFrame), unsigned(r->job.reset), unsigned(reset), resetReasons,
                      unsigned(s->historyMotion), unsigned(s->historyNetwork.lock() != r->network),
                      unsigned(r->frameId != s->historyFrame + 1), unsigned(now - s->historyTick >= 250),
                      unsigned(r->job.width != s->historyWidth || r->job.height != s->historyHeight),
@@ -228,7 +229,7 @@ int32_t EnqueueHip(void* context, void* token, void* queue)
     else
     {
         s->historyNetwork.reset();
-        s->resetPending = true;
+        s->RequestHistoryReset(Session::ResetEnqueue);
     }
     if (s->enqueueCalls <= 5 || s->enqueueCalls % 120 == 0)
         nr::logf("[mochizuki] %s enqueue frame=%llu rc=%d reset=%u passes=%d calls=%llu recipe=%u in_flight=%u physical=%u",

@@ -15,6 +15,11 @@ namespace Sub=DlssNr::Submission;
 namespace In=DlssNr::Backend::InlineRecording;
 static void Require(bool ok,const char* why) {if(!ok){std::fprintf(stderr,"FAIL %s\n",why);std::exit(1);}}
 static void Check(HRESULT hr,const char* why) {Require(SUCCEEDED(hr),why);}
+static unsigned failureReports=0;
+static Own::SessionOwner::Failure firstFailure;
+static void ReportFailure(const Own::SessionOwner::Failure& failure) noexcept {
+    ++failureReports;firstFailure=failure;
+}
 struct Runtime {
     unsigned invalidated=0,collected=0,enqueueFailures=0,ended=0;
     static int32_t Invalidate(void* context,void*) {++static_cast<Runtime*>(context)->invalidated;return LMXXF_NR_OK;}
@@ -23,7 +28,9 @@ struct Runtime {
     static int32_t Destroy(void*) {return LMXXF_NR_OK;}
     static int32_t Begin(void*,void*,void*) {return LMXXF_NR_OK;}
     static int32_t Enqueue(void* context,void*,void*) {++static_cast<Runtime*>(context)->enqueueFailures;return LMXXF_NR_FAILED;}
-    static int32_t Error(char* out,uint32_t size) {if(size)out[0]=0;return LMXXF_NR_OK;}
+    static int32_t Error(char* out,uint32_t size) {
+        if(size)std::snprintf(out,size,"injected network enqueue failure");return LMXXF_NR_OK;
+    }
     static int32_t End(void* context,void*,void*,uint32_t,void*,uint64_t,int32_t) {++static_cast<Runtime*>(context)->ended;return LMXXF_NR_OK;}
 };
 
@@ -93,6 +100,7 @@ int main() try {
     }
     // Real callback capture/Enqueue failure, real game/side queues, real proxy
     // invalidation and collection. More failures than the admission cap.
+    owner->onFailure=&ReportFailure;
     for(unsigned n=0;n<6;++n) {
         Ptr<ID3D12CommandAllocator> allocator;Ptr<ID3D12GraphicsCommandList> native;
         Check(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,IID_PPV_ARGS(&allocator)),"failure allocator");
@@ -125,6 +133,14 @@ int main() try {
         }
     }
     Require(runtime.enqueueFailures==6&&runtime.ended==6,"six actual callback enqueue failures ended");
+    Require(failureReports==1 && std::strcmp(firstFailure.phase,"EnqueueHip")==0 &&
+            firstFailure.result==LMXXF_NR_FAILED && firstFailure.queue &&
+            std::strcmp(firstFailure.error.data(),"injected network enqueue failure")==0,
+            "first worker error reaches reporter exactly once with its original text and queue");
+    owner->RecordFailure("EndRecordingExecution",LMXXF_NR_UNAVAILABLE,nullptr,"secondary poisoned session");
+    Require(failureReports==1 && owner->failure.result==LMXXF_NR_FAILED &&
+            std::strcmp(owner->failure.error.data(),firstFailure.error.data())==0,
+            "secondary unavailable error cannot replace first enqueue failure");
     // Side completion never certifies a game fence that has not reached its tail.
     Ptr<ID3D12Fence> delayedGame;Check(device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&delayedGame)),"delayed game");
     auto aborted=std::make_shared<In::Resources>(device.Get(),original.Get(),candidate.Get(),nullptr,8,8,owner->inlinePipelines);

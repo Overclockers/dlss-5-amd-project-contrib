@@ -1786,6 +1786,7 @@ struct Session
     std::atomic<uint32_t> infoRequestedPasses { 1 };
     // Host lifecycle calls serialize updates; GetStatus also reads under errorMutex.
     char networkDeferred[192] {};
+    char loggedCapacity[256] {};
 
     // runtime->last_gpu_ms() of the last kGpuSamples frames, for GetStatus. Pushed under submitMutex as well.
     std::mutex statsMutex;
@@ -1887,7 +1888,17 @@ struct Session
 
     uint64_t lastFrameId = 0;
     ULONGLONG lastFrameTick = 0;
+    enum HistoryResetReason : uint32_t {
+        ResetStartup = 1, ResetQueue = 2, ResetNetwork = 4, ResetExtent = 8,
+        ResetPasses = 16, ResetNoMotion = 32, ResetPassthrough = 64,
+        ResetCancel = 128, ResetExternal = 256, ResetEnqueue = 512
+    };
     std::atomic<bool> resetPending { true };
+    std::atomic<uint32_t> resetReasons { ResetStartup };
+    void RequestHistoryReset(uint32_t reason) {
+        resetReasons.fetch_or(reason, std::memory_order_relaxed);
+        resetPending.store(true, std::memory_order_release);
+    }
     std::atomic<uint64_t> frames { 0 };
 
     // A game queue idle within 30 s: S_OK, HRESULT_FROM_WIN32(ERROR_TIMEOUT) or what failed.
@@ -2312,7 +2323,7 @@ struct Session
                 p.Release();
                 return hr;
             }
-            resetPending = true;
+            RequestHistoryReset(ResetQueue);
             // Logged like NoteError: a game may switch every frame.
             const uint64_t n = ++queueSwitches;
             if (n <= kErrorsLogged || n % 1000 == 0)
@@ -3072,6 +3083,17 @@ struct Session
         std::lock_guard lock(errorMutex);
         std::snprintf(networkDeferred, sizeof networkDeferred, "%s", reason);
     }
+    void LogPassCapacity(uint32_t served)
+    {
+        char reason[192] {};
+        { std::lock_guard lock(errorMutex); std::memcpy(reason, networkDeferred, sizeof reason); }
+        char text[256] {};
+        std::snprintf(text, sizeof text, "requested=%u active=%u capacity=%u reason=%s",
+                      infoRequestedPasses.load(), served, net.maxPasses, reason[0] ? reason : "ready");
+        if (std::strcmp(text, loggedCapacity) == 0) return;
+        std::memcpy(loggedCapacity, text, sizeof text);
+        nr::logf("[mochizuki] pass capacity: %s", text);
+    }
 
     // Failed capacity expansion preserves a compatible network and its buffers.
     // Incompatible replacements retain the ordinary passthrough/retry behavior.
@@ -3133,7 +3155,7 @@ struct Session
                 old = TakeNetwork("replacing the network", oldFinished);
             runtime = std::move(built);
             net = buildKey;
-            resetPending = true;
+            RequestHistoryReset(ResetNetwork);
             historyBits = 0;
             historyCount = 0;
         }
@@ -3946,7 +3968,7 @@ struct Session
         if (const HRESULT hr = producer->Wait(fromVk.fence, sub.finished); FAILED(hr))
             throw lost("the game queue's wait", VK_SUCCESS, hr);
         ++passthroughs;
-        resetPending = true;
+        RequestHistoryReset(ResetPassthrough);
     }
 
     void RunNetwork(ID3D12CommandQueue* producer, uint64_t call, Submission& sub)
@@ -4529,12 +4551,13 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
                 s->validHeight = h;
                 s->infoValidWidth = w;
                 s->infoValidHeight = h;
-                s->resetPending = true;
+                s->RequestHistoryReset(Session::ResetExtent);
             }
 
             // While a build for new settings runs, the frame keeps the network it ran on: no more passes than that one
             // was built for.
             const uint32_t served = std::min(passes, s->net.maxPasses);
+            s->LogPassCapacity(served);
 
             // History carries over only to the frame right after this one.
             const ULONGLONG now = GetTickCount64();
@@ -4549,7 +4572,7 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
                     nr::logf("[mochizuki] %u passes (was %u): history reset", served, s->lastPasses);
                 s->lastPasses = served;
                 s->infoPasses = served;
-                s->resetPending = true;
+                s->RequestHistoryReset(Session::ResetPasses);
             }
 
             Job next;
@@ -4592,7 +4615,7 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
                 next.reset = info->reset || !continuous;
             }
             else
-                s->resetPending = true; // record() neither updates the history nor consumes a reset
+                s->RequestHistoryReset(Session::ResetNoMotion); // consumed at execution
             next.firstPass = g.firstPass && s->net.firstPass && served > 1 && s->firstResult;
             job->first_pass_output = next.firstPass ? s->firstResult : nullptr;
             next.state = LMXXF_NR_JOB_PREPARED;
@@ -4729,7 +4752,7 @@ int32_t CoreCancelUnsubmitted(void* context, void* job)
             s->orphanGen = s->jobGen;
         }
         s->job.state = LMXXF_NR_JOB_RETIRED;
-        s->resetPending = true;
+        s->RequestHistoryReset(Session::ResetCancel);
     }
     return LMXXF_NR_OK;
 }
@@ -4768,7 +4791,7 @@ int32_t CoreRetire(void* context, void* job)
 int32_t ResetHistory(void* context)
 {
     if (auto* s = static_cast<Session*>(context))
-        s->resetPending = true;
+        s->RequestHistoryReset(Session::ResetExternal);
     return LMXXF_NR_OK;
 }
 

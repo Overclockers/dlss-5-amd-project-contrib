@@ -134,6 +134,21 @@ runtime to exercise 12 alternating real proxy Reset/Release operations, verify e
 job retirement and capacity reuse, and retain a started reservation until its
 certified side-reset completion. No model or hardware GPU run is needed.
 
+## Failure and capacity reports
+
+lmxxf reports the first recording failure at error level for every game, including
+the phase, result, execution queue and error captured on the callback thread.
+The NR-off status retains that first error after releasing the backend's session
+reference; a later poisoned-session error must not replace it.
+
+Mochizuki logs requested passes, active passes, installed capacity and the deferred
+build/refusal reason when that combination changes. A refused expansion keeps the
+compatible network running at its existing capacity. This is reduced execution,
+not proof that the requested pass count ran. The VRAM guard remains in force.
+Pending history resets carry reason bits for startup, queue, network, extent,
+passes, missing motion, passthrough, cancellation, external reset and enqueue failure.
+The reason legend accompanies the bounded reset log; it does not change reset policy.
+
 ## Initial validation (2026-10-11)
 
 RX 9070 XT / gfx1201: bounded success and exhaustion, original/current-frame and
