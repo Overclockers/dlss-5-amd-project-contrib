@@ -26,7 +26,8 @@ look it up at draw time so both switching directions work.
 ## Font
 
 The host embeds `menu/font/NotoSansSC-Menu.ttf` as resource 201. The regular-weight
-subset includes Latin-1, tabular numerals and the catalog's Chinese characters.
+subset includes Latin-1, tabular numerals, the catalog's Chinese characters and the
+fixed splash notice in `menu/SplashNotice.h`.
 With the default HQ font, `MenuFont::AddUnified` uses this one family for both
 languages, including mixed labels such as `NR 模型`. Language switching does not
 replace the font or require Windows language packs. The underlying DLL owns the

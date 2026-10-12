@@ -20,8 +20,8 @@ def main():
     expected = 'a3041811a78c361b1de50f953c805e0244951c21c5bd412f7232ef0d899af0da'
     if hashlib.sha256(args.source.read_bytes()).hexdigest() != expected:
         parser.error('Source differs from the pinned Noto Sans SC font; review provenance before updating it.')
-    # Include catalog text and language-selector text. Missing catalog glyphs are tested in host CI.
-    text = (MENU / 'MenuStrings.inl').read_text(encoding='utf-8') + '简体中文'
+    # Include catalog text, the fixed splash notice and language-selector text. Missing catalog glyphs are tested in host CI.
+    text = (MENU / 'MenuStrings.inl').read_text(encoding='utf-8') + (MENU / 'SplashNotice.h').read_text(encoding='utf-8') + '简体中文'
     font = TTFont(args.source, recalcTimestamp=False)
     font = instantiateVariableFont(font, {'wght': 400}, inplace=True)
     options = subset.Options()
