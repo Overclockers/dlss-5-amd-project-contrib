@@ -1038,6 +1038,16 @@ struct SharedBuffer
         VkBufferCreateInfo bi { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, &external };
         bi.size = rd.Width;
         bi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        // The whole-chain compute path and the segments/passthrough on graphics
+        // copy through the same buffers; like the adapter images, shared by both
+        // families instead of exclusive ownership transfers.
+        const uint32_t queueFamilies[] {vk.family, vk.computeFamily};
+        if (vk.computeQueue && vk.computeFamily != vk.family)
+        {
+            bi.sharingMode = VK_SHARING_MODE_CONCURRENT;
+            bi.queueFamilyIndexCount = 2;
+            bi.pQueueFamilyIndices = queueFamilies;
+        }
         VkCheck(vkCreateBuffer(vk.device, &bi, nullptr, &buffer), "vkCreateBuffer (shared)");
         VkMemoryRequirements req {};
         vkGetBufferMemoryRequirements(vk.device, buffer, &req);

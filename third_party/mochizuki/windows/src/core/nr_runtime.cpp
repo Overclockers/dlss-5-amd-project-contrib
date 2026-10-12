@@ -991,6 +991,7 @@ struct Runtime::Impl {
         if (depth_copy.device) depth_copy.destroy();
         if (alpha.device) alpha.destroy();
         if (pack_u8.device) pack_u8.destroy();
+        if (pack_img.handle) session.ctx.destroy(pack_img);
         if (encode.device) encode.destroy();
         if (transfer_pass.device) transfer_pass.destroy();
         if (first_transfer.device) first_transfer.destroy();
