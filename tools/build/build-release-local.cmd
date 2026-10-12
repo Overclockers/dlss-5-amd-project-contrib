@@ -5,6 +5,8 @@ rem   default  LmxxfNrRuntime.dll, tests\run-all.cmd --tier ci,device against th
 rem            with exports\release-local\build.log.
 rem   --fast   Host + person worker only: no tests, no NR runtime build, no build.log.
 setlocal
+rem MSVC/MSBuild emit UTF-8 zh-CN text; show it in a UTF-8 console instead of GBK mojibake.
+chcp 65001 >nul
 cd /d "%~dp0..\.."
 set "FAST="
 if /i "%~1"=="--fast" set "FAST=1"
