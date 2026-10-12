@@ -6,6 +6,7 @@
 #include "MenuNavigation.h"
 #include "UpscalerRouteDiagnostic.h"
 #include "MenuWindowLayout.h"
+#include "SplashNotice.h"
 #include "MenuFont.h"
 #include <dlssnr/DlssNr_ExposureScan.h>
 #include <dlssnr/amd/AmdPreSr.h>
@@ -1580,6 +1581,8 @@ void MenuCommon::RenderSplashWindow(RenderMenuContext& ctx)
                 MenuUi::Text("OptiScaler - %s for menu",
                             Keybind::KeyNameFromVirtualKeyCode(config->ShortcutKey.value_or_default()).c_str());
                 MenuUi::TextColored(toneMapColor(ImVec4(1.0f, 1.0f, 1.0f, 0.7f)), splashMessage.c_str());
+                ImGui::TextUnformatted(SplashNotice::Chinese);
+                ImGui::TextUnformatted(SplashNotice::English);
 
                 splashSize = ImGui::GetWindowSize();
 
