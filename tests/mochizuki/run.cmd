@@ -35,6 +35,8 @@ if /i "%~1"=="pass-switch" goto passswitch
 if /i "%~1"=="split-retain" goto splitretain
 if /i "%~1"=="gpu" (
   call tests\mochizuki\run.cmd hdr-shader || exit /b 1
+  call tests\mochizuki\run.cmd phase-failure || exit /b 1
+  call tests\mochizuki\run.cmd inline || exit /b 1
   exports\mochizuki-tests\runtime.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" --composition
   if errorlevel 1 exit /b 1
   exports\mochizuki-tests\runtime.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime"
