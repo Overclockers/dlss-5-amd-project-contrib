@@ -7496,7 +7496,7 @@ void MenuCommon::RenderMainMenuBottomBar(RenderMenuContext& ctx)
         {
             config->MenuWindowWidth.reset();
             config->MenuWindowHeight.reset();
-            config->MenuWindowAnchor.reset();
+            config->MenuWindowAnchor = 0;
             resetMenuWindow = true;
         }
 

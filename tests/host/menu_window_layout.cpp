@@ -2,7 +2,6 @@
 #include <cassert>
 #include <limits>
 #include <iostream>
-#include <utility>
 
 int main()
 {
@@ -32,12 +31,16 @@ int main()
     const auto small = Calculate({}, {640, 360}, 1, preferred, {}, 0, true);
     const auto restored = Calculate({}, {1920, 1080}, 1, preferred, {}, 0, true);
     assert(small.size.x < preferred.x && restored.size.x == preferred.x && restored.size.y == preferred.y);
-    // Default anchor (2 = top right): flush right/top, size still follows scale.
-    const auto tr1 = Calculate({}, {1920, 1080}, 1, {}, {}, 2, true);
-    const auto tr09 = Calculate({}, {1920, 1080}, .9f, {}, {}, 2, true);
-    for (auto [l, sc] : {std::pair{tr1, 1.f}, std::pair{tr09, .9f}})
-        assert(std::abs(l.pos.x + l.size.x - (1920 - 12 * sc)) < .01f && std::abs(l.pos.y - 12 * sc) < .01f);
-    assert(tr09.size.x < tr1.size.x);
-    assert(tr1.pos.x > 1920 * .2f);
+    // Unsaved default: right column, clamped on screen at 1080p/1440p/2160p.
+    for (Point vp : {Point{1920, 1080}, Point{2560, 1440}, Point{3840, 2160}, Point{1280, 720}})
+    {
+        const float sc = vp.y >= 2160 ? 2.f : vp.y >= 1440 ? 1.3f : vp.y >= 1080 ? 1.f : .6f;
+        const auto d = Calculate({}, vp, sc, {}, {}, 0, true);
+        assert(d.size.x >= std::min(560 * sc, d.maximum.x) && d.size.x <= d.maximum.x);
+        assert(d.pos.x + d.size.x <= vp.x + .01f && d.pos.y + d.size.y <= vp.y + .01f);
+        assert(d.pos.x > vp.x * .4f);
+        std::cout << vp.x << "x" << vp.y << " scale " << sc << ": " << d.size.x << "x" << d.size.y
+                  << " at " << d.pos.x << "," << d.pos.y << "\n";
+    }
     std::cout << "menu window layout: PASS\n";
 }
