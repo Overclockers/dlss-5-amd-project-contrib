@@ -549,7 +549,7 @@ void RenderMenu(Config* config, float menuResScale)
             const Kind active = DlssNr::Backend::ActiveKindFromConfig();
             const bool isLmxxf = (active == Kind::Lmxxf);
             // Runtime name belongs with Enable NR — tight pair, not a separate group.
-            const char* ver = active == Kind::Mochizuki ? "mochizuki v0.0.3" : isLmxxf ? "lmxxf 0.41" : DlssNr::AmdBridge::RuntimeName();
+            const char* ver = active == Kind::Mochizuki ? "mochizuki v0.0.4" : isLmxxf ? "lmxxf 0.41" : DlssNr::AmdBridge::RuntimeName();
             const bool haveVer = ver && *ver;
             HGap(0.12f);
             MenuUi::TextDisabled("%s", haveVer ? ver : (isLmxxf ? "lmxxf 0.41" : "pass1?"));
