@@ -18,5 +18,5 @@ inline constexpr const char* Chinese = "本软件永久免费，如付费购买�
 inline constexpr const char* English = "This software is free forever. If you paid for it, ask for a refund now.";
 // Main menu title bar, top right. English key; the Chinese text
 // "免费使用，谨防上当" lives in MenuStrings.inl and is translated at draw time.
-inline constexpr const char* TitleBar = "Free. Don't pay.";
+inline constexpr const char* TitleBar = "Free. Don't buy.";
 }

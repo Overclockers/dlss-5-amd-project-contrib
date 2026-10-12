@@ -360,7 +360,7 @@ When reporting issues, please include:
 
 ## Free Software Notice
 
-This project is distributed free of charge. The splash line "This software is free forever. If you paid for it, ask for a refund now." and the menu title-bar notice ("Free. Don't pay.") are notices the author asks to keep. If you paid for this software, ask for a refund. When redistributing or modifying the project, please keep these notices and do not remove or alter them to sell it.
+This project is distributed free of charge. The splash line "This software is free forever. If you paid for it, ask for a refund now." and the menu title-bar notice ("Free. Don't buy.") are notices the author asks to keep. If you paid for this software, ask for a refund. When redistributing or modifying the project, please keep these notices and do not remove or alter them to sell it.
 
 ## 6. Attributions & Licenses
 

@@ -1026,4 +1026,4 @@
 {"Keeps the game command list intact. Bounded wait selects the original frame on timeout.\nShared by lmxxf and Mochizuki. INI: NrInline. Off uses command-list splitting.", "保持游戏命令列表完整。有限等待超时后使用原帧。\nlmxxf 和 Mochizuki 共用。INI：NrInline。关闭时使用命令列表切分。"},
 {"Experimental. Inline execution restores known whole-resource layouts; partial or pending layouts are rejected.", "实验选项。内联执行会恢复已知的完整资源布局；局部或未完成的布局转换会被拒绝。"},
 {"Full-frame YuNet input. Larger sizes can detect smaller faces but use more CPU time. Default 320. Changing size resets the face mask.", "YuNet 全画面检测的输入尺寸。较大尺寸有助于识别小脸，但 CPU 耗时更高。默认 320，切换后重置脸部蒙版。"},
-{"Free. Don't pay.", "免费使用，谨防上当"},
+{"Free. Don't buy.", "免费使用，谨防上当"},
