@@ -5,6 +5,7 @@
 #include "OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/dlssnr/DlssNr_PipelineUi.h"
 #include "OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/menu/MenuNavigation.h"
 #include "OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/menu/MenuCard.h"
+#include "OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/menu/SplashNotice.h"
 #include <imgui/imgui_impl_dx11.h>
 #include <d3d11.h>
 #include <wrl/client.h>
@@ -105,6 +106,13 @@ int main(int argc, char** argv)
                     {
                         unsigned int cp; const int n = ImTextCharFromUtf8(&cp, p, nullptr); assert(n > 0); p += n;
                         if (cp >= 0x2000) assert(ImGui::GetFontBaked()->FindGlyphNoFallback(static_cast<ImWchar>(cp)));
+                    }
+                // Fixed splash lines are not catalog entries: every glyph must be in the font.
+                for (const char* line : {SplashNotice::Chinese, SplashNotice::English, SplashNotice::TitleBar})
+                    for (const char* p = line; *p;)
+                    {
+                        unsigned int cp; const int n = ImTextCharFromUtf8(&cp, p, nullptr); assert(n > 0); p += n;
+                        if (cp > ' ') assert(ImGui::GetFontBaked()->FindGlyphNoFallback(static_cast<ImWchar>(cp)));
                     }
             }
             MenuUi::SeparatorText("DLSS Neural Rendering");
