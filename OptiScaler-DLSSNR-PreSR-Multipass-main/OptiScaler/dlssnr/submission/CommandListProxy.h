@@ -63,6 +63,8 @@ IRecordingResources : public IUnknown
     virtual HRESULT STDMETHODCALLTYPE BeginInlineState(UINT count, ID3D12Resource** resources,
                                                         D3D12_RESOURCE_STATES* states) = 0;
     virtual void STDMETHODCALLTYPE EndInlineState() = 0;
+    virtual HRESULT STDMETHODCALLTYPE BeginSplitState(UINT count, ID3D12Resource** resources,
+                                                       D3D12_RESOURCE_STATES* states) = 0;
 };
 
 class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogicalCommandList, public IRecordingResources
@@ -181,7 +183,22 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
     HRESULT STDMETHODCALLTYPE BeginInlineState(UINT count, ID3D12Resource** resources,
                                                D3D12_RESOURCE_STATES* states) override
     {
-        if (!CanRecordInline() || inlineStateActive) return E_UNEXPECTED;
+        if (!CanRecordInline()) return E_UNEXPECTED;
+        return BeginNrState(count, resources, states);
+    }
+    HRESULT STDMETHODCALLTYPE BeginSplitState(UINT count, ID3D12Resource** resources,
+                                              D3D12_RESOURCE_STATES* states) override
+    {
+        if (IsSplitIneligible()) { inlineRejection = SplitRejectionReason(); return E_UNEXPECTED; }
+        if (enhancedBarriersSeen && !AllowEnhancedBarriers()) {
+            inlineRejection = "enhanced_barriers_not_allowed"; return E_UNEXPECTED;
+        }
+        return BeginNrState(count, resources, states);
+    }
+private:
+    HRESULT BeginNrState(UINT count, ID3D12Resource** resources, D3D12_RESOURCE_STATES* states)
+    {
+        if (inlineStateActive) { inlineRejection = "nr_state_already_active"; return E_UNEXPECTED; }
         if (count && (!resources || !states)) return E_INVALIDARG;
         inlineLayouts.clear();
         // Validate every source before writing any command or changing caller states.
@@ -213,6 +230,7 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
         if (list7) list7->Release();
         return S_OK;
     }
+public:
     void STDMETHODCALLTYPE EndInlineState() override
     {
         if (!inlineStateActive) return;
@@ -433,7 +451,10 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
             MarkSplitIneligible(why ? why : "resource_state");
             return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
         }
-        const HRESULT hr = logical.Split(TrackedState().stateObject != nullptr);
+        // A private NR scope restores the game snapshot after the cut, including
+        // DXR state and any enhanced layouts. Certify those interfaces before Close.
+        const HRESULT hr = logical.Split(TrackedState().stateObject != nullptr || contState.stateObject != nullptr,
+                                         !inlineLayouts.empty());
         if (FAILED(hr))
             return hr;
         // Seed continuation with captured producer bindings (IA/SO/VRS included).
@@ -607,8 +628,17 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
     }
     void STDMETHODCALLTYPE ResourceBarrier(UINT n, const D3D12_RESOURCE_BARRIER *b) override
     {
-        for (UINT i = 0; b && i < n; ++i)
-            if (b[i].Type == D3D12_RESOURCE_BARRIER_TYPE_TRANSITION) enhancedBook.Forget(b[i].Transition.pResource);
+        for (UINT i = 0; b && i < n; ++i) {
+            if (b[i].Type == D3D12_RESOURCE_BARRIER_TYPE_TRANSITION)
+                enhancedBook.Forget(b[i].Transition.pResource);
+            else if (b[i].Type == D3D12_RESOURCE_BARRIER_TYPE_ALIASING) {
+                if (!b[i].Aliasing.pResourceBefore || !b[i].Aliasing.pResourceAfter) enhancedBook.Reset();
+                else {
+                    enhancedBook.Forget(b[i].Aliasing.pResourceBefore);
+                    enhancedBook.Forget(b[i].Aliasing.pResourceAfter);
+                }
+            }
+        }
         const char *why = nullptr;
         if (!resBook.OnBarriers(n, b, &why))
             MarkSplitIneligible(why ? why : "barrier");
@@ -954,7 +984,9 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
         const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC *desc, UINT numPost,
         const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC *post) override
     {
-        MarkSplitIneligible("rtas");
+        // An AS build is a recorded producer command, not persistent list state.
+        // Keep it on the producer; its barriers and addresses are never replayed.
+        if (!desc) MarkSplitIneligible("null_rtas_build");
         if (auto *c = CurAs<ID3D12GraphicsCommandList4>())
         {
             c->BuildRaytracingAccelerationStructure(desc, numPost, post);
@@ -965,7 +997,7 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
         const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC *desc, UINT numSrc,
         const D3D12_GPU_VIRTUAL_ADDRESS *src) override
     {
-        MarkSplitIneligible("rtas");
+        if (!desc || (numSrc && !src)) MarkSplitIneligible("invalid_rtas_postbuild");
         if (auto *c = CurAs<ID3D12GraphicsCommandList4>())
         {
             c->EmitRaytracingAccelerationStructurePostbuildInfo(desc, numSrc, src);
@@ -976,7 +1008,8 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
                                                                D3D12_GPU_VIRTUAL_ADDRESS src,
                                                                D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE mode) override
     {
-        MarkSplitIneligible("rtas");
+        // Copying an AS does not change pipeline/root bindings to be restored.
+        if (!dst || !src) MarkSplitIneligible("invalid_rtas_copy");
         if (auto *c = CurAs<ID3D12GraphicsCommandList4>())
         {
             c->CopyRaytracingAccelerationStructure(dst, src, mode);
@@ -997,7 +1030,7 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
     {
         // DispatchRays is already recorded on the producer. Its shader tables and
         // resource barriers remain there; the continuation restores pipeline/root
-        // bindings, never replays the dispatch. Keep AS-build and other guards.
+        // bindings, never replays the dispatch. Other admission guards still apply.
         if (!desc) MarkSplitIneligible("null_dispatch_rays");
         if (auto *c = CurAs<ID3D12GraphicsCommandList4>())
         {
@@ -1040,13 +1073,35 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
     // --- ID3D12GraphicsCommandList7 ---
     void STDMETHODCALLTYPE Barrier(UINT32 numGroups, const D3D12_BARRIER_GROUP *groups) override
     {
-        // Enhanced barriers: ResourceStateBook does not classify these groups. Default is
-        // to pass through and keep split (Horizon 6). Opt out to fail closed (older games).
+        // Explicit opt-in still applies. NR inputs additionally require a known
+        // layout and a COMMON round trip in BeginNrState; this switch alone is not proof.
         if (!AllowEnhancedBarriers())
             MarkSplitIneligible("enhanced_barrier");
         if (auto *c = CurAs<ID3D12GraphicsCommandList7>())
         {
             enhancedBarriersSeen = true;
+            for (UINT32 g = 0; groups && g < numGroups; ++g) {
+                const auto& group = groups[g];
+                for (UINT32 i = 0; i < group.NumBarriers; ++i) {
+                    D3D12_BARRIER_SYNC before {}, after {};
+                    if (group.Type == D3D12_BARRIER_TYPE_TEXTURE) {
+                        const auto& b = group.pTextureBarriers[i];
+                        resBook.Forget(b.pResource);
+                        before = b.SyncBefore; after = b.SyncAfter;
+                    } else if (group.Type == D3D12_BARRIER_TYPE_BUFFER) {
+                        const auto& b = group.pBufferBarriers[i];
+                        resBook.Forget(b.pResource);
+                        before = b.SyncBefore; after = b.SyncAfter;
+                    } else if (group.Type == D3D12_BARRIER_TYPE_GLOBAL) {
+                        before = group.pGlobalBarriers[i].SyncBefore;
+                        after = group.pGlobalBarriers[i].SyncAfter;
+                    }
+                    // A full range-aware split tracker is not available. Refuse
+                    // this recording even if a later group closes the split.
+                    if (before == D3D12_BARRIER_SYNC_SPLIT || after == D3D12_BARRIER_SYNC_SPLIT)
+                        MarkSplitIneligible("enhanced_split_barrier");
+                }
+            }
             enhancedBook.Observe(numGroups, groups);
             c->Barrier(numGroups, groups);
             c->Release();
@@ -1108,7 +1163,20 @@ inline Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> QueryLogicalCommandList
 {
     Microsoft::WRL::ComPtr<ILogicalCommandList> logical;
     Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> proxy;
-    if (list && SUCCEEDED(list->QueryInterface(IID_PPV_ARGS(&logical))) && logical)
+    if (!list) return proxy;
+    if (SUCCEEDED(list->QueryInterface(IID_PPV_ARGS(&logical))) && logical) {
+        logical.As(&proxy);
+        return proxy;
+    }
+    // Streamline's native-object QI is also used by Util::CheckForRealObject.
+    // Some wrappers do not forward private IIDs. Only accept a recovered object
+    // that actually exposes our logical face; never manufacture a proxy around
+    // an already-recorded native list or redirect it by pointer similarity.
+    static constexpr GUID streamlineNative = {0xADEC44E2, 0x61F0, 0x45C3,
+        {0xAD, 0x9F, 0x1B, 0x37, 0x37, 0x92, 0x84, 0xFF}};
+    Microsoft::WRL::ComPtr<IUnknown> native;
+    if (SUCCEEDED(list->QueryInterface(streamlineNative, reinterpret_cast<void**>(native.GetAddressOf()))) && native &&
+        SUCCEEDED(native.As(&logical)) && logical)
         logical.As(&proxy);
     return proxy;
 }

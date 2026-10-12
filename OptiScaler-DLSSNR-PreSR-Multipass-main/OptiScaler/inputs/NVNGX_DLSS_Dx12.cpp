@@ -1,5 +1,6 @@
 #include "pch.h"
 #include <dlssnr/amd/AmdBridge.h>
+#include <dlssnr/submission/CommandListProxy.h>
 #include "Util.h"
 #include "Config.h"
 
@@ -1211,6 +1212,12 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_D3D12_EvaluateFeature(ID3D12GraphicsCom
 
     if (lastDlssgCameraFar.has_value())
         InParameters->Set("DLSSG.CameraFar", lastDlssgCameraFar.value());
+
+    // Keep NR and the replacement upscaler on the same logical list. Resolving
+    // only inside AmdBridge can leave SR recording on an outer wrapper's original
+    // native producer after NR has closed it and switched to a continuation.
+    const auto logicalCmd = DlssNr::Submission::QueryLogicalCommandList(InCmdList);
+    if (logicalCmd) InCmdList = logicalCmd.Get();
 
     if (feature == NVSDK_NGX_Feature_SuperSampling)
         DlssNr::EvaluateBeforeUpscale(InCmdList, InParameters);

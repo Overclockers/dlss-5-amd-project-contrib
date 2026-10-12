@@ -204,23 +204,30 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     if (!cmd || !input.colour) return nullptr;
     Microsoft::WRL::ComPtr<Submission::ILogicalCommandList> logical;
     Microsoft::WRL::ComPtr<Submission::IRecordingResources> resources;
-    if (FAILED(cmd->QueryInterface(IID_PPV_ARGS(&logical))) || FAILED(cmd->QueryInterface(IID_PPV_ARGS(&resources))))
-    { p->Status("mochizuki: recording proxy unavailable; original frame"); return nullptr; }
+    const HRESULT proxyHr = cmd->QueryInterface(IID_PPV_ARGS(&logical));
+    if (FAILED(proxyHr) || FAILED(cmd->QueryInterface(IID_PPV_ARGS(&resources))))
+    {
+        p->Status("mochizuki: recording proxy unavailable; original frame");
+        static unsigned missingProxy = 0;
+        if (++missingProxy <= 5 || missingProxy % 1000 == 0)
+            LOG_WARN("mochizuki missing recording proxy: frame={} list={:p} type={} logicalQi={:08X} sample={}",
+                     frameId, static_cast<void*>(cmd), unsigned(cmd->GetType()), unsigned(proxyHr), missingProxy);
+        return nullptr;
+    }
     const bool inlineMode = Config::Instance()->NrInline.value_or_default();
     if (logical->IsSplitIneligible()) logical->TraceOpenQueries();
     InlineRecording::StateScope inlineState;
-    if (inlineMode) {
-        const bool motion = (input.nativeGuideScale || !input.motionJittered) &&
-            Config::Instance()->MochizukiTemporal.value_or_default();
-        if (FAILED(inlineState.Begin(cmd, input, motion, false, false))) {
-            p->Status(std::string("mochizuki: inline unavailable: ") + inlineState.Reason()); return nullptr;
-        }
-    } else if (logical->IsSplitIneligible() || !resources->CanAppendCompute()) {
-        const char* reason = logical->IsSplitIneligible() ? logical->SplitRejectionReason() : "compute append unsupported";
+    if (!inlineMode && logical->IsSplitIneligible()) {
+        const char* reason = logical->SplitRejectionReason();
         p->Status(std::string("mochizuki: recording boundary unavailable: ") + reason + "; original frame");
         static unsigned rejected = 0;
         if (++rejected <= 5 || rejected % 1000 == 0) LOG_WARN("mochizuki recording rejected: {}", reason);
         return nullptr;
+    }
+    const bool motion = (input.nativeGuideScale || !input.motionJittered) &&
+        Config::Instance()->MochizukiTemporal.value_or_default();
+    if (FAILED(inlineState.Begin(cmd, input, motion, false, false, !inlineMode))) {
+        p->Status(std::string("mochizuki: input state unavailable: ") + inlineState.Reason()); return nullptr;
     }
     if (!p->Ensure()) return nullptr;
     if (p->owner->InlineBusy()) { p->owner->InlineBypassed(); p->Status("mochizuki: inline ahead cap reached; original frame"); return nullptr; }

@@ -49,8 +49,12 @@ heap, type, index, list identity and generation without changing query contents.
 `LmxxfAllowEnhancedBarriers` initializes proxy policy during Config loading,
 independently of backend construction; menu changes synchronize the same policy.
 An existing recording's split rejection is not retroactively cleared.
-Mochizuki's ordinary split path and shared output effects still reject enhanced
-recordings; enabling the experimental inline path is a separate decision.
+Both backends' ordinary split paths now use the same checked input-layout scope:
+known enhanced inputs transition through COMMON and are restored on the continuation.
+The continuation's List4/List7 requirements are checked before closing the producer.
+Shared output effects still reject enhanced recordings. Enabling experimental inline
+execution remains a separate decision; it is not required for this split interop.
+Any observed enhanced SYNC_SPLIT still rejects the recording conservatively.
 
 For sources actually consumed by the selected backend, the proxy admits known
 whole-resource enhanced layouts and records a transition to COMMON before legacy

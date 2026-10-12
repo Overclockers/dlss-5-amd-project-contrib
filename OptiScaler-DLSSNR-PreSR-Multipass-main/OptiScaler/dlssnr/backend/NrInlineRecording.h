@@ -19,14 +19,15 @@ class StateScope {
 public:
     const std::string& Reason() const { return reason; }
     template<class Frame> HRESULT Begin(ID3D12GraphicsCommandList* list, Frame& frame,
-                                       bool motion = true, bool depth = true, bool exposure = true) {
+                                       bool motion = true, bool depth = true, bool exposure = true,
+                                       bool split = false) {
         HRESULT hr = list->QueryInterface(IID_PPV_ARGS(&state));
         if (FAILED(hr)) return hr;
-        if (!state->CanRecordInline()) { reason = state->InlineRejectionReason(); state.Reset(); return E_UNEXPECTED; }
+        if (!split && !state->CanRecordInline()) { reason = state->InlineRejectionReason(); state.Reset(); return E_UNEXPECTED; }
         ID3D12Resource* resources[] {frame.colour, motion ? frame.motion : nullptr,
                                    depth ? frame.depth : nullptr, exposure ? frame.exposure : nullptr};
         D3D12_RESOURCE_STATES states[] {frame.colourState, frame.motionState, frame.depthState, frame.exposureState};
-        hr = state->BeginInlineState(4, resources, states);
+        hr = split ? state->BeginSplitState(4, resources, states) : state->BeginInlineState(4, resources, states);
         if (FAILED(hr)) { reason = state->InlineRejectionReason(); state.Reset(); return hr; }
         frame.colourState = states[0]; frame.motionState = states[1]; frame.depthState = states[2]; frame.exposureState = states[3];
         return S_OK;

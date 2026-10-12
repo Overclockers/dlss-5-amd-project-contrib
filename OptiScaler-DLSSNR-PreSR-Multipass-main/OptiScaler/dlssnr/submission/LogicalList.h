@@ -199,7 +199,7 @@ class LogicalList
         return S_OK;
     }
 
-    HRESULT Split(bool needsList4 = false)
+    HRESULT Split(bool needsList4 = false, bool needsList7 = false)
     {
         if (phase != Phase::RecordingProducer || !device || !producer)
             return E_UNEXPECTED;
@@ -229,6 +229,17 @@ class LogicalList
                 return FAILED(hr) ? hr : E_NOINTERFACE;
             }
             l4->Release();
+        }
+        if (needsList7)
+        {
+            ID3D12GraphicsCommandList7 *l7 = nullptr;
+            hr = nextList->QueryInterface(IID_PPV_ARGS(&l7));
+            if (FAILED(hr) || !l7)
+            {
+                nextList->Release(); nextAlloc->Release();
+                return FAILED(hr) ? hr : E_NOINTERFACE;
+            }
+            l7->Release();
         }
         hr = producer->Close();
         if (FAILED(hr))
