@@ -52,7 +52,7 @@ struct SessionOwner
                 if (pending->WasAborted()) ++inlineAborted;
                 else {
                     ++inlineTimeouts;
-                    if (inlineTimeouts <= 5 || inlineTimeouts % 120 == 0)
+                    if (inlineTimeouts <= 5 || inlineTimeouts % 1200 == 0)
                         LOG_WARN("NR inline wait exhausted; original frame selected, history reset (timeouts={})", inlineTimeouts);
                 }
             } else {
@@ -64,7 +64,7 @@ struct SessionOwner
             it = inlineInFlight.erase(it);
         }
         const auto completed = inlineApplied + inlineTimeouts + inlineAborted;
-        if (side && (completed <= 3 || completed % 120 == 0))
+        if (side && (completed <= 3 || completed % 3600 == 0))
             LOG_INFO("NR inline completed={} applied={} timeouts={} aborted={} bypassed={} live_recordings={} in_flight={} side_queue={} last_slice_spins={}",
                      completed, inlineApplied, inlineTimeouts, inlineAborted, inlineBypassed,
                      liveRecordings.load(std::memory_order_relaxed), inlineInFlight.size(), side, spun);
@@ -75,7 +75,7 @@ struct SessionOwner
     }
     void InlineBypassed() {
         ++inlineBypassed;
-        if (inlineBypassed > 5 && inlineBypassed % 120 != 0) return;
+        if (inlineBypassed > 5 && inlineBypassed % 1200 != 0) return;
         size_t unstarted = 0;
         for (const auto& pending : inlineInFlight)
             if (pending && !pending->Started()) ++unstarted;
@@ -209,7 +209,7 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
             if (inlineResources) {
                 owner->NoteInlineEnqueue(job);
                 ++owner->inlineAdmitted;
-                if (owner->inlineAdmitted <= 5 || owner->inlineAdmitted % 120 == 0)
+                if (owner->inlineAdmitted <= 5 || owner->inlineAdmitted % 3600 == 0)
                     LOG_INFO("NR inline admit serial={} queue={} in_flight={} enqueue_depth={}",
                              static_cast<unsigned long long>(e.serial), static_cast<const void*>(e.queue),
                              owner->inlineInFlight.size(), owner->inlineEnqueueOrder.size());
@@ -252,7 +252,7 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
             if (captured && ordered) {
                 if (waitedMs >= 2) {
                     ++lease->owner->inlineTurnWaits;
-                    if (lease->owner->inlineTurnWaits <= 5 || lease->owner->inlineTurnWaits % 120 == 0)
+                    if (lease->owner->inlineTurnWaits <= 5 || lease->owner->inlineTurnWaits % 1200 == 0)
                         LOG_INFO("NR inline enqueue waited {} ms for the previous frame", waitedMs);
                 }
                 Submission::RecordingExecution side {}; side.queue = lease->inlineResources->SideQueue();

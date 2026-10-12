@@ -203,7 +203,7 @@ int32_t EnqueueHip(void* context, void* token, void* queue)
     const uint32_t resetReasons = reset ? s->resetReasons.exchange(0) : 0;
     if (r->job.reset || reset || !continuous) {
         const auto n = ++s->recordingHistoryResets;
-        if (n <= 5 || n % 120 == 0)
+        if (n <= 5 || n % 3600 == 0)
             nr::logf("[mochizuki] history reset mode=%s %llu: frame=%llu previous=%llu requested=%u pending=%u reasons=0x%X (startup=1 queue=2 network=4 extent=8 passes=16 noMotion=32 passthrough=64 cancel=128 external=256 enqueue=512) motion=%u networkChanged=%u frameGap=%u timeGap=%u geometryChanged=%u passesChanged=%u recipe=%u in_flight=%u physical=%u",
                      r->inlineExecution ? "inline" : "split",
                      static_cast<unsigned long long>(n), static_cast<unsigned long long>(r->frameId),
@@ -231,7 +231,7 @@ int32_t EnqueueHip(void* context, void* token, void* queue)
         s->historyNetwork.reset();
         s->RequestHistoryReset(Session::ResetEnqueue);
     }
-    if (s->enqueueCalls <= 5 || s->enqueueCalls % 120 == 0)
+    if (s->enqueueCalls <= 5 || s->enqueueCalls % 3600 == 0)
         nr::logf("[mochizuki] %s enqueue frame=%llu rc=%d reset=%u passes=%d calls=%llu recipe=%u in_flight=%u physical=%u",
                  r->inlineExecution ? "inline" : "split",
                  static_cast<unsigned long long>(r->frameId), rc, unsigned(r->job.reset),
