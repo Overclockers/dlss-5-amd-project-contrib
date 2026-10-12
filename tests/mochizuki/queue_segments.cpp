@@ -14,7 +14,8 @@ int wmain(int argc,wchar_t**argv) try {
     Hr(device->CreateCommandQueue(&desc,IID_PPV_ARGS(&queue)));
     LmxxfNrCreateInfo ci{sizeof ci,device.Get(),queue.Get(),argv[2],LMXXF_NR_CREATE_FLAG_RECORDING_LEASES|LMXXF_NR_CREATE_FLAG_INLINE_QUEUE};
     void* context=nullptr;Rc(api.Create(&ci,&context));Rc(api.PrepareSession(context));
-    const bool unorm8=argc>3&&wcscmp(argv[3],L"unorm8")==0;
+    const bool refuse=argc>3&&wcscmp(argv[3],L"refuse")==0;
+    const bool unorm8=refuse||(argc>3&&wcscmp(argv[3],L"unorm8")==0);
     Frame frame(device.Get(),256,256,unorm8?DXGI_FORMAT_R8G8B8A8_UNORM:DXGI_FORMAT_R16G16B16A16_FLOAT);List upload(device.Get());frame.Upload(upload.cmd.Get());Hr(upload.cmd->Close());Submit(queue.Get(),upload);
     ComPtr<ID3D12Fence> tail;Hr(device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&tail)));
     Hr(queue->Signal(tail.Get(),1));Wait(tail.Get(),1);
@@ -27,6 +28,16 @@ int wmain(int argc,wchar_t**argv) try {
     Rc(api.BeginRecordingExecution(context,job.handle,queue.Get()));Submit(queue.Get(),in);
     auto rc=api.EnqueueHip(context,job.handle,queue.Get());
     char error[256]{};api.GetLastError(error,sizeof error);
+    if(refuse){
+        // MZ_TEST_COMPUTE_REFUSE_AT=1: the whole-chain compute recording is refused after
+        // the core may have changed its CPU-side state. The frame fails; no passthrough.
+        Require(rc!=LMXXF_NR_OK&&strstr(error,"MZ_TEST_COMPUTE_REFUSE_AT")!=nullptr,"refused compute recording was not reported");
+        Require(strstr(error,"passed through")==nullptr,"refused compute recording was passed through");
+        MochizukiNrInfo state{sizeof state};Rc(info(context,&state));
+        Require(state.failed!=0,"refused compute recording left the session running on stale core state");
+        std::printf("INLINE_COMPUTE_REFUSAL_FAILED_FRAME %s\n",error);
+        return 0; // no Vulkan submit: the context stays pinned until process exit
+    }
     Require(rc!=LMXXF_NR_OK && strstr(error,"inline network phase")!=nullptr,"injected partial submission was not reported");
     Require(!unorm8 || strstr(error,"phase 1/1")!=nullptr,"UNORM8 inline frame did not run as one compute phase");
     Hr(queue->Signal(tail.Get(),2));Wait(tail.Get(),2);

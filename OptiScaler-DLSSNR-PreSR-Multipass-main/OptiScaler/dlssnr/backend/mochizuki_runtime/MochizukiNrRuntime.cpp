@@ -201,6 +201,7 @@ struct TestHooks
     bool rejectAcoDevice = false; // MZ_TEST_REJECT_ACO_DEVICE=1: the first pipeline-binary device is treated as rejected
     uint64_t dropSubmitAt = 0;   // MZ_TEST_DROP_SUBMIT_AT=N: Enqueue N skips its Vulkan submit, the game still waits
     uint64_t phaseSubmitFailAt = 0; // MZ_TEST_PHASE_SUBMIT_FAIL_AT=N: fail phase N of an inline chain
+    uint64_t computeRefuseAt = 0; // MZ_TEST_COMPUTE_REFUSE_AT=N: Enqueue N's whole-chain compute recording is refused
     uint64_t inlineChain = 0; // MZ_TEST_INLINE_CHAIN=1: an inline frame must run whole on compute; =2: in segments;
                               // =3: segments are forced
 };
@@ -238,6 +239,7 @@ const TestHooks& Hooks()
         h.dropSubmitAt = number("MZ_TEST_DROP_SUBMIT_AT");
         h.phaseSubmitFailAt = number("MZ_TEST_PHASE_SUBMIT_FAIL_AT");
         h.inlineChain = number("MZ_TEST_INLINE_CHAIN");
+        h.computeRefuseAt = number("MZ_TEST_COMPUTE_REFUSE_AT");
         return h;
     }();
     return hooks;
@@ -4089,8 +4091,8 @@ struct Session
         }
         Submitted(produced, finished);
     }
-    // A graphics-only command reached in a compute-family recording: this frame
-    // fails as any recording failure does; later frames keep the segments.
+    // A graphics-only command reached in a compute-family recording: the frame
+    // fails like a partial segmented recording (no passthrough retry).
     void ComputeChainRefused(bool fullCompute, const std::exception& e)
     {
         if (!fullCompute || computeChainOff) return;
@@ -4140,7 +4142,10 @@ struct Session
             else if (job.firstPass) chainWhy = "the first-pass export needs a blit";
             else if (motion && job.motionPath != Job::Uploaded && job.motionPath != Job::Padded)
                 chainWhy = "the motion vectors are rescaled by a blit";
-            else chainWhy = runtime->compute_refusal(motion, motionVk, kImageUsage, job.controls.passes);
+            // mask: the host binds no explicit ControlMaskFrame (record/record_engine pass none);
+            // the automatic mask is not a ControlMaskFrame.
+            else chainWhy = runtime->compute_refusal(motion, motionVk, kImageUsage, job.controls.passes,
+                                                     /*mask=*/false);
             fullCompute = !chainWhy;
             // Logged when the path or reason changes; a game that flips every frame
             // (first-pass export, DRS) is bounded like the error lines.
@@ -4271,6 +4276,17 @@ struct Session
             // One compute-family buffer; the core refuses any graphics-only command in it.
             runtime->set_compute_recording(true);
             phases.push_back({c, true});
+            // The core updates CPU-side state while recording (layouts, history
+            // ping-pong, recording count) and refuses a graphics-only command
+            // only when it reaches it. A throw from here on must fail the frame
+            // like a partial segmented recording: no passthrough retry.
+            sub.segmentedRecording = true;
+            if (call == hooks.computeRefuseAt)
+            {
+                const std::logic_error refused("MZ_TEST_COMPUTE_REFUSE_AT: compute-family recording refused (test hook)");
+                ComputeChainRefused(true, refused);
+                throw refused;
+            }
         } else if (job.inlineExecution && vk.computeQueue) {
             phases.push_back({c, false}); size_t graphics = 0, compute = 0;
             runtime->set_network_segments([&, graphics, compute](VkCommandBuffer previous, bool enter) mutable {

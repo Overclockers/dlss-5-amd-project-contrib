@@ -75,7 +75,14 @@ set "MZ_TEST_INLINE_CHAIN=1"
 exports\mochizuki-tests\queue_segments.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" unorm8 || exit /b 1
 set "MZ_TEST_PHASE_SUBMIT_FAIL_AT="
 set "MZ_TEST_INLINE_CHAIN="
-exit /b 0
+rem A refused whole-chain compute recording fails the frame without a passthrough.
+set "MZ_TEST_COMPUTE_REFUSE_AT=1"
+set "MZ_TEST_INLINE_CHAIN=1"
+exports\mochizuki-tests\queue_segments.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" refuse
+set "RC=%errorlevel%"
+set "MZ_TEST_COMPUTE_REFUSE_AT="
+set "MZ_TEST_INLINE_CHAIN="
+exit /b %RC%
 
 :inline
 set "MOCHI_ACO_ARG="
