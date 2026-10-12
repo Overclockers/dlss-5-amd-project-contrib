@@ -52,7 +52,7 @@ UI升级、NR强度及人脸保护等多重更新，详见 [Release 页](https:/
 1. **下载解压**：从 [Release 页](https://github.com/TheAutomatic/dlss-5-amd-project/releases) 下载本项目最新 zip 压缩包，解压至任意非中文路径。
 2. **收集必备外部文件**（复制到与 `Setup.bat` 同一文件夹下，即 **1 个文件夹 + 1 个 DLL + 1 个 EXE**）：
    - `nvngx_dlssnr.dll`（NVIDIA 原生降噪动态库，当前**仅支持 310.8.0** 版本）；
-   - [`native-game-tiled-assets` 文件夹](https://gofile.io/d/RyvcrDxz)（lmxxf 权重目录，解压后包含权重文件）；
+   - [`native-game-tiled-assets` 文件夹](https://github.com/lmxxf/dlss5-on-amd-9070xt-porting)（lmxxf 权重目录，解压后包含权重文件）；
    - [`dlssnr_on_amd_setup.exe`](https://github.com/danielblnc/DLSS-NR-on-AMD/releases)（Danielblnc 所需的安装/提取程序）。
    > 💡 **提示**：若计划使用 **Mochizuki** 后端，请提前在微软商店（Microsoft Store）搜索并安装 **Python 3.10+**。
 3. **运行安装器并选择游戏**：
@@ -98,11 +98,11 @@ UI升级、NR强度及人脸保护等多重更新，详见 [Release 页](https:/
 
 可以准备以下任意后端，或同时安装多个后端：
 
-##### 选项 A：[准备 `lmxxf` 后端文件](https://github.com/lmxxf/dlss5-on-amd-9070xt-porting) 或[点击这里](https://gofile.io/d/RyvcrDxz)获取权重文件
+##### 选项 A：[准备 `lmxxf` 后端文件](https://github.com/lmxxf/dlss5-on-amd-9070xt-porting)
 - 使用本项目完整包内配套的 `LmxxfNrRuntime.dll`（不要混用上游 ABI1 runtime）；
 - 算子模块目录 `lmxxf-modules\`（官方双架构两层目录结构，包含 `gfx1200` [9060 系列，实验性] 与 `gfx1201` [9070 系列，正式生产] 两个子目录，各含 40 个 `.hsaco` 算子模块、叶子清单与根 `SHA256SUMS` 清单，共 80 个模块；运行时由 D3D12/HIP 设备智能自动匹配，安装器校验完整双包并支持旧版覆盖升级）；
 - 着色器目录 `shaders\`（包含 `native_codec_encode.hlsl` 等）；
-- 模型权重目录 `native-game-tiled-assets\`（可[点击这里](https://gofile.io/d/RyvcrDxz)直接下载）；
+- 模型权重目录 `native-game-tiled-assets\`（从合法持有且许可允许使用的模型文件自行提取；方法见上游仓库）；
 - 将上述文件/文件夹放在与 `Setup.bat` 相同的解压目录下。
 
 升级时直接运行新包的 `Setup.bat` 并选择游戏目录。检测到已有 OptiScaler 后，安装器会建议先卸载，以避免新版文件、模块布局和旧设置冲突：输入 **Y（推荐）**会自动调用新包卸载器，再继续安装；输入 **N** 则直接覆盖安装。卸载会重置 OptiScaler 设置，保留权重和已有备份。正常覆盖不再备份旧 DLL、INI 或整套模块；模块切换仅临时保留旧目录，成功后清理、失败时恢复。用户自加且不能混入新版模块集的 `.hsaco` 等内容单独保存在安装结束时显示的 `backup-amd-presr-*/lmxxf-modules`，其他兼容的用户文件继续保留。

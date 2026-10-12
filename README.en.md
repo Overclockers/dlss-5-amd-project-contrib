@@ -52,7 +52,7 @@ RX 6000 (RDNA2) cards using danielblnc 0.6.0 require the AMD HIP 7.2 runtime.
 1. **Download & Extract**: Download the latest release `.zip` from the [Releases page](https://github.com/TheAutomatic/dlss-5-amd-project/releases) and extract it to any folder.
 2. **Collect Required External Files** (copy them into the same extracted folder as `Setup.bat`, i.e., **1 folder + 1 DLL + 1 EXE**):
    - `nvngx_dlssnr.dll` (NVIDIA DLSS-NR native library, **version 310.8.0 is strictly required**);
-   - [`native-game-tiled-assets` folder](https://gofile.io/d/RyvcrDxz) (lmxxf weights directory containing model files);
+   - [`native-game-tiled-assets` folder](https://github.com/lmxxf/dlss5-on-amd-9070xt-porting) (lmxxf weights directory containing model files);
    - [`dlssnr_on_amd_setup.exe`](https://github.com/danielblnc/DLSS-NR-on-AMD/releases) (Setup/extraction executable for danielblnc).
    > 💡 **Tip**: If you plan to use the **Mochizuki** backend, please make sure **Python 3.10+** is installed from the Microsoft Store beforehand.
 3. **Run Setup & Select Game Directory**:
@@ -98,11 +98,11 @@ RX 6000 (RDNA2) cards using danielblnc 0.6.0 require the AMD HIP 7.2 runtime.
 
 Prepare either backend (or both for side-by-side coexistence):
 
-##### Option A: [Prepare `lmxxf` Backend Files](https://github.com/lmxxf/dlss5-on-amd-9070xt-porting) or [Click Here](https://gofile.io/d/RyvcrDxz) to download weights
+##### Option A: [Prepare `lmxxf` Backend Files](https://github.com/lmxxf/dlss5-on-amd-9070xt-porting)
 - `LmxxfNrRuntime.dll` from this complete project package (do not substitute the upstream ABI1 runtime);
 - Module folder `lmxxf-modules\` (official dual-architecture layout containing `gfx1200` [9060 series, experimental] and `gfx1201` [9070 series, production] subfolders, with 40 `.hsaco` compute modules each, leaf manifests, and root `SHA256SUMS` for a total of 80 modules; automatically matched by the runtime based on D3D12/HIP GPU architecture; the installer validates the complete bundle and supports overwriting older flat installs);
 - Shader folder `shaders\` (with `native_codec_encode.hlsl`);
-- Weights folder `native-game-tiled-assets\` (can be downloaded [here](https://gofile.io/d/RyvcrDxz));
+- Weights folder `native-game-tiled-assets\` (extract from model files you lawfully possess and are permitted to use; see upstream instructions);
 - Place these in the same extracted folder as `Setup.bat`.
 
 To upgrade, run the new package's `Setup.bat` and select the game folder. When OptiScaler is detected, Setup recommends uninstalling first to avoid conflicts between the new files, module layout, and old settings. Choose **Y (Recommended)** to run the new uninstaller automatically and continue installing, or **N** to overwrite the existing installation. Uninstall resets OptiScaler settings but keeps weights and existing backups. Normal overwrite does not create backup copies of old DLLs, INI files, or complete module folders. The old module tree is kept temporarily for rollback and removed after a successful switch. User-added `.hsaco` files and other content that cannot enter the new module layout are saved separately under `backup-amd-presr-*/lmxxf-modules`; compatible user files remain in place.

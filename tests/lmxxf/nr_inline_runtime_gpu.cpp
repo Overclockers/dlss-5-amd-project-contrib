@@ -274,7 +274,7 @@ int main(int argc, char** argv) {
         for (unsigned i = 0; i < kPatterns; ++i) {
             Check(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &desc,
                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, IID_PPV_ARGS(&patterns[i])), "ahead colour");
-            UploadColorPattern(device.Get(), game.Get(), patterns[i].Get(), i + 1);
+            UploadColorPattern(device.Get(), game.Get(), patterns[i].Get(), PatternOptions{i + 1});
             originalHashByPattern[i] = HashTexture(device.Get(), game.Get(), patterns[i].Get());
             for (unsigned earlier = 0; earlier < i; ++earlier)
                 Require(originalHashByPattern[i] != originalHashByPattern[earlier], "ahead patterns are distinguishable");
@@ -512,7 +512,7 @@ int main(int argc, char** argv) {
             }
             std::printf("inline stagger timeout=%u PASS\n", timeoutMode);
         }
-        g_patternExponentShift = 0;
+
     }
     owner.reset();
     FreeLibrary(dll); std::puts("actual inline runtime PASS"); return 0;

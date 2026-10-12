@@ -11,7 +11,7 @@
 ## 版本号
 
 - 版本串来自仓库根的 `VERSION`；`PACKAGE_RELEASE.ps1` 未显式给 `-Version` 时读它，并把 `VERSION` 放进包里。
-- 日常发版只更新三语 README 的标题版本号，保留其 Release 更新日志入口，不再向 README 添加逐版更新摘要。中英文更新日志统一维护在 `.github/workflows/release.yml` 的发布正文中；安装说明等长期文档仅在功能用法确有变化时更新。
+- 日常发版只更新三语 README 的标题版本号，保留其 Release 更新日志入口，不再向 README 添加逐版更新摘要。中英文更新日志统一维护在 `docs/release-notes/<VERSION>.md`，workflow 按解析后的版本读取；缺失或为空则中止；安装说明等长期文档仅在功能用法确有变化时更新。
 - 当前产品名为 **OptScaler(NR)**。品牌仅用于安装/卸载窗口、README、包名等产品展示：窗口显示 `OptScaler(NR) <版本>`，正式 ZIP 为 `OptScaler-NR-<版本>.zip`，Actions artifact 名为 `OptScaler(NR)`。ZIP 使用连字符，避免 GitHub 上传附件时将括号改为点号、导致按文件名核验失败。同步修改名称时检查打包、上传和下载路径。`OptiScaler.dll` / INI、旧日志名、源码目录及注册表位置保持兼容，旧安装记录仍可识别，新记录写入 `project=OptScaler(NR)`。
 - **tag 与 GitHub Release 标题固定为 `v<版本>`**（例如 `v1.10.2`），不添加品牌或其他描述；workflow 的发布标题直接使用 `github.ref_name`。CI 在 tag 名含 `-alpha`、`-beta` 或 `-rc` 时发成 prerelease，否则是正式版（Latest）。只认这三个后缀。
 - 1.8.x 时代的形式是 `1.8.x-0.3.y`（本 fork 版本 + 支持的 daniel runtime 版本）；1.9 起双后端，不再带 runtime 后缀。
@@ -93,7 +93,7 @@ Actions按精确键缓存上述Mochizuki产物及工具测试记录，不使用�
 
 ### 执行顺序
 
-1. **固定待发布源码与文案。** 更新 `VERSION`、各语言 README 标题和 `.github/workflows/release.yml` 的发布正文，确认版本一致且描述准确。检查 `git status --short` 确认工作区无未跟踪/未提交的脏改动。
+1. **固定待发布源码与文案。** 更新 `VERSION`、各语言 README 标题和 `docs/release-notes/<VERSION>.md` 的发布正文，确认版本一致且描述准确。检查 `git status --short` 确认工作区无未跟踪/未提交的脏改动。
 2. **本地核心契约与新鲜度核验。**
    在本地运行模块契约与产物新鲜度检查，确保 40/80 模块契约与当前源码匹配：
    ```powershell
@@ -217,7 +217,7 @@ Actions 每次创建独立证书，打包步骤传入其指纹，随后的 `alwa
 | `OptiScaler/`、`Licenses/` | FFX / XeSS / Agility 依赖与第三方许可证 |
 | `experimental_lighting/` | 可选 |
 
-**禁止入包**（打包脚本与 CI 各有一道绊线，检查的是实际 zip）：`nvngx*.dll`、`dlssnr_amd_pass*.dll`、`dlssnr_on_amd_weights.bin`、`version.dll`、`dlssnr_on_amd_setup.exe`；打包脚本另外拒绝 `*.generated.hip`、`*.hsaco.s`。lmxxf 权重 `native-game-tiled-assets/` 也不进 GitHub 包（体积约 200 MB+）；给玩家的整合包可以在 zip 外另加。
+**禁止入包**（打包脚本与 CI 各有一道绊线，检查的是实际 zip）：`nvngx*.dll`、`dlssnr_amd_pass*.dll`、`dlssnr_on_amd_weights.bin`、`version.dll`、`dlssnr_on_amd_setup.exe`；打包脚本另外拒绝 `*.generated.hip`、`*.hsaco.s`。lmxxf 权重 `native-game-tiled-assets/` 也不进 GitHub 包（体积约 200 MB+）；用户按适用许可自行准备，不提供第三方权重镜像。
 
 ## 编码规则
 
@@ -264,7 +264,7 @@ GPU的shader优先级回归包装既有HIP专项调用，同样不重复矩阵�
 - 核对线上资产用 **CI 产出的 zip**，不要用本机 `dist/` 冒充。
 - Release 的 tag、CI 构建的 commit（`head_sha`）、正文里的源码链接必须指向同一个提交。
 - 查 GitHub 状态用 REST（`gh api repos/TheAutomatic/dlss-5-amd-project/releases/tags/<tag>`），不要凭一次 GraphQL 失败下结论；`gh` 一律带 `-R TheAutomatic/dlss-5-amd-project`（见 [dev-environment.md](dev-environment.md)）。
-- 保留已发布的 tag；改动以新版本发布。附件先暂存上传，核验大小和 SHA-256 后改成正式名称；网络失败会重试。同名内容一致可重跑，不同内容会拒绝覆盖。
+- 保留已发布的 tag；改动以新版本发布（例如 `-alpha.2`）。tag CI 在修改 Release 正文前核对已存在 Release 的源码 SHA，移位或无法确认来源则拒绝继续。附件先暂存上传，核验大小和 SHA-256 后改成正式名称；网络失败会重试。同名内容一致可重跑，不同内容会拒绝覆盖。
 - Release 正文写清用户需自备的文件：daniel 需要作者的 setup 与 `nvngx_dlssnr.dll`（或现成 `version.dll` + weights）；lmxxf 需要权重目录。
 
 ## 已核实的 Actions 差异与历史失败

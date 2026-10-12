@@ -155,8 +155,7 @@ int main(int argc, char **argv)
           "color");
     if (outputHash)
     {
-        g_patternExponentShift = scale16 ? 4u : 0u;
-        UploadColorPattern(device, submitQueue, color);
+        UploadColorPattern(device, submitQueue, color, PatternOptions{scale16 ? 4u : 0u});
     }
 
     const std::wstring modules = Widen(argv[2]);
@@ -475,7 +474,8 @@ int main(int argc, char **argv)
                                                                  static_cast<ID3D12Resource *>(job.private_output),
                                                                  scale16 ? 4u : 0u,
                                                                  subrect ? frame.color_width : 0,
-                                                                 subrect ? frame.color_height : 0)),
+                                                                 subrect ? frame.color_height : 0,
+                                                                 PatternOptions{scale16 ? 4u : 0u})),
                     frame.color_width, frame.color_height);
     if (dumpPath && outs == LMXXF_NR_OK && job.private_output)
         DumpTexture(device, submitQueue, static_cast<ID3D12Resource *>(job.private_output), dumpPath);

@@ -52,7 +52,7 @@ Las tarjetas RX 6000 (RDNA2) con danielblnc 0.6.0 requieren AMD HIP 7.2 runtime.
 1. **Descargar y descomprimir**: Descargue el archivo `.zip` más reciente desde la [página de Releases](https://github.com/TheAutomatic/dlss-5-amd-project/releases) y extráigalo en cualquier carpeta.
 2. **Reunir archivos externos requeridos** (cópielos en la misma carpeta junto a `Setup.bat`, es decir, **1 carpeta + 1 DLL + 1 EXE**):
    - `nvngx_dlssnr.dll` (biblioteca nativa de DLSS-NR de NVIDIA, **actualmente solo se admite la versión 310.8.0**);
-   - [Carpeta `native-game-tiled-assets`](https://gofile.io/d/RyvcrDxz) (carpeta de pesos de lmxxf con los archivos del modelo);
+   - [Carpeta `native-game-tiled-assets`](https://github.com/lmxxf/dlss5-on-amd-9070xt-porting) (carpeta de pesos de lmxxf con los archivos del modelo);
    - [`dlssnr_on_amd_setup.exe`](https://github.com/danielblnc/DLSS-NR-on-AMD/releases) (ejecutable de instalación/extracción para danielblnc).
    > 💡 **Consejo**: Si planea utilizar el backend **Mochizuki**, instale previamente **Python 3.10+** desde Microsoft Store.
 3. **Ejecutar Setup y seleccionar el juego**:
@@ -98,11 +98,11 @@ Las tarjetas RX 6000 (RDNA2) con danielblnc 0.6.0 requieren AMD HIP 7.2 runtime.
 
 Prepare uno o varios backends:
 
-##### Opción A: [Preparar archivos del backend `lmxxf`](https://github.com/lmxxf/dlss5-on-amd-9070xt-porting) o [haga clic aquí](https://gofile.io/d/RyvcrDxz) para descargar los pesos
+##### Opción A: [Preparar archivos del backend `lmxxf`](https://github.com/lmxxf/dlss5-on-amd-9070xt-porting)
 - `LmxxfNrRuntime.dll` de este paquete completo (no sustituya el runtime ABI1 del upstream);
 - Carpeta de módulos `lmxxf-modules\` (estructura de doble arquitectura que incluye subdirectorios `gfx1200` [serie 9060, experimental] y `gfx1201` [serie 9070, producción], con 40 módulos `.hsaco` cada uno y un total de 80 módulos; selección automática según GPU D3D12/HIP; el instalador valida el paquete completo y permite actualizar las instalaciones planas anteriores);
 - Carpeta de shaders `shaders\` (con los archivos `.hlsl`);
-- Carpeta de pesos `native-game-tiled-assets\` (se puede descargar [aquí](https://gofile.io/d/RyvcrDxz));
+- Carpeta de pesos `native-game-tiled-assets\` (extraiga de archivos de modelo que posea legalmente y cuyo uso esté permitido; consulte las instrucciones del proyecto original);
 - Coloque estos elementos en la misma carpeta descomprimida junto a `Setup.bat`.
 
 Para actualizar, ejecute `Setup.bat` del paquete nuevo y seleccione la carpeta del juego. Si detecta OptiScaler, el instalador recomienda desinstalarlo primero para evitar conflictos entre los archivos nuevos, la estructura de módulos y la configuración anterior. Elija **Y (Recomendado)** para ejecutar automáticamente el desinstalador nuevo y continuar con la instalación, o **N** para sobrescribir la instalación existente. La desinstalación restablece la configuración de OptiScaler y conserva los pesos y las copias de seguridad existentes. La sobrescritura normal no crea copias de seguridad de los DLL, INI ni de las carpetas completas de módulos anteriores. La carpeta anterior se guarda temporalmente para revertir un fallo y se elimina al completar el cambio. Los archivos `.hsaco` añadidos por el usuario y otros contenidos incompatibles con la nueva estructura se guardan aparte en `backup-amd-presr-*/lmxxf-modules`; los demás archivos compatibles del usuario permanecen en su sitio.

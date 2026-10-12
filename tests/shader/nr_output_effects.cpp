@@ -16,8 +16,8 @@ int main()
     Check(device->CreateCommandQueue(&qd,IID_PPV_ARGS(&queue)),"queue");Check(device->CreateCommandQueue(&qd,IID_PPV_ARGS(&other)),"other queue");
     constexpr UINT width=32,height=24;
     auto original=Texture(device.Get(),width,height), result=Texture(device.Get(),width,height);
-    g_patternExponentShift=0;UploadColorPattern(device.Get(),queue.Get(),original.Get());
-    g_patternExponentShift=1;UploadColorPattern(device.Get(),queue.Get(),result.Get());g_patternExponentShift=0;
+    UploadColorPattern(device.Get(),queue.Get(),original.Get(), PatternOptions{0});
+    UploadColorPattern(device.Get(),queue.Get(),result.Get(), PatternOptions{1});
     auto record=[&](float intensity){auto r=NewRecording(device.Get());
         r.output=Effects::Record(r.proxy.Get(),original.Get(),result.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,width,height,intensity,true);
         Check(r.proxy->Close(),"close effects");return r;};
@@ -41,13 +41,13 @@ int main()
     std::vector<Recording> held;for(unsigned i=0;i<16;++i)held.push_back(record(.5f));
     auto overflow=record(.5f);Require(overflow.output==result.Get(),"resource cap bypass");held.clear();overflow.proxy.Reset();Effects::Reset();Effects::Poll();
     Require(NoLeases(),"unsubmitted resources released");
-    g_patternExponentShift=4;UploadColorPattern(device.Get(),queue.Get(),original.Get());
-    g_patternExponentShift=5;UploadColorPattern(device.Get(),queue.Get(),result.Get());g_patternExponentShift=4;
-    auto hdr=record(.25f);Check(hdr.proxy->ExecuteOn(queue.Get()),"HDR attenuation");WaitQueue(device.Get(),queue.Get());CheckPixels(device.Get(),queue.Get(),hdr.output,.25f);
+    UploadColorPattern(device.Get(),queue.Get(),original.Get(), PatternOptions{4});
+    UploadColorPattern(device.Get(),queue.Get(),result.Get(), PatternOptions{5});
+    auto hdr=record(.25f);Check(hdr.proxy->ExecuteOn(queue.Get()),"HDR attenuation");WaitQueue(device.Get(),queue.Get());CheckPixels(device.Get(),queue.Get(),hdr.output,.25f,PatternOptions{4});
     hdr.proxy.Reset();Effects::Reset();
-    g_patternExponentShift=6;UploadColorPattern(device.Get(),queue.Get(),result.Get());g_patternExponentShift=4;
-    auto guarded=record(2.f);Check(guarded.proxy->ExecuteOn(queue.Get()),"guarded amplification");WaitQueue(device.Get(),queue.Get());CheckPixels(device.Get(),queue.Get(),guarded.output,5.f);
-    guarded.proxy.Reset();Effects::Reset();g_patternExponentShift=0;
+    UploadColorPattern(device.Get(),queue.Get(),result.Get(), PatternOptions{6});
+    auto guarded=record(2.f);Check(guarded.proxy->ExecuteOn(queue.Get()),"guarded amplification");WaitQueue(device.Get(),queue.Get());CheckPixels(device.Get(),queue.Get(),guarded.output,5.f,PatternOptions{4});
+    guarded.proxy.Reset();Effects::Reset();
     Ptr<ID3D12InfoQueue> info;if(SUCCEEDED(device.As(&info)))for(UINT64 i=0;i<info->GetNumStoredMessages();++i){
         SIZE_T bytes=0;info->GetMessage(i,nullptr,&bytes);std::vector<char> storage(bytes);auto* m=reinterpret_cast<D3D12_MESSAGE*>(storage.data());
         Check(info->GetMessage(i,m,&bytes),"debug message");if(m->Severity<=D3D12_MESSAGE_SEVERITY_ERROR)std::fprintf(stderr,"%s\n",m->pDescription);

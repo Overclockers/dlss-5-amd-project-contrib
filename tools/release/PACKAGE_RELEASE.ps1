@@ -41,6 +41,25 @@ function Get-Sha256([string]$path) {
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 if (-not $root) { $root = (Get-Location).Path }
 $source = Join-Path $root 'OptiScaler-DLSSNR-PreSR-Multipass-main'
+# Required notices are part of the complete package, even with -AllowMissingDeps.
+foreach ($license in @(
+    'LICENSE',
+    'NOTICE',
+    'OptiScaler-DLSSNR-PreSR-Multipass-main/LICENSE',
+    'third_party/lmxxf/LICENSE',
+    'third_party/mochizuki/LICENSE',
+    'third_party/onnxruntime/LICENSE',
+    'third_party/onnxruntime/YOLO11_AGPL-3.0.txt',
+    'third_party/onnxruntime/PPHumanSeg_Apache-2.0.txt',
+    'third_party/onnxruntime/YuNet_MIT.txt',
+    'OptiScaler-DLSSNR-PreSR-Multipass-main/external/xess/LICENSE.txt',
+    'OptiScaler-DLSSNR-PreSR-Multipass-main/external/FidelityFX-SDK/docs/license.md',
+    'OptiScaler-DLSSNR-PreSR-Multipass-main/external/FidelityFX-SDK-v2/docs/license.md',
+    'OptiScaler-DLSSNR-PreSR-Multipass-main/external/directx_agility_sdk/LICENSE.txt'
+)) {
+    if (!(Test-Path -LiteralPath (Join-Path $root $license) -PathType Leaf)) { throw "Required license missing: $license" }
+}
+
 # Prefer repo-root VERSION when -Version was not passed explicitly.
 if (-not $PSBoundParameters.ContainsKey('Version')) {
     $vf = Join-Path $root 'VERSION'
@@ -213,11 +232,10 @@ if ($missing.Count -gt 0) {
     }
 }
 
-# Licenses
-$optiLic = Join-Path $source 'LICENSE'
-if (Test-Path $optiLic) {
-    Copy-Item $optiLic (Join-Path $stage 'Licenses/OptiScaler_LICENSE.txt') -Force
-}
+# Required license notices were checked before staging.
+Copy-Item -LiteralPath (Join-Path $source 'LICENSE') -Destination (Join-Path $stage 'Licenses/OptiScaler_LICENSE.txt') -Force
+Copy-Item -LiteralPath (Join-Path $root 'third_party/lmxxf/LICENSE') -Destination (Join-Path $stage 'Licenses/Lmxxf_MIT.txt') -Force
+Copy-Item -LiteralPath (Join-Path $root 'LICENSE'), (Join-Path $root 'NOTICE') -Destination $stage -Force
 if (Test-Path (Join-Path $source 'Licenses')) {
     Get-ChildItem (Join-Path $source 'Licenses') -File | Copy-Item -Destination (Join-Path $stage 'Licenses') -Force
 }
@@ -228,7 +246,7 @@ foreach ($pair in @(
     @('external/directx_agility_sdk/LICENSE.txt', 'DirectX_LICENSE.txt')
 )) {
     $p = Join-Path $source $pair[0]
-    if (Test-Path $p) { Copy-Item $p (Join-Path $stage ('Licenses/' + $pair[1])) -Force }
+    Copy-Item -LiteralPath $p -Destination (Join-Path $stage ('Licenses/' + $pair[1])) -Force
 }
 
 # INI
@@ -615,17 +633,11 @@ if (Test-Path -LiteralPath $personSrc -PathType Container) {
         $_.Name -match '^(msvcp140(_1|_2|_atomic_wait|_codecvt_ids)?|vcruntime140(_1|_threads)?|concrt140|vccorlib140)\.dll$'
     } | Copy-Item -Destination $personDst -Force
     Copy-Item -LiteralPath $freshWorker -Destination (Join-Path $personDst 'person-worker.exe') -Force
-    if (Test-Path -LiteralPath (Join-Path $root 'third_party/onnxruntime/LICENSE')) {
-        Copy-Item -LiteralPath (Join-Path $root 'third_party/onnxruntime/LICENSE') -Destination (Join-Path $stage 'Licenses/ONNXRuntime_MIT.txt') -Force
-    }
+    Copy-Item -LiteralPath (Join-Path $root 'third_party/onnxruntime/LICENSE') -Destination (Join-Path $stage 'Licenses/ONNXRuntime_MIT.txt') -Force
     $agplSrc = Join-Path $root 'third_party/onnxruntime/YOLO11_AGPL-3.0.txt'
-    if (Test-Path -LiteralPath $agplSrc) {
-        Copy-Item -LiteralPath $agplSrc -Destination (Join-Path $stage 'Licenses/YOLO11_AGPL-3.0.txt') -Force
-    }
+    Copy-Item -LiteralPath $agplSrc -Destination (Join-Path $stage 'Licenses/YOLO11_AGPL-3.0.txt') -Force
     $ppLicense = Join-Path $root 'third_party/onnxruntime/PPHumanSeg_Apache-2.0.txt'
-    if (Test-Path -LiteralPath $ppLicense) {
-        Copy-Item -LiteralPath $ppLicense -Destination (Join-Path $stage 'Licenses/PPHumanSeg_Apache-2.0.txt') -Force
-    }
+    Copy-Item -LiteralPath $ppLicense -Destination (Join-Path $stage 'Licenses/PPHumanSeg_Apache-2.0.txt') -Force
     Copy-Item -LiteralPath (Join-Path $root 'third_party/onnxruntime/YuNet_MIT.txt') -Destination (Join-Path $stage 'Licenses/YuNet_MIT.txt') -Force
 }
 

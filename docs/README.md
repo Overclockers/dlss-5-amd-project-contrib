@@ -23,6 +23,7 @@
 | [lmxxf-041-consumer-review.md](lmxxf-041-consumer-review.md) | 0.41：预测三层、肤色保护、76模块、布局优化与本地验证 |
 | [backends/lmxxf.md](backends/lmxxf.md) | lmxxf 后端专页 |
 | [games/](games/) | 各游戏的兼容说明、已修复案例和排查入口 |
+| [2026-10-12-review-verification.md](2026-10-12-review-verification.md) | 17 项外部意见核实、失败回收与发布门禁修复、验证边界 |
 | [release.md](release.md) | 发版唯一入口：构建、测试产物、试包、Actions 预验证、发布核验与故障处理 |
 | [measurement.md](measurement.md) | 测量纪律：读数规则、PresentMon 列语义、开工前清单 |
 | [dev-environment.md](dev-environment.md) | 工具与测试索引、Windows / PowerShell / Git Bash 的坑、git 查证的坑、协作约定 |

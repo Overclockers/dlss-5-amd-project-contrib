@@ -325,3 +325,11 @@ Actions, and this machine-specific GPU fixture needs a suitable device.
 Local cases 1–26, 42 and 45 passed; the remainder was intentionally skipped after
 the user narrowed local verification. Inline ACO passed 120 fresh recordings and
 retained replay with 100% observed temporal history. No game/FPS result is claimed.
+
+## ACO 本地缓存边界
+
+导入后产生的驱动管线缓存位于 `%LOCALAPPDATA%/OptScaler-NR/Mochizuki/aco-cache/`，
+不再写入游戏或模型目录；目录不可用时禁用磁盘缓存。旧 `aco-cache` 不迁移或导入。
+包内固定的 ACO records 仍是构建输入，两者用途不同。
+缓存里的 FNV64 仅检测损坏，不认证写入者；不要把第三方缓存当作可信模型资产导入。
+相同用户权限的进程仍可修改本地缓存，修改后的二进制可能交给 Vulkan 驱动。

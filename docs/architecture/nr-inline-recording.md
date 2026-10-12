@@ -9,9 +9,12 @@ is independent. Neither path artificially ends or restarts the game's queries.
 
 The host attaches a recording lease before appending private commands. Inputs are
 recorded normally, followed by a D3D12 capture flag. A Windows threadpool worker
-samples that flag through an independent D3D12 compute queue; readback is read only
+samples that flag through an independent D3D12 compute queue (50 microseconds
+exponential backoff to 5 ms, at most 2048 samples and a 10 s deadline); readback is read only
 after that queue's fence completes. Sampling and completion use separate buffers.
-No HIP/Vulkan shader is expected to see a D3D12 shader flag.
+No HIP/Vulkan shader is expected to see a D3D12 shader flag. Fence waits poll the
+actual completed value at 1 ms intervals, never reusing an outstanding event.
+Enqueue ordering uses a condition variable notified after the preceding runtime End.
 
 After observing capture, the worker calls the current recording ABI's Enqueue on
 the same-device side compute queue. Existing HIP/Vulkan external-fence ordering
@@ -22,8 +25,8 @@ the side queue and capture proof are essential.
 
 The game list contains 64 bounded wait dispatches, each limited to 32768 iterations.
 UAV barriers serialize slices and the final success snapshot. This is a work budget,
-not a portable millisecond timeout. Slices allow independent queues to progress;
-there is no unbounded shader loop. The frozen snapshot predicates the runtime's
+not a portable millisecond timeout. D3D12 does not guarantee concurrent queue progress. Bounded slices prevent an
+unbounded shader loop but cannot establish a frame-time or TDR-safe bound. The frozen snapshot predicates the runtime's
 output work. A host composition shader selects either that output or this frame's
 original colour into a private texture (FP32 for FP32 sources, otherwise FP16). Optional first-pass output uses the
 same decision. Late completion cannot change a failed frame's frozen selection.
@@ -74,8 +77,13 @@ A game tail alone cannot release a late network. New records on that session wai
 by passing through until both sides complete. A timeout resets history before the
 next accepted frame. Reset/final Release during an asynchronous execution defers
 runtime invalidation until the worker's End event, then collects only after both
-queues finish. Uncertain signals or enqueue failure poison further NR and retain
-resources without inventing completion proof. No GPU completion wait occurs under
+queues finish. Enqueue failure still poisons the runtime session. The host appends a fresh
+side-queue tail even when no network succeeded, and reclaims its reservation only
+after both that tail and the actual game tail complete. Runtime CollectRecording
+independently certifies HIP/Vulkan lifetime; failed or partially submitted network
+work can still retain that runtime job. Unknown signals retain resources without
+inventing completion proof. These unprovable retirements do not continually rearm
+the collection timer; first-failure logging remains available. No GPU completion wait occurs under
 the host recording mutex.
 
 ## Crimson Desert follow-up fixes (2026-10-11)

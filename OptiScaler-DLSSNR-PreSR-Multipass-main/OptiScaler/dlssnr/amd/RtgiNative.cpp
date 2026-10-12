@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
+#include <cstdio>
 using Microsoft::WRL::ComPtr;
 namespace AmdPreSr
 {
@@ -20,7 +21,10 @@ namespace
 void Require(HRESULT hr, const char* operation)
 {
     if (FAILED(hr))
-        throw std::runtime_error(std::string("RTGI: ") + operation + " HRESULT=" + std::to_string(UINT(hr)));
+        {
+        char code[16]; std::snprintf(code, sizeof code, "0x%08X", unsigned(hr));
+        throw std::runtime_error(std::string("RTGI: ") + operation + " HRESULT=" + code);
+    }
 }
 std::vector<char> Read(const std::filesystem::path& path)
 {

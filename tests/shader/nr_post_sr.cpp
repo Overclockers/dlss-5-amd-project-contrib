@@ -177,9 +177,8 @@ static void SharedScratchRecordings(ID3D12Device* d, ID3D12CommandQueue* q, ID3D
         auto result = Texture(d, 32, 24);
         auto capture = Tex(d, 32, 24, DXGI_FORMAT_R32G32_FLOAT);
         UploadColorPattern(d, q, target.Get());
-        g_patternExponentShift = 1 + i % 2;
-        UploadColorPattern(d, q, result.Get());
-        g_patternExponentShift = 0;
+        UploadColorPattern(d, q, result.Get(), PatternOptions{1 + i % 2});
+
         auto r = NewRecording(d);
         auto f = base;
         f.colour = target.Get();
@@ -384,9 +383,8 @@ int main()
     Retained4KRecordings(d.Get(), q.Get());
     auto output = Tex(d.Get(), 35, 27, DXGI_FORMAT_R16G16B16A16_FLOAT), result = Texture(d.Get(), 35, 27);
     UploadColorPattern(d.Get(), q.Get(), output.Get());
-    g_patternExponentShift = 1;
-    UploadColorPattern(d.Get(), q.Get(), result.Get());
-    g_patternExponentShift = 0;
+    UploadColorPattern(d.Get(), q.Get(), result.Get(), PatternOptions{1});
+
     auto mv = Guide(d.Get(), q.Get(), 20, 16, 2), depth = Guide(d.Get(), q.Get(), 19, 15, 1);
     AmdPreSr::Frame base;
     base.colour = output.Get();

@@ -33,6 +33,7 @@
 #include <map>
 #include <cstring>
 #include <stdexcept>
+#include <cstdio>
 #include <cmath>
 
 using Microsoft::WRL::ComPtr;
@@ -52,7 +53,10 @@ UINT CompletedJob(HMODULE h, const AmdLayout* layout)
 void Check(HRESULT hr, const char* operation)
 {
     if (FAILED(hr))
-        throw std::runtime_error(std::string(operation) + " HRESULT=" + std::to_string(static_cast<unsigned>(hr)));
+        {
+        char code[16]; std::snprintf(code, sizeof code, "0x%08X", unsigned(hr));
+        throw std::runtime_error(std::string(operation) + " HRESULT=" + code);
+    }
 }
 void Barrier(ID3D12GraphicsCommandList* c, ID3D12Resource* r, D3D12_RESOURCE_STATES a, D3D12_RESOURCE_STATES b)
 {

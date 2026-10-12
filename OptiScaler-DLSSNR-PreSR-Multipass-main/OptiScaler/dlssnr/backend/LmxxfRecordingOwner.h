@@ -9,6 +9,7 @@
 #include <vector>
 #include <array>
 #include <cstdio>
+#include <condition_variable>
 #ifndef LOG_INFO
 #define LOG_INFO(...) ((void)0)
 #endif
@@ -34,6 +35,7 @@ struct SessionOwner
     static constexpr size_t kInlineAhead = 4;
     std::vector<std::shared_ptr<InlineRecording::Resources>> inlineInFlight;
     std::deque<void*> inlineEnqueueOrder;
+    std::condition_variable_any inlineTurnChanged;
     std::shared_ptr<InlineRecording::Pipelines> inlinePipelines;
     uint64_t inlineApplied = 0, inlineTimeouts = 0, inlineAborted = 0, inlineBypassed = 0;
     uint64_t inlineAdmitted = 0, inlineTurnWaits = 0;
@@ -97,7 +99,10 @@ struct SessionOwner
     }
     void PopInlineEnqueue(void* job) {
         auto it = std::find(inlineEnqueueOrder.begin(), inlineEnqueueOrder.end(), job);
-        if (it != inlineEnqueueOrder.end()) inlineEnqueueOrder.erase(it);
+        if (it != inlineEnqueueOrder.end()) {
+            inlineEnqueueOrder.erase(it);
+            inlineTurnChanged.notify_all();
+        }
     }
     // Accessed under RecordingMutex. Preserve the first error on the callback
     // thread: GetLastError is thread-local and cannot be queried by the menu.
@@ -156,6 +161,7 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
     bool ready = false, invalidated = false, begun = false;
     std::shared_ptr<InlineRecording::Resources> inlineResources;
     bool inlineEnqueueFinished = false, executionReported = false;
+    bool runtimeRetirementUncertain = false;
     uint64_t inlineResetSerial = 0, activeExecutionSerial = 0;
     Submission::RecordingExecution inlineExecution {};
     Microsoft::WRL::ComPtr<ID3D12CommandQueue> inlineQueue;
@@ -184,6 +190,7 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
         if (tracing) ++traceExecutions;
         Trace("execute.begin", e.queue);
         enqueued = false;
+        runtimeRetirementUncertain = false;
         if (inlineResources) {
             inlineResetSerial = e.serial;
             try { inlineResources->BeforeExecute(e.queue); }
@@ -213,16 +220,19 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
     }
     // Host enqueue order, without holding RecordingMutex while sleeping.
     bool WaitInlineTurn() {
-        const auto start = GetTickCount64();
-        for (;;) {
-            {
-                std::lock_guard lock(Submission::RecordingMutex());
-                if (!owner || owner->InlineEnqueueTurn(job)) return true;
-                if (!owner->InlineEnqueueQueued(job)) return false;
-            }
-            if (GetTickCount64() - start > 10000) return false;
-            Sleep(1);
-        }
+        std::unique_lock lock(Submission::RecordingMutex());
+        if (!owner) return false;
+        const bool changed = owner->inlineTurnChanged.wait_for(lock, std::chrono::seconds(10), [&] {
+            return owner->InlineEnqueueTurn(job) || !owner->InlineEnqueueQueued(job);
+        });
+        return changed && owner->InlineEnqueueTurn(job);
+    }
+    void FailInlineWorker(const char* error) noexcept {
+        std::lock_guard lock(Submission::RecordingMutex());
+        owner->RecordFailure("inline worker", E_FAIL, nullptr, error); owner->failed = true;
+        try { inlineResources->NetworkQueued(false); } catch (...) {}
+        inlineEnqueueFinished = true;
+        if (executionReported) FinishInline();
     }
     struct Work { std::shared_ptr<Lease> lease; HMODULE module = nullptr; };
     static void CALLBACK InlineCallback(PTP_CALLBACK_INSTANCE instance, void* context)
@@ -258,11 +268,9 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
             lease->inlineEnqueueFinished = true;
             if (lease->executionReported) lease->FinishInline();
         } catch (const std::exception& error) {
-            std::lock_guard lock(Submission::RecordingMutex());
-            lease->owner->RecordFailure("inline worker", E_FAIL, nullptr, error.what()); lease->owner->failed = true;
-            try { lease->inlineResources->NetworkQueued(false); } catch (...) {}
-            lease->inlineEnqueueFinished = true;
-            if (lease->executionReported) lease->FinishInline();
+            lease->FailInlineWorker(error.what());
+        } catch (...) {
+            lease->FailInlineWorker("non-standard exception in inline worker");
         }
         const auto module = work->module;
         work.reset(); lease.reset();
@@ -358,6 +366,7 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
         if (rc != LMXXF_NR_OK) {
             owner->RecordFailure("EndRecordingExecution", rc, e.queue);
             owner->failed = true;
+            runtimeRetirementUncertain = true;
         }
         else if (FAILED(e.status))
             owner->RecordFailure("ExecuteCommandLists", e.status, e.queue, "producer/consumer submission or tail signal failed");
@@ -398,7 +407,13 @@ inline bool CollectLocked()
         auto& lease = *it;
         lease->owner->ReclaimInlineLocked();
         if (!lease->invalidated) { ++it; continue; }
-        if (lease->begun || (lease->inlineResources && !lease->inlineResources->Complete())) { pending = true; ++it; continue; }
+        if (lease->begun) { pending = true; ++it; continue; }
+        if (lease->inlineResources && !lease->inlineResources->Complete()) {
+            // Unknown signals cannot gain proof by polling. Keep the pins but
+            // stop a permanent 100 ms timer; later explicit collection can retry.
+            if (!lease->inlineResources->RetirementUncertain()) pending = true;
+            ++it; continue;
+        }
         const int32_t rc = lease->owner->api.CollectRecording(lease->owner->context, lease->job);
         if (rc == LMXXF_NR_OK || rc == LMXXF_NR_DEVICE_LOST)
         {
@@ -406,7 +421,7 @@ inline bool CollectLocked()
             lease->job = nullptr;
             it = leases.erase(it);
         }
-        else { pending = true; ++it; }
+        else { if (!lease->runtimeRetirementUncertain) pending = true; ++it; }
     }
     return pending;
 }

@@ -8,6 +8,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -43,6 +44,27 @@ def retry(operation, attempts, sleep):
             delay = min(30, 2 ** (attempt + 1))
             print(f"GitHub transfer/API failed; retry {attempt + 2}/{attempts} in {delay}s", flush=True)
             sleep(delay)
+
+
+def verify_release_source(client, tag, sha):
+    """Reject a moved/unknown published tag before release metadata is edited."""
+    if not re.fullmatch(r'[0-9a-fA-F]{40}', sha):
+        raise ValueError('A full source commit SHA is required')
+    try:
+        release = client.api('GET', 'releases/tags/' + quote(tag, safe=''))
+    except subprocess.CalledProcessError as error:
+        # Only a genuine missing release is allowed; auth/network failures block.
+        if 'HTTP 404' in (error.stderr or ''):
+            return
+        raise
+    proofs = set(re.findall(r'https://github\.com/' + re.escape(client.repo)
+                            + r'/tree/([0-9a-fA-F]{40})(?![0-9a-fA-F])', release.get('body') or ''))
+    target = release.get('target_commitish', '')
+    if re.fullmatch(r'[0-9a-fA-F]{40}', target):
+        proofs.add(target)
+    if {proof.lower() for proof in proofs} != {sha.lower()}:
+        raise RuntimeError('Existing release source differs or cannot be certified; '
+                           'retain the published tag and use a new version: ' + tag)
 
 
 def publish(client, tag, path, attempts=5, sleep=time.sleep):
@@ -100,9 +122,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=os.environ.get("GH_REPO"), required=not os.environ.get("GH_REPO"))
     parser.add_argument("--tag", required=True)
-    parser.add_argument("--asset", required=True, type=Path)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--asset", type=Path)
+    mode.add_argument("--verify-source", metavar="SHA")
     args = parser.parse_args()
-    publish(GitHub(args.repo), args.tag, args.asset)
+    client = GitHub(args.repo)
+    if args.verify_source:
+        verify_release_source(client, args.tag, args.verify_source)
+    else:
+        publish(client, args.tag, args.asset)
 
 
 if __name__ == "__main__":

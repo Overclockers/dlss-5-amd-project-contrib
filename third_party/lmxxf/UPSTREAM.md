@@ -45,6 +45,17 @@ to the manifest. Historical patches are independent regression fixtures only.
 | `modules/` and `hip/SHA256SUMS` shipping rows | Locally verified 40 modules per architecture (80 total); generated binary metadata is not copied from upstream Git |
 | `module-defines.json` | Two reviewed LINE_STORES build arguments; no source patch |
 
+Per-module binary SHA-256, source names, aggregate source SHA-256, target,
+defines and options are recorded in `modules/gfx1200/modules.json` and
+`modules/gfx1201/modules.json`. The root and leaf `SHA256SUMS` bind all 80
+shipping binaries; `Assert-LmxxfModulePackage` in
+`tools/lmxxf-module-package.ps1` validates those hashes and metadata before
+packaging. `hip/build-modules.ps1` contains the source assembly and compiler
+recipe; `tools/lmxxf-sync/Modules.ps1` records the assembled source hash.
+This provenance is available for audit; release CI deliberately uses
+the reviewed committed binaries and does not claim bit-identical HIP rebuilds
+with an arbitrary runner toolchain.
+
 The LLVM23.1.2/COMGR split, RowOpts, scoped 900 normalization, 1440 Swin and
 pool64/output routes remain unchanged. Module provenance and review are still
 mandatory. Zero source pins does not mean arbitrary future revisions are safe

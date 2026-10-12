@@ -62,6 +62,17 @@ Add-Type -TypeDefinition 'public static class PackageFixture { public static int
                      'stage-lmxxf-beside-optiscaler.ps1', 'release/check-module-contract.ps1',
                      'release/check-release-freshness.ps1', 'release/package-signing.ps1', 'lmxxf-sync/manifest.json'):
             shutil.copy2(REPO / 'tools' / name, self.root / 'tools' / name)
+        for name in ('LICENSE', 'NOTICE', 'OptiScaler-DLSSNR-PreSR-Multipass-main/LICENSE',
+                     'third_party/lmxxf/LICENSE', 'third_party/onnxruntime/LICENSE',
+                     'third_party/onnxruntime/YOLO11_AGPL-3.0.txt',
+                     'third_party/onnxruntime/PPHumanSeg_Apache-2.0.txt', 'third_party/onnxruntime/YuNet_MIT.txt',
+                     'OptiScaler-DLSSNR-PreSR-Multipass-main/external/xess/LICENSE.txt',
+                     'OptiScaler-DLSSNR-PreSR-Multipass-main/external/FidelityFX-SDK/docs/license.md',
+                     'OptiScaler-DLSSNR-PreSR-Multipass-main/external/FidelityFX-SDK-v2/docs/license.md',
+                     'OptiScaler-DLSSNR-PreSR-Multipass-main/external/directx_agility_sdk/LICENSE.txt'):
+            target = self.root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(REPO / name, target)
         # Both real gates run against this synthetic checkout. Carry their source inputs
         # along with the entrypoint instead of replacing a new gate with a success stub.
         for name in (
@@ -180,6 +191,29 @@ Add-Type -TypeDefinition 'public static class PackageFixture { public static int
             self.assertNotIn('dlssnr-amd/dlssnr.bin', by_name)
             self.assertNotIn('dlssnr-amd/pipeline.cache', by_name)
             self.assertFalse(any('aco-cache' in name for name in by_name))
+
+    def test_missing_license_rejected_before_staging(self):
+        for name in ('third_party/lmxxf/LICENSE', 'third_party/onnxruntime/LICENSE',
+                     'third_party/onnxruntime/YOLO11_AGPL-3.0.txt',
+                     'third_party/onnxruntime/PPHumanSeg_Apache-2.0.txt'):
+            with self.subTest(name=name):
+                path = self.root / name
+                contents = path.read_bytes()
+                path.unlink()
+                code, out = self.package()
+                self.assertNotEqual(code, 0, out)
+                self.assertIn('Required license missing: ' + name, out)
+                self.assertFalse(self.archive.exists())
+                path.write_bytes(contents)
+
+    def test_package_carries_required_notices(self):
+        code, out = self.package()
+        self.assertEqual(code, 0, out)
+        with zipfile.ZipFile(self.archive) as archive:
+            for source, dest in [('LICENSE', 'LICENSE'), ('NOTICE', 'NOTICE'),
+                                 ('third_party/lmxxf/LICENSE', 'Licenses/Lmxxf_MIT.txt'),
+                                 ('third_party/mochizuki/LICENSE', 'Licenses/Mochizuki_MIT.txt')]:
+                self.assertEqual(archive.read(dest), (self.root / source).read_bytes())
 
     def test_mochizuki_runtime_changed_after_abi_is_rejected(self):
         runtime = self.root / 'exports/mochizuki-runtime/MochizukiNrRuntime.dll'

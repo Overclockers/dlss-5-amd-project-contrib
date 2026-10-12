@@ -1906,8 +1906,12 @@ struct Session
         hr = q->Signal(f, 1);
         if (SUCCEEDED(hr))
             hr = f->SetEventOnCompletion(1, ev);
-        if (SUCCEEDED(hr) && WaitForSingleObject(ev, 30000) != WAIT_OBJECT_0)
-            hr = HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+        if (SUCCEEDED(hr)) {
+            const DWORD waited = WaitForSingleObject(ev, 30000);
+            const auto completed = f->GetCompletedValue();
+            if (completed == UINT64_MAX) hr = DXGI_ERROR_DEVICE_REMOVED;
+            else if (completed < 1) hr = waited == WAIT_FAILED ? HRESULT_FROM_WIN32(GetLastError()) : HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+        }
         CloseHandle(ev);
         f->Release();
         return hr;
@@ -2962,8 +2966,18 @@ struct Session
             }
             nr::logf("[mochizuki] ACO records %d/%d match aco/shaders; shells native=%d alias=%d self=%d", matched,
                      checked, nativeShells, aliasShells, selfShells);
-            const fs::path cache = root / L"aco-cache";
-            fs::create_directories(cache, ec);
+            // Cache is local disposable driver data, never package/model input.
+            std::wstring localAppData(32768, L'\0');
+            const DWORD localLen = GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData.data(), DWORD(localAppData.size()));
+            fs::path cache;
+            if (localLen && localLen < localAppData.size()) {
+                localAppData.resize(localLen);
+                if (fs::path(localAppData).is_absolute()) {
+                    cache = fs::path(localAppData) / L"OptScaler-NR" / L"Mochizuki" / L"aco-cache";
+                    fs::create_directories(cache, ec);
+                    if (ec) cache.clear();
+                }
+            }
             std::vector<std::string> shellUtf8;
             shellUtf8.reserve(shellDirs.size());
             for (const fs::path& dir : shellDirs)
@@ -4873,9 +4887,7 @@ int32_t SetControls(void* context, const MochizukiNrControls* in)
         return Fail(LMXXF_NR_INVALID_ARGUMENT, "SetControls: bad arguments");
     try
     {
-        MochizukiNrControls c;
-        DefaultControls(c); // what a shorter struct does not hold
-        std::memcpy(&c, in, std::min<size_t>(in->struct_size, sizeof c) & ~size_t(3));
+        const MochizukiNrControls c = *in; // Exact current-package ABI only.
         SessionControls sanitised = Sanitise(c);
         std::lock_guard lock(s->controlsMutex);
         s->controls = std::move(sanitised);

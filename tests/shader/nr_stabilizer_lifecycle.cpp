@@ -27,7 +27,7 @@ int main()
     Check(D3D12CreateDevice(adapter.Get(),D3D_FEATURE_LEVEL_11_0,IID_PPV_ARGS(&d)),"device");
     Ptr<ID3D12CommandQueue> q,other;D3D12_COMMAND_QUEUE_DESC qd {};Check(d->CreateCommandQueue(&qd,IID_PPV_ARGS(&q)),"queue");Check(d->CreateCommandQueue(&qd,IID_PPV_ARGS(&other)),"other");
     auto original=Texture(d.Get(),32,24),result=Texture(d.Get(),32,24);
-    g_patternExponentShift=0;UploadColorPattern(d.Get(),q.Get(),original.Get());g_patternExponentShift=1;UploadColorPattern(d.Get(),q.Get(),result.Get());g_patternExponentShift=0;
+    UploadColorPattern(d.Get(),q.Get(),original.Get(), PatternOptions{0});UploadColorPattern(d.Get(),q.Get(),result.Get(), PatternOptions{1});
     auto motion=Guide(d.Get(),q.Get(),DXGI_FORMAT_R32G32_FLOAT,0),depth=Guide(d.Get(),q.Get(),DXGI_FORMAT_R32_FLOAT,.5f);
     Effects::Guides guides;guides.motion=motion.Get();guides.depth=depth.Get();guides.motionWidth=32;guides.motionHeight=24;
     auto record=[&](float intensity=1.f){auto r=NewRecording(d.Get());r.output=Effects::Record(r.proxy.Get(),original.Get(),result.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,32,24,intensity,true,guides,{true,.8f,4});Check(r.proxy->Close(),"close");return r;};

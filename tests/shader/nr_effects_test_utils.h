@@ -35,7 +35,7 @@ static Recording NewRecording(ID3D12Device* device)
     Check(Submission::CommandListProxy::Create(device,out.allocator.Get(),real.Get(),&proxy),"proxy"); out.proxy.Attach(proxy);
     return out;
 }
-static void CheckPixels(ID3D12Device* device, ID3D12CommandQueue* queue, ID3D12Resource* output, float intensity)
+static void CheckPixels(ID3D12Device* device, ID3D12CommandQueue* queue, ID3D12Resource* output, float intensity, PatternOptions pattern = {})
 {
     auto td=output->GetDesc(); D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp {}; UINT64 bytes=0;
     device->GetCopyableFootprints(&td,0,1,0,&fp,nullptr,nullptr,&bytes);
@@ -54,7 +54,7 @@ static void CheckPixels(ID3D12Device* device, ID3D12CommandQueue* queue, ID3D12R
     Check(list->Close(),"copy close");ID3D12CommandList* lists[]={list.Get()};queue->ExecuteCommandLists(1,lists);WaitQueue(device,queue);
     void* data=nullptr;D3D12_RANGE range {0,SIZE_T(bytes)};Check(readback->Map(0,&range,&data),"map");
     std::vector<unsigned char> expected(size_t(td.Width)*8);
-    for(UINT y=0;y<td.Height;++y){FillRow(expected.data(),y,UINT(td.Width),td.Format);
+    for(UINT y=0;y<td.Height;++y){FillRow(expected.data(),y,UINT(td.Width),td.Format,pattern);
         const auto* actual=reinterpret_cast<const UINT16*>(static_cast<unsigned char*>(data)+size_t(y)*fp.Footprint.RowPitch);
         const auto* base=reinterpret_cast<const UINT16*>(expected.data());
         for(UINT x=0;x<td.Width;++x)for(UINT c=0;c<4;++c){

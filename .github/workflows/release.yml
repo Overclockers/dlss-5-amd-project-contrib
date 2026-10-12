@@ -72,10 +72,42 @@ jobs:
           "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           Write-Host "resolved version: $v"
 
+      - name: Prepare versioned release notes
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.ver.outputs.version }}
+          SOURCE_SHA: ${{ github.sha }}
+          SOURCE_REPO: ${{ github.repository }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $notes = "docs/release-notes/$env:RELEASE_VERSION.md"
+          if (!(Test-Path -LiteralPath $notes -PathType Leaf)) { throw "Missing release notes: $notes" }
+          $body = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $notes))
+          if ([string]::IsNullOrWhiteSpace($body)) { throw "Empty release notes: $notes" }
+          $headings = [regex]::Matches($body, '(?m)^### v([^\s]+)\s*$')
+          if (!$headings.Count) { throw "Missing version heading: $notes" }
+          foreach ($heading in $headings) {
+            if ($heading.Groups[1].Value -cne $env:RELEASE_VERSION) { throw "Release notes version mismatch: $notes" }
+          }
+          $body += "`nSource / 源码：[$env:SOURCE_SHA](https://github.com/$env:SOURCE_REPO/tree/$env:SOURCE_SHA)`n"
+          New-Item -ItemType Directory -Force exports | Out-Null
+          [IO.File]::WriteAllText((Join-Path $PWD 'exports/release-notes.md'), $body, [Text.UTF8Encoding]::new($false))
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+
+      - name: Reject moved published tags
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python -B .github/scripts/publish_release_asset.py --tag "$env:RELEASE_TAG" --verify-source "$env:GITHUB_SHA"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Toolchain preflight
         id: toolchain
@@ -257,6 +289,7 @@ jobs:
               Where-Object { -not [string]::IsNullOrEmpty($_.Name) -and $_.Name -match $forbidden } |
               ForEach-Object { $_.FullName })
             $entryNames = @($archive.Entries | ForEach-Object { $_.Name })
+            $entryPaths = @($archive.Entries | ForEach-Object { $_.FullName.Replace("\", "/") })
           } finally {
             $archive.Dispose()
           }
@@ -264,10 +297,16 @@ jobs:
             $bad | ForEach-Object { Write-Host "FORBIDDEN: $_" }
             throw 'Refusing to publish: proprietary/user-supplied binaries found in package zip.'
           }
-          $required = @('OptiScaler.dll', 'LmxxfNrRuntime.dll', 'MochizukiNrRuntime.dll', 'OptiScaler.ini', 'Setup.ps1', 'Setup.bat', 'person-worker.exe', 'onnxruntime.dll', 'pphumanseg.onnx', 'yolo11n-seg.onnx', 'yunet.onnx', 'YuNet_MIT.txt')
+          $required = @('OptiScaler.dll', 'LmxxfNrRuntime.dll', 'MochizukiNrRuntime.dll', 'OptiScaler.ini', 'Setup.ps1', 'Setup.bat', 'LICENSE', 'NOTICE', 'person-worker.exe', 'onnxruntime.dll', 'pphumanseg.onnx', 'yolo11n-seg.onnx', 'yunet.onnx')
           foreach ($r in $required) {
             if ($entryNames -notcontains $r) {
               throw "REQUIRED COMPONENT MISSING IN ZIP: $r"
+            }
+          }
+
+          foreach ($license in @('OptiScaler_LICENSE.txt', 'Lmxxf_MIT.txt', 'Mochizuki_MIT.txt', 'ONNXRuntime_MIT.txt', 'YOLO11_AGPL-3.0.txt', 'PPHumanSeg_Apache-2.0.txt', 'YuNet_MIT.txt', 'XeSS_LICENSE.txt', 'FidelityFX_v1_LICENSE.md', 'FidelityFX_v2_LICENSE.md', 'DirectX_LICENSE.txt')) {
+            if ($entryPaths -notcontains "Licenses/$license") {
+              throw "REQUIRED LICENSE MISSING IN ZIP: $license"
             }
           }
 
@@ -288,67 +327,9 @@ jobs:
           # Formal tags like v1.9.1 stay latest/stable; plain substrings such as "source" do not count.
           prerelease: ${{ contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') }}
           name: ${{ github.ref_name }}
+          target_commitish: ${{ github.sha }}
           generate_release_notes: true
-          body: |
-            ### v1.12.0-alpha
-
-            - **实验性：同命令列表原地内联执行架构（NrInline 模式）**：
-              - 解决《红色沙漠》（Crimson Desert）等游戏中因跨 Evaluate 未闭合非时间戳 Query（open_query）或复杂增强屏障导致的切分拒绝与崩溃。
-            - **Mochizuki 官方 a9b13dd 深度集成与 ACO 编译器支持**：
-              - 修复 ACO 解码器尾部（C64 到 fused-C32）屏障依赖与生命周期边界（感谢 @[Overclockers](https://github.com/TheAutomatic/dlss-5-amd-project/commits?author=Overclockers)）。
-              - 支持可选 30 层降噪模式与 SR 后 NR 运动矢量直通。
-            - **架构稳定性与自动化测试回归**。
-
-            **安装与对应后端权重准备**
-
-            - 请完整解压 ZIP 至任意文件夹并运行新包的 `Setup.bat`。更新时推荐选择 **Y 先卸载**，重新使用包内默认配置（已自带人物模型保留规则）。
-            - **Daniel 0.6.0**：运行文件请前往 [Daniel 官方发布页](https://github.com/danielblnc/DLSS-NR-on-AMD/releases) 获取；`nvngx_dlssnr.dll` 310.8.0 请自行获取。
-            - **lmxxf 0.41**：需自备 `native-game-tiled-assets` 权重目录，见 [原仓库](https://github.com/lmxxf/dlss5-on-amd-9070xt-porting) 或 [下载镜像](https://gofile.io/d/wRln0Pue)。
-            - **Mochizuki 0.0.3（引入 0.04/a9b13dd 特性）**：从 `nvngx_dlssnr.dll` 310.8.0（与 Daniel 使用同一文件）提取权重，需要 Python 3.10+。
-            - 本包已内置 PP-HumanSeg 与 YOLO11n-seg 人物分割模型权重（见 Licenses/）；不含 NVIDIA DLL、Daniel 安装器或全图专有神经渲染权重。
-
-            **已知问题**
-
-            - 实验性内联模式（`NrInline`）目前需在配置中显式开启，专用于解决不兼容命令列表拆分的游戏；在已兼容切分模式的游戏中建议保持默认。
-            - SR → NR 支持 DX12 及 DX11/Vulkan 转 DX12 桥接，不扩展原生 RR/Vulkan；不支持的纹理布局保留 SR 图像并显示原因。
-            - lmxxf 时序历史（抗闪烁）功能与 ViT 自适应复用继续互斥；建议关闭预测第 3 层。
-            - 部分场景与 XeFG 插件冲突，请关闭 XeFG 后重新进入游戏。
-
-            感谢各位用户的测试与反馈。
-
-            ---
-
-            ### v1.12.0-alpha
-
-            - **Experimental: Same-Command-List Inline NR Execution (`NrInline` Mode)**:
-              - Resolves split rejection (`open_query`) and crashes in games like *Crimson Desert* caused by unclosed non-timestamp queries or enhanced barriers across Evaluate.
-            - **Mochizuki Official a9b13dd Upstream Integration & ACO Compiler Support**:
-              - Fixed ACO decoder-tail (C64 to fused-C32) barrier dependencies and lifetime boundaries (special thanks to @[Overclockers](https://github.com/TheAutomatic/dlss-5-amd-project/commits?author=Overclockers)).
-              - Added selectable 30-layer pass mode and post-SR NR motion vector passthrough.
-            - **Architectural Stability & Automated Test Coverage**.
-
-            **Installation and backend model preparation**
-
-            - Extract the complete ZIP into a folder of your choice and run `Setup.bat`. When updating, we recommend choosing **Y to uninstall first** and start with default settings (existing person models are preserved automatically).
-            - **Daniel 0.6.0**: obtain runtime files from the [Daniel releases page](https://github.com/danielblnc/DLSS-NR-on-AMD/releases). Obtain `nvngx_dlssnr.dll` 310.8.0 separately.
-            - **lmxxf 0.41**: provide `native-game-tiled-assets` weights from the [upstream repository](https://github.com/lmxxf/dlss5-on-amd-9070xt-porting) or [mirror](https://gofile.io/d/wRln0Pue).
-            - **Mochizuki 0.0.3 (includes 0.04/a9b13dd features)**: extract weights from `nvngx_dlssnr.dll` 310.8.0 (same file as Daniel). Python 3.10+ is required.
-            - Bundles PP-HumanSeg and YOLO11n-seg person partition models (see Licenses/); NVIDIA DLLs, Daniel installers, and proprietary neural weights are not included.
-
-            **Known issues**
-
-            - Experimental `NrInline` mode must be explicitly enabled in configuration; intended specifically for games with split-ineligible command lists. Keep default split mode for normally compatible titles.
-            - SR → NR supports DX12 and DX11/Vulkan-to-DX12 bridges; does not provide native RR/Vulkan. Unsupported layouts retain the SR frame and display diagnostic reasons.
-            - lmxxf temporal history and adaptive ViT reuse remain mutually exclusive. Disabling predicted pass 3 is recommended.
-            - May conflict with the XeFG plugin in certain titles; disable XeFG and restart the game if encountered.
-
-            Thanks to all users for testing and feedback.
-
-            This archive does not include NVIDIA proprietary binaries, the danielblnc installer, or unauthorized model weights.
-
-            See the included README for configuration details. Bug reports with logs are welcome.
-
-            Source / 源码：[${{ github.sha }}](https://github.com/${{ github.repository }}/tree/${{ github.sha }})
+          body_path: exports/release-notes.md
 
       - name: Upload release asset with verified retries
         if: startsWith(github.ref, 'refs/tags/')

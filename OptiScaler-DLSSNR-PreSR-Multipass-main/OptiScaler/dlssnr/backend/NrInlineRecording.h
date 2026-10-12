@@ -6,6 +6,9 @@
 #include <atomic>
 #include <stdexcept>
 #include <string>
+#include <cstdio>
+#include <thread>
+#include <algorithm>
 
 namespace DlssNr::Backend::InlineRecording
 {
@@ -31,7 +34,10 @@ public:
     ~StateScope() { if (state) state->EndInlineState(); }
 };
 inline void Check(HRESULT hr, const char* operation) {
-    if (FAILED(hr)) throw std::runtime_error(std::string(operation) + " HRESULT=" + std::to_string(unsigned(hr)));
+    if (FAILED(hr)) {
+        char code[16]; std::snprintf(code, sizeof code, "0x%08X", unsigned(hr));
+        throw std::runtime_error(std::string(operation) + " HRESULT=" + code);
+    }
 }
 inline void Execute(ID3D12CommandQueue* queue, ID3D12GraphicsCommandList* list) {
     ID3D12CommandList* native = list;
@@ -60,7 +66,7 @@ inline Ptr<ID3DBlob> Compile(const char* source, const char* entry) {
 
 // All polling is between D3D12 queues on the same device. HIP/Vulkan retain their
 // existing external-fence handoff on the side queue; no cross-API shader flag is assumed.
-// The game wait is a finite sequence of small dispatches, allowing the side queue to progress.
+// Bounded slices cap shader work; they do not guarantee side-queue scheduling progress.
 struct Pipelines {
     Ptr<ID3D12Device> device;
     // Session-owned queue identity; recording-local buffers/fences remain independent.
@@ -80,9 +86,9 @@ class Resources
     Ptr<ID3D12Resource> control, capture, sample, readback, decision, decisionReadback;
     Ptr<ID3D12Fence> sideFence, gameFence;
     UINT64 serial = 0, finalValue = 0, gameValue = 0;
-    HANDLE event = nullptr;
     std::atomic<bool> scheduled {false};
     bool started = false, uncertain = false;
+    std::atomic<bool> sideUncertain {false};
     bool noNetwork = false;
     bool decisionReadable = false;
     struct Output {
@@ -253,9 +259,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
             pipelines->controlPso = controlPso; pipelines->composePso = composePso;
         }
         CreateOutput(output, source, neural, width, height); CreateOutput(first, source, firstPass, width, height);
-        event = CreateEventW(nullptr, FALSE, FALSE, nullptr); if (!event) throw std::runtime_error("inline event");
     }
-    ~Resources() { if (event) CloseHandle(event); }
     ID3D12CommandQueue* SideQueue() const { return side.Get(); }
     const std::shared_ptr<Pipelines>& PipelineCache() const { return pipelines; }
     bool WasAborted() const { return noNetwork; }
@@ -284,11 +288,12 @@ cbuffer Size : register(b0) { uint width; uint height; }
         decisionReadable = true;
     }
     bool Started() const { return started; }
+    bool RetirementUncertain() const { return uncertain || sideUncertain; }
     // Set under RecordingMutex from the lease that admitted this recording.
     uint64_t activityToken = 0;
     bool Complete() const {
         if (!started) return true;
-        if (uncertain || !scheduled.load(std::memory_order_acquire) || !finalValue || !gameFence || !gameValue) return false;
+        if (RetirementUncertain() || !scheduled.load(std::memory_order_acquire) || !finalValue || !gameFence || !gameValue) return false;
         const auto a = sideFence->GetCompletedValue(), b = gameFence->GetCompletedValue();
         return a != UINT64_MAX && b != UINT64_MAX && a >= finalValue && b >= gameValue;
     }
@@ -307,13 +312,15 @@ cbuffer Size : register(b0) { uint width; uint height; }
     }
     void BeforeExecute(ID3D12CommandQueue* game) {
         if (!Complete()) throw std::runtime_error("inline recording still executing");
-        started = true; uncertain = noNetwork = false; finalValue = gameValue = 0; gameFence.Reset();
+        started = true; uncertain = noNetwork = false; sideUncertain = true;
+        finalValue = gameValue = 0; gameFence.Reset();
         scheduled.store(false, std::memory_order_release);
         Check(sampleAlloc->Reset(), "inline reset allocator"); Check(sampleList->Reset(sampleAlloc.Get(), nullptr), "inline reset list");
         Op(sampleList.Get(), 0, sample.Get()); UavBarrier(sampleList.Get(), control.Get());
         Op(sampleList.Get(), 6, sample.Get()); UavBarrier(sampleList.Get(), capture.Get());
         Check(sampleList->Close(), "inline reset close"); Execute(side.Get(), sampleList.Get());
         const auto reset = ++serial; Check(side->Signal(sideFence.Get(), reset), "inline reset signal");
+        sideUncertain = false;
         // No CPU GPU wait under RecordingMutex. Only the producer depends on this clear.
         Check(game->Wait(sideFence.Get(), reset), "inline producer reset wait");
     }
@@ -331,36 +338,53 @@ cbuffer Size : register(b0) { uint width; uint height; }
     }
     bool WaitCapture() {
         const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        // Read the fence itself: no outstanding auto-reset event can wake a later wait.
+        auto waitFence = [&](UINT64 value) {
+            for (;;) {
+                const auto done = sideFence->GetCompletedValue();
+                if (done == UINT64_MAX) return false;
+                if (done >= value) return true;
+                if (std::chrono::steady_clock::now() >= until) return false;
+                Sleep(1);
+            }
+        };
         // The reset list must retire before reusing the sampling allocator.
         const auto reset = serial;
-        Check(sideFence->SetEventOnCompletion(reset, event), "inline reset event");
-        if (WaitForSingleObject(event, 10000) != WAIT_OBJECT_0) return false;
-        while (std::chrono::steady_clock::now() < until) {
+        if (!waitFence(reset)) return false;
+        auto backoff = std::chrono::microseconds(50);
+        for (unsigned polls = 0; polls < 2048 && std::chrono::steady_clock::now() < until; ++polls) {
             Check(sampleAlloc->Reset(), "inline poll allocator"); Check(sampleList->Reset(sampleAlloc.Get(), nullptr), "inline poll list");
             Op(sampleList.Get(), 3, sample.Get()); UavBarrier(sampleList.Get(), sample.Get());
             Barrier(sampleList.Get(), sample.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
             sampleList->CopyBufferRegion(readback.Get(), 0, sample.Get(), 0, 4);
             Barrier(sampleList.Get(), sample.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-            Check(sampleList->Close(), "inline poll close"); Execute(side.Get(), sampleList.Get());
+            Check(sampleList->Close(), "inline poll close"); sideUncertain = true; Execute(side.Get(), sampleList.Get());
             const auto done = ++serial; Check(side->Signal(sideFence.Get(), done), "inline poll signal");
-            Check(sideFence->SetEventOnCompletion(done, event), "inline poll event");
-            if (WaitForSingleObject(event, 1000) != WAIT_OBJECT_0) return false;
+            sideUncertain = false;
+            if (!waitFence(done)) return false;
             void* p = nullptr; D3D12_RANGE range {0, 4}; Check(readback->Map(0, &range, &p), "inline poll map");
             const UINT captured = *static_cast<const UINT*>(p); D3D12_RANGE none {0, 0}; readback->Unmap(0, &none);
             if (captured) return true;
-            SwitchToThread();
+            std::this_thread::sleep_for(backoff);
+            backoff = (std::min)(backoff * 2, std::chrono::microseconds(5000));
         }
         return false;
     }
     void NetworkQueued(bool ok) {
-        if (!ok) uncertain = true;
+        // Failure can follow partial runtime submission. Append a fresh side tail,
+        // rather than reusing serial (whose Signal might itself have failed).
+        // This certifies host D3D12 resources only; CollectRecording still owns
+        // HIP/Vulkan completion and may retain its job after an enqueue failure.
+        noNetwork = !ok;
+        sideUncertain = true;
         if (ok) {
             Check(doneAlloc->Reset(), "inline done allocator"); Check(doneList->Reset(doneAlloc.Get(), nullptr), "inline done list");
             // Runtime Enqueue inserted its network completion Wait on this same side queue.
             Op(doneList.Get(), 2, sample.Get()); UavBarrier(doneList.Get(), control.Get());
             Check(doneList->Close(), "inline done close"); Execute(side.Get(), doneList.Get());
-            finalValue = ++serial; Check(side->Signal(sideFence.Get(), finalValue), "inline done signal");
         }
+        finalValue = ++serial; Check(side->Signal(sideFence.Get(), finalValue), "inline tail signal");
+        sideUncertain = false;
         scheduled.store(true, std::memory_order_release);
     }
 };

@@ -89,5 +89,38 @@ class UploadTests(unittest.TestCase):
         self.assertEqual(len(self.client.assets), 1)
 
 
+class SourceGuardTests(unittest.TestCase):
+    class Client:
+        repo = 'owner/repo'
+        def __init__(self, release=None, error=None):
+            self.release, self.error = release, error
+        def api(self, method, path):
+            assert method == 'GET'  # Source verification never edits a release.
+            if self.error:
+                raise self.error
+            return self.release
+
+    def test_new_release_only_accepts_404(self):
+        for status in (404, 403, 500):
+            client = self.Client(error=subprocess.CalledProcessError(1, 'gh', stderr=f'HTTP {status}'))
+            if status == 404:
+                publisher.verify_release_source(client, 'v1', 'a' * 40)
+            else:
+                with self.assertRaises(subprocess.CalledProcessError):
+                    publisher.verify_release_source(client, 'v1', 'a' * 40)
+
+    def test_same_source_accepts_rerun(self):
+        publisher.verify_release_source(self.Client({'target_commitish': 'a' * 40}), 'v1', 'a' * 40)
+        publisher.verify_release_source(self.Client({'target_commitish': 'main',
+            'body': '[Source](https://github.com/owner/repo/tree/' + 'a' * 40 + ')'}), 'v1', 'a' * 40)
+
+    def test_moved_unknown_or_conflicting_source_is_rejected(self):
+        for release in ({'target_commitish': 'b' * 40}, {'target_commitish': 'main'},
+                        {'target_commitish': 'a' * 40,
+                         'body': '[Source](https://github.com/owner/repo/tree/' + 'b' * 40 + ')'}):
+            with self.subTest(release=release), self.assertRaises(RuntimeError):
+                publisher.verify_release_source(self.Client(release), 'v1', 'a' * 40)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

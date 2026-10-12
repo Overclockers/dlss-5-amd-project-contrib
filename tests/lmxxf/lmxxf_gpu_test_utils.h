@@ -49,10 +49,12 @@ static void WaitQueue(ID3D12Device *device, ID3D12CommandQueue *queue)
 // format has no Inf/NaN, so any bit pattern is a finite value. R10G10B10A2 is UNORM, so
 // the 10-bit channels are the same mantissa pattern widened to 10 bits.
 // --scale16 raises every FP16 exponent by 4: an exact x16 of the same pattern.
-static UINT g_patternExponentShift = 0;
+struct PatternOptions { UINT exponentShift = 0; };
 
-static void FillRow(unsigned char *dst, UINT y, UINT w, DXGI_FORMAT format)
+static void FillRow(unsigned char *dst, UINT y, UINT w, DXGI_FORMAT format, PatternOptions options = {})
 {
+    Require(format == DXGI_FORMAT_R16G16B16A16_FLOAT || options.exponentShift == 0, "pattern scaling requires FP16");
+    Require(options.exponentShift <= 15, "pattern exponent remains finite");
     const bool rgb9e5 = format == DXGI_FORMAT_R9G9B9E5_SHAREDEXP;
     const bool r10g10b10a2 = format == DXGI_FORMAT_R10G10B10A2_UNORM;
     for (UINT x = 0; x < w; ++x)
@@ -82,9 +84,9 @@ static void FillRow(unsigned char *dst, UINT y, UINT w, DXGI_FORMAT format)
             // 8 bytes per pixel: four FP16 channels (NOT four float32). Exponent 12..15
             // keeps every value finite; 0x3C00 is 1.0f in FP16.
             const UINT16 h[4] = {
-                static_cast<UINT16>(((12u + g_patternExponentShift + (mR >> 7)) << 10) | (mR & 0x3FFu)),
-                static_cast<UINT16>(((12u + g_patternExponentShift + (mG >> 7)) << 10) | (mG & 0x3FFu)),
-                static_cast<UINT16>(((12u + g_patternExponentShift + (mB >> 7)) << 10) | (mB & 0x3FFu)),
+                static_cast<UINT16>(((12u + options.exponentShift + (mR >> 7)) << 10) | (mR & 0x3FFu)),
+                static_cast<UINT16>(((12u + options.exponentShift + (mG >> 7)) << 10) | (mG & 0x3FFu)),
+                static_cast<UINT16>(((12u + options.exponentShift + (mB >> 7)) << 10) | (mB & 0x3FFu)),
                 0x3C00u
             };
             std::memcpy(dst + size_t(x) * 8, h, sizeof h);
@@ -94,9 +96,8 @@ static void FillRow(unsigned char *dst, UINT y, UINT w, DXGI_FORMAT format)
 
 // Fills `tex` with FillRow. `tex` must start and end in NON_PIXEL_SHADER_RESOURCE.
 static void UploadColorPattern(ID3D12Device *device, ID3D12CommandQueue *queue, ID3D12Resource *tex,
-                               UINT exponentShift = 0)
+                               PatternOptions options = {})
 {
-    g_patternExponentShift = exponentShift;
     const D3D12_RESOURCE_DESC td = tex->GetDesc();
     const UINT w = static_cast<UINT>(td.Width), h = td.Height;
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp {};
@@ -121,7 +122,7 @@ static void UploadColorPattern(ID3D12Device *device, ID3D12CommandQueue *queue, 
     Check(upload->Map(0, nullptr, &mapped), "map pattern upload");
     auto *base = static_cast<unsigned char *>(mapped);
     for (UINT y = 0; y < h; ++y)
-        FillRow(base + size_t(y) * fp.Footprint.RowPitch, y, w, td.Format);
+        FillRow(base + size_t(y) * fp.Footprint.RowPitch, y, w, td.Format, options);
     upload->Unmap(0, nullptr);
 
     ID3D12CommandAllocator *al = nullptr;
@@ -159,9 +160,10 @@ static void UploadColorPattern(ID3D12Device *device, ID3D12CommandQueue *queue, 
 // exponentShift > 0 divides every normal FP16 value by 2^shift before hashing, so a run on an
 // exactly scaled input can be compared bit for bit with the unscaled one.
 static uint64_t HashTexture(ID3D12Device *device, ID3D12CommandQueue *queue, ID3D12Resource *tex,
-                            UINT exponentShift = 0, UINT preservedOutsideWidth = 0, UINT preservedOutsideHeight = 0)
+                            UINT exponentShift = 0, UINT preservedOutsideWidth = 0, UINT preservedOutsideHeight = 0, PatternOptions paddingPattern = {})
 {
     const D3D12_RESOURCE_DESC td = tex->GetDesc();
+    Require(td.Format == DXGI_FORMAT_R16G16B16A16_FLOAT || exponentShift == 0, "hash scaling requires FP16");
     if (td.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D)
     {
         std::fprintf(stderr, "output_hash: output is not a texture; skipped\n");
@@ -224,7 +226,7 @@ static uint64_t HashTexture(ID3D12Device *device, ID3D12CommandQueue *queue, ID3
         auto *expected = new unsigned char[static_cast<size_t>(rowBytes)];
         for (UINT y = 0; y < h; ++y)
         {
-            FillRow(expected, y, static_cast<UINT>(td.Width), td.Format);
+            FillRow(expected, y, static_cast<UINT>(td.Width), td.Format, paddingPattern);
             const size_t begin = y < preservedOutsideHeight ? size_t(preservedOutsideWidth) * 8 : 0;
             Require(begin <= rowBytes && std::memcmp(base + size_t(y) * fp.Footprint.RowPitch + begin,
                     expected + begin, static_cast<size_t>(rowBytes) - begin) == 0,
