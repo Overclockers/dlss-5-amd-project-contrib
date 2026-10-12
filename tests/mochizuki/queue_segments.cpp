@@ -14,7 +14,8 @@ int wmain(int argc,wchar_t**argv) try {
     Hr(device->CreateCommandQueue(&desc,IID_PPV_ARGS(&queue)));
     LmxxfNrCreateInfo ci{sizeof ci,device.Get(),queue.Get(),argv[2],LMXXF_NR_CREATE_FLAG_RECORDING_LEASES|LMXXF_NR_CREATE_FLAG_INLINE_QUEUE};
     void* context=nullptr;Rc(api.Create(&ci,&context));Rc(api.PrepareSession(context));
-    Frame frame(device.Get(),256,256,DXGI_FORMAT_R16G16B16A16_FLOAT);List upload(device.Get());frame.Upload(upload.cmd.Get());Hr(upload.cmd->Close());Submit(queue.Get(),upload);
+    const bool unorm8=argc>3&&wcscmp(argv[3],L"unorm8")==0;
+    Frame frame(device.Get(),256,256,unorm8?DXGI_FORMAT_R8G8B8A8_UNORM:DXGI_FORMAT_R16G16B16A16_FLOAT);List upload(device.Get());frame.Upload(upload.cmd.Get());Hr(upload.cmd->Close());Submit(queue.Get(),upload);
     ComPtr<ID3D12Fence> tail;Hr(device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&tail)));
     Hr(queue->Signal(tail.Get(),1));Wait(tail.Get(),1);
     MochizukiNrFrameInfo f{};f.struct_size=sizeof f;f.frame_id=1;f.color=frame.color.Get();f.color_width=f.color_height=256;
@@ -27,6 +28,7 @@ int wmain(int argc,wchar_t**argv) try {
     auto rc=api.EnqueueHip(context,job.handle,queue.Get());
     char error[256]{};api.GetLastError(error,sizeof error);
     Require(rc!=LMXXF_NR_OK && strstr(error,"inline network phase")!=nullptr,"injected partial submission was not reported");
+    Require(!unorm8 || strstr(error,"phase 1/1")!=nullptr,"UNORM8 inline frame did not run as one compute phase");
     Hr(queue->Signal(tail.Get(),2));Wait(tail.Get(),2);
     api.EndRecordingExecution(context,job.handle,queue.Get(),LMXXF_NR_SUBMITTED_PRODUCER,tail.Get(),2,S_OK);
     Rc(api.InvalidateRecording(context,job.handle));

@@ -430,6 +430,19 @@ public:
     // a null callback preserves the original single-buffer behavior.
     void set_network_segments(std::function<VkCommandBuffer(VkCommandBuffer, bool)>);
 
+    // **Recording a whole frame on a compute-only queue family.** compute_refusal
+    // answers, before recording, whether a frame with these inputs needs a
+    // graphics-only command (a format-converting blit): null when it does not,
+    // otherwise the reason. motion/motion_format/motion_usage describe the
+    // engine motion source (temporal frames only); passes is the frame's pass
+    // count and mask whether a control mask is bound.
+    const char* compute_refusal(bool motion, VkFormat motion_format, VkImageUsageFlags motion_usage, int passes,
+                                bool mask = false) const;
+    // While on, recordings go to a compute-only family: an R8G8B8A8_UNORM
+    // write-back uses the compute pack, and any graphics-only command left
+    // throws before it is recorded. Off by default; recording is unchanged.
+    void set_compute_recording(bool on);
+
     // **What the pass costs on the GPU**, from a timestamp pair around the work
     // this runtime records - everything between the first barrier and the last,
     // which is the number a player comparing it against their frame time wants.

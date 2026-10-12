@@ -66,7 +66,7 @@ struct Frame {
                 reinterpret_cast<DirectX::PackedVector::XMFLOAT3SE*>(row)[x]=DirectX::PackedVector::XMFLOAT3SE(base,base*.8f,base*.6f);
             else if(fmt==DXGI_FORMAT_R11G11B10_FLOAT)
                 reinterpret_cast<DirectX::PackedVector::XMFLOAT3PK*>(row)[x]=DirectX::PackedVector::XMFLOAT3PK(base,base*.8f,base*.6f);
-            else if(fmt==DXGI_FORMAT_R8G8B8A8_UNORM_SRGB) {
+            else if(fmt==DXGI_FORMAT_R8G8B8A8_UNORM_SRGB||fmt==DXGI_FORMAT_R8G8B8A8_UNORM) {
                 auto* p=reinterpret_cast<uint8_t*>(row)+x*4;
                 for(int k=0;k<3;k++)p[k]=uint8_t(std::round(base*(1.f-.2f*k)*255));p[3]=255;
             } else {

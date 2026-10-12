@@ -4,6 +4,8 @@
 #include <d3d12.h>
 #include <dxgi1_4.h>
 #include "OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/dlssnr/backend/lmxxf_runtime/LmxxfNrApi.h"
+#include <DirectXPackedVector.h>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -53,7 +55,8 @@ struct PatternOptions { UINT exponentShift = 0; };
 
 static void FillRow(unsigned char *dst, UINT y, UINT w, DXGI_FORMAT format, PatternOptions options = {})
 {
-    Require(format == DXGI_FORMAT_R16G16B16A16_FLOAT || options.exponentShift == 0, "pattern scaling requires FP16");
+    Require(format == DXGI_FORMAT_R16G16B16A16_FLOAT || format == DXGI_FORMAT_R8G8B8A8_UNORM || options.exponentShift == 0,
+            "pattern scaling requires FP16 (or shifts the UNORM8 pattern)");
     Require(options.exponentShift <= 15, "pattern exponent remains finite");
     const bool rgb9e5 = format == DXGI_FORMAT_R9G9B9E5_SHAREDEXP;
     const bool r10g10b10a2 = format == DXGI_FORMAT_R10G10B10A2_UNORM;
@@ -72,6 +75,15 @@ static void FillRow(unsigned char *dst, UINT y, UINT w, DXGI_FORMAT format, Patt
         {
             const float rgba[] = {mR / 512.f, mG / 512.f, mB / 512.f, 1.f};
             std::memcpy(dst + size_t(x) * sizeof rgba, rgba, sizeof rgba);
+        }
+        else if (format == DXGI_FORMAT_R8G8B8A8_UNORM)
+        {
+            // 4 bytes per pixel; exponentShift moves the pattern so variants differ.
+            const UINT s = options.exponentShift * 61u;
+            const unsigned char p[4] = {static_cast<unsigned char>(((mR + s) & 0x1FFu) >> 1),
+                                        static_cast<unsigned char>(((mG + s) & 0x1FFu) >> 1),
+                                        static_cast<unsigned char>(((mB + s) & 0x1FFu) >> 1), 255};
+            std::memcpy(dst + size_t(x) * 4, p, 4);
         }
         else if (r10g10b10a2)
         {
@@ -250,6 +262,83 @@ static uint64_t HashTexture(ID3D12Device *device, ID3D12CommandQueue *queue, ID3
                 if (e > exponentShift && e < 31)
                     half = static_cast<UINT16>(half - (exponentShift << 10));
                 byte = (i & 1) ? static_cast<unsigned char>(half >> 8) : static_cast<unsigned char>(half);
+            }
+            hsh ^= byte;
+            hsh *= 1099511628211ull;
+        }
+    }
+    rb->Unmap(0, nullptr);
+    cl->Release();
+    al->Release();
+    rb->Release();
+    return hsh;
+}
+
+// A hash of 8-bit channel values, for comparing an R8G8B8A8_UNORM frame with the
+// RGBA16F inline output composed from it: FP16 channels hash as round(v * 255).
+static uint64_t HashTextureUnorm8(ID3D12Device *device, ID3D12CommandQueue *queue, ID3D12Resource *tex)
+{
+    const D3D12_RESOURCE_DESC td = tex->GetDesc();
+    Require(td.Format == DXGI_FORMAT_R8G8B8A8_UNORM || td.Format == DXGI_FORMAT_R16G16B16A16_FLOAT,
+            "8-bit hash takes RGBA8 or RGBA16F");
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp {};
+    UINT numRows = 0;
+    UINT64 rowBytes = 0, total = 0;
+    device->GetCopyableFootprints(&td, 0, 1, 0, &fp, &numRows, &rowBytes, &total);
+    D3D12_HEAP_PROPERTIES rbh {};
+    rbh.Type = D3D12_HEAP_TYPE_READBACK;
+    D3D12_RESOURCE_DESC bd {};
+    bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bd.Width = total;
+    bd.Height = 1;
+    bd.DepthOrArraySize = bd.MipLevels = 1;
+    bd.SampleDesc.Count = 1;
+    bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    ID3D12Resource *rb = nullptr;
+    Check(device->CreateCommittedResource(&rbh, D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_COPY_DEST,
+                                          nullptr, IID_PPV_ARGS(&rb)), "readback buffer");
+    ID3D12CommandAllocator *al = nullptr;
+    Check(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&al)), "hash alloc");
+    ID3D12GraphicsCommandList *cl = nullptr;
+    Check(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, al, nullptr, IID_PPV_ARGS(&cl)), "hash list");
+    D3D12_RESOURCE_BARRIER toCopy {};
+    toCopy.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    toCopy.Transition = { tex, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                          D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE };
+    cl->ResourceBarrier(1, &toCopy);
+    D3D12_TEXTURE_COPY_LOCATION dstLoc {}, srcLoc {};
+    dstLoc.pResource = rb;
+    dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    dstLoc.PlacedFootprint = fp;
+    srcLoc.pResource = tex;
+    srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    cl->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, nullptr);
+    D3D12_RESOURCE_BARRIER toSrv = toCopy;
+    toSrv.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    toSrv.Transition.StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    cl->ResourceBarrier(1, &toSrv);
+    Check(cl->Close(), "close hash list");
+    ID3D12CommandList *ls[] = { cl };
+    queue->ExecuteCommandLists(1, ls);
+    WaitQueue(device, queue);
+    uint64_t hsh = 1469598103934665603ull;
+    void *mapped = nullptr;
+    Check(rb->Map(0, nullptr, &mapped), "map readback");
+    const auto *base = static_cast<const unsigned char *>(mapped);
+    const bool half = td.Format == DXGI_FORMAT_R16G16B16A16_FLOAT;
+    for (UINT y = 0; y < td.Height; ++y)
+    {
+        const unsigned char *row = base + size_t(y) * fp.Footprint.RowPitch;
+        for (UINT64 c = 0; c < td.Width * 4; ++c)
+        {
+            unsigned char byte = row[c];
+            if (half)
+            {
+                UINT16 bits = 0;
+                std::memcpy(&bits, row + c * 2, 2);
+                const float v = DirectX::PackedVector::XMConvertHalfToFloat(bits);
+                const float clamped = v < 0.f ? 0.f : (v > 1.f ? 1.f : v);
+                byte = static_cast<unsigned char>(std::floor(clamped * 255.f + .5f));
             }
             hsh ^= byte;
             hsh *= 1099511628211ull;

@@ -118,6 +118,7 @@ aco/shaders/runtime/runtime_alpha.spv
 aco/shaders/runtime/runtime_depth.spv
 aco/shaders/runtime/runtime_downscale.spv
 aco/shaders/runtime/runtime_encode.spv
+aco/shaders/runtime/runtime_pack_u8.spv
 aco/shaders/runtime/runtime_prep.spv
 aco/shaders/runtime/runtime_taps.spv
 aco/shaders/runtime/runtime_transfer.spv
@@ -199,6 +200,7 @@ shaders/runtime/runtime_alpha.spv
 shaders/runtime/runtime_depth.spv
 shaders/runtime/runtime_downscale.spv
 shaders/runtime/runtime_encode.spv
+shaders/runtime/runtime_pack_u8.spv
 shaders/runtime/runtime_prep.spv
 shaders/runtime/runtime_taps.spv
 shaders/runtime/runtime_transfer.spv

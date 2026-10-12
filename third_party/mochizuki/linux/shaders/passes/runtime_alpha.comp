@@ -1,4 +1,22 @@
 #version 460
+#ifdef NR_PACK_U8
+// Inline compute-family write-back for an R8G8B8A8_UNORM frame (runtime_pack_u8.spv).
+// The format-converting blit is graphics-only. The answer already holds k/255 values
+// (alpha pass, encode_u8), so this rounding equals the blit's float -> UNORM conversion.
+// The bytes go to an R32_UINT image of the same 32-bit copy class; a copy places them.
+layout(local_size_x=8, local_size_y=8) in;
+layout(set=0,binding=0,rgba32f) uniform readonly image2D answer;
+layout(set=0,binding=1,r32ui) uniform writeonly uimage2D packed;
+layout(push_constant) uniform Push { uint width, height; } pc;
+void main() {
+    ivec2 xy=ivec2(gl_GlobalInvocationID.xy);
+    if (xy.x>=pc.width || xy.y>=pc.height) return;
+    precise vec4 scaled=clamp(imageLoad(answer,xy),vec4(0),vec4(1))*255.0;
+    precise vec4 shifted=scaled+0.5;
+    uvec4 q=uvec4(floor(shifted));
+    imageStore(packed,xy,uvec4(q.r | (q.g<<8) | (q.b<<16) | (q.a<<24),0u,0u,0u));
+}
+#else
 // Preserve caller alpha. Float output keeps NR RGB; 8-bit output uses the same
 // explicit rounding as the reference frame writer before the driver's format-converting blit.
 layout(local_size_x=8, local_size_y=8) in;
@@ -16,3 +34,4 @@ void main() {
     }
     imageStore(result,xy,vec4(rgb,texelFetch(original,xy,0).a));
 }
+#endif

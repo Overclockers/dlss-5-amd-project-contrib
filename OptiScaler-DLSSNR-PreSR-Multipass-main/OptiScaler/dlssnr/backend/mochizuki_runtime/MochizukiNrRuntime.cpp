@@ -201,6 +201,8 @@ struct TestHooks
     bool rejectAcoDevice = false; // MZ_TEST_REJECT_ACO_DEVICE=1: the first pipeline-binary device is treated as rejected
     uint64_t dropSubmitAt = 0;   // MZ_TEST_DROP_SUBMIT_AT=N: Enqueue N skips its Vulkan submit, the game still waits
     uint64_t phaseSubmitFailAt = 0; // MZ_TEST_PHASE_SUBMIT_FAIL_AT=N: fail phase N of an inline chain
+    uint64_t inlineChain = 0; // MZ_TEST_INLINE_CHAIN=1: an inline frame must run whole on compute; =2: in segments;
+                              // =3: segments are forced
 };
 
 const TestHooks& Hooks()
@@ -235,6 +237,7 @@ const TestHooks& Hooks()
         h.rejectAcoDevice = on("MZ_TEST_REJECT_ACO_DEVICE");
         h.dropSubmitAt = number("MZ_TEST_DROP_SUBMIT_AT");
         h.phaseSubmitFailAt = number("MZ_TEST_PHASE_SUBMIT_FAIL_AT");
+        h.inlineChain = number("MZ_TEST_INLINE_CHAIN");
         return h;
     }();
     return hooks;
@@ -1734,6 +1737,10 @@ struct Session
     VkSemaphore phaseSemaphore {};
     uint64_t phaseValue = 0;
     size_t loggedPhaseCount = 0;
+    bool loggedFullCompute = false;
+    uint64_t chainPathChanges = 0;
+    std::string loggedChainWhy;
+    const char* computeChainOff = nullptr; // set once a compute-family recording hit a graphics-only command
     struct PhaseCommand {VkCommandBuffer command; bool compute;};
     // A slot's final graphics fence certifies every preceding compute segment.
     // Retained game recordings still own their normal buffers independently.
@@ -4072,6 +4079,14 @@ struct Session
         }
         Submitted(produced, finished);
     }
+    // A graphics-only command reached in a compute-family recording: this frame
+    // fails as any recording failure does; later frames keep the segments.
+    void ComputeChainRefused(bool fullCompute, const std::exception& e)
+    {
+        if (!fullCompute || computeChainOff) return;
+        computeChainOff = "an earlier frame reached a graphics-only command";
+        nr::logf("[mochizuki] inline network: %s; the whole-chain compute path is off for this session", e.what());
+    }
     void RunNetwork(ID3D12CommandQueue* producer, uint64_t call, Submission& sub)
     {
         if (!runtime)
@@ -4102,11 +4117,51 @@ struct Session
         }
         slotTimeouts = 0;
         nextSlot = (slot + 1) % kSlots;
-        VkCommandBuffer c = commands[slot];
-        VkCheck(vkResetCommandBuffer(c, 0), "vkResetCommandBuffer");
-        VkCommandBufferBeginInfo bi { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
-        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        VkCheck(vkBeginCommandBuffer(c, &bi), "vkBeginCommandBuffer");
+        // Inline: the whole chain goes on the compute family when nothing in it
+        // needs a graphics-only command (a format-converting blit). Otherwise the
+        // conversions stay on graphics and only the network loop moves (segments).
+        const bool motion = job.motion && motionImage.image;
+        const char* chainWhy = nullptr;
+        bool fullCompute = false;
+        if (job.inlineExecution && vk.computeQueue)
+        {
+            if (computeChainOff) chainWhy = computeChainOff;
+            else if (hooks.inlineChain == 3) chainWhy = "MZ_TEST_INLINE_CHAIN=3 (test hook)";
+            else if (job.firstPass) chainWhy = "the first-pass export needs a blit";
+            else if (motion && job.motionPath != Job::Uploaded && job.motionPath != Job::Padded)
+                chainWhy = "the motion vectors are rescaled by a blit";
+            else chainWhy = runtime->compute_refusal(motion, motionVk, kImageUsage, job.controls.passes);
+            fullCompute = !chainWhy;
+            // Logged when the path or reason changes; a game that flips every frame
+            // (first-pass export, DRS) is bounded like the error lines.
+            if (fullCompute != loggedFullCompute || (chainWhy && loggedChainWhy != chainWhy))
+            {
+                loggedFullCompute = fullCompute;
+                loggedChainWhy = chainWhy ? chainWhy : "";
+                const uint64_t change = ++chainPathChanges;
+                if (change > 8 && change % 1000 != 0) {}
+                else if (fullCompute)
+                    nr::logf("[mochizuki] inline network: the whole chain on compute family %u", vk.computeFamily);
+                else
+                    nr::logf("[mochizuki] inline network: conversions stay on family %u, network segments on compute "
+                             "family %u (%s)", vk.family, vk.computeFamily, chainWhy);
+            }
+        }
+        if (job.inlineExecution && vk.computeQueue && (hooks.inlineChain == 1 || hooks.inlineChain == 2) &&
+            (hooks.inlineChain == 1) != fullCompute)
+            throw NrError(NrError::Other, fullCompute ? "MZ_TEST_INLINE_CHAIN=2: the frame took the whole compute chain"
+                                                      : "MZ_TEST_INLINE_CHAIN=1: the frame took the segments (test hook)");
+        VkCommandBuffer c {};
+        if (fullCompute)
+            c = PhaseBuffer(slot, true, 0);
+        else
+        {
+            c = commands[slot];
+            VkCheck(vkResetCommandBuffer(c, 0), "vkResetCommandBuffer");
+            VkCommandBufferBeginInfo bi { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
+            bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            VkCheck(vkBeginCommandBuffer(c, &bi), "vkBeginCommandBuffer");
+        }
 
         // The frame's valid extent in the image the network runs on, W x H: the whole of it, except with dynamic
         // resolution, where the rest repeats the frame's edge (Pad).
@@ -4149,7 +4204,6 @@ struct Session
             Pad(c, colour.image, w, h, W, H);
             ready(colour.image);
         }
-        const bool motion = job.motion && motionImage.image;
         // The image the network reads the vectors from, and its extent: the uploaded one, or the bucket-sized one with
         // the vectors laid over the subrect (dynamic resolution).
         VkImage motionSource = motionImage.image;
@@ -4202,8 +4256,12 @@ struct Session
         // Record the whole chain before submitting any segment. Conversion and
         // history work stay on graphics; only the network loop changes engines.
         std::vector<PhaseCommand> phases;
-        struct ClearSegments {nr::Runtime* runtime; ~ClearSegments() { runtime->set_network_segments({}); }} clearSegments {runtime.get()};
-        if (job.inlineExecution && vk.computeQueue) {
+        struct ClearSegments {nr::Runtime* runtime; ~ClearSegments() { runtime->set_network_segments({}); runtime->set_compute_recording(false); }} clearSegments {runtime.get()};
+        if (fullCompute) {
+            // One compute-family buffer; the core refuses any graphics-only command in it.
+            runtime->set_compute_recording(true);
+            phases.push_back({c, true});
+        } else if (job.inlineExecution && vk.computeQueue) {
             phases.push_back({c, false}); size_t graphics = 0, compute = 0;
             runtime->set_network_segments([&, graphics, compute](VkCommandBuffer previous, bool enter) mutable {
                 sub.segmentedRecording = true;
@@ -4233,13 +4291,31 @@ struct Session
             frame.motion.usage = kImageUsage;
             frame.motion_scale_x = job.motionScaleX;
             frame.motion_scale_y = job.motionScaleY;
-            const nr::EngineResult r = runtime->record_engine(c, frame, job.controls);
-            dispatches.store(r.frame.network_dispatches, std::memory_order_relaxed);
-            consumed = r.history_consumed;
+            try
+            {
+                const nr::EngineResult r = runtime->record_engine(c, frame, job.controls);
+                dispatches.store(r.frame.network_dispatches, std::memory_order_relaxed);
+                consumed = r.history_consumed;
+            }
+            catch (const std::logic_error& e)
+            {
+                ComputeChainRefused(fullCompute, e);
+                throw;
+            }
         }
         else
-            dispatches.store(runtime->record(c, frame.colour, job.controls).network_dispatches,
-                             std::memory_order_relaxed);
+        {
+            try
+            {
+                dispatches.store(runtime->record(c, frame.colour, job.controls).network_dispatches,
+                                 std::memory_order_relaxed);
+            }
+            catch (const std::logic_error& e)
+            {
+                ComputeChainRefused(fullCompute, e);
+                throw;
+            }
+        }
         if (job.firstPass)
         {
             const VkImage first = runtime->first_pass_output();
@@ -4319,7 +4395,8 @@ struct Session
         }
         else
         {
-            if (phases.size() > 1) {
+            if (fullCompute) SubmitPhases(phases, sub.produced, sub.finished, done[slot]);
+            else if (phases.size() > 1) {
                 if (loggedPhaseCount != phases.size()) {
                     loggedPhaseCount = phases.size();
                     nr::logf("[mochizuki] inline network: compute family %u, conversion family %u, %zu segments for %d passes",

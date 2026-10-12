@@ -67,6 +67,12 @@ for %%P in (2 3) do (
   set "MZ_TEST_PHASE_SUBMIT_FAIL_AT=%%P"
   exports\mochizuki-tests\queue_segments.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" || exit /b 1
 )
+rem R8G8B8A8_UNORM: the whole chain is one compute phase; its submit fails.
+set "MZ_TEST_PHASE_SUBMIT_FAIL_AT=1"
+set "MZ_TEST_INLINE_CHAIN=1"
+exports\mochizuki-tests\queue_segments.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" unorm8 || exit /b 1
+set "MZ_TEST_PHASE_SUBMIT_FAIL_AT="
+set "MZ_TEST_INLINE_CHAIN="
 exit /b 0
 
 :inline
@@ -87,7 +93,22 @@ if errorlevel 1 exit /b 1
 exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --large --temporal %MOCHI_ACO_ARG%
 if errorlevel 1 exit /b 1
 exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --large --temporal --three-passes %MOCHI_ACO_ARG%
-exit /b %errorlevel%
+if errorlevel 1 exit /b 1
+rem R16G16B16A16_FLOAT above needs the colour conversions: segments. R8G8B8A8_UNORM runs whole on compute.
+set "MZ_TEST_INLINE_CHAIN=2"
+exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki %MOCHI_ACO_ARG%
+if errorlevel 1 exit /b 1
+set "MZ_TEST_INLINE_CHAIN=1"
+for %%M in ("" "--timeout" "--ahead" "--timeout --ahead" "--large --temporal") do (
+  exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --unorm8 %%~M %MOCHI_ACO_ARG%
+  if errorlevel 1 (set "MZ_TEST_INLINE_CHAIN=" & exit /b 1)
+)
+rem Three passes leave the direct colour input: the UNORM8 frame falls back to segments.
+set "MZ_TEST_INLINE_CHAIN=2"
+exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --unorm8 --large --temporal --three-passes %MOCHI_ACO_ARG%
+set "RC=%errorlevel%"
+set "MZ_TEST_INLINE_CHAIN="
+exit /b %RC%
 
 :startup
 set "ASSETS=%CD%\exports\mochizuki-runtime"

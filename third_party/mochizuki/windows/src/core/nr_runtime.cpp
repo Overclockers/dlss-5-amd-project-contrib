@@ -329,6 +329,14 @@ struct Temporal {
 struct Runtime::Impl {
     NrSession session;
     nrvk::Kernel alpha, mask_pre, mask_resolve;
+    // Compute write-back for an R8G8B8A8_UNORM frame (runtime_pack_u8.spv), used
+    // only while compute_recording; graphics recordings keep the blit.
+    nrvk::Kernel pack_u8; nrvk::Context::Image pack_img{}; bool pack_built{};
+    bool compute_recording{}, graphics_family{true};
+    void graphics_only(const char* what) const {
+        if (compute_recording)
+            throw std::logic_error(std::string("NR compute-family recording reached a graphics-only ") + what);
+    }
     // The linear-light path: the proxy is made in place on tex_in and the
     // original kept here for the decode. Only when RuntimeConfig::linear_input.
     nrvk::Kernel encode, transfer_pass, first_transfer;
@@ -982,6 +990,7 @@ struct Runtime::Impl {
         }
         if (depth_copy.device) depth_copy.destroy();
         if (alpha.device) alpha.destroy();
+        if (pack_u8.device) pack_u8.destroy();
         if (encode.device) encode.destroy();
         if (transfer_pass.device) transfer_pass.destroy();
         if (first_transfer.device) first_transfer.destroy();
@@ -1206,8 +1215,9 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
     vkGetPhysicalDeviceQueueFamilyProperties(host.physical, &count, props.data());
     if (host.queue_family >= count || !(props[host.queue_family].queueFlags & VK_QUEUE_COMPUTE_BIT))
         throw std::invalid_argument("NR host queue must support compute");
-    if (transfer != Transfer::Identical && !(props[host.queue_family].queueFlags & VK_QUEUE_GRAPHICS_BIT))
-        throw std::invalid_argument("NR colour format conversion requires a graphics-capable queue");
+    // A compute-only host family is refused later, once the direct paths are
+    // known, and only when a frame would still need a format-converting blit.
+    impl_->graphics_family = (props[host.queue_family].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0;
     std::string why;
     if (!s.ctx.adopt(host.instance, host.physical, host.device, host.queue, host.queue_family, &why))
         throw std::runtime_error("NR device unsupported: " + why);
@@ -1437,6 +1447,22 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
                                         : (config.max_passes > 1 ? &impl_->shown_keep : &s.tex_in);
     if (!impl_->store_native && !impl_->compact_rgba)
         impl_->alpha.create(s.ctx, (adapters / "runtime_alpha.spv").string(), {}, 12, {answer, frame_alpha});
+    if (impl_->transfer == Transfer::DirectBlit && impl_->round_u8 && !impl_->direct_out &&
+        config.colour_format == VK_FORMAT_R8G8B8A8_UNORM && !impl_->store_native && !impl_->compact_rgba &&
+        !impl_->scaled) {
+        const auto pack = adapters / "runtime_pack_u8.spv";
+        if (std::filesystem::exists(pack)) {
+            impl_->pack_img = s.ctx.image(config.width, config.height, VK_FORMAT_R32_UINT, false);
+            s.ctx.transition(impl_->pack_img, VK_IMAGE_LAYOUT_GENERAL);
+            impl_->pack_u8.create(s.ctx, pack.string(), {}, 8, {answer, &impl_->pack_img});
+            impl_->pack_built = true;
+        } else {
+            nr::logf("[nr] runtime_pack_u8.spv missing; compute-family UNORM8 write-back unavailable");
+        }
+    }
+    if (!impl_->graphics_family && compute_refusal(false, VK_FORMAT_UNDEFINED, 0, 1))
+        throw std::invalid_argument("NR colour format conversion requires a graphics-capable queue");
+    impl_->compute_recording = !impl_->graphics_family;
     if (config.linear_input) {
         impl_->linear = true;
         impl_->white_point = config.white_point;
@@ -1764,6 +1790,21 @@ uint32_t Runtime::model_height() const { return impl_->mh; }
 void Runtime::set_network_segments(std::function<VkCommandBuffer(VkCommandBuffer, bool)> callback) {
     impl_->network_segments = std::move(callback);
 }
+const char* Runtime::compute_refusal(bool motion, VkFormat motion_format, VkImageUsageFlags motion_usage,
+                                     int passes, bool mask) const {
+    auto& m = *impl_;
+    if (m.scaled) return "model scale below 1 needs a downscale blit";
+    if (m.transfer != Transfer::Identical && !m.direct_in) return "colour input conversion needs a blit";
+    if (m.transfer != Transfer::Identical && !m.direct_out && !m.store_native && !m.pack_built)
+        return "colour write-back conversion needs a blit";
+    if (motion && !(NR_DIRECT_MOTION && !m.motion_src_failed && !mask && passes == 1 && m.temporal.pingpong &&
+                    (motion_usage & VK_IMAGE_USAGE_SAMPLED_BIT) && m.filters_linearly(motion_format)))
+        return "motion vectors need a blit";
+    return nullptr;
+}
+void Runtime::set_compute_recording(bool on) {
+    impl_->compute_recording = on || !impl_->graphics_family;
+}
 void Runtime::set_white_point(float v) {
     if (impl_->linear) impl_->white_point = v > 1e-4f ? v : 1e-4f;
 }
@@ -2075,6 +2116,7 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
         barrier(cmd,encoded.handle,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                 VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,
                 VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT);
+        impl_->graphics_only("blit (encoded.handle)");
         vkCmdBlitImage(cmd,encoded.handle,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                        colour_dst,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&blit,VK_FILTER_NEAREST);
         barrier(cmd,encoded.handle,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,
@@ -2083,6 +2125,7 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
     } else if (impl_->transfer == Transfer::DirectBlit) {
         // FP16 / 16-bit UNORM / 10-bit packed: no sRGB transfer function to route
         // around, so the blit's own format conversion is the whole of it.
+        impl_->graphics_only("blit (frame.image)");
         vkCmdBlitImage(cmd, frame.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                        colour_dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
     } else {
@@ -2104,6 +2147,7 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
         down.srcSubresource = down.dstSubresource = region.srcSubresource;
         down.srcOffsets[1] = {int32_t(frame.width), int32_t(frame.height), 1};
         down.dstOffsets[1] = {int32_t(nw), int32_t(nh), 1};
+        impl_->graphics_only("blit (impl_->keep_full.handle)");
         vkCmdBlitImage(cmd, impl_->keep_full.handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                        s.tex_in.handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &down, impl_->downscale_filter);
         barrier(cmd, impl_->keep_full.handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
@@ -2259,6 +2303,7 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
             mv.srcOffsets[1] = {int32_t(engine->motion_x + engine->motion.width),
                                 int32_t(engine->motion_y + engine->motion.height), 1};
             mv.dstOffsets[1] = {int32_t(t.lw[0]), int32_t(t.lh[0]), 1};
+            impl_->graphics_only("blit (engine->motion.image)");
             vkCmdBlitImage(cmd, engine->motion.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                            t.flow[0].handle, VK_IMAGE_LAYOUT_GENERAL, 1, &mv, VK_FILTER_LINEAR);
             barrier(cmd, t.flow[0].handle, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
@@ -2326,6 +2371,7 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
                 // a depth that is on neither surface, which is precisely the
                 // edge this tap exists to get right. Vulkan also forbids linear
                 // filtering on a depth aspect.
+                impl_->graphics_only("blit (engine->depth.image)");
                 vkCmdBlitImage(cmd, engine->depth.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                t.depth.handle, VK_IMAGE_LAYOUT_GENERAL, 1, &d, VK_FILTER_NEAREST);
                 barrier(cmd, t.depth.handle, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
@@ -2657,6 +2703,7 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
             barrier(cmd,encoded.handle,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                     VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT,
                     VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT);
+            impl_->graphics_only("blit (out)");
             vkCmdBlitImage(cmd,out,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                            encoded.handle,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&blit,VK_FILTER_NEAREST);
             barrier(cmd,encoded.handle,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -2667,7 +2714,27 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
             barrier(cmd,encoded.handle,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,
                     VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT,
                     VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT|VK_ACCESS_TRANSFER_WRITE_BIT);
+        } else if (impl_->pack_built && impl_->compute_recording) {
+            // Compute-family write-back: pack the k/255 answer to RGBA8 words,
+            // then copy them (same 32-bit class) into the frame.
+            barrier(cmd, out, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+            barrier(cmd, impl_->pack_img.handle, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT);
+            const uint32_t pe[] = {frame.width, frame.height};
+            dispatch(cmd, impl_->pack_u8, (frame.width + 7) / 8, (frame.height + 7) / 8, 1, pe, sizeof pe);
+            barrier(cmd, impl_->pack_img.handle, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+            vkCmdCopyImage(cmd, impl_->pack_img.handle, VK_IMAGE_LAYOUT_GENERAL,
+                           wb, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+            barrier(cmd, out, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
         } else if (impl_->transfer == Transfer::DirectBlit) {
+            impl_->graphics_only("blit (out)");
             vkCmdBlitImage(cmd, out, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                            wb, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
         } else {

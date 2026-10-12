@@ -27,7 +27,8 @@ GLSLANG = R / 'toolchain/glslang/bin/glslang'
 RUNTIME = ['runtime_alpha', 'runtime_encode', 'runtime_transfer', 'runtime_upscale', 'runtime_prep', 'runtime_depth', 'cascade_lograt', 'cascade_blur', 'cascade_feed',
            'runtime_downscale', 'runtime_taps']
 # runtime passes built from another pass's source with defines: name -> (source, defines)
-RUNTIME_VARIANTS = {'runtime_transfer_store': ('runtime_transfer', ['NR_STORE_NATIVE'])}
+RUNTIME_VARIANTS = {'runtime_transfer_store': ('runtime_transfer', ['NR_STORE_NATIVE']),
+                    'runtime_pack_u8': ('runtime_alpha', ['NR_PACK_U8'])}
 MOTION = ['motion_luma', 'motion_estimate']
 
 

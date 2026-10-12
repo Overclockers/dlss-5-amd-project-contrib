@@ -21,13 +21,19 @@ int main(int argc, char** argv) {
     bool ahead = false;
     bool aco = false;
     bool threePasses = false;
+    bool unorm8 = false; // R8G8B8A8_UNORM colour: the whole inline chain can run on the compute family
     for (int i = 3; i < argc; ++i) timeoutMode |= std::strcmp(argv[i], "--timeout") == 0;
     for (int i = 3; i < argc; ++i) large |= std::strcmp(argv[i], "--large") == 0;
     for (int i = 3; i < argc; ++i) temporalRequested |= std::strcmp(argv[i], "--temporal") == 0;
     for (int i = 3; i < argc; ++i) ahead |= std::strcmp(argv[i], "--ahead") == 0;
     for (int i = 3; i < argc; ++i) aco |= std::strcmp(argv[i], "--aco") == 0;
     for (int i = 3; i < argc; ++i) threePasses |= std::strcmp(argv[i], "--three-passes") == 0;
+    for (int i = 3; i < argc; ++i) unorm8 |= std::strcmp(argv[i], "--unorm8") == 0;
     Require(!aco || mochi, "ACO fixture requires Mochizuki");
+    // The inline output is RGBA16F; an R8G8B8A8_UNORM frame is compared through its 8-bit values.
+    auto Hash = [&](ID3D12Device* d, ID3D12CommandQueue* q, ID3D12Resource* t) {
+        return unorm8 ? HashTextureUnorm8(d, q, t) : HashTexture(d, q, t);
+    };
     Require(!threePasses || mochi, "three-pass fixture requires Mochizuki");
     Ptr<ID3D12Debug> debug;
     if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug)))) debug->EnableDebugLayer();
@@ -66,7 +72,7 @@ int main(int argc, char** argv) {
     const UINT width = large ? 2560 : (mochi ? 256 : 1280), height = large ? 1440 : (mochi ? 256 : 720);
     D3D12_RESOURCE_DESC desc {}; desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     desc.Width = width; desc.Height = height; desc.DepthOrArraySize = desc.MipLevels = 1;
-    desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; desc.SampleDesc.Count = 1; desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    desc.Format = unorm8 ? DXGI_FORMAT_R8G8B8A8_UNORM : DXGI_FORMAT_R16G16B16A16_FLOAT; desc.SampleDesc.Count = 1; desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
     D3D12_HEAP_PROPERTIES hp {}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
     Ptr<ID3D12Resource> colour;
     Check(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &desc,
@@ -74,7 +80,8 @@ int main(int argc, char** argv) {
     UploadColorPattern(device.Get(), game.Get(), colour.Get());
     Ptr<ID3D12Resource> motion;
     if (mochi && temporalRequested) {
-        Check(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        D3D12_RESOURCE_DESC motionDesc = desc; motionDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        Check(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &motionDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                                               nullptr, IID_PPV_ARGS(&motion)), "zero motion");
         Ptr<ID3D12DescriptorHeap> heap; D3D12_DESCRIPTOR_HEAP_DESC hd {};
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.NumDescriptors = 1; hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
@@ -144,8 +151,8 @@ int main(int argc, char** argv) {
     Check(game->Signal(tail.Get(), 1), "baseline signal");
     ok(api.EndRecordingExecution(context, baseline.handle, game.Get(), 3, tail.Get(), 1, S_OK), "baseline end");
     WaitQueue(device.Get(), game.Get());
-    const auto expected = HashTexture(device.Get(), game.Get(), static_cast<ID3D12Resource*>(baseline.private_output));
-    const auto originalHash = HashTexture(device.Get(), game.Get(), colour.Get());
+    const auto expected = Hash(device.Get(), game.Get(), static_cast<ID3D12Resource*>(baseline.private_output));
+    const auto originalHash = Hash(device.Get(), game.Get(), colour.Get());
     producer.Reset(); consumer.Reset(); ok(api.InvalidateRecording(context, baseline.handle), "baseline invalidate");
     ok(api.CollectRecording(context, baseline.handle), "baseline collect");
     std::puts("split baseline completed; testing actual inline worker"); std::fflush(stdout);
@@ -197,7 +204,7 @@ int main(int argc, char** argv) {
             Require(physical.valid && physical.frame_id == 2, "side completion cannot precede actual HIP event completion");
         }
         const auto selected = timeoutMode ? originalHash : expected;
-        Require(HashTexture(device.Get(), queue, resources->OutputTexture()) == selected, "inline output equals selected current-frame source");
+        Require(Hash(device.Get(), queue, resources->OutputTexture()) == selected, "inline output equals selected current-frame source");
         std::printf("%s actual inline replay=%u timeout=%u hash=%016llx PASS\n", mochi ? "Vulkan" : "HIP", replay, timeoutMode, selected);
     }
     // Successful Reset can invalidate a submitted recording before its capture
@@ -257,7 +264,7 @@ int main(int argc, char** argv) {
         while (!in->Complete()) { Require(GetTickCount64() < until, "continuous completion"); Sleep(1); }
         Require(in->Succeeded() != timeoutMode, "continuous selected output");
         if (!temporalMode && (n == 0 || n + 1 == count))
-            Require(HashTexture(device.Get(), game.Get(), in->OutputTexture()) == (timeoutMode ? originalHash : expected), "continuous pixels");
+            Require(Hash(device.Get(), game.Get(), in->OutputTexture()) == (timeoutMode ? originalHash : expected), "continuous pixels");
         list.Reset(); raw.Reset();
         Own::Collect(); Require(owner->liveRecordings == 0, "completed invalidated recordings do not accumulate");
     }
@@ -286,7 +293,7 @@ int main(int argc, char** argv) {
             Check(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &desc,
                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, IID_PPV_ARGS(&patterns[i])), "ahead colour");
             UploadColorPattern(device.Get(), game.Get(), patterns[i].Get(), PatternOptions{i + 1});
-            originalHashByPattern[i] = HashTexture(device.Get(), game.Get(), patterns[i].Get());
+            originalHashByPattern[i] = Hash(device.Get(), game.Get(), patterns[i].Get());
             for (unsigned earlier = 0; earlier < i; ++earlier)
                 Require(originalHashByPattern[i] != originalHashByPattern[earlier], "ahead patterns are distinguishable");
         }
@@ -344,7 +351,7 @@ int main(int argc, char** argv) {
                 }
                 Check(list->ExecuteOn(game.Get()), "ahead baseline execute");
                 WaitQueue(device.Get(), game.Get());
-                neuralHashByPattern[i] = HashTexture(device.Get(), game.Get(), resources->OutputTexture());
+                neuralHashByPattern[i] = Hash(device.Get(), game.Get(), resources->OutputTexture());
                 Require(neuralHashByPattern[i] != originalHashByPattern[i], "ahead baseline changed the frame");
                 retire(list, recorded, resources);
             }
@@ -428,7 +435,7 @@ int main(int argc, char** argv) {
                     Sleep(1);
                 }
                 const auto selected = timeoutMode ? originalHashByPattern[i] : neuralHashByPattern[i];
-                Require(HashTexture(device.Get(), game.Get(), frames[i].resources->OutputTexture()) == selected,
+                Require(Hash(device.Get(), game.Get(), frames[i].resources->OutputTexture()) == selected,
                         "ahead output matches that frame's own colour");
             }
             for (unsigned i = 0; i < n; ++i) {
@@ -501,7 +508,7 @@ int main(int argc, char** argv) {
                     Sleep(1);
                 }
                 const auto selected = timeoutMode ? originalHashByPattern[i] : neuralHashByPattern[i];
-                Require(HashTexture(device.Get(), game.Get(), frames[i].resources->OutputTexture()) == selected,
+                Require(Hash(device.Get(), game.Get(), frames[i].resources->OutputTexture()) == selected,
                         "stagger output matches that frame's own colour");
             }
             for (unsigned i = 0; i < 2; ++i) {
