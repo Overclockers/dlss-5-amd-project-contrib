@@ -38,6 +38,28 @@ int main() {
     b.SyncAfter = D3D12_BARRIER_SYNC_SPLIT; layouts.Observe(1, &group);
     assert(!layouts.Find(texture)->known);
     layouts.Restore(texture, whole); assert(layouts.Find(texture)->known);
+    b.SyncAfter = D3D12_BARRIER_SYNC_ALL; b.SyncBefore = D3D12_BARRIER_SYNC_SPLIT;
+    layouts.Observe(1, &group); assert(!layouts.Find(texture)->known);
+    layouts.Restore(texture, whole);
+    D3D12_RESOURCE_BARRIER legacy {}; legacy.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    legacy.Transition = {texture, 0, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE};
+    layouts.OnLegacyBarrier(legacy);
+    assert(!layouts.Find(texture)->known); // One legacy subresource is not whole-resource evidence.
+    legacy.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    layouts.OnLegacyBarrier(legacy);
+    assert(layouts.Find(texture)->known && layouts.Find(texture)->legacy);
+    auto* other = reinterpret_cast<ID3D12Resource*>(uintptr_t(3));
+    auto* unseen = reinterpret_cast<ID3D12Resource*>(uintptr_t(4));
+    D3D12_RESOURCE_BARRIER alias {}; alias.Type = D3D12_RESOURCE_BARRIER_TYPE_ALIASING;
+    alias.Aliasing = {texture, other}; layouts.OnLegacyBarrier(alias);
+    assert(!layouts.Find(texture)->known && !layouts.Find(other)->known && !layouts.Find(unseen));
+    alias.Aliasing = {nullptr, nullptr}; layouts.OnLegacyBarrier(alias);
+    assert(layouts.Find(unseen) && !layouts.Find(unseen)->known); // Wildcard aliases also cover unseen inputs.
+    layouts.OnLegacyBarrier(legacy);
+    assert(layouts.Find(texture)->known && layouts.Find(texture)->legacy && !layouts.Find(other)->known);
+    layouts.Restore(texture, whole); assert(layouts.Find(texture)->known && !layouts.Find(texture)->legacy);
+    layouts.Reset(); assert(!layouts.Find(texture) && !layouts.Find(unseen)); // No state survives Reset/address reuse.
+    layouts.Restore(texture, whole);
     layouts.Forget(texture); assert(!layouts.Find(texture));
     SetAllowEnhancedBarriers(true); assert(AllowEnhancedBarriers());
     SetAllowEnhancedBarriers(false); assert(!AllowEnhancedBarriers());

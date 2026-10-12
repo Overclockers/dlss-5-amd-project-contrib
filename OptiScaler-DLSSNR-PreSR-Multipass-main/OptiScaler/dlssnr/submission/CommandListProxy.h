@@ -11,7 +11,7 @@
 #include <memory>
 #include <wrl/client.h>
 // Enhanced-barrier policy (host sets from LmxxfAllowEnhancedBarriers; no Config.h include here).
-// Fail-closed default: split state does not model layout/access, so leave those lists off NR.
+// Explicit opt-in: interop only normalizes observed, uniform enhanced input layouts.
 
 #ifndef LOG_WARN
 #define LOG_WARN(...) ((void)0)
@@ -63,6 +63,10 @@ IRecordingResources : public IUnknown
     virtual HRESULT STDMETHODCALLTYPE BeginInlineState(UINT count, ID3D12Resource** resources,
                                                         D3D12_RESOURCE_STATES* states) = 0;
     virtual void STDMETHODCALLTYPE EndInlineState() = 0;
+    virtual HRESULT STDMETHODCALLTYPE BeginSplitState(UINT count, ID3D12Resource** resources,
+                                                       D3D12_RESOURCE_STATES* states) = 0;
+    virtual void STDMETHODCALLTYPE TraceNrInputState(const char* backend, uint64_t frame, const char* role,
+                                                     ID3D12Resource* resource, D3D12_RESOURCE_STATES expected) = 0;
 };
 
 class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogicalCommandList, public IRecordingResources
@@ -178,30 +182,67 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
         return false;
     }
     const char* STDMETHODCALLTYPE InlineRejectionReason() override { return inlineRejection; }
+    void STDMETHODCALLTYPE TraceNrInputState(const char* backend, uint64_t frame, const char* role,
+                                             ID3D12Resource* resource, D3D12_RESOURCE_STATES expected) override
+    {
+        if (!resource) return;
+        const auto id = Identity();
+        D3D12_RESOURCE_STATES legacy {};
+        const bool hasLegacy = resBook.TryGet(resource, &legacy);
+        const auto* observed = enhancedBook.Find(resource);
+        const EnhancedBarrierBook::State state = observed ? *observed : EnhancedBarrierBook::State {};
+        (void)backend; (void)frame; (void)role; (void)expected; (void)hasLegacy; // No-logger harness builds.
+        LOG_WARN("{} NR input: frame={} proxy={:p} native={:p} listId={} generation={} role={} resource={:p} inputRange=all expectedLegacy={:X} legacyObserved={} lastLegacy={:X} enhancedObserved={} known={} invalidated={} legacyContract={} lastLayout={} lastAccess={:X} observedRange={}/{} arrays={}/{} planes={}/{} bufferOffset={} bufferSize={}",
+                 backend, frame, static_cast<void*>(this), static_cast<void*>(Cur()), id.list, id.generation,
+                 role, static_cast<void*>(resource), unsigned(expected), hasLegacy, unsigned(legacy),
+                 observed != nullptr, state.known, state.invalidated, state.legacy, int(state.layout), unsigned(state.access),
+                 state.range.IndexOrFirstMipLevel, state.range.NumMipLevels, state.range.FirstArraySlice,
+                 state.range.NumArraySlices, state.range.FirstPlane, state.range.NumPlanes, state.offset, state.size);
+    }
     HRESULT STDMETHODCALLTYPE BeginInlineState(UINT count, ID3D12Resource** resources,
                                                D3D12_RESOURCE_STATES* states) override
     {
-        if (!CanRecordInline() || inlineStateActive) return E_UNEXPECTED;
-        if (count && (!resources || !states)) return E_INVALIDARG;
+        if (!CanRecordInline()) return E_UNEXPECTED;
+        return BeginNrState(count, resources, states, false);
+    }
+    HRESULT STDMETHODCALLTYPE BeginSplitState(UINT count, ID3D12Resource** resources,
+                                              D3D12_RESOURCE_STATES* states) override
+    {
+        if (IsSplitIneligible()) { inlineRejection = SplitRejectionReason(); return E_UNEXPECTED; }
+        if (enhancedBarriersSeen && !AllowEnhancedBarriers()) {
+            inlineRejection = "enhanced_barriers_not_allowed"; return E_UNEXPECTED;
+        }
+        return BeginNrState(count, resources, states, true);
+    }
+private:
+    HRESULT BeginNrState(UINT count, ID3D12Resource** resources, D3D12_RESOURCE_STATES* states, bool split)
+    {
+        if (inlineStateActive) { inlineRejection = "nr_state_already_active"; return E_UNEXPECTED; }
+        if (count && (!resources || !states)) { inlineRejection = "invalid_nr_inputs"; return E_INVALIDARG; }
+        inlineRejection = "eligible";
         inlineLayouts.clear();
+        // Preserve the pre-existing split cost for ordinary legacy games: no
+        // source scan, private binding snapshot or additional restore commands.
+        if (split && !enhancedBarriersSeen) return S_OK;
         // Validate every source before writing any command or changing caller states.
         for (UINT i = 0; i < count; ++i) {
             if (!resources[i]) continue;
             if (const auto* state = enhancedBook.Find(resources[i])) {
                 if (!state->known) {
-                    inlineRejection = "enhanced_layout_partial_or_pending"; return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
+                    inlineRejection = state->invalidated ? "source_layout_invalidated" : "enhanced_layout_partial_or_pending";
+                    return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
                 }
+                if (state->legacy) continue;
                 if (std::none_of(inlineLayouts.begin(), inlineLayouts.end(), [&](const auto& p) {
                         return p.first == resources[i]; })) inlineLayouts.emplace_back(resources[i], *state);
-            } else if (enhancedBarriersSeen) {
-                D3D12_RESOURCE_STATES known;
-                if (!resBook.TryGet(resources[i], &known)) {
-                    inlineRejection = "source_layout_unknown"; return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
-                }
             }
+            // An untouched input retains the caller's Frame/INI legacy contract,
+            // including a state established by a previously submitted list. A
+            // GLOBAL barrier changes no texture layout. Never infer COMMON here.
         }
+        if (split && inlineLayouts.empty()) return S_OK;
         auto* list7 = inlineLayouts.empty() ? nullptr : CurAs<ID3D12GraphicsCommandList7>();
-        if (!inlineLayouts.empty() && !list7) return E_NOINTERFACE;
+        if (!inlineLayouts.empty() && !list7) { inlineRejection = "enhanced_interface_unavailable"; return E_NOINTERFACE; }
         inlineState.Reset();
         inlineStateActive = true;
         for (const auto& [resource, state] : inlineLayouts) {
@@ -213,6 +254,7 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
         if (list7) list7->Release();
         return S_OK;
     }
+public:
     void STDMETHODCALLTYPE EndInlineState() override
     {
         if (!inlineStateActive) return;
@@ -433,7 +475,10 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
             MarkSplitIneligible(why ? why : "resource_state");
             return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
         }
-        const HRESULT hr = logical.Split(TrackedState().stateObject != nullptr);
+        // A private NR scope restores the game snapshot after the cut, including
+        // DXR state and any enhanced layouts. Certify those interfaces before Close.
+        const HRESULT hr = logical.Split(TrackedState().stateObject != nullptr || contState.stateObject != nullptr,
+                                         !inlineLayouts.empty());
         if (FAILED(hr))
             return hr;
         // Seed continuation with captured producer bindings (IA/SO/VRS included).
@@ -607,8 +652,8 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
     }
     void STDMETHODCALLTYPE ResourceBarrier(UINT n, const D3D12_RESOURCE_BARRIER *b) override
     {
-        for (UINT i = 0; b && i < n; ++i)
-            if (b[i].Type == D3D12_RESOURCE_BARRIER_TYPE_TRANSITION) enhancedBook.Forget(b[i].Transition.pResource);
+        if (enhancedBarriersSeen)
+            for (UINT i = 0; b && i < n; ++i) enhancedBook.OnLegacyBarrier(b[i]);
         const char *why = nullptr;
         if (!resBook.OnBarriers(n, b, &why))
             MarkSplitIneligible(why ? why : "barrier");
@@ -1040,13 +1085,35 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
     // --- ID3D12GraphicsCommandList7 ---
     void STDMETHODCALLTYPE Barrier(UINT32 numGroups, const D3D12_BARRIER_GROUP *groups) override
     {
-        // Enhanced barriers: ResourceStateBook does not classify these groups. Default is
-        // to pass through and keep split (Horizon 6). Opt out to fail closed (older games).
+        // Explicit opt-in still applies. Observed enhanced NR inputs require a
+        // known layout and COMMON round trip; untouched inputs keep the legacy contract.
         if (!AllowEnhancedBarriers())
             MarkSplitIneligible("enhanced_barrier");
         if (auto *c = CurAs<ID3D12GraphicsCommandList7>())
         {
             enhancedBarriersSeen = true;
+            for (UINT32 g = 0; groups && g < numGroups; ++g) {
+                const auto& group = groups[g];
+                for (UINT32 i = 0; i < group.NumBarriers; ++i) {
+                    D3D12_BARRIER_SYNC before {}, after {};
+                    if (group.Type == D3D12_BARRIER_TYPE_TEXTURE) {
+                        const auto& b = group.pTextureBarriers[i];
+                        resBook.Forget(b.pResource);
+                        before = b.SyncBefore; after = b.SyncAfter;
+                    } else if (group.Type == D3D12_BARRIER_TYPE_BUFFER) {
+                        const auto& b = group.pBufferBarriers[i];
+                        resBook.Forget(b.pResource);
+                        before = b.SyncBefore; after = b.SyncAfter;
+                    } else if (group.Type == D3D12_BARRIER_TYPE_GLOBAL) {
+                        before = group.pGlobalBarriers[i].SyncBefore;
+                        after = group.pGlobalBarriers[i].SyncAfter;
+                    }
+                    // A full range-aware split tracker is not available. Refuse
+                    // this recording even if a later group closes the split.
+                    if (before == D3D12_BARRIER_SYNC_SPLIT || after == D3D12_BARRIER_SYNC_SPLIT)
+                        MarkSplitIneligible("enhanced_split_barrier");
+                }
+            }
             enhancedBook.Observe(numGroups, groups);
             c->Barrier(numGroups, groups);
             c->Release();
@@ -1108,7 +1175,20 @@ inline Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> QueryLogicalCommandList
 {
     Microsoft::WRL::ComPtr<ILogicalCommandList> logical;
     Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> proxy;
-    if (list && SUCCEEDED(list->QueryInterface(IID_PPV_ARGS(&logical))) && logical)
+    if (!list) return proxy;
+    if (SUCCEEDED(list->QueryInterface(IID_PPV_ARGS(&logical))) && logical) {
+        logical.As(&proxy);
+        return proxy;
+    }
+    // Streamline's native-object QI is also used by Util::CheckForRealObject.
+    // Some wrappers do not forward private IIDs. Only accept a recovered object
+    // that actually exposes our logical face; never manufacture a proxy around
+    // an already-recorded native list or redirect it by pointer similarity.
+    static constexpr GUID streamlineNative = {0xADEC44E2, 0x61F0, 0x45C3,
+        {0xAD, 0x9F, 0x1B, 0x37, 0x37, 0x92, 0x84, 0xFF}};
+    Microsoft::WRL::ComPtr<IUnknown> native;
+    if (SUCCEEDED(list->QueryInterface(streamlineNative, reinterpret_cast<void**>(native.GetAddressOf()))) && native &&
+        SUCCEEDED(native.As(&logical)) && logical)
         logical.As(&proxy);
     return proxy;
 }

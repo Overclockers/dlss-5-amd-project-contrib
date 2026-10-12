@@ -204,22 +204,38 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     if (!cmd || !input.colour) return nullptr;
     Microsoft::WRL::ComPtr<Submission::ILogicalCommandList> logical;
     Microsoft::WRL::ComPtr<Submission::IRecordingResources> resources;
-    if (FAILED(cmd->QueryInterface(IID_PPV_ARGS(&logical))) || FAILED(cmd->QueryInterface(IID_PPV_ARGS(&resources))))
-    { p->Status("mochizuki: recording proxy unavailable; original frame"); return nullptr; }
+    const HRESULT proxyHr = cmd->QueryInterface(IID_PPV_ARGS(&logical));
+    const HRESULT resourcesHr = cmd->QueryInterface(IID_PPV_ARGS(&resources));
+    if (FAILED(proxyHr) || FAILED(resourcesHr))
+    {
+        p->Status("mochizuki: recording proxy unavailable; original frame");
+        static unsigned missingProxy = 0;
+        if (++missingProxy <= 5 || missingProxy % 1000 == 0)
+            LOG_WARN("mochizuki missing recording proxy: frame={} list={:p} type={} logicalQi={:08X} resourcesQi={:08X} sample={}",
+                     frameId, static_cast<void*>(cmd), unsigned(cmd->GetType()), unsigned(proxyHr), unsigned(resourcesHr), missingProxy);
+        return nullptr;
+    }
     const bool inlineMode = Config::Instance()->NrInline.value_or_default();
     if (logical->IsSplitIneligible()) logical->TraceOpenQueries();
     InlineRecording::StateScope inlineState;
-    if (inlineMode) {
-        const bool motion = (input.nativeGuideScale || !input.motionJittered) &&
-            Config::Instance()->MochizukiTemporal.value_or_default();
-        if (FAILED(inlineState.Begin(cmd, input, motion, false, false))) {
-            p->Status(std::string("mochizuki: inline unavailable: ") + inlineState.Reason()); return nullptr;
-        }
-    } else if (logical->IsSplitIneligible() || !resources->CanAppendCompute()) {
-        const char* reason = logical->IsSplitIneligible() ? logical->SplitRejectionReason() : "compute append unsupported";
+    if (!inlineMode && logical->IsSplitIneligible()) {
+        const char* reason = logical->SplitRejectionReason();
         p->Status(std::string("mochizuki: recording boundary unavailable: ") + reason + "; original frame");
         static unsigned rejected = 0;
-        if (++rejected <= 5 || rejected % 1000 == 0) LOG_WARN("mochizuki recording rejected: {}", reason);
+        if (++rejected <= 5 || rejected % 1000 == 0) {
+            const auto id = logical->Identity();
+            LOG_WARN("mochizuki recording rejected: frame={} list={:p} listId={} generation={} reason={}",
+                     frameId, static_cast<void*>(cmd), id.list, id.generation, reason);
+        }
+        return nullptr;
+    }
+    const bool motion = (input.nativeGuideScale || !input.motionJittered) &&
+        Config::Instance()->MochizukiTemporal.value_or_default();
+    if (FAILED(inlineState.Begin(cmd, input, motion, false, false, !inlineMode))) {
+        p->Status(std::string("mochizuki: input state unavailable: ") + inlineState.Reason());
+        static unsigned rejectedInput = 0;
+        if (++rejectedInput <= 5 || rejectedInput % 1000 == 0)
+            inlineState.TraceFailure("mochizuki", frameId, cmd, input, motion, false, false);
         return nullptr;
     }
     if (!p->Ensure()) return nullptr;
@@ -307,7 +323,12 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     { p->failed = true; p->Error("recording failed"); return nullptr; }
     if (inlineResources) inlineResources->RecordSelect(cmd, input.colourState);
     lease->ready = true;
-    if (lease->trace) SubmissionTrace(frameId, "record.ready", cmd, 0);
+    if (lease->trace) {
+        SubmissionTrace(frameId, "record.ready", cmd, 0);
+        const auto id = logical->Identity();
+        LOG_INFO("mochizuki recording ready: frame={} list={:p} listId={} generation={}",
+                 frameId, static_cast<void*>(cmd), id.list, id.generation);
+    }
     if (invocation) invocation->outcome = "recorded";
     p->Info();
     if (first) *first = inlineResources ? inlineResources->FirstTexture() : static_cast<ID3D12Resource*>(job.first_pass_output);

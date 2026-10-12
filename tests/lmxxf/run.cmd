@@ -1,8 +1,9 @@
 @echo off
 rem lmxxf runtime and submission tests. Every test in tests\lmxxf belongs to exactly one tier below.
-rem Usage: tests\lmxxf\run.cmd abi^|warp^|device^|inline^|inline-discard^|inline-gpu^|early-unity^|hip-passthrough^|gpu [out-dir]
+rem Usage: tests\lmxxf\run.cmd abi^|warp^|device^|inline^|inline-discard^|inline-gpu^|split-state^|early-unity^|hip-passthrough^|gpu [out-dir]
 rem   abi    : lmxxf_nr_abi, lmxxf_zero_fallback_abi.c, test_runtime_validation.py (no GPU)
 rem   warp   : lmxxf_same_frame_boundary, lmxxf_color_probe (D3D12 WARP; no GPU)
+rem   split-state: focused inherited-legacy/enhanced split admission and pixel readback (also in warp).
 rem   device : lmxxf_list_split, lmxxf_list1_wrap, lmxxf_create_execute, lmxxf_evaluate_cut
 rem            plus early Unity caller admission, retained split/Reset (hardware D3D12 adapter)
 rem   early-unity: only the early caller/retained-list regression (also included in device).
@@ -42,7 +43,8 @@ if /i "%TIER%"=="hip-passthrough" goto hip-passthrough
 if /i "%TIER%"=="inline" goto inline
 if /i "%TIER%"=="inline-discard" goto inline-discard
 if /i "%TIER%"=="inline-gpu" goto inline-gpu
-echo usage: tests\lmxxf\run.cmd abi^|warp^|device^|inline^|inline-discard^|inline-gpu^|early-unity^|hip-passthrough^|gpu [out-dir]
+if /i "%TIER%"=="split-state" goto split-state
+echo usage: tests\lmxxf\run.cmd abi^|warp^|device^|inline^|inline-discard^|inline-gpu^|split-state^|early-unity^|hip-passthrough^|gpu [out-dir]
 exit /b 2
 
 :abi
@@ -60,6 +62,7 @@ copy /Y "%LMXXF_TEST_RUNTIME%" "%OUT%\LmxxfNrRuntime.dll" >nul || goto fail
 goto pass
 
 :warp
+call :RunSplitState || goto fail
 call :RunInlineFixture warp || goto fail
 %CXX% /I"%INC%" tests\lmxxf\lmxxf_wrapped_command_list.cpp /Fe"%OUT%\lmxxf_wrapped_command_list.exe" /Fo"%OUT%\lmxxf_wrapped_command_list.obj" /link %D3D% "%DETOURS%" || goto fail
 "%OUT%\lmxxf_wrapped_command_list.exe" || goto fail
@@ -100,6 +103,15 @@ goto pass
 :inline
 call :RunInlineFixture hardware || goto fail
 goto pass
+
+:split-state
+call :RunSplitState || goto fail
+goto pass
+
+:RunSplitState
+%CXX% /I"%INC%" tests\lmxxf\nr_inline_recording.cpp /Fe"%OUT%\nr_split_state.exe" /Fo"%OUT%\nr_split_state.obj" /link %D3D% d3dcompiler.lib || exit /b 1
+"%OUT%\nr_split_state.exe" --split-state
+exit /b %errorlevel%
 
 :inline-gpu
 if not defined LMXXF_ASSETS goto fail

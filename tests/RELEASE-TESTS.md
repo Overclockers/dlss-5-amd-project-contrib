@@ -42,6 +42,7 @@ tests\host\run.cmd ci
 tests\shader\run.cmd
 tests\lmxxf\run.cmd abi
 tests\lmxxf\run.cmd warp
+tests\lmxxf\run.cmd split-state
 tests\lmxxf\run.cmd device
 tests\lmxxf\run.cmd early-unity
 tests\lmxxf\run.cmd hip-passthrough
@@ -55,6 +56,11 @@ tests\mochizuki\run.cmd shader-tail
 ```
 
 ABI 入口包含 C++、C 和 Python runtime 校验，覆盖当前 ABI v3 函数表边界、旧 ABI 拒绝与模块状态。
+`split-state` 是 `warp` 内的聚焦入口：验证前一列表建立的 legacy 输入在无关 GLOBAL/纹理
+enhanced barrier 后仍被接受、partial guide 拒绝的原子性、显式关闭策略，以及增强输入经
+COMMON 转换、真实切分、恢复和像素读回。需要支持 enhanced barriers 的 WARP；尝试启用
+D3D12 debug layer，缺少 Graphics Tools 时单独报告跳过该层检查。`warp` 的包装器用例还
+覆盖只暴露 Streamline native IID 的一层包装、引用平衡和拆分后的提交/读回顺序。
 `early-unity` 是 `device` 内的独立定位入口：真实 UnityPlayer/OtherEngine 测试 DLL
 验证早期调用来源过滤、显式开关和自动范围，以及保留列表的拆分/执行/读回/Reset。
 已运行完整 `device` 时不重复运行它；不需要 HIP/Vulkan 模型。

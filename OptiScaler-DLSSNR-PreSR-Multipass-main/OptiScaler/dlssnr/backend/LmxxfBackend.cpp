@@ -617,13 +617,19 @@ ID3D12Resource* LmxxfBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, const
         return RecordDiagnostic(cmd, frame, settings);
     // Never substitute Color from an earlier Evaluate to work around an unsubmitted producer.
     DlssNr::Submission::ILogicalCommandList *logical = nullptr;
-    if (FAILED(cmd->QueryInterface(__uuidof(DlssNr::Submission::ILogicalCommandList),
-                                  reinterpret_cast<void **>(&logical))) || !logical)
+    const HRESULT proxyHr = cmd->QueryInterface(__uuidof(DlssNr::Submission::ILogicalCommandList),
+                                                reinterpret_cast<void **>(&logical));
+    if (FAILED(proxyHr) || !logical)
     {
         SetStatus("lmxxf: same-frame boundary unavailable (original Color; NO NR)");
+        static unsigned missingProxy = 0;
+        if (++missingProxy <= 5 || missingProxy % 1000 == 0)
+            LOG_WARN("lmxxf missing recording proxy: frame={} list={:p} type={} qi={:08X} sample={}",
+                     frameId, static_cast<void*>(cmd), unsigned(cmd->GetType()), unsigned(proxyHr), missingProxy);
         return nullptr;
     }
     const bool ineligible = logical->IsSplitIneligible();
+    const auto recordingId = logical->Identity();
     if (ineligible) logical->TraceOpenQueries();
     const char *borrowedReason = logical->SplitRejectionReason();
     const std::string reason = borrowedReason ? borrowedReason : "unknown";
@@ -631,10 +637,6 @@ ID3D12Resource* LmxxfBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, const
     const bool inlineMode = Config::Instance()->NrInline.value_or_default();
     InlineRecording::StateScope inlineState;
     const bool inlineGuides = Config::Instance()->LmxxfModelHistory.value_or_default();
-    if (inlineMode && FAILED(inlineState.Begin(cmd, frame, inlineGuides, inlineGuides,
-                                               IsUsableExposureTexture(frame.exposure)))) {
-        SetStatus((std::string("lmxxf: inline unavailable: ") + inlineState.Reason() + " (NO NR)").c_str()); return nullptr;
-    }
     if (ineligible && !inlineMode)
     {
         char status[128] {};
@@ -650,6 +652,17 @@ ID3D12Resource* LmxxfBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, const
         {
             LOG_WARN("{} (frame #{})", status, c);
         }
+        return nullptr;
+    }
+    // Both submission modes normalize only the inputs consumed by the runtime.
+    // In split mode the scope restores the game bindings/layouts on the continuation.
+    if (FAILED(inlineState.Begin(cmd, frame, inlineGuides, inlineGuides,
+                                IsUsableExposureTexture(frame.exposure), !inlineMode))) {
+        SetStatus((std::string("lmxxf: input state unavailable: ") + inlineState.Reason() + " (NO NR)").c_str());
+        static unsigned rejectedInput = 0;
+        if (++rejectedInput <= 5 || rejectedInput % 1000 == 0)
+            inlineState.TraceFailure("lmxxf", frameId, cmd, frame, inlineGuides, inlineGuides,
+                                     IsUsableExposureTexture(frame.exposure));
         return nullptr;
     }
     if (!NoteEnqueueRecoveries())
@@ -843,8 +856,8 @@ ID3D12Resource* LmxxfBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, const
 
     if (rEval <= 5)
     {
-        LOG_INFO("lmxxf nr: eval={} output={} betweenHits={} enqueueCalls={} skippedHits={} lastEnqueueRc={:X} transfer={:.2f} color={:.2f} debugView={} scale={:.2f} producerSubmitted={} continuationSubmitted={} submitFailures={}",
-                 rEval, static_cast<void *>(result),
+        LOG_INFO("lmxxf nr: eval={} frame={} list={:p} listId={} generation={} output={} betweenHits={} enqueueCalls={} skippedHits={} lastEnqueueRc={:X} transfer={:.2f} color={:.2f} debugView={} scale={:.2f} producerSubmitted={} continuationSubmitted={} submitFailures={}",
+                 rEval, frameId, static_cast<void*>(cmd), recordingId.list, recordingId.generation, static_cast<void *>(result),
                  p.betweenHits.load(std::memory_order_relaxed),
                  p.enqueueCalls.load(std::memory_order_relaxed),
                  p.skippedHits.load(std::memory_order_relaxed),
@@ -856,8 +869,8 @@ ID3D12Resource* LmxxfBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, const
     }
     else if (rEval % 120 == 0)
     {
-        LOG_DEBUG("lmxxf nr: eval={} output={} betweenHits={} enqueueCalls={} skippedHits={} lastEnqueueRc={:X} transfer={:.2f} color={:.2f} debugView={} scale={:.2f} producerSubmitted={} continuationSubmitted={} submitFailures={}",
-                  rEval, static_cast<void *>(result),
+        LOG_DEBUG("lmxxf nr: eval={} frame={} list={:p} listId={} generation={} output={} betweenHits={} enqueueCalls={} skippedHits={} lastEnqueueRc={:X} transfer={:.2f} color={:.2f} debugView={} scale={:.2f} producerSubmitted={} continuationSubmitted={} submitFailures={}",
+                  rEval, frameId, static_cast<void*>(cmd), recordingId.list, recordingId.generation, static_cast<void *>(result),
                   p.betweenHits.load(std::memory_order_relaxed),
                   p.enqueueCalls.load(std::memory_order_relaxed),
                   p.skippedHits.load(std::memory_order_relaxed),
