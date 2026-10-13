@@ -337,6 +337,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             SetAllowEnhancedBarriers(LmxxfAllowEnhancedBarriers.value_or_default());
             NrInline.set_from_config(readBool(CfgKey::kSection, CfgKey::NrInline));
             LmxxfInlineSlots.set_from_config(readInt(CfgKey::kSection, CfgKey::LmxxfInlineSlots));
+            NrCaptureBackoff.set_from_config(readInt(CfgKey::kSection, CfgKey::NrCaptureBackoff));
             LmxxfEarlyExeWrap.set_from_config(readBool("DlssNr", "LmxxfEarlyExeWrap"));
             DlssNrMaxRatio.set_from_config(readFloat("DlssNr", "MaxRatio"));
             DlssNrTransfer.set_from_config(readUInt("DlssNr", "Transfer"));
@@ -1793,6 +1794,7 @@ bool Config::SaveIni()
     ini.SetValue("DlssNr", "LmxxfAllowEnhancedBarriers",
                  GetBoolValue(Instance()->LmxxfAllowEnhancedBarriers.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::LmxxfInlineSlots, GetIntValue(Instance()->LmxxfInlineSlots.value_for_config()).c_str());
+    ini.SetValue(CfgKey::kSection, CfgKey::NrCaptureBackoff, GetIntValue(Instance()->NrCaptureBackoff.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::NrInline,
                  GetBoolValue(Instance()->NrInline.value_for_config()).c_str());
     if (auto earlyWrap = Instance()->LmxxfEarlyExeWrap.value_for_config(); earlyWrap.has_value())

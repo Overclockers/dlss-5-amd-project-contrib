@@ -2,10 +2,9 @@
 // Default-off per-frame NR diagnostics for PresentMon correlation.
 // Host QPC markers only — never WaitForGpu / spin GetCompletedValue for measurement.
 // Device-calibrated GPU timestamps remain scratch timeline tooling until promoted.
+// Core is dependency-free so standalone tests can include recording headers;
+// Config/State-dependent entry points (Enabled/Begin/NotePresent/EmitBypass) live in NrFrameDiagHost.h.
 #include "DiagnosticLog.h"
-#include <Config.h>
-#include <State.h>
-#include <Util.h>
 #include <Windows.h>
 #include <atomic>
 #include <cstdint>
@@ -16,12 +15,6 @@
 
 namespace DlssNr::FrameDiag
 {
-inline bool Enabled()
-{
-    auto* cfg = Config::Instance();
-    return cfg && cfg->NrFrameDiag.value_or_default();
-}
-
 inline int64_t Qpc()
 {
     LARGE_INTEGER v {};
@@ -46,6 +39,18 @@ inline double MsBetween(int64_t begin, int64_t end)
 }
 
 // Filled on InlineRecording::Resources when diag is on; flushed on reclaim / bypass.
+// Directory of the module that contains this code (OptiScaler DLL in product, test EXE standalone).
+inline std::filesystem::path ModuleDirectory()
+{
+    HMODULE module = nullptr;
+    wchar_t path[MAX_PATH] {};
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            reinterpret_cast<LPCWSTR>(&ModuleDirectory), &module))
+        module = nullptr;
+    const DWORD n = GetModuleFileNameW(module, path, MAX_PATH);
+    return n ? std::filesystem::path(path).parent_path() : std::filesystem::path {};
+}
+
 struct Counters
 {
     bool active = false;
@@ -75,6 +80,7 @@ struct Counters
 
     unsigned capturePolls = 0;
     unsigned captureBackoffUsFinal = 0;
+    const char* captureBackoffMode = "-"; // exp | fixed100 (inline only)
     unsigned waitEnqueueOrderMs = 0;
     unsigned lockWaitMs = 0;
     unsigned recordCpuUs = 0;
@@ -83,39 +89,6 @@ struct Counters
     unsigned spinCount = 0;
     bool historyReset = false;
 };
-
-inline std::atomic<uint64_t>& PresentSerialAtom()
-{
-    static std::atomic<uint64_t> serial {0};
-    return serial;
-}
-
-inline void NotePresent(void* /*swapchain*/) noexcept
-{
-    if (!Enabled()) return;
-    PresentSerialAtom().fetch_add(1, std::memory_order_relaxed);
-}
-
-inline void Begin(Counters& c, const char* backend, uint64_t frameId, unsigned w, unsigned h,
-                  const char* version, const char* mode = "inline") noexcept
-{
-    if (!Enabled()) { c = {}; return; }
-    c = {};
-    c.active = true;
-    c.backend = backend ? backend : "nr";
-    c.mode = mode && mode[0] ? mode : "inline";
-    c.nrFrameId = frameId;
-    c.width = w;
-    c.height = h;
-    c.qpcRecordBegin = Qpc();
-    c.presentSerial = PresentSerialAtom().load(std::memory_order_relaxed);
-    try { c.swapchain = State::Instance().currentSwapchain; } catch (...) { c.swapchain = nullptr; }
-    if (auto* cfg = Config::Instance()) {
-        c.fg = cfg->FGEnabled.value_or_default() ? 1 : 0;
-        c.aco = cfg->MochizukiAcoMode.value_or_default() ? 1u : 0u;
-    }
-    if (version) std::snprintf(c.version, sizeof c.version, "%s", version);
-}
 
 inline void Emit(const Counters& c) noexcept
 {
@@ -128,7 +101,7 @@ inline void Emit(const Counters& c) noexcept
             "qpc_enqueue_wait_begin=%lld qpc_enqueue_wait_end=%lld qpc_vk_enqueue=%lld "
             "qpc_side_ready=%lld qpc_game_wait_exit=%lld qpc_output_done=%lld "
             "nr_frame=%llu list=%llu generation=%llu submit_serial=%llu present_serial=%llu swapchain=%p "
-            "capture_polls=%u capture_backoff_us=%u wait_enqueue_order_ms=%u lock_wait_ms=%u "
+            "capture_polls=%u capture_backoff=%s capture_backoff_us=%u wait_enqueue_order_ms=%u lock_wait_ms=%u "
             "record_cpu_us=%u submit_cpu_us=%u active_slots=%u spin=%u history_reset=%u "
             "res=%ux%u aco=%u fg=%d version=%s "
             "cpu_wait_enqueue_ms=%.3f cpu_record_ms=%.3f host_A_capture_to_vk_ms=%.3f host_B_side_ready_ms=%.3f",
@@ -149,7 +122,7 @@ inline void Emit(const Counters& c) noexcept
             static_cast<unsigned long long>(c.submitSerial),
             static_cast<unsigned long long>(c.presentSerial),
             c.swapchain,
-            c.capturePolls, c.captureBackoffUsFinal, c.waitEnqueueOrderMs, c.lockWaitMs,
+            c.capturePolls, c.captureBackoffMode ? c.captureBackoffMode : "-", c.captureBackoffUsFinal, c.waitEnqueueOrderMs, c.lockWaitMs,
             c.recordCpuUs, c.submitCpuUs, c.activeSlots, c.spinCount, c.historyReset ? 1u : 0u,
             c.width, c.height, c.aco, c.fg, c.version[0] ? c.version : "?",
             double(c.waitEnqueueOrderMs),
@@ -157,22 +130,9 @@ inline void Emit(const Counters& c) noexcept
             MsBetween(c.qpcCaptureSeen, c.qpcVkEnqueue),
             MsBetween(c.qpcVkEnqueue, c.qpcSideReady));
         if (n <= 0) return;
-        const auto path = Util::DllPath().parent_path() / L"NrFrameDiag.log";
+        const auto path = ModuleDirectory() / L"NrFrameDiag.log";
         Diagnostics::Append(path, std::string_view(line, size_t(n)), 8ull * 1024 * 1024);
     } catch (...) {}
 }
 
-inline void EmitBypass(const char* backend, uint64_t frameId, unsigned slots, unsigned w, unsigned h,
-                       const char* version) noexcept
-{
-    if (!Enabled()) return;
-    Counters c {};
-    Begin(c, backend, frameId, w, h, version);
-    if (!c.active) return;
-    c.mode = "bypass";
-    c.outcome = "bypass";
-    c.activeSlots = slots;
-    c.qpcOutputDone = Qpc();
-    Emit(c);
-}
 } // namespace DlssNr::FrameDiag

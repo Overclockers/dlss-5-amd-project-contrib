@@ -395,6 +395,8 @@ class Config
     // true opts in for games that need those lists on the NR path.
     CustomOptional<bool> LmxxfAllowEnhancedBarriers { false };
     CustomOptional<int> LmxxfInlineSlots { 3 };
+    // Inline capture polling: 0 = exponential 50..5000 us (default), 1 = fixed 100 us. Applies per frame.
+    CustomOptional<int> NrCaptureBackoff { 0 };
     CustomOptional<bool> NrInline { false }; // Experimental same-list execution for lmxxf/Mochizuki.
     // Wrap host CreateCommandList results before the swapchain exists.
     // Missing = engine whitelist (Unreal + Forza). false = never. true = force for any engine.

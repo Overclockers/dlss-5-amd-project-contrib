@@ -59,6 +59,7 @@ static void ResetSharedNrDefaults(Config* config)
     config->NrFrameDiag = std::optional<bool>{};
     config->NrInline.reset();
     config->LmxxfInlineSlots.reset();
+    config->NrCaptureBackoff.reset();
 }
 
 // The "(?)" marker every control carries, matching the rest of the menu.
@@ -701,6 +702,15 @@ void RenderMenu(Config* config, float menuResScale)
                 if (MenuUi::Checkbox("Experimental inline execution", &inlineMode)) config->NrInline = inlineMode;
                 HelpMarker("Keeps the game command list intact. Bounded wait selects the original frame on timeout."
                            "\nShared by lmxxf and Mochizuki. INI: NrInline. Off uses command-list splitting.");
+                if (inlineMode) {
+                    int backoff = std::clamp(config->NrCaptureBackoff.value_or_default(), 0, 1);
+                    const char* backoffChoices[] = {"Exponential 50-5000 us (default)", "Fixed 100 us"};
+                    if (MenuUi::Combo("Capture poll backoff##nr", &backoff, backoffChoices, IM_ARRAYSIZE(backoffChoices)))
+                        config->NrCaptureBackoff = backoff;
+                    HelpMarker("How often the inline worker re-checks that the game captured NR inputs."
+                               "\nFixed 100 us finds ready inputs sooner at a small CPU/poll cost. Applies to the next frame."
+                               "\nINI: NrCaptureBackoff (0 exponential, 1 fixed 100 us).");
+                }
                 if (isLmxxf && inlineMode) {
                     int slots = std::clamp(config->LmxxfInlineSlots.value_or_default(), 1, 5) - 1;
                     const char* choices[] = {"1", "2", "3", "4", "5"};
@@ -779,6 +789,7 @@ void RenderMenu(Config* config, float menuResScale)
                     resetOption(config->LmxxfAllowEnhancedBarriers);
                     resetOption(config->NrInline);
                     resetOption(config->LmxxfInlineSlots);
+                    resetOption(config->NrCaptureBackoff);
                     SetAllowEnhancedBarriers(config->LmxxfAllowEnhancedBarriers.value_or_default());
                     resetOption(config->LmxxfEarlyExeWrap);
                 }

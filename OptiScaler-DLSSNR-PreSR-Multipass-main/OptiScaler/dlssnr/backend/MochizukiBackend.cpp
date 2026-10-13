@@ -1,7 +1,7 @@
 #include "pch.h"
 #include "MochizukiBackend.h"
 #include "LmxxfRecordingOwner.h"
-#include "../NrFrameDiag.h"
+#include "../NrFrameDiagHost.h"
 #include <resource.h>
 #include "mochizuki_runtime/MochizukiNrApi.h"
 #include "../amd/GraphicsInvocation.h"
@@ -307,6 +307,7 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
                 static_cast<ID3D12Resource*>(job.private_output), static_cast<ID3D12Resource*>(job.first_pass_output),
                 frame.color_width, frame.color_height, p->owner->inlinePipelines);
             p->owner->inlinePipelines = inlineResources->PipelineCache();
+            inlineResources->captureBackoff = Config::Instance()->NrCaptureBackoff.value_or_default();
             FrameDiag::Begin(inlineResources->diag, "mochizuki", frameId, frame.color_width, frame.color_height, OPTI_VERSION);
             const auto id0 = logical->Identity();
             inlineResources->diag.listId = id0.list;

@@ -4,7 +4,7 @@
 #include "../submission/SplitEligibility.h"
 #include "InstallStatus.h"
 #include "LmxxfRecordingOwner.h"
-#include "../NrFrameDiag.h"
+#include "../NrFrameDiagHost.h"
 #include <resource.h>
 #include <cstring>
 #include <State.h>
@@ -530,6 +530,7 @@ ID3D12Resource *LmxxfBackend::FinishRecord(ID3D12GraphicsCommandList *recordCmd,
                 inlineFrame->width ? inlineFrame->width : UINT(desc.Width), inlineFrame->height ? inlineFrame->height : desc.Height,
                 sessionOwner->inlinePipelines);
             sessionOwner->inlinePipelines = inlineResources->PipelineCache();
+            inlineResources->captureBackoff = Config::Instance()->NrCaptureBackoff.value_or_default();
             FrameDiag::Begin(inlineResources->diag, "lmxxf", 0, 0, 0, OPTI_VERSION);
         } catch (const std::exception& error) {
             logical->Release(); api->table.InvalidateRecording(session, jobHandle); api->table.CollectRecording(session, jobHandle);

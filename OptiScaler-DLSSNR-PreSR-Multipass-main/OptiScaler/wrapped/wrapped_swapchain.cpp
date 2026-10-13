@@ -1,7 +1,7 @@
 #include "pch.h"
 #include <with_dx12/dx11_with_dx12_sync.h>
 #include "wrapped_swapchain.h"
-#include "dlssnr/NrFrameDiag.h"
+#include "dlssnr/NrFrameDiagHost.h"
 #include <hooks/DxgiSwapchainSizing.h>
 
 #include <Util.h>

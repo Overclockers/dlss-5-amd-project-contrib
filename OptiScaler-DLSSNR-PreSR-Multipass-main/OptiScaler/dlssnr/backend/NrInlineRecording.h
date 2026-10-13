@@ -326,6 +326,8 @@ cbuffer Size : register(b0) { uint width; uint height; }
     uint64_t activityToken = 0;
     // Filled when NrFrameDiag is on; RecordingOwner / backends emit on reclaim.
     FrameDiag::Counters diag;
+    // Capture polling policy snapshot for this frame (0 exponential 50..5000 us, 1 fixed 100 us).
+    int captureBackoff = 0;
     bool Complete() const {
         if (!started) return true;
         if (RetirementUncertain() || !scheduled.load(std::memory_order_acquire) || !finalValue || !gameFence || !gameValue) return false;
@@ -374,7 +376,8 @@ cbuffer Size : register(b0) { uint width; uint height; }
     }
     bool WaitCapture() {
         const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-        if (diag.active) { diag.capturePolls = 0; diag.captureBackoffUsFinal = 0; }
+        const bool fixedBackoff = captureBackoff == 1;
+        if (diag.active) { diag.capturePolls = 0; diag.captureBackoffUsFinal = 0; diag.captureBackoffMode = fixedBackoff ? "fixed100" : "exp"; }
         // The event wakes this worker promptly; the fence remains the proof.
         // Reusing one event across values can let a late signal wake a new wait.
         auto waitFence = [&](UINT64 value) {
@@ -401,7 +404,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
         timer->value = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_MODIFY_STATE | SYNCHRONIZE);
         if (!timer->value) timer->value = CreateWaitableTimerExW(nullptr, nullptr, 0, TIMER_MODIFY_STATE | SYNCHRONIZE);
         Check(timer->value ? S_OK : HRESULT_FROM_WIN32(GetLastError()), "inline capture backoff timer");
-        auto backoff = std::chrono::microseconds(50);
+        auto backoff = std::chrono::microseconds(fixedBackoff ? 100 : 50);
         for (unsigned polls = 0; polls < 2048 && std::chrono::steady_clock::now() < until; ++polls) {
             if (diag.active) diag.capturePolls = polls + 1;
             Check(sampleAlloc->Reset(), "inline poll allocator"); Check(sampleList->Reset(sampleAlloc.Get(), nullptr), "inline poll list");
@@ -428,7 +431,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
             Check(SetWaitableTimer(timer->value, &due, 0, nullptr, nullptr, FALSE) ? S_OK : HRESULT_FROM_WIN32(GetLastError()), "inline capture timer arm");
             const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(until - std::chrono::steady_clock::now()).count();
             if (remaining <= 0 || WaitForSingleObject(timer->value, DWORD(remaining)) != WAIT_OBJECT_0) return false;
-            backoff = (std::min)(backoff * 2, std::chrono::microseconds(5000));
+            if (!fixedBackoff) backoff = (std::min)(backoff * 2, std::chrono::microseconds(5000));
         }
         return false;
     }

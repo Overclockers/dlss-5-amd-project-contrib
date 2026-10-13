@@ -183,6 +183,7 @@ int main() {
                 "AllowEnhancedBarriers",
                 "LmxxfInlineSlots",  # Host-owned inline admission limit.
                 "NrInline",  # Host-owned submission mode, no upstream environment alias.
+                "NrCaptureBackoff",  # Host-owned inline capture polling policy.
                 "EarlyExeWrap",
                 "Diagnostic",
                 "NrTimingEnabled",  # Product telemetry, not an upstream kernel option.
