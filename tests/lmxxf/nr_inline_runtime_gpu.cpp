@@ -208,6 +208,54 @@ int main(int argc, char** argv) {
         Require(Hash(device.Get(), queue, resources->OutputTexture()) == selected, "inline output equals selected current-frame source");
         std::printf("%s actual inline replay=%u timeout=%u hash=%016llx PASS\n", mochi ? "Vulkan" : "HIP", replay, timeoutMode, selected);
     }
+    // Saturated admission on a completed retained recording must preserve the
+    // real mixed game batch, select original, then recover when a slot is free.
+    {
+        std::vector<std::shared_ptr<In::Resources>> reservations;
+        const auto savedLimit = owner->inlineLimit;
+        {
+            std::lock_guard lock(Sub::RecordingMutex());
+            owner->ReclaimInlineLocked();
+            for (size_t n = 0; n < savedLimit; ++n) {
+                auto held = std::make_shared<In::Resources>(device.Get(), colour.Get(),
+                    static_cast<ID3D12Resource*>(job.private_output), nullptr, width, height, owner->inlinePipelines);
+                Require(owner->AdmitInline(held), "reserve capacity for replay bypass"); reservations.push_back(held);
+            }
+            owner->inlineLimit = 1; // Shrinking must preserve old reservations too.
+        }
+        Ptr<ID3D12CommandAllocator> ordinaryAllocator; Ptr<ID3D12GraphicsCommandList> ordinary;
+        Check(device->CreateCommandAllocator(q.Type, IID_PPV_ARGS(&ordinaryAllocator)), "bypass ordinary allocator");
+        Check(device->CreateCommandList(0, q.Type, ordinaryAllocator.Get(), nullptr, IID_PPV_ARGS(&ordinary)), "bypass ordinary list");
+        Check(ordinary->Close(), "bypass ordinary close");
+        ID3D12CommandList* batch[] {ordinary.Get(), proxy.Get()};
+        const auto calls = batchCalls, lists = batchLists;
+        const auto admitted = owner->inlineAdmitted, bypassed = owner->inlineBypassed;
+        Sub::Hooks::ExecuteExpanded(game.Get(), 2, batch, nullptr, nullptr, TraceBatch);
+        WaitQueue(device.Get(), game.Get());
+        Require(batchCalls == calls + 1 && batchLists == lists + 2, "saturated replay preserves mixed native batch");
+        Require(resources->Complete() && !resources->Succeeded() && !lease->begun && !owner->failed,
+                "capacity bypass completes without runtime failure");
+        Require(owner->inlineAdmitted == admitted && owner->inlineBypassed == bypassed + 1 &&
+                owner->inlineInFlight.size() == savedLimit && owner->inlineEnqueueOrder.empty(), "bypass does not admit network work");
+        Require(Hash(device.Get(), game.Get(), resources->OutputTexture()) == originalHash, "capacity bypass selects original pixels");
+        if (!timeoutMode) Require(resources->LastSpinCount() == 1, "capacity bypass skips long wait");
+        {
+            std::lock_guard lock(Sub::RecordingMutex());
+            for (auto& held : reservations) owner->ForgetUnstarted(held);
+            owner->inlineLimit = savedLimit;
+        }
+        Check(proxy->ExecuteOn(other.Get()), "recover replay after freeing slots"); WaitQueue(device.Get(), other.Get());
+        const auto until = GetTickCount64() + 10000;
+        for (;;) {
+            { std::lock_guard lock(Sub::RecordingMutex()); if (resources->Complete() && !lease->begun) break; }
+            Require(GetTickCount64() < until, "recovered worker completion"); Sleep(1);
+        }
+        Require(!owner->failed && resources->Succeeded() != timeoutMode && owner->inlineAdmitted == admitted + 1,
+                "replay recovers normal admission");
+        Require(Hash(device.Get(), other.Get(), resources->OutputTexture()) == (timeoutMode ? originalHash : expected),
+                "recovered replay equals split baseline");
+        std::puts("capacity bypass: mixed batch, original pixels, shrink, bounded slots, recovery vs split PASS");
+    }
     // Successful Reset can invalidate a submitted recording before its capture
     // reaches the GPU. The worker must still enqueue the captured job, certify
     // its End event, then invalidate/collect it after BOTH queues finish.

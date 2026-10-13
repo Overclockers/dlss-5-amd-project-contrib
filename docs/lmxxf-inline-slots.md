@@ -23,7 +23,9 @@ history 控制更新 → codec/temporal 输入 → HIP → decode/history 输出
 
 可重放列表必须在失效且双侧完成后才能归还私有资源池，池上限随槽数变化；仅 GPU 完成
 不代表录制失效。因此保留大量 closed command lists 的游戏可能持有超过槽数的物理缓冲。
-重放重新申请准入，未知提交/设备异常不猜测完成。实现见
+重放重新申请 NR 准入；已完成录制遇到满槽时选择原图，保留整个游戏提交批次，
+不启动网络或占用新槽。旁路仍等待 reset-side 和 game-tail 双完成，空槽恢复后可再次运行 NR。
+同一录制尚未完成时不能重置其控制缓冲，仍拒绝重叠重放；未知提交/设备异常不猜测完成。实现见
 `InlineFrame.h`、`LmxxfNrRuntime.cpp`、`LmxxfRecordingOwner.h`，流程见
 [inline 架构](architecture/nr-inline-recording.md)。
 
@@ -308,3 +310,24 @@ Debug 对比仍仅豁免已知、具名的原子握手并发访问报告；其�
 真实设备丢失、长时间 retained-list 压力及其它硬件/驱动验收。inline 保持默认关闭。
 本地日志 `exports/inline-slots/ordered-*.log`、`ordered-slots/` 和 `ordered-1440-results.json`
 供本机复核；表中命令可从当前源码重新生成验证。
+
+## 满槽重放旁路修复（2026-10-13）
+
+审查发现：已完成并回收准入的 closed recording 遇到其它预约占满槽位时，
+`BeforeExecute` 的 `E_PENDING` 会使 unsplit 提交钩子跳过整个原始 batch，连同普通游戏列表。
+lmxxf 和 Mochizuki 共用该路径。现改为仅旁路该次 NR：control=2 让等待立即退出，
+decision 仅在 control=1 时选择网络结果；final/first-pass 均选择当前原图。
+不调用 runtime Begin/Enqueue/End，不增加槽位占用；实际提交后重置时域状态。
+旁路私有资源仍保留到 reset-side 和 game-tail 完成，未知尾信号保持钉住。
+同一录制尚未完成的重叠重放仍拒绝，释放容量后正常 NR 重放可恢复。
+
+本次针对性验证全部通过：
+
+- `tests\lmxxf\run.cmd inline-discard`：真实提交钩子保留混合 batch；无 runtime 调用；旁路重叠拒绝、未提交取消、Reset 前后保留/回收、满槽恢复、未知尾信号。
+- `tests\lmxxf\run.cmd inline`：当前原图和首层像素、FP32 大范围、立即退出等待、enhanced layout 恢复。
+- `tests\lmxxf\run.cmd inline-gpu`：真实 HIP 满槽/降槽旁路、释放后恢复并与 split hash 一致；既有成功/超时、2–5 ahead、交错、跨队列和 Reset 回归。
+- `tests\mochizuki\run.cmd inline`、`aco-inline`：原生及 ACO 同样覆盖旁路/恢复；FLOAT 分段、UNORM8 全 compute、1440p 时域和三层均通过。
+- `tools\build\build-release-local.cmd --fast`：宿主构建通过。
+
+本次未重跑性能 sweep，也没有新增游戏 FPS 结论；正常准入路径及槽位默认值不变。
+游戏实测、长时间 retained-list 压力和其它驱动仍待验收。

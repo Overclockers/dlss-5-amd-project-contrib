@@ -8,6 +8,7 @@
 #include <thread>
 #include "OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/dlssnr/backend/LmxxfRecordingOwner.h"
 #include "OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/dlssnr/submission/SplitEligibility.h"
+#include "OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/dlssnr/submission/SubmissionHooks.h"
 
 template<class T> using Ptr=Microsoft::WRL::ComPtr<T>;
 namespace Own=DlssNr::Backend::LmxxfRecording;
@@ -21,12 +22,12 @@ static void ReportFailure(const Own::SessionOwner::Failure& failure) noexcept {
     ++failureReports;firstFailure=failure;
 }
 struct Runtime {
-    unsigned invalidated=0,collected=0,enqueueFailures=0,ended=0;
+    unsigned invalidated=0,collected=0,enqueueFailures=0,ended=0,begins=0,resets=0;
     static int32_t Invalidate(void* context,void*) {++static_cast<Runtime*>(context)->invalidated;return LMXXF_NR_OK;}
     static int32_t Collect(void* context,void*) {++static_cast<Runtime*>(context)->collected;return LMXXF_NR_OK;}
-    static int32_t Reset(void*) {return LMXXF_NR_OK;}
+    static int32_t Reset(void* context) {++static_cast<Runtime*>(context)->resets;return LMXXF_NR_OK;}
     static int32_t Destroy(void*) {return LMXXF_NR_OK;}
-    static int32_t Begin(void*,void*,void*) {return LMXXF_NR_OK;}
+    static int32_t Begin(void* context,void*,void*) {++static_cast<Runtime*>(context)->begins;return LMXXF_NR_OK;}
     static int32_t Enqueue(void* context,void*,void*) {++static_cast<Runtime*>(context)->enqueueFailures;return LMXXF_NR_FAILED;}
     static int32_t Error(char* out,uint32_t size) {
         if(size)std::snprintf(out,size,"injected network enqueue failure");return LMXXF_NR_OK;
@@ -189,8 +190,8 @@ int main() try {
     }
     std::puts("INLINE_CANCELLED_TURN_OK no capture polling or network enqueue");
     // The shared-buffer backend admits one reservation, including before submit.
-    // Private-buffer backends explicitly opt into four. Completed replays must
-    // reacquire a slot before any reset commands or runtime Begin can run.
+    // Completed replays must reacquire a slot for NR, but a full cap must not
+    // drop their original game batch. Bypass retains both queue proofs.
     Runtime admissionRuntime;
     auto admission=std::make_shared<Own::SessionOwner>();
     admission->api=owner->api;admission->context=&admissionRuntime;
@@ -213,16 +214,75 @@ int main() try {
     auto replay=std::make_shared<Own::Lease>(admission,reinterpret_cast<void*>(300),Sub::RecordingIdentity{});
     replay->inlineResources=second;
     Sub::RecordingExecution replayExecution{};replayExecution.queue=game.Get();replayExecution.serial=1;
-    Require(replay->BeforeExecute(replayExecution)==E_PENDING,"retained replay cannot bypass another reservation");
-    Require(second->Complete()&&!replay->begun&&admission->inlineEnqueueOrder.empty(),"rejected replay did not reset or Begin");
+    Ptr<ID3D12CommandAllocator> batchAlloc,ordinaryAlloc;
+    Ptr<ID3D12GraphicsCommandList> batchRaw,ordinaryRaw;
+    Ptr<Sub::CommandListProxy> batchProxy;
+    Check(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,IID_PPV_ARGS(&batchAlloc)),"batch allocator");
+    Check(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,IID_PPV_ARGS(&ordinaryAlloc)),"ordinary allocator");
+    Check(device->CreateCommandList(0,D3D12_COMMAND_LIST_TYPE_DIRECT,batchAlloc.Get(),nullptr,IID_PPV_ARGS(&batchRaw)),"batch native");
+    Check(device->CreateCommandList(0,D3D12_COMMAND_LIST_TYPE_DIRECT,ordinaryAlloc.Get(),nullptr,IID_PPV_ARGS(&ordinaryRaw)),"ordinary native");
+    Check(Sub::CommandListProxy::Create(device.Get(),batchAlloc.Get(),batchRaw.Get(),&batchProxy),"batch proxy");
+    replay->identity=batchProxy->Identity();replayExecution.identity=replay->identity;
+    replay->ready=true;
+    Check(batchProxy->ObserveRecording(replay),"observe completed recording");
+    second->RecordCapture(batchProxy.Get());second->RecordWait(batchProxy.Get());
+    second->RecordSelect(batchProxy.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    Check(batchProxy->Close(),"batch close");Check(ordinaryRaw->Close(),"ordinary close");
+    Ptr<ID3D12Fence> gate;Check(device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&gate)),"batch gate");
+    Check(game->Wait(gate.Get(),1),"hold game batch");
+    static unsigned rawCalls=0,rawLists=0;
+    ID3D12CommandList* lists[]{ordinaryRaw.Get(),batchProxy.Get()};
+    const auto failures=Sub::g_submissionFailures.load();
+    Sub::Hooks::ExecuteExpanded(game.Get(),2,lists,nullptr,nullptr,
+        [](ID3D12CommandQueue* queue,UINT count,ID3D12CommandList*const* native){
+            ++rawCalls;rawLists+=count;queue->ExecuteCommandLists(count,native);
+        });
+    Require(rawCalls==1&&rawLists==2&&Sub::g_submissionFailures.load()==failures,"full cap preserves entire original batch");
+    Require(!second->Complete()&&!replay->begun&&admission->inlineEnqueueOrder.empty(),"bypass retains game tail without worker");
+    Require(admissionRuntime.begins==0&&admissionRuntime.ended==0&&admissionRuntime.enqueueFailures==0,
+        "bypass never enters runtime recording execution");
+    Require(admission->inlineInFlight.size()==1&&admission->inlineInFlight.front()==first&&admission->inlineBypassed==1,
+        "bypass preserves existing reservation and cap");
+    Require(batchProxy->ExecuteOn(game.Get())==E_PENDING&&!second->Complete()&&!admission->failed,
+        "overlapping bypass replay cannot reset or retire the pending game execution");
+    Check(gate->Signal(1),"release game batch");
+    const auto bypassUntil=GetTickCount64()+5000;
+    while(!second->Complete()){Require(GetTickCount64()<bypassUntil,"bypass dual completion");Sleep(1);}
+    Require(!second->Succeeded()&&second->LastSpinCount()==1&&!admission->failed,"bypass exits wait immediately and selects original");
+    // A later rejected list can abort the batch after this bypass was prepared.
+    replayExecution.serial=100;
+    Check(replay->BeforeExecute(replayExecution),"prepare bypass without submit");
+    const auto resets=admissionRuntime.resets;
+    replayExecution.status=E_FAIL;replay->Executed(replayExecution);
+    while(!second->Complete()){Require(GetTickCount64()<bypassUntil,"unsubmitted bypass reset tail");Sleep(1);}
+    Require(admissionRuntime.resets==resets,"unsubmitted bypass does not reset history");
     admission->ForgetUnstarted(first);
-    replayExecution.serial=2;
+    replayExecution.serial=101;
     Check(replay->BeforeExecute(replayExecution),"replay after capacity released");
     Require(admission->inlineInFlight.size()==1&&admission->InlineBusy(),"replay reserves capacity again");
     replayExecution.status=E_FAIL;replay->Executed(replayExecution); // No producer: certify the reset only.
     const auto replayUntil=GetTickCount64()+5000;
     while(!second->Complete()){Require(GetTickCount64()<replayUntil,"aborted replay reset completes");Sleep(1);}
     admission->ReclaimInlineLocked();Require(!admission->InlineBusy(),"aborted replay releases capacity");
+    Require(admissionRuntime.begins==1&&admissionRuntime.ended==1,"available capacity restores runtime execution");
+    // Reset while a bypass batch is pending cannot collect its private buffers.
+    Require(admission->AdmitInline(first),"reserve capacity before bypass Reset");
+    Check(game->Wait(gate.Get(),2),"hold bypass before Reset");
+    Check(batchProxy->ExecuteOn(game.Get()),"bypass before Reset");
+    {std::lock_guard lock(Sub::RecordingMutex());Own::Registry().push_back(replay);}
+    Ptr<ID3D12CommandAllocator> replacement;
+    Check(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,IID_PPV_ARGS(&replacement)),"replacement allocator");
+    Check(batchProxy->Reset(replacement.Get(),nullptr),"Reset pending bypass");
+    {std::lock_guard lock(Sub::RecordingMutex());Own::CollectLocked();Require(replay->job&&!second->Complete(),"Reset pins bypass buffers until game tail");}
+    Check(gate->Signal(2),"release bypass Reset");
+    const auto resetUntil=GetTickCount64()+5000;
+    for(;;){
+        {std::lock_guard lock(Sub::RecordingMutex());Own::CollectLocked();if(!replay->job)break;}
+        Require(GetTickCount64()<resetUntil,"bypass Reset collection");Sleep(1);
+    }
+    Check(batchProxy->Close(),"replacement close");
+    admission->ForgetUnstarted(first);
+    std::puts("INLINE_REPLAY_BYPASS_OK original batch, bounded slots, no worker, recovery, Reset lifetime");
     admission->inlineLimit=Own::SessionOwner::kInlineAhead;
     std::vector<std::shared_ptr<In::Resources>> privateFrames;
     for(unsigned n=0;n<4;++n) {
@@ -241,7 +301,7 @@ int main() try {
     // Truly unknown game submission is retained, but cannot become actionable
     // merely by rearming a collection timer every 100 ms.
     auto unknown=std::make_shared<In::Resources>(device.Get(),original.Get(),candidate.Get(),nullptr,8,8,owner->inlinePipelines);
-    unknown->BeforeExecute(game.Get());unknown->NetworkQueued(false);unknown->GameSubmitted(delayedGame.Get(),1,E_FAIL);
+    unknown->BeforeExecute(game.Get(),true);unknown->CertifyWithoutNetwork(nullptr,0,E_FAIL,true);
     auto retained=std::make_shared<Own::Lease>(owner,reinterpret_cast<void*>(201),Sub::RecordingIdentity{});
     retained->inlineResources=unknown;retained->invalidated=true;
     {

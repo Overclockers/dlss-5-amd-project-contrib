@@ -286,6 +286,16 @@ static void Run(Gpu& gpu, bool timeout, bool enhanced = false, bool fullBudget =
     }
     std::printf("inline %s PASS: open query, unchanged native list, current pixels, replay%s\n",
                 timeout ? "timeout" : "success", timeout ? ", late completion retention and original-frame selection" : "");
+    // Bypass must overwrite the prior neural decision, including first-pass output,
+    // without spending the polling budget or starting a network worker.
+    resources->BeforeExecute(gpu.queue.Get(), true);
+    In::Execute(gpu.queue.Get(), raw.Get()); const auto bypassTail = gpu.Signal();
+    resources->CertifyWithoutNetwork(gpu.fence.Get(), bypassTail, S_OK, true); gpu.Wait(bypassTail);
+    Require(resources->Complete() && !resources->Succeeded(), "bypass completion and frozen original decision");
+    if (!timeout || fullBudget) Require(resources->LastSpinCount() == 1, "bypass skips polling budget");
+    gpu.Pixels(resources->OutputTexture(), redHalf, red);
+    gpu.Pixels(resources->FirstTexture(), redHalf, red);
+    std::puts("inline bypass output and first-pass original pixels PASS");
     if (enhanced) {
         // NR returned to the game's enhanced SRV layout. A game transition using
         // that exact LayoutBefore must remain valid and preserve the selected pixels.

@@ -133,7 +133,14 @@ Mochizuki permits four reservations with its own private frame buffers.
 
 Invalidated recordings enter the lmxxf reuse pool only after both queue proofs.
 Closed, still replayable recordings keep their buffers even after execution;
-replay must reacquire host admission. The pool is bounded by the requested slot
+replay must reacquire host admission for network execution. If capacity is full,
+the completed recording instead executes its original game batch with control=2
+(bypass): polling exits immediately, the frozen decision selects original colour
+for both final and first-pass output, and no runtime Begin/Enqueue/End runs.
+The bypass retains its private resources until the reset-side and submitted-game
+tails complete; a missing/failed game signal never substitutes a side-only proof.
+An overlapping replay of the same unfinished recording remains rejected because
+its control buffers cannot be reset safely. The pool is bounded by the requested slot
 count and trimmed on subsequent PrepareFrame calls. Retained game command lists
 can therefore keep more physical buffers alive than the active admission limit.
 Lowering the limit cannot free resources still referenced by those lists.
@@ -235,5 +242,6 @@ by deferred invalidation/collection. Commands:
 These are mechanism/fixture results, not Crimson Desert compatibility or performance
 certification. Cold-start game testing, other adapters/drivers, full temporal/multi-pass
 acceptance and long hot-switch stress remain outstanding. lmxxf now supports 1–5 private inline captures; Mochizuki
-allows four with private buffers. See [lmxxf slots validation](../lmxxf-inline-slots.md) for the newer acceptance and performance scope. Retained recordings must reacquire admission
-before replay resets flags or appends queue work. Keep the option off by default.
+allows four with private buffers. See [lmxxf slots validation](../lmxxf-inline-slots.md) for the newer acceptance and performance scope. Retained recordings reacquire admission
+for NR; full capacity selects the original frame without dropping the game batch.
+Keep the option off by default.

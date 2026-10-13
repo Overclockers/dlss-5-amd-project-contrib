@@ -170,7 +170,7 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
     std::shared_ptr<InlineRecording::Resources> inlineResources;
     bool inlineEnqueueFinished = false, executionReported = false;
     bool runtimeRetirementUncertain = false;
-    uint64_t inlineResetSerial = 0, activeExecutionSerial = 0;
+    uint64_t inlineResetSerial = 0, activeExecutionSerial = 0, inlineBypassSerial = 0;
     Submission::RecordingExecution inlineExecution {};
     Microsoft::WRL::ComPtr<ID3D12CommandQueue> inlineQueue;
     Microsoft::WRL::ComPtr<ID3D12Fence> inlineFence;
@@ -191,8 +191,7 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
             owner->RecordFailure("identity", E_UNEXPECTED, e.queue, "invalidated or mismatched recording");
             return E_UNEXPECTED;
         }
-        // Replay must reserve capacity again after an earlier completion was reclaimed.
-        // Reject before resetting flags or appending queue work.
+        // Never reset flags still used by an earlier execution of this recording.
         if (inlineResources && inlineResources->Started() && !inlineResources->Complete()) return E_PENDING;
         tracing = traceId && traceExecutions < 2;
         if (tracing) ++traceExecutions;
@@ -201,9 +200,15 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
         runtimeRetirementUncertain = false;
         if (inlineResources) {
             try {
-                if (!owner->AdmitInline(inlineResources)) return E_PENDING;
+                const bool bypass = !owner->AdmitInline(inlineResources);
                 inlineResetSerial = e.serial;
-                inlineResources->BeforeExecute(e.queue);
+                inlineResources->BeforeExecute(e.queue, bypass);
+                if (bypass) {
+                    // Preserve the original game batch without entering the runtime
+                    // or consuming a network slot. The recorded selector uses original.
+                    inlineBypassSerial = e.serial;
+                    return S_OK;
+                }
             }
             catch (const std::exception& error) {
                 owner->RecordFailure("inline reset", E_FAIL, e.queue, error.what()); owner->failed = true; return E_FAIL;
@@ -347,7 +352,16 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
     void Executed(const Submission::RecordingExecution& e) noexcept override
     {
         // A rejected overlapping replay must not end the still-running execution.
-        if (inlineResources && begun && activeExecutionSerial != e.serial) return;
+        if (inlineResources && inlineResetSerial != e.serial) return;
+        if (inlineResources && inlineBypassSerial == e.serial) {
+            inlineBypassSerial = 0;
+            inlineResources->CertifyWithoutNetwork(e.fence, e.fenceValue, e.status, e.producerSubmitted);
+            if (e.producerSubmitted) {
+                owner->InlineBypassed();
+                owner->activity.Reset(); owner->api.ResetHistory(owner->context);
+            }
+            return;
+        }
         if (inlineResources && begun && ready && e.producerSubmitted) {
             inlineExecution = e; inlineQueue = e.queue; inlineFence = e.fence;
             inlineResources->GameSubmitted(e.fence, e.fenceValue, e.status);
@@ -356,7 +370,7 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
             return;
         }
         if (inlineResources && inlineResetSerial == e.serial && (!ready || !e.producerSubmitted))
-            inlineResources->CertifyWithoutNetwork(e.producerSubmitted ? e.fence : nullptr, e.fenceValue, e.status);
+            inlineResources->CertifyWithoutNetwork(e.fence, e.fenceValue, e.status, e.producerSubmitted);
         FinishExecution(e);
         if (inlineResources) owner->PopInlineEnqueue(job);
     }
