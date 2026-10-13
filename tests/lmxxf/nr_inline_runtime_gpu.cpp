@@ -12,6 +12,12 @@ static unsigned batchCalls = 0, batchLists = 0;
 static void STDMETHODCALLTYPE TraceBatch(ID3D12CommandQueue* q, UINT n, ID3D12CommandList* const* lists) {
     ++batchCalls; batchLists += n; q->ExecuteCommandLists(n, lists);
 }
+// --fixed-backoff runs every inline frame with NrCaptureBackoff=1 (fixed 100 us capture polling).
+static int gCaptureBackoff = 0;
+struct BackoffResources : In::Resources {
+    template<class... A> explicit BackoffResources(A&&... a) : In::Resources(std::forward<A>(a)...) { captureBackoff = gCaptureBackoff; }
+};
+
 int main(int argc, char** argv) {
     if (argc < 3) return 2;
     const bool mochi = argc > 3 && std::strcmp(argv[3], "--mochizuki") == 0;
@@ -29,6 +35,7 @@ int main(int argc, char** argv) {
     for (int i = 3; i < argc; ++i) aco |= std::strcmp(argv[i], "--aco") == 0;
     for (int i = 3; i < argc; ++i) threePasses |= std::strcmp(argv[i], "--three-passes") == 0;
     for (int i = 3; i < argc; ++i) unorm8 |= std::strcmp(argv[i], "--unorm8") == 0;
+    for (int i = 3; i < argc; ++i) if (std::strcmp(argv[i], "--fixed-backoff") == 0) gCaptureBackoff = 1;
     Require(!aco || mochi, "ACO fixture requires Mochizuki");
     const UINT waitSlices = mochi ? In::kWaitSlices : In::kLmxxfWaitSlices;
     const UINT waitIterations = mochi ? In::kWaitIterations : In::kLmxxfWaitIterations;
@@ -167,7 +174,7 @@ int main(int argc, char** argv) {
     Check(device->CreateQueryHeap(&query, IID_PPV_ARGS(&queries)), "query heap");
     proxy->BeginQuery(queries.Get(), D3D12_QUERY_TYPE_PIPELINE_STATISTICS, 0);
     auto job = prepare(proxy.Get(), 2);
-    auto resources = std::make_shared<In::Resources>(device.Get(), colour.Get(), static_cast<ID3D12Resource*>(job.private_output), nullptr, width, height, std::shared_ptr<In::Pipelines>{});
+    auto resources = std::make_shared<BackoffResources>(device.Get(), colour.Get(), static_cast<ID3D12Resource*>(job.private_output), nullptr, width, height, std::shared_ptr<In::Pipelines>{});
     owner->inlinePipelines = resources->PipelineCache();
     std::shared_ptr<Own::Lease> lease;
     {
@@ -219,7 +226,7 @@ int main(int argc, char** argv) {
             std::lock_guard lock(Sub::RecordingMutex());
             owner->ReclaimInlineLocked();
             for (size_t n = 0; n < savedLimit; ++n) {
-                auto held = std::make_shared<In::Resources>(device.Get(), colour.Get(),
+                auto held = std::make_shared<BackoffResources>(device.Get(), colour.Get(),
                     static_cast<ID3D12Resource*>(job.private_output), nullptr, width, height, owner->inlinePipelines);
                 Require(owner->AdmitInline(held), "reserve capacity for replay bypass"); reservations.push_back(held);
             }
@@ -296,7 +303,7 @@ int main(int argc, char** argv) {
         Check(device->CreateCommandList(0, q.Type, alloc.Get(), nullptr, IID_PPV_ARGS(&raw)), "continuous native");
         Check(Sub::CommandListProxy::Create(device.Get(), alloc.Get(), raw.Get(), &list), "continuous proxy");
         auto next = prepare(list.Get(), 10 + n);
-        auto in = std::make_shared<In::Resources>(device.Get(), colour.Get(), static_cast<ID3D12Resource*>(next.private_output), nullptr,
+        auto in = std::make_shared<BackoffResources>(device.Get(), colour.Get(), static_cast<ID3D12Resource*>(next.private_output), nullptr,
                                                 width, height, owner->inlinePipelines);
         Require(in->SideQueue() == owner->inlinePipelines->sideQueue.Get(), "stable producer queue across new recordings");
         {
@@ -385,7 +392,7 @@ int main(int argc, char** argv) {
                 Check(device->CreateCommandList(0, q.Type, alloc.Get(), nullptr, IID_PPV_ARGS(&raw)), "ahead baseline native");
                 Check(Sub::CommandListProxy::Create(device.Get(), alloc.Get(), raw.Get(), &list), "ahead baseline proxy");
                 auto job = prepare(list.Get(), 1000 + i, patterns[i].Get());
-                auto resources = std::make_shared<In::Resources>(device.Get(), patterns[i].Get(),
+                auto resources = std::make_shared<BackoffResources>(device.Get(), patterns[i].Get(),
                     static_cast<ID3D12Resource*>(job.private_output), nullptr, width, height, owner->inlinePipelines);
                 std::shared_ptr<Own::Lease> recorded;
                 {
@@ -423,7 +430,7 @@ int main(int argc, char** argv) {
                 Check(device->CreateCommandList(0, q.Type, frames[i].alloc.Get(), nullptr, IID_PPV_ARGS(&frames[i].raw)), "ahead native");
                 Check(Sub::CommandListProxy::Create(device.Get(), frames[i].alloc.Get(), frames[i].raw.Get(), &frames[i].list), "ahead proxy");
                 auto job = prepare(frames[i].list.Get(), 2000 + n * 10 + i, patterns[i].Get());
-                frames[i].resources = std::make_shared<In::Resources>(device.Get(), patterns[i].Get(),
+                frames[i].resources = std::make_shared<BackoffResources>(device.Get(), patterns[i].Get(),
                     static_cast<ID3D12Resource*>(job.private_output), nullptr, width, height, owner->inlinePipelines);
                 {
                     std::lock_guard lock(Sub::RecordingMutex());
@@ -460,7 +467,7 @@ int main(int argc, char** argv) {
                     Check(device->CreateCommandList(0, q.Type, alloc.Get(), nullptr, IID_PPV_ARGS(&raw)), "fifth native");
                     Check(Sub::CommandListProxy::Create(device.Get(), alloc.Get(), raw.Get(), &list), "fifth proxy");
                     auto job = prepare(list.Get(), 9000, patterns[0].Get());
-                    auto resources = std::make_shared<In::Resources>(device.Get(), patterns[0].Get(),
+                    auto resources = std::make_shared<BackoffResources>(device.Get(), patterns[0].Get(),
                         static_cast<ID3D12Resource*>(job.private_output), nullptr, width, height, owner->inlinePipelines);
                     std::shared_ptr<Own::Lease> rejected;
                     {
@@ -525,7 +532,7 @@ int main(int argc, char** argv) {
                 Check(device->CreateCommandList(0, q.Type, frames[i].alloc.Get(), nullptr, IID_PPV_ARGS(&frames[i].raw)), "stagger native");
                 Check(Sub::CommandListProxy::Create(device.Get(), frames[i].alloc.Get(), frames[i].raw.Get(), &frames[i].list), "stagger proxy");
                 auto job = prepare(frames[i].list.Get(), 3000 + i, patterns[i].Get());
-                frames[i].resources = std::make_shared<In::Resources>(device.Get(), patterns[i].Get(),
+                frames[i].resources = std::make_shared<BackoffResources>(device.Get(), patterns[i].Get(),
                     static_cast<ID3D12Resource*>(job.private_output), nullptr, width, height, owner->inlinePipelines);
                 std::lock_guard lock(Sub::RecordingMutex());
                 ID3D12Resource* sources[] {patterns[i].Get()};
