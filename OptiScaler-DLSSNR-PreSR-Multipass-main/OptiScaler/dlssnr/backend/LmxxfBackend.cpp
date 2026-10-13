@@ -4,6 +4,8 @@
 #include "../submission/SplitEligibility.h"
 #include "InstallStatus.h"
 #include "LmxxfRecordingOwner.h"
+#include "../NrFrameDiag.h"
+#include <resource.h>
 #include <cstring>
 #include <State.h>
 #include "../submission/SubmissionTls.h"
@@ -528,6 +530,7 @@ ID3D12Resource *LmxxfBackend::FinishRecord(ID3D12GraphicsCommandList *recordCmd,
                 inlineFrame->width ? inlineFrame->width : UINT(desc.Width), inlineFrame->height ? inlineFrame->height : desc.Height,
                 sessionOwner->inlinePipelines);
             sessionOwner->inlinePipelines = inlineResources->PipelineCache();
+            FrameDiag::Begin(inlineResources->diag, "lmxxf", 0, 0, 0, OPTI_VERSION);
         } catch (const std::exception& error) {
             logical->Release(); api->table.InvalidateRecording(session, jobHandle); api->table.CollectRecording(session, jobHandle);
             SetStatus((std::string("lmxxf: inline unavailable: ") + error.what()).c_str()); return nullptr;
@@ -680,7 +683,11 @@ ID3D12Resource* LmxxfBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, const
     if (!inlineMode && !sessionOwner->inlineInFlight.empty()) {
         SetStatus("lmxxf: finishing inline frames before split"); return nullptr;
     }
-    if (sessionOwner->InlineBusy()) { sessionOwner->InlineBypassed(); SetStatus("lmxxf: inline ahead cap reached; original frame"); return nullptr; }
+    if (sessionOwner->InlineBusy()) {
+        sessionOwner->InlineBypassed(); SetStatus("lmxxf: inline ahead cap reached; original frame");
+        FrameDiag::EmitBypass("lmxxf", 0, unsigned(sessionOwner->inlineInFlight.size()), 0, 0, OPTI_VERSION);
+        return nullptr;
+    }
     ReTrace(reTraceId, "session.end", session, 0);
     UpdateTiming();
 

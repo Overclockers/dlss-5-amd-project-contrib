@@ -1,5 +1,6 @@
 #pragma once
 #include "../submission/CommandListProxy.h"
+#include "../NrFrameDiag.h"
 #include <d3dcompiler.h>
 #include <wrl/client.h>
 #include <chrono>
@@ -323,6 +324,8 @@ cbuffer Size : register(b0) { uint width; uint height; }
     bool RetirementUncertain() const { return uncertain || sideUncertain; }
     // Set under RecordingMutex from the lease that admitted this recording.
     uint64_t activityToken = 0;
+    // Filled when NrFrameDiag is on; RecordingOwner / backends emit on reclaim.
+    FrameDiag::Counters diag;
     bool Complete() const {
         if (!started) return true;
         if (RetirementUncertain() || !scheduled.load(std::memory_order_acquire) || !finalValue || !gameFence || !gameValue) return false;
@@ -371,6 +374,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
     }
     bool WaitCapture() {
         const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        if (diag.active) { diag.capturePolls = 0; diag.captureBackoffUsFinal = 0; }
         // The event wakes this worker promptly; the fence remains the proof.
         // Reusing one event across values can let a late signal wake a new wait.
         auto waitFence = [&](UINT64 value) {
@@ -399,6 +403,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
         Check(timer->value ? S_OK : HRESULT_FROM_WIN32(GetLastError()), "inline capture backoff timer");
         auto backoff = std::chrono::microseconds(50);
         for (unsigned polls = 0; polls < 2048 && std::chrono::steady_clock::now() < until; ++polls) {
+            if (diag.active) diag.capturePolls = polls + 1;
             Check(sampleAlloc->Reset(), "inline poll allocator"); Check(sampleList->Reset(sampleAlloc.Get(), nullptr), "inline poll list");
             Op(sampleList.Get(), 3, sample.Get()); UavBarrier(sampleList.Get(), sample.Get());
             Barrier(sampleList.Get(), sample.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
@@ -410,7 +415,13 @@ cbuffer Size : register(b0) { uint width; uint height; }
             if (!waitFence(done)) return false;
             void* p = nullptr; D3D12_RANGE range {0, 4}; Check(readback->Map(0, &range, &p), "inline poll map");
             const UINT captured = *static_cast<const UINT*>(p); D3D12_RANGE none {0, 0}; readback->Unmap(0, &none);
-            if (captured) return true;
+            if (captured) {
+                if (diag.active) {
+                    diag.qpcCaptureSeen = FrameDiag::Qpc();
+                    diag.captureBackoffUsFinal = unsigned(backoff.count());
+                }
+                return true;
+            }
             // sleep_for(50us) can sleep a whole Windows timer tick. Use a
             // private timer, without changing the process/system timer period.
             LARGE_INTEGER due {}; due.QuadPart = -10 * backoff.count();
@@ -422,6 +433,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
         return false;
     }
     void NetworkQueued(bool ok) {
+        if (diag.active) diag.qpcSideReady = FrameDiag::Qpc();
         // Failure can follow partial runtime submission. Append a fresh side tail,
         // rather than reusing serial (whose Signal might itself have failed).
         // This certifies host D3D12 resources only; CollectRecording still owns

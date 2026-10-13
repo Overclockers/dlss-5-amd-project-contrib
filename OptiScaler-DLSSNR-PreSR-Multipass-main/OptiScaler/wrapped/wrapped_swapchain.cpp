@@ -1,6 +1,7 @@
 #include "pch.h"
 #include <with_dx12/dx11_with_dx12_sync.h>
 #include "wrapped_swapchain.h"
+#include "dlssnr/NrFrameDiag.h"
 #include <hooks/DxgiSwapchainSizing.h>
 
 #include <Util.h>
@@ -670,6 +671,8 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::Present(UINT SyncInterval, UIN
 {
     if (_real == nullptr)
         return DXGI_ERROR_DEVICE_REMOVED;
+    if ((Flags & DXGI_PRESENT_TEST) == 0)
+        DlssNr::FrameDiag::NotePresent(_real);
 
 #ifdef USE_LOCAL_MUTEX
     OwnedLockGuard lock(_localMutex, 4);

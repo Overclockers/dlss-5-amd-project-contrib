@@ -56,6 +56,7 @@ static void ResetSharedNrDefaults(Config* config)
     ResetSharedEffectsDefaults(config);
     config->NrTimingEnabled = std::optional<bool>{};
     config->NrTimingLog = std::optional<bool>{};
+    config->NrFrameDiag = std::optional<bool>{};
     config->NrInline.reset();
     config->LmxxfInlineSlots.reset();
 }
@@ -490,9 +491,13 @@ static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const 
         MenuUi::TextWrapped("Completed-sample means. Network includes fused temporal shaders; Other covers core input, history copies and composition. Bridge copies, shared effects and whole-frame latency are excluded.");
         bool logging = config->NrTimingLog.value_or_default();
         if (MenuUi::Checkbox("Write timing summary to log", &logging)) config->NrTimingLog = logging;
+        bool frameDiag = config->NrFrameDiag.value_or_default();
+        if (MenuUi::Checkbox("Per-frame NR diag (PresentMon)", &frameDiag)) config->NrFrameDiag = frameDiag;
+        HelpMarker("Default off. Writes NrFrameDiag.log next to the DLL for PresentMon join. No sync GPU waits.");
         MenuUi::TextWrapped("%s", AmdBridge::EffectsStatus().c_str());
         if (MenuUi::Button("Reset diagnostics")) {
             config->NrTimingLog = std::optional<bool>{};
+            config->NrFrameDiag = std::optional<bool>{};
         }
         ImGui::TreePop();
     }
@@ -1646,6 +1651,9 @@ void RenderMenu(Config* config, float menuResScale)
                     const bool timingEnabled = config->NrTimingEnabled.value_or_default();
                     bool timingLog = config->NrTimingLog.value_or_default();
                     if (MenuUi::Checkbox("Write timing summary to log", &timingLog)) config->NrTimingLog = timingLog;
+                    bool frameDiag = config->NrFrameDiag.value_or_default();
+                    if (MenuUi::Checkbox("Per-frame NR diag (PresentMon)", &frameDiag)) config->NrFrameDiag = frameDiag;
+                    HelpMarker("Default off. Writes NrFrameDiag.log next to the DLL for PresentMon join.");
                     HelpMarker("Requires measurement and file logging. At most one summary every five seconds.");
                     if (timingEnabled) {
                         const auto snapshot = DlssNr::AmdBridge::Timing();
@@ -1696,6 +1704,7 @@ void RenderMenu(Config* config, float menuResScale)
                 {
                     resetOption(config->NrTimingEnabled);
                     resetOption(config->NrTimingLog);
+                    resetOption(config->NrFrameDiag);
                     resetOption(config->DlssNrDebugView);
                 }
                 ImGui::TreePop();

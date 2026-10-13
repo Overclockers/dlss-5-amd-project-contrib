@@ -1,6 +1,8 @@
 #include "pch.h"
 #include "MochizukiBackend.h"
 #include "LmxxfRecordingOwner.h"
+#include "../NrFrameDiag.h"
+#include <resource.h>
 #include "mochizuki_runtime/MochizukiNrApi.h"
 #include "../amd/GraphicsInvocation.h"
 #include <State.h>
@@ -239,7 +241,13 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
         return nullptr;
     }
     if (!p->Ensure()) return nullptr;
-    if (p->owner->InlineBusy()) { p->owner->InlineBypassed(); p->Status("mochizuki: inline ahead cap reached; original frame"); return nullptr; }
+    if (p->owner->InlineBusy()) {
+        p->owner->InlineBypassed();
+        p->Status("mochizuki: inline ahead cap reached; original frame");
+        FrameDiag::EmitBypass("mochizuki", frameId, unsigned(p->owner->inlineInFlight.size()),
+                              incoming.width, incoming.height, OPTI_VERSION);
+        return nullptr;
+    }
     auto* cfg = Config::Instance();
     p->setLogging(cfg->LogToFile.value_or_default());
     MochizukiNrFrameInfo frame {};
@@ -299,6 +307,10 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
                 static_cast<ID3D12Resource*>(job.private_output), static_cast<ID3D12Resource*>(job.first_pass_output),
                 frame.color_width, frame.color_height, p->owner->inlinePipelines);
             p->owner->inlinePipelines = inlineResources->PipelineCache();
+            FrameDiag::Begin(inlineResources->diag, "mochizuki", frameId, frame.color_width, frame.color_height, OPTI_VERSION);
+            const auto id0 = logical->Identity();
+            inlineResources->diag.listId = id0.list;
+            inlineResources->diag.generation = id0.generation;
         } catch (const std::exception& error) {
             p->api.InvalidateRecording(p->owner->context, job.handle); p->api.CollectRecording(p->owner->context, job.handle);
             p->Status(std::string("mochizuki: inline unavailable: ") + error.what()); return nullptr;

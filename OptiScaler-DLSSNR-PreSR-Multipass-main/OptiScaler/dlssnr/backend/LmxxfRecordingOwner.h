@@ -3,6 +3,7 @@
 #include "../NrSessionActivity.h"
 #include "lmxxf_runtime/LmxxfNrApi.h"
 #include "NrInlineRecording.h"
+#include "../NrFrameDiag.h"
 #include <algorithm>
 #include <deque>
 #include <memory>
@@ -60,6 +61,16 @@ struct SessionOwner
             } else {
                 ++inlineApplied;
                 if (!failed) activity.Succeeded(pending->activityToken);
+            }
+            if (pending->diag.active) {
+                pending->diag.qpcGameWaitExit = pending->diag.qpcOutputDone = FrameDiag::Qpc();
+                pending->diag.activeSlots = unsigned(inlineInFlight.size());
+                pending->diag.spinCount = pending->WasAborted() ? 0 : pending->LastSpinCount();
+                pending->diag.historyReset = !pending->Succeeded() && !pending->WasAborted();
+                pending->diag.outcome = pending->Succeeded() ? "apply"
+                    : (pending->WasAborted() ? "abort" : "timeout");
+                FrameDiag::Emit(pending->diag);
+                pending->diag = {};
             }
             side = pending->SideQueue();
             spun = pending->WasAborted() ? 0 : pending->LastSpinCount();
@@ -225,6 +236,15 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
             if (inlineResources) {
                 owner->NoteInlineEnqueue(job);
                 ++owner->inlineAdmitted;
+                if (inlineResources->diag.active) {
+                    inlineResources->diag.submitSerial = e.serial;
+                    inlineResources->diag.qpcAdmit = FrameDiag::Qpc();
+                    inlineResources->diag.activeSlots = unsigned(owner->inlineInFlight.size());
+                    if (inlineResources->diag.qpcRecordBegin)
+                        inlineResources->diag.recordCpuUs = unsigned(
+                            FrameDiag::MsBetween(inlineResources->diag.qpcRecordBegin,
+                                                 inlineResources->diag.qpcAdmit) * 1000.0);
+                }
                 if (owner->inlineAdmitted <= 5 || owner->inlineAdmitted % 3600 == 0)
                     LOG_INFO("NR inline admit serial={} queue={} in_flight={} enqueue_depth={}",
                              static_cast<unsigned long long>(e.serial), static_cast<const void*>(e.queue),
@@ -259,9 +279,12 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
             // Capture polling submits work to the shared side queue. Only its
             // current enqueue owner may poll; ahead workers would otherwise
             // delay the frame that releases their game-queue consumer waits.
+            auto& diag = lease->inlineResources->diag;
             const auto turnStart = GetTickCount64();
+            if (diag.active) diag.qpcEnqueueWaitBegin = FrameDiag::Qpc();
             const bool ordered = lease->WaitInlineTurn();
             const auto waitedMs = static_cast<unsigned>(GetTickCount64() - turnStart);
+            if (diag.active) { diag.qpcEnqueueWaitEnd = FrameDiag::Qpc(); diag.waitEnqueueOrderMs = waitedMs; }
             const bool captured = ordered && lease->inlineResources->WaitCapture();
             std::lock_guard lock(Submission::RecordingMutex());
             if (captured && ordered) {
@@ -270,6 +293,7 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
                     if (lease->owner->inlineTurnWaits <= 5 || lease->owner->inlineTurnWaits % 1200 == 0)
                         LOG_INFO("NR inline enqueue waited {} ms for the previous frame", waitedMs);
                 }
+                if (diag.active) diag.qpcVkEnqueue = FrameDiag::Qpc();
                 Submission::RecordingExecution side {}; side.queue = lease->inlineResources->SideQueue();
                 lease->Between(side);
             } else if (!ordered) {

@@ -340,6 +340,8 @@ class Config
     CustomOptional<int> NrConvenience { 1 };
     CustomOptional<bool> NrTimingEnabled { false };
     CustomOptional<bool> NrTimingLog { false };
+    // Default-off per-frame NR diag for PresentMon join (NrFrameDiag.log).
+    CustomOptional<bool> NrFrameDiag { false };
     CustomOptional<bool> NrPersonPartition { false };
     CustomOptional<int> NrPersonModel { 0 };
     CustomOptional<int> NrFaceInputSize { 320 };

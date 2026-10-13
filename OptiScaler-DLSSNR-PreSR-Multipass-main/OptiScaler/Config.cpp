@@ -405,6 +405,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             NrConvenience.set_from_config(readInt("DlssNr", "NrConvenience"));
             NrTimingEnabled.set_from_config(readBool(CfgKey::kSection, CfgKey::NrTimingEnabled));
             NrTimingLog.set_from_config(readBool(CfgKey::kSection, CfgKey::NrTimingLog));
+            NrFrameDiag.set_from_config(readBool(CfgKey::kSection, CfgKey::NrFrameDiag));
             NrPersonPartition.set_from_config(readBool(CfgKey::kSection, CfgKey::NrPersonPartition));
             NrPersonModel.set_from_config(readInt(CfgKey::kSection, CfgKey::NrPersonModel));
             NrFaceInputSize.set_from_config(readInt(CfgKey::kSection, CfgKey::NrFaceInputSize));
@@ -1679,6 +1680,7 @@ bool Config::SaveIni()
     ini.SetValue("DlssNr", "NrConvenience", GetIntValue(Instance()->NrConvenience.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::NrTimingEnabled, GetBoolValue(Instance()->NrTimingEnabled.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::NrTimingLog, GetBoolValue(Instance()->NrTimingLog.value_for_config()).c_str());
+    ini.SetValue(CfgKey::kSection, CfgKey::NrFrameDiag, GetBoolValue(Instance()->NrFrameDiag.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::NrPersonPartition, GetBoolValue(Instance()->NrPersonPartition.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::NrPersonModel, GetIntValue(Instance()->NrPersonModel.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::NrFaceInputSize, GetIntValue(Instance()->NrFaceInputSize.value_for_config()).c_str());

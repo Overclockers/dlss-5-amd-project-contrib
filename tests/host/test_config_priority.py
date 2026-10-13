@@ -187,6 +187,7 @@ int main() {
                 "Diagnostic",
                 "NrTimingEnabled",  # Product telemetry, not an upstream kernel option.
                 "NrTimingLog",
+                "NrFrameDiag",
                 "LmxxfModelHistory",  # Host-owned FrameInfo flag, not an upstream environment key.
                 "NrStabilizerEnabled", "NrStabilizerAlpha", "NrStabilizerThreshold",
                 "NrOverallIntensity",  # Shared final-output blend, no runtime environment alias.
