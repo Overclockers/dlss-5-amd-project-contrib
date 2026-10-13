@@ -704,13 +704,14 @@ void RenderMenu(Config* config, float menuResScale)
                 HelpMarker("Keeps the game command list intact. Bounded wait selects the original frame on timeout."
                            "\nShared by lmxxf and Mochizuki. INI: NrInline. Off uses command-list splitting.");
                 if (inlineMode) {
-                    int backoff = std::clamp(config->NrCaptureBackoff.value_or_default(), 0, 1);
-                    const char* backoffChoices[] = {"Exponential 50-5000 us (default)", "Fixed 100 us"};
+                    int backoff = std::clamp(config->NrCaptureBackoff.value_or_default(), 0, 2);
+                    const char* backoffChoices[] = {"Exponential 50-5000 us (default)", "Fixed 100 us", "Event (side-queue watch)"};
                     if (MenuUi::Combo("Capture poll backoff##nr", &backoff, backoffChoices, IM_ARRAYSIZE(backoffChoices)))
                         config->NrCaptureBackoff = backoff;
                     HelpMarker("How often the inline worker re-checks that the game captured NR inputs."
                                "\nFixed 100 us finds ready inputs sooner at a small CPU/poll cost. Applies to the next frame."
-                               "\nINI: NrCaptureBackoff (0 exponential, 1 fixed 100 us).");
+                               "\nEvent: side queue watches the capture flag and a fence event wakes the worker."
+                               "\nINI: NrCaptureBackoff (0 exponential, 1 fixed 100 us, 2 event).");
                     bool reuse = config->NrInlineReuse.value_or_default();
                     if (MenuUi::Checkbox("Reuse inline recordings", &reuse)) config->NrInlineReuse = reuse;
                     HelpMarker("Default off. Reuses finished per-frame inline objects with identical inputs instead of"

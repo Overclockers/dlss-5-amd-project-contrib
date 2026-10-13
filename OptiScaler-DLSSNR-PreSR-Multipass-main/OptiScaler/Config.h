@@ -395,7 +395,7 @@ class Config
     // true opts in for games that need those lists on the NR path.
     CustomOptional<bool> LmxxfAllowEnhancedBarriers { false };
     CustomOptional<int> LmxxfInlineSlots { 3 };
-    // Inline capture polling: 0 = exponential 50..5000 us (default), 1 = fixed 100 us. Applies per frame.
+    // Inline capture discovery: 0 = exponential 50..5000 us (default), 1 = fixed 100 us, 2 = event. Applies per frame.
     CustomOptional<int> NrCaptureBackoff { 0 };
     // Reuse retired inline recordings (same inputs) instead of creating D3D12 objects every frame. Default off.
     CustomOptional<bool> NrInlineReuse { false };

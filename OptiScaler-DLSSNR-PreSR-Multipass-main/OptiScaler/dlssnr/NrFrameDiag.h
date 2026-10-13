@@ -80,7 +80,7 @@ struct Counters
 
     unsigned capturePolls = 0;
     unsigned captureBackoffUsFinal = 0;
-    const char* captureBackoffMode = "-"; // exp | fixed100 (inline only)
+    const char* captureBackoffMode = "-"; // exp | fixed100 | event (inline only)
     bool inlineReuse = false; // recording came from the NrInlineReuse pool
     unsigned waitEnqueueOrderMs = 0;
     unsigned lockWaitMs = 0;

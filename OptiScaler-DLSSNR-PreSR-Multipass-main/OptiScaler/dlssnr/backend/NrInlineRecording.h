@@ -19,6 +19,7 @@ template<class T> using Ptr = Microsoft::WRL::ComPtr<T>;
 // Mochizuki's graphics/compute segments regress with longer wait dispatches.
 inline constexpr UINT kWaitSlices = 64;
 inline constexpr UINT kWaitIterations = 32768;
+inline constexpr UINT kCaptureWatchSlices = 4;
 // lmxxf benefits from fewer dispatch/barrier pairs with the same total work.
 // Neither schedule is a portable wall-clock timeout or concurrent-progress guarantee.
 inline constexpr UINT kLmxxfWaitSlices = 32;
@@ -153,7 +154,7 @@ class Resources
     }
     void Op(ID3D12GraphicsCommandList* list, UINT op, ID3D12Resource* target, UINT iterations = 0) {
         list->SetPipelineState(controlPso.Get()); list->SetComputeRootSignature(controlRoot.Get());
-        list->SetComputeRootUnorderedAccessView(0, (op == 1 || op == 3 || op == 6 ? capture : control)->GetGPUVirtualAddress());
+        list->SetComputeRootUnorderedAccessView(0, (op == 1 || op == 3 || op == 6 || op == 7 ? capture : control)->GetGPUVirtualAddress());
         list->SetComputeRootUnorderedAccessView(1, target->GetGPUVirtualAddress());
         const UINT args[] {op, iterations}; list->SetComputeRoot32BitConstants(2, 2, args, 0);
         list->Dispatch(1, 1, 1);
@@ -256,14 +257,15 @@ cbuffer Args : register(b0) { uint operation; uint iterations; }
  if (operation == 0 || operation == 6) { flag.Store(0, operation == 0 ? iterations : 0); }
  else if (operation == 1 || operation == 2) { flag.InterlockedExchange(0, 1, value); DeviceMemoryBarrier(); }
  else if (operation == 3) { flag.InterlockedCompareExchange(0, 0, 0, value); target.Store(0, value); }
- else if (operation == 4) {
+ else if (operation == 4 || operation == 7) {
+  // 7: side-queue capture watch (NrCaptureBackoff=2); same bounded spin on the capture flag.
   uint spun = 0;
   [loop] [allow_uav_condition] for (uint i = 0; i < iterations; ++i) {
    ++spun;
    DeviceMemoryBarrier();
    flag.InterlockedCompareExchange(0, 0, 0, value); if (value != 0) break;
   }
-  target.Store(8, spun);
+  if (operation == 4) target.Store(8, spun);
  } else { flag.InterlockedCompareExchange(0, 0, 0, value); target.Store2(0, uint2(value == 1 ? 1 : 0, 0)); }
 })");
         D3D12_DESCRIPTOR_RANGE ranges[2] {};
@@ -336,7 +338,8 @@ cbuffer Size : register(b0) { uint width; uint height; }
     uint64_t activityToken = 0;
     // Filled when NrFrameDiag is on; RecordingOwner / backends emit on reclaim.
     FrameDiag::Counters diag;
-    // Capture polling policy snapshot for this frame (0 exponential 50..5000 us, 1 fixed 100 us).
+    // Capture discovery policy snapshot for this frame (0 exponential 50..5000 us, 1 fixed 100 us,
+    // 2 event: a bounded side-queue spin on the capture flag, then a fence event wakes the worker).
     int captureBackoff = 0;
     bool reused = false; // came from NrInlineReuse pool
     bool Complete() const {
@@ -387,8 +390,9 @@ cbuffer Size : register(b0) { uint width; uint height; }
     }
     bool WaitCapture() {
         const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-        const bool fixedBackoff = captureBackoff == 1;
-        if (diag.active) { diag.capturePolls = 0; diag.captureBackoffUsFinal = 0; diag.captureBackoffMode = fixedBackoff ? "fixed100" : "exp"; }
+        const bool fixedBackoff = captureBackoff == 1, eventWake = captureBackoff == 2;
+        if (diag.active) { diag.capturePolls = 0; diag.captureBackoffUsFinal = 0;
+            diag.captureBackoffMode = eventWake ? "event" : fixedBackoff ? "fixed100" : "exp"; }
         // The event wakes this worker promptly; the fence remains the proof.
         // Reusing one event across values can let a late signal wake a new wait.
         auto waitFence = [&](UINT64 value) {
@@ -419,6 +423,9 @@ cbuffer Size : register(b0) { uint width; uint height; }
         for (unsigned polls = 0; polls < 2048 && std::chrono::steady_clock::now() < until; ++polls) {
             if (diag.active) diag.capturePolls = polls + 1;
             Check(sampleAlloc->Reset(), "inline poll allocator"); Check(sampleList->Reset(sampleAlloc.Get(), nullptr), "inline poll list");
+            // Event: the side queue watches the flag (bounded, ~1 ms) so the fence fires at capture,
+            // not at the next CPU poll. The game queue is never touched; a miss just re-arms.
+            if (eventWake) { for (UINT i = 0; i < kCaptureWatchSlices; ++i) { Op(sampleList.Get(), 7, sample.Get(), kWaitIterations); UavBarrier(sampleList.Get(), capture.Get()); } }
             Op(sampleList.Get(), 3, sample.Get()); UavBarrier(sampleList.Get(), sample.Get());
             Barrier(sampleList.Get(), sample.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
             sampleList->CopyBufferRegion(readback.Get(), 0, sample.Get(), 0, 4);
@@ -436,6 +443,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
                 }
                 return true;
             }
+            if (eventWake) continue; // the watch itself paced this round
             // sleep_for(50us) can sleep a whole Windows timer tick. Use a
             // private timer, without changing the process/system timer period.
             LARGE_INTEGER due {}; due.QuadPart = -10 * backoff.count();

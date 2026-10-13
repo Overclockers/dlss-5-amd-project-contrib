@@ -12,7 +12,7 @@ static unsigned batchCalls = 0, batchLists = 0;
 static void STDMETHODCALLTYPE TraceBatch(ID3D12CommandQueue* q, UINT n, ID3D12CommandList* const* lists) {
     ++batchCalls; batchLists += n; q->ExecuteCommandLists(n, lists);
 }
-// --fixed-backoff runs every inline frame with NrCaptureBackoff=1 (fixed 100 us capture polling).
+// --fixed-backoff / --event-backoff run every inline frame with NrCaptureBackoff=1 (fixed 100 us) / 2 (event).
 static int gCaptureBackoff = 0;
 struct BackoffResources : In::Resources {
     template<class... A> explicit BackoffResources(A&&... a) : In::Resources(std::forward<A>(a)...) { captureBackoff = gCaptureBackoff; }
@@ -48,6 +48,7 @@ int main(int argc, char** argv) {
     for (int i = 3; i < argc; ++i) threePasses |= std::strcmp(argv[i], "--three-passes") == 0;
     for (int i = 3; i < argc; ++i) unorm8 |= std::strcmp(argv[i], "--unorm8") == 0;
     for (int i = 3; i < argc; ++i) if (std::strcmp(argv[i], "--fixed-backoff") == 0) gCaptureBackoff = 1;
+    for (int i = 3; i < argc; ++i) if (std::strcmp(argv[i], "--event-backoff") == 0) gCaptureBackoff = 2;
     for (int i = 3; i < argc; ++i) if (std::strcmp(argv[i], "--reuse") == 0) gReuse = true;
     Require(!aco || mochi, "ACO fixture requires Mochizuki");
     const UINT waitSlices = mochi ? In::kWaitSlices : In::kLmxxfWaitSlices;
