@@ -19,7 +19,11 @@ try {
         'OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/OptiScaler.vcxproj')) {
         if (!(Test-Path -LiteralPath (Join-Path $Root $file) -PathType Leaf)) { throw "Not a source checkout: missing $file" }
     }
-    if (!$Version) { $Version = Read-Host 'Package version (example: 1.9.10.3)' }
+    if (!$Version) {
+        $defaultVersion = ([IO.File]::ReadAllText((Join-Path $Root 'VERSION'))).Trim()
+        $entered = Read-Host "版本 [$defaultVersion] 回车沿用，或输入新版本"
+        if ([string]::IsNullOrWhiteSpace($entered)) { $Version = $defaultVersion } else { $Version = $entered }
+    }
     $Version = $Version.Trim()
     if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:\.[0-9]+)?(?:-(?:alpha|beta|rc)(?:[.-]?[0-9]+)?)?$') { throw 'Use a version such as 1.9.10.3 or 1.10.5-alpha.' }
     $roots = @($Root)
