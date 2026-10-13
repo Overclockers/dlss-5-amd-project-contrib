@@ -193,6 +193,16 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
     { if (tracing && trace && traceId) trace(traceId, phase, object, result); }
     bool neural = false, enqueued = false;
     uint64_t activityToken = 0;
+    // Split-path diag lives on the lease; inline uses InlineRecording::Resources::diag.
+    FrameDiag::Counters diag;
+    void EmitSplitDiag(const char* outcome) noexcept
+    {
+        if (inlineResources || !diag.active) return;
+        diag.qpcGameWaitExit = diag.qpcOutputDone = FrameDiag::Qpc();
+        diag.outcome = outcome ? outcome : "fail";
+        FrameDiag::Emit(diag);
+        diag = {};
+    }
     Lease(std::shared_ptr<SessionOwner> session, void* token, Submission::RecordingIdentity id)
         : owner(std::move(session)), job(token), identity(id), activityToken(owner->activity.Token()) { ++owner->liveRecordings; }
     ~Lease() override { --owner->liveRecordings; }
@@ -249,7 +259,17 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
                     LOG_INFO("NR inline admit serial={} queue={} in_flight={} enqueue_depth={}",
                              static_cast<unsigned long long>(e.serial), static_cast<const void*>(e.queue),
                              owner->inlineInFlight.size(), owner->inlineEnqueueOrder.size());
+            } else if (diag.active) {
+                diag.submitSerial = e.serial;
+                diag.qpcAdmit = FrameDiag::Qpc();
+                diag.listId = identity.list;
+                diag.generation = identity.generation;
+                if (diag.qpcRecordBegin)
+                    diag.recordCpuUs = unsigned(
+                        FrameDiag::MsBetween(diag.qpcRecordBegin, diag.qpcAdmit) * 1000.0);
             }
+        } else if (!inlineResources && diag.active) {
+            EmitSplitDiag("fail");
         }
         if (!begun) owner->failed = true;
         return begun ? S_OK : E_FAIL;
@@ -356,7 +376,12 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
         diagnostic.betweenHits.fetch_add(1, std::memory_order_relaxed);
         diagnostic.enqueueCalls.fetch_add(1, std::memory_order_relaxed);
         Trace("hip.begin", e.queue);
+        if (!inlineResources && diag.active) {
+            if (!diag.qpcEnqueueWaitBegin) diag.qpcEnqueueWaitBegin = FrameDiag::Qpc();
+            diag.qpcVkEnqueue = FrameDiag::Qpc();
+        }
         const int32_t rc = owner->api.EnqueueHip(owner->context, job, e.queue);
+        if (!inlineResources && diag.active) diag.qpcSideReady = FrameDiag::Qpc();
         Trace("hip.end", e.queue, rc);
         std::array<char, 256> error {};
         owner->api.GetLastError(error.data(), static_cast<uint32_t>(error.size()));
@@ -423,9 +448,17 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
         begun = false;
         if (!inlineResources && neural && ready && enqueued && e.producerSubmitted && e.continuationSubmitted &&
             SUCCEEDED(e.status) && rc == LMXXF_NR_OK && !owner->failed.load(std::memory_order_acquire))
+        {
             owner->activity.Succeeded(activityToken);
+            EmitSplitDiag("apply");
+        }
         else if (!inlineResources && neural)
+        {
             owner->activity.Reset();
+            EmitSplitDiag((FAILED(e.status) || rc != LMXXF_NR_OK) ? "fail" : "reject");
+        }
+        else
+            EmitSplitDiag((FAILED(e.status) || rc != LMXXF_NR_OK) ? "fail" : "apply");
     }
     void Invalidated(Submission::RecordingIdentity id) noexcept override
     {
@@ -465,6 +498,7 @@ inline bool CollectLocked()
         const int32_t rc = lease->owner->api.CollectRecording(lease->owner->context, lease->job);
         if (rc == LMXXF_NR_OK || rc == LMXXF_NR_DEVICE_LOST)
         {
+            lease->EmitSplitDiag("abort");
             lease->owner->ForgetUnstarted(lease->inlineResources);
             lease->job = nullptr;
             it = leases.erase(it);

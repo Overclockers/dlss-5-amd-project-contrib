@@ -544,6 +544,11 @@ ID3D12Resource *LmxxfBackend::FinishRecord(ID3D12GraphicsCommandList *recordCmd,
                   (std::string("lmxxf: split blocked before record: ") + splitReason + " (NO NR)").c_str());
         return nullptr;
     }
+    if (!inlineResources) {
+        const unsigned w = inlineFrame && inlineFrame->width ? inlineFrame->width : 0;
+        const unsigned h = inlineFrame && inlineFrame->height ? inlineFrame->height : 0;
+        FrameDiag::Begin(lease->diag, "lmxxf", 0, w, h, OPTI_VERSION, "split");
+    }
     lease->traceId = reTraceId;
     lease->trace = &ReTrace;
     ReTrace(reTraceId, "inputs.begin", jobHandle, 0);

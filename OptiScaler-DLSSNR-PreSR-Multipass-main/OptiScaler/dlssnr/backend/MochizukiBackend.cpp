@@ -318,6 +318,13 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     }
     auto lease = LmxxfRecording::Attach(p->owner, job.handle, logical.Get(), inlineResources);
     if (!lease) { p->Status("mochizuki: this recording already owns NR work"); return nullptr; }
+    if (!inlineMode) {
+        FrameDiag::Begin(lease->diag, "mochizuki", frameId, frame.color_width, frame.color_height,
+                         OPTI_VERSION, "split");
+        const auto id0 = logical->Identity();
+        lease->diag.listId = id0.list;
+        lease->diag.generation = id0.generation;
+    }
     lease->neural = true;
     if (p->tracedRecordings < 2)
     {

@@ -493,7 +493,7 @@ static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const 
         if (MenuUi::Checkbox("Write timing summary to log", &logging)) config->NrTimingLog = logging;
         bool frameDiag = config->NrFrameDiag.value_or_default();
         if (MenuUi::Checkbox("Per-frame NR diag (PresentMon)", &frameDiag)) config->NrFrameDiag = frameDiag;
-        HelpMarker("Default off. Writes NrFrameDiag.log next to the DLL for PresentMon join. No sync GPU waits.");
+        HelpMarker("Default off. Writes NrFrameDiag.log next to the DLL (split and inline) for PresentMon join. No sync GPU waits.");
         MenuUi::TextWrapped("%s", AmdBridge::EffectsStatus().c_str());
         if (MenuUi::Button("Reset diagnostics")) {
             config->NrTimingLog = std::optional<bool>{};
@@ -1653,7 +1653,7 @@ void RenderMenu(Config* config, float menuResScale)
                     if (MenuUi::Checkbox("Write timing summary to log", &timingLog)) config->NrTimingLog = timingLog;
                     bool frameDiag = config->NrFrameDiag.value_or_default();
                     if (MenuUi::Checkbox("Per-frame NR diag (PresentMon)", &frameDiag)) config->NrFrameDiag = frameDiag;
-                    HelpMarker("Default off. Writes NrFrameDiag.log next to the DLL for PresentMon join.");
+                    HelpMarker("Default off. Writes NrFrameDiag.log next to the DLL (split and inline) for PresentMon join.");
                     HelpMarker("Requires measurement and file logging. At most one summary every five seconds.");
                     if (timingEnabled) {
                         const auto snapshot = DlssNr::AmdBridge::Timing();

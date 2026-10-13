@@ -97,13 +97,13 @@ inline void NotePresent(void* /*swapchain*/) noexcept
 }
 
 inline void Begin(Counters& c, const char* backend, uint64_t frameId, unsigned w, unsigned h,
-                  const char* version) noexcept
+                  const char* version, const char* mode = "inline") noexcept
 {
     if (!Enabled()) { c = {}; return; }
     c = {};
     c.active = true;
     c.backend = backend ? backend : "nr";
-    c.mode = "inline";
+    c.mode = mode && mode[0] ? mode : "inline";
     c.nrFrameId = frameId;
     c.width = w;
     c.height = h;
