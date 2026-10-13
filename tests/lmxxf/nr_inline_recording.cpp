@@ -245,7 +245,7 @@ static void Run(Gpu& gpu, bool timeout, bool enhanced = false, bool fullBudget =
     ID3D12Resource* sources[] {original.Get()}; D3D12_RESOURCE_STATES states[] {D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE};
     Check(proxy->BeginInlineState(1, sources, states), "inline scope");
     Require(states[0] == (enhanced ? D3D12_RESOURCE_STATE_COMMON : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE), "enhanced source normalized");
-    resources->RecordCapture(proxy.Get()); resources->RecordWait(proxy.Get(), timeout && !fullBudget ? 0 : 64, 32768);
+    resources->RecordCapture(proxy.Get()); resources->RecordWait(proxy.Get(), timeout && !fullBudget ? 0 : In::kLmxxfWaitSlices, In::kLmxxfWaitIterations);
     In::Barrier(proxy.Get(), network.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE);
     In::Barrier(proxy.Get(), decoded.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
     proxy->CopyResource(decoded.Get(), network.Get());
@@ -280,7 +280,7 @@ static void Run(Gpu& gpu, bool timeout, bool enhanced = false, bool fullBudget =
         Require(resources->Complete() && captured, "both queues complete");
         std::printf("frozen success=%u last slice iterations=%u\n", resources->Succeeded(), resources->LastSpinCount());
         Require(resources->Succeeded() != timeout, "frozen success decision");
-        if (fullBudget) Require(resources->LastSpinCount() == 32768, "bounded wait actually exhausted its work budget");
+        if (fullBudget) Require(resources->LastSpinCount() == In::kLmxxfWaitIterations, "bounded wait actually exhausted its work budget");
         gpu.Pixels(resources->OutputTexture(), timeout ? redHalf : blueHalf, timeout ? red : blue);
         gpu.Pixels(resources->FirstTexture(), timeout ? redHalf : blueHalf, timeout ? red : blue);
     }

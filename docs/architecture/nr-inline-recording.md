@@ -60,7 +60,12 @@ potentially stale core layout/history state. The ordinary game-list split path
 continues to use its original Vulkan queue. This changes network queue selection,
 not the compute/pixel stage of the D3D12 waiting shader.
 
-The game list contains 64 bounded wait dispatches, each limited to 32768 iterations.
+The lmxxf game list contains 32 bounded wait dispatches, each limited to 65536
+iterations. Fewer dispatch/UAV-barrier pairs remove its measured extra multi-slot
+scheduling loss on RX 9070 XT. Mochizuki retains 64 x 32768: its graphics/compute
+segmented path regressed with longer waits. Both retain the same total loop
+budget. See [slot measurements](../lmxxf-inline-slots.md) for the backend comparisons
+and Mochizuki's outstanding sustained-load scheduling issue.
 UAV barriers serialize slices and the final success snapshot. This is a work budget,
 not a portable millisecond timeout. D3D12 does not guarantee concurrent queue progress. Bounded slices prevent an
 unbounded shader loop but cannot establish a frame-time or TDR-safe bound. The frozen snapshot predicates game-list output work (lmxxf finishes its private side output independently). A host composition shader selects either that output or this frame's

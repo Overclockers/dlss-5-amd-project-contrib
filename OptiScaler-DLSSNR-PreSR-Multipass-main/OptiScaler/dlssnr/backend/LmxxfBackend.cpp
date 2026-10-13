@@ -554,7 +554,10 @@ ID3D12Resource *LmxxfBackend::FinishRecord(ID3D12GraphicsCommandList *recordCmd,
         return nullptr;
     }
     ReTrace(reTraceId, "inputs.end/split.begin", jobHandle, 0);
-    if (inlineResources) { inlineResources->RecordCapture(recordCmd); inlineResources->RecordWait(recordCmd); }
+    if (inlineResources) {
+        inlineResources->RecordCapture(recordCmd);
+        inlineResources->RecordWait(recordCmd, InlineRecording::kLmxxfWaitSlices, InlineRecording::kLmxxfWaitIterations);
+    }
     const HRESULT splitHr = inlineResources ? S_OK : LmxxfCut::TrySplitAtEvaluate(recordCmd);
     ReTrace(reTraceId, "split.end", recordCmd, splitHr);
     if (splitHr != S_OK)

@@ -30,6 +30,8 @@ int main(int argc, char** argv) {
     for (int i = 3; i < argc; ++i) threePasses |= std::strcmp(argv[i], "--three-passes") == 0;
     for (int i = 3; i < argc; ++i) unorm8 |= std::strcmp(argv[i], "--unorm8") == 0;
     Require(!aco || mochi, "ACO fixture requires Mochizuki");
+    const UINT waitSlices = mochi ? In::kWaitSlices : In::kLmxxfWaitSlices;
+    const UINT waitIterations = mochi ? In::kWaitIterations : In::kLmxxfWaitIterations;
     // The inline output is RGBA16F; an R8G8B8A8_UNORM frame is compared through its 8-bit values.
     auto Hash = [&](ID3D12Device* d, ID3D12CommandQueue* q, ID3D12Resource* t) {
         return unorm8 ? HashTextureUnorm8(d, q, t) : HashTexture(d, q, t);
@@ -174,7 +176,7 @@ int main(int argc, char** argv) {
         Check(proxy->BeginInlineState(1, sources, states), "state scope");
         lease = Own::Attach(owner, job.handle, proxy.Get(), resources); Require(bool(lease), "inline ownership");
         ok(api.RecordInputs(context, job.handle, proxy.Get()), "inline inputs");
-        resources->RecordCapture(proxy.Get()); resources->RecordWait(proxy.Get(), timeoutMode ? 0 : 64);
+        resources->RecordCapture(proxy.Get()); resources->RecordWait(proxy.Get(), timeoutMode ? 0 : waitSlices, waitIterations);
         ok(api.RecordOutputs(context, job.handle, proxy.Get()), "inline outputs");
         resources->RecordSelect(proxy.Get(), states[0]); proxy->EndInlineState(); lease->ready = true;
         Require(proxy->IsSplitIneligible(), "query remains open after inline NR");
@@ -303,7 +305,7 @@ int main(int argc, char** argv) {
             Check(list->BeginInlineState(1, sources, states), "continuous state");
             auto nextLease = Own::Attach(owner, next.handle, list.Get(), in); Require(bool(nextLease), "continuous lease");
             ok(api.RecordInputs(context, next.handle, list.Get()), "continuous inputs");
-            in->RecordCapture(list.Get()); in->RecordWait(list.Get(), timeoutMode ? 0 : 64);
+            in->RecordCapture(list.Get()); in->RecordWait(list.Get(), timeoutMode ? 0 : waitSlices, waitIterations);
             ok(api.RecordOutputs(context, next.handle, list.Get()), "continuous outputs");
             in->RecordSelect(list.Get(), states[0]); nextLease->ready = true;
             list->EndInlineState(); Check(list->Close(), "continuous close");
@@ -394,7 +396,7 @@ int main(int argc, char** argv) {
                     recorded = Own::Attach(owner, job.handle, list.Get(), resources);
                     Require(bool(recorded), "ahead baseline lease");
                     ok(api.RecordInputs(context, job.handle, list.Get()), "ahead baseline inputs");
-                    resources->RecordCapture(list.Get()); resources->RecordWait(list.Get(), 64);
+                    resources->RecordCapture(list.Get()); resources->RecordWait(list.Get(), waitSlices, waitIterations);
                     ok(api.RecordOutputs(context, job.handle, list.Get()), "ahead baseline outputs");
                     resources->RecordSelect(list.Get(), states[0]); recorded->ready = true;
                     list->EndInlineState(); Check(list->Close(), "ahead baseline close");
@@ -432,7 +434,7 @@ int main(int argc, char** argv) {
                     Require(bool(frames[i].lease), "ahead lease");
                     ok(api.RecordInputs(context, job.handle, frames[i].list.Get()), "ahead inputs");
                     frames[i].resources->RecordCapture(frames[i].list.Get());
-                    frames[i].resources->RecordWait(frames[i].list.Get(), timeoutMode ? 0 : 64);
+                    frames[i].resources->RecordWait(frames[i].list.Get(), timeoutMode ? 0 : waitSlices, waitIterations);
                     ok(api.RecordOutputs(context, job.handle, frames[i].list.Get()), "ahead outputs");
                     frames[i].resources->RecordSelect(frames[i].list.Get(), states[0]);
                     frames[i].lease->ready = true;
@@ -533,7 +535,7 @@ int main(int argc, char** argv) {
                 Require(bool(frames[i].lease), "stagger lease");
                 ok(api.RecordInputs(context, job.handle, frames[i].list.Get()), "stagger inputs");
                 frames[i].resources->RecordCapture(frames[i].list.Get());
-                frames[i].resources->RecordWait(frames[i].list.Get(), timeoutMode ? 0 : 64);
+                frames[i].resources->RecordWait(frames[i].list.Get(), timeoutMode ? 0 : waitSlices, waitIterations);
                 ok(api.RecordOutputs(context, job.handle, frames[i].list.Get()), "stagger outputs");
                 frames[i].resources->RecordSelect(frames[i].list.Get(), states[0]);
                 frames[i].lease->ready = true;

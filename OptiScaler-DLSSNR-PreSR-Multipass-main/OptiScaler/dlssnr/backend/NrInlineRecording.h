@@ -15,6 +15,13 @@
 namespace DlssNr::Backend::InlineRecording
 {
 template<class T> using Ptr = Microsoft::WRL::ComPtr<T>;
+// Mochizuki's graphics/compute segments regress with longer wait dispatches.
+inline constexpr UINT kWaitSlices = 64;
+inline constexpr UINT kWaitIterations = 32768;
+// lmxxf benefits from fewer dispatch/barrier pairs with the same total work.
+// Neither schedule is a portable wall-clock timeout or concurrent-progress guarantee.
+inline constexpr UINT kLmxxfWaitSlices = 32;
+inline constexpr UINT kLmxxfWaitIterations = 65536;
 class StateScope {
     Ptr<Submission::IRecordingResources> state;
     std::string reason = "recording_proxy_unavailable";
@@ -291,7 +298,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
     ID3D12Resource* OutputTexture() const { return output.texture.Get(); }
     ID3D12Resource* FirstTexture() const { return first.texture.Get(); }
     void RecordCapture(ID3D12GraphicsCommandList* list) { Op(list, 1, decision.Get()); UavBarrier(list, capture.Get()); }
-    void RecordWait(ID3D12GraphicsCommandList* list, UINT slices = 64, UINT iterations = 32768) {
+    void RecordWait(ID3D12GraphicsCommandList* list, UINT slices = kWaitSlices, UINT iterations = kWaitIterations) {
         // Keep the predicate immutable after this point: late completion cannot select unrecorded output.
         for (UINT i = 0; i < slices; ++i) {
             Op(list, 4, decision.Get(), iterations);

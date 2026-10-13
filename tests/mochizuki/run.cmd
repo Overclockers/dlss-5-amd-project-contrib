@@ -28,6 +28,8 @@ if /i "%~1"=="aco-inline" goto inline
 if /i "%~1"=="aco-temporal" goto acotemporal
 if /i "%~1"=="hdr-shader" goto hdrshader
 if /i "%~1"=="phase-failure" goto phasefailure
+if /i "%~1"=="wait-profile" goto waitprofile
+if /i "%~1"=="aco-wait-profile" goto waitprofile
 cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /I OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler tests/mochizuki/runtime.cpp /Foexports/mochizuki-tests/runtime.obj /Feexports/mochizuki-tests/runtime.exe /link d3d12.lib dxgi.lib || exit /b 1
 if /i "%~1"=="destroy-tail" goto destroytail
 if /i "%~1"=="startup" goto startup
@@ -89,6 +91,17 @@ set "RC=%errorlevel%"
 set "MZ_TEST_COMPUTE_REFUSE_AT="
 set "MZ_TEST_INLINE_CHAIN="
 exit /b %RC%
+
+:waitprofile
+set "MOCHI_ACO_ARG="
+if /i "%~1"=="aco-wait-profile" set "MOCHI_ACO_ARG=--aco"
+set "INCLUDE=%INCLUDE%;%CD%"
+set "MOCHI_WAIT_OUT=exports\mochizuki-tests\%~1"
+if not "%~2"=="" set "MOCHI_WAIT_OUT=%~2"
+if not exist "%MOCHI_WAIT_OUT%" mkdir "%MOCHI_WAIT_OUT%"
+cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /I OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/include tests/lmxxf/nr_slots_benchmark.cpp /Fo"%MOCHI_WAIT_OUT%/nr_slots_benchmark.obj" /Fe"%MOCHI_WAIT_OUT%/nr_slots_benchmark.exe" /link d3d12.lib dxgi.lib dxguid.lib d3dcompiler.lib OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/library/detours/detours.lib || exit /b 1
+python -B tests\lmxxf\compare_wait_profiles.py "%MOCHI_WAIT_OUT%\nr_slots_benchmark.exe" "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" "%MOCHI_WAIT_OUT%" --mochizuki %MOCHI_ACO_ARG%
+exit /b %errorlevel%
 
 :inline
 set "MOCHI_ACO_ARG="

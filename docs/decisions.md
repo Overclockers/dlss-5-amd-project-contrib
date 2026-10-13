@@ -817,3 +817,20 @@ patches rather than unexplained vendor edits. Preserve required product behavior
 through equivalent APIs; reducing divergence does not authorize silent feature loss.
 Implementation and its internal validation run continuously, followed by one final
 review. Public PR submission and release remain separate from this planning decision.
+
+## 2026-10-13：减少 inline 等待分段，消除额外多槽调度损失
+
+lmxxf 宿主等待由 64×32768 调整为 32×65536；总循环工作预算仍为 2097152，
+但不代表相同的毫秒超时或通用 TDR 安全界限。Mochizuki 的 graphics/compute 分段
+路径在 32 段下实测回落，因此保留 64×32768，不能直接推广 lmxxf 的参数。
+本项仅取代上文 2026-10-12 的 lmxxf 参数；槽位上限、默认值、私有输入/结果、
+冻结选择与双尾回收契约保持不变。
+
+依据同进程正反序、等预算对照，减少等待 dispatch/UAV barrier 对可消除已定位的
+lmxxf 额外多槽吞吐回落；更少的 16/8 段没有进一步收益，因此采用 32 段。
+这是源代码层面的受控因果定位，尚未由 GPU trace 确定具体 WDDM/CU/cache 机制。
+控制资源池化和缩小录制锁范围不能消除该回落，不混入本次修复。
+
+验证、两种 Mochizuki 路径及剩余 split 差距见 [离线槽位对比](lmxxf-inline-slots.md)。
+共用路径须覆盖取消、重放、满槽旁路、超时冻结、失败回收与真实 GPU；不能以限制为
+2–3 槽代替调度修复。inline 继续默认关闭，游戏和其它驱动验收另行进行。
