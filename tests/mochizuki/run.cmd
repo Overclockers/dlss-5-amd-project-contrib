@@ -30,6 +30,8 @@ if /i "%~1"=="hdr-shader" goto hdrshader
 if /i "%~1"=="phase-failure" goto phasefailure
 if /i "%~1"=="wait-profile" goto waitprofile
 if /i "%~1"=="aco-wait-profile" goto waitprofile
+if /i "%~1"=="inline-profile" goto waitprofile
+if /i "%~1"=="aco-inline-profile" goto waitprofile
 cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /I OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler tests/mochizuki/runtime.cpp /Foexports/mochizuki-tests/runtime.obj /Feexports/mochizuki-tests/runtime.exe /link d3d12.lib dxgi.lib || exit /b 1
 if /i "%~1"=="destroy-tail" goto destroytail
 if /i "%~1"=="startup" goto startup
@@ -73,6 +75,7 @@ exit /b %errorlevel%
 
 :phasefailure
 cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /I OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler tests/mochizuki/queue_segments.cpp /Foexports/mochizuki-tests/queue_segments.obj /Feexports/mochizuki-tests/queue_segments.exe /link d3d12.lib dxgi.lib dxguid.lib || exit /b 1
+set "MZ_TEST_INLINE_CHAIN=3"
 for %%P in (2 3) do (
   set "MZ_TEST_PHASE_SUBMIT_FAIL_AT=%%P"
   exports\mochizuki-tests\queue_segments.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" || exit /b 1
@@ -95,12 +98,19 @@ exit /b %RC%
 :waitprofile
 set "MOCHI_ACO_ARG="
 if /i "%~1"=="aco-wait-profile" set "MOCHI_ACO_ARG=--aco"
+if /i "%~1"=="aco-inline-profile" set "MOCHI_ACO_ARG=--aco"
 set "INCLUDE=%INCLUDE%;%CD%"
 set "MOCHI_WAIT_OUT=exports\mochizuki-tests\%~1"
 if not "%~2"=="" set "MOCHI_WAIT_OUT=%~2"
 if not exist "%MOCHI_WAIT_OUT%" mkdir "%MOCHI_WAIT_OUT%"
 cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /I OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/include tests/lmxxf/nr_slots_benchmark.cpp /Fo"%MOCHI_WAIT_OUT%/nr_slots_benchmark.obj" /Fe"%MOCHI_WAIT_OUT%/nr_slots_benchmark.exe" /link d3d12.lib dxgi.lib dxguid.lib d3dcompiler.lib OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/library/detours/detours.lib || exit /b 1
+if /i "%~1"=="inline-profile" goto productionprofile
+if /i "%~1"=="aco-inline-profile" goto productionprofile
 python -B tests\lmxxf\compare_wait_profiles.py "%MOCHI_WAIT_OUT%\nr_slots_benchmark.exe" "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" "%MOCHI_WAIT_OUT%" --mochizuki %MOCHI_ACO_ARG%
+exit /b %errorlevel%
+
+:productionprofile
+python -B tests\mochizuki\compare_inline_profiles.py "%MOCHI_WAIT_OUT%\nr_slots_benchmark.exe" "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" "%MOCHI_WAIT_OUT%" %MOCHI_ACO_ARG% %3 %4
 exit /b %errorlevel%
 
 :inline
@@ -122,8 +132,8 @@ exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%
 if errorlevel 1 exit /b 1
 exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --large --temporal --three-passes %MOCHI_ACO_ARG%
 if errorlevel 1 exit /b 1
-rem R16G16B16A16_FLOAT above needs the colour conversions: segments. R8G8B8A8_UNORM runs whole on compute.
-set "MZ_TEST_INLINE_CHAIN=2"
+rem Equal-extent FP16 and UNORM8 both support the whole compute chain.
+set "MZ_TEST_INLINE_CHAIN=1"
 exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki %MOCHI_ACO_ARG%
 if errorlevel 1 exit /b 1
 set "MZ_TEST_INLINE_CHAIN=1"
@@ -162,7 +172,7 @@ exit /b %errorlevel%
 cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS /I exports/mochizuki-toolchain/Vulkan-Headers-e3b1eec08173d6b825cd3ac88c885a63b621504a/include /I third_party/mochizuki/windows/src/core tests/mochizuki/hdr_shader.cpp /Foexports/mochizuki-tests/hdr_shader.obj /Feexports/mochizuki-tests/hdr_shader.exe /link OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/library/vulkan/vulkan-1.lib || exit /b 1
 set "MOCHI_HDR_SHADERS=%CD%\exports\mochizuki-runtime\dlssnr-amd\shaders\runtime"
 if not "%~2"=="" set "MOCHI_HDR_SHADERS=%~f2"
-exports\mochizuki-tests\hdr_shader.exe "%MOCHI_HDR_SHADERS%"
+exports\mochizuki-tests\hdr_shader.exe "%MOCHI_HDR_SHADERS%" %3
 exit /b %errorlevel%
 
 :profile

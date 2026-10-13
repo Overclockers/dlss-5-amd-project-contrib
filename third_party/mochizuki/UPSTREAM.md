@@ -7,7 +7,7 @@
 - Closure: `windows/src/core`, `windows/shaders`, `windows/build` (recipe, unroll, quad-quant, `arch/rdna4.sh`), `windows/data/aco` records and `shell-aliases.txt`, `linux/shaders`, `linux/build/build_network.py`, `linux/build/arch/rdna4.sh`, and `linux/package/model-tools`. Patch 12 adds weights-only installation extraction; the weight parser, unpackers and model hash lists remain unchanged.
 - Not imported: `windows/src/pe`, official installers, the Vulkan loader, the ReShade add-on, OptiScaler-NR package scripts, DX9/DX10/DX11 hosts, and the INT4 host path.
 
-The source pin and twelve feature patches are machine-readable in
+The source pin and thirteen feature patches are machine-readable in
 [tools/mochizuki-sync/manifest.json](../../tools/mochizuki-sync/manifest.json).
 [Replay verification](../../tools/mochizuki-sync/README.md) reproduces all 173
 closure files from the pinned Git objects plus these patches, without overwriting
@@ -52,7 +52,19 @@ ACO is off unless `MochizukiAcoMode` is true. The host pushes the current INI in
 
 The product device enables `VK_EXT_pipeline_robustness` when the physical device lists the extension and the feature is on. `adopt()` reads that feature from the physical device, and `Kernel::create` then chains a robustness info. `Features::prepare` and `mark` run only after a bundle was configured. `MZ_PROBE_PIPELINE_BINARY` remains a test probe, not the ACO path.
 
-The builder writes Linux SPIR-V to `dlssnr-amd/aco/shaders` and copies the official records and aliases beside it. Generation failure fails the build. Package and uninstall ownership is the exact relative list in `tools/install/mochizuki-owned.txt` (214 paths: the 58 official records, both shader trees' pinned outputs, and `aco/shell-aliases.txt`). The packager copies only those paths and ships the pin as `mochizuki-owned.txt`. It does not copy `dlssnr.bin`, `pipeline.cache`, `aco-cache`, `test.spv` or a file whose name merely resembles a package file. Uninstall deletes a shader or ACO file only when its path is on that pin, and removes a directory only when it is empty. A missing pin deletes no shader or ACO file. Unknown files stay. Linked paths stay. `dlssnr.bin` and `aco-cache` stay.
+The builder writes Linux SPIR-V to `dlssnr-amd/aco/shaders` and copies the official records and aliases beside it. Generation failure fails the build. Package and uninstall ownership is the exact relative list in `tools/install/mochizuki-owned.txt` (220 paths: the 58 official records, both shader trees' pinned outputs, and `aco/shell-aliases.txt`). The packager copies only those paths and ships the pin as `mochizuki-owned.txt`. It does not copy `dlssnr.bin`, `pipeline.cache`, `aco-cache`, `test.spv` or a file whose name merely resembles a package file. Uninstall deletes a shader or ACO file only when its path is on that pin, and removes a directory only when it is empty. A missing pin deletes no shader or ACO file. Unknown files stay. Linked paths stay. `dlssnr.bin` and `aco-cache` stay.
+
+## Optional FP16 compute conversions
+
+Patch 13 adds private sampled FP16 input and storage FP16 output conversions for
+equal-extent frames. They are allocated only for an optional second-family or
+compute-only host, and only where the official direct input/store cannot suffice.
+Graphics recordings still use the original blits. Compute input uses texelFetch
+into RGBA32F; compute output stores RGBA32F into RGBA16F and copies to the caller.
+No UNORM conversion, new tone mapping, model arithmetic, ABI or ACO record changes.
+The product budgets both optional images conservatively before a network build.
+The two shaders are compiled in both recipes and included in the ownership pin.
+Reduced model scale, motion needing a blit and first-pass export retain segments.
 
 ## Pins
 

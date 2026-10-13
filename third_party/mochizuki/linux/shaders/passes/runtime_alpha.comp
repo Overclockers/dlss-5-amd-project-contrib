@@ -1,5 +1,25 @@
 #version 460
-#ifdef NR_PACK_U8
+#if defined(NR_PACK_F16) || defined(NR_UNPACK_F16)
+// Equal-extent nearest conversion; no tone mapping, clamp or UNORM quantization.
+layout(local_size_x=8, local_size_y=8) in;
+#ifdef NR_UNPACK_F16
+layout(set=0,binding=0) uniform sampler2D source;
+layout(set=0,binding=1,rgba32f) uniform writeonly image2D result;
+#else
+layout(set=0,binding=0,rgba32f) uniform readonly image2D source;
+layout(set=0,binding=1,rgba16f) uniform writeonly image2D result;
+#endif
+layout(push_constant) uniform Push { uint width, height; } pc;
+void main() {
+    ivec2 xy=ivec2(gl_GlobalInvocationID.xy);
+    if (xy.x>=pc.width || xy.y>=pc.height) return;
+#ifdef NR_UNPACK_F16
+    imageStore(result,xy,texelFetch(source,xy,0));
+#else
+    imageStore(result,xy,imageLoad(source,xy));
+#endif
+}
+#elif defined(NR_PACK_U8)
 // Inline compute-family write-back for an R8G8B8A8_UNORM frame (runtime_pack_u8.spv).
 // The format-converting blit is graphics-only. The answer already holds k/255 values
 // (alpha pass, encode_u8), so this rounding equals the blit's float -> UNORM conversion.

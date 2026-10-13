@@ -32,7 +32,9 @@ RUNTIME = ['runtime_alpha', 'runtime_encode', 'runtime_transfer', 'runtime_upsca
            'runtime_downscale', 'runtime_taps']
 # runtime passes built from another pass's source with defines: name -> (source, defines)
 RUNTIME_VARIANTS = {'runtime_transfer_store': ('runtime_transfer', ['NR_STORE_NATIVE']),
-                    'runtime_pack_u8': ('runtime_alpha', ['NR_PACK_U8'])}
+                    'runtime_pack_u8': ('runtime_alpha', ['NR_PACK_U8']),
+                    'runtime_pack_f16': ('runtime_alpha', ['NR_PACK_F16']),
+                    'runtime_unpack_f16': ('runtime_alpha', ['NR_UNPACK_F16'])}
 MOTION = ['motion_luma', 'motion_estimate']
 
 

@@ -118,11 +118,13 @@ aco/shaders/runtime/runtime_alpha.spv
 aco/shaders/runtime/runtime_depth.spv
 aco/shaders/runtime/runtime_downscale.spv
 aco/shaders/runtime/runtime_encode.spv
+aco/shaders/runtime/runtime_pack_f16.spv
 aco/shaders/runtime/runtime_pack_u8.spv
 aco/shaders/runtime/runtime_prep.spv
 aco/shaders/runtime/runtime_taps.spv
 aco/shaders/runtime/runtime_transfer.spv
 aco/shaders/runtime/runtime_transfer_store.spv
+aco/shaders/runtime/runtime_unpack_f16.spv
 aco/shaders/runtime/runtime_upscale.spv
 aco/shaders/shader-constants.txt
 aco/shaders/swin-bias-storage.txt
@@ -200,11 +202,13 @@ shaders/runtime/runtime_alpha.spv
 shaders/runtime/runtime_depth.spv
 shaders/runtime/runtime_downscale.spv
 shaders/runtime/runtime_encode.spv
+shaders/runtime/runtime_pack_f16.spv
 shaders/runtime/runtime_pack_u8.spv
 shaders/runtime/runtime_prep.spv
 shaders/runtime/runtime_taps.spv
 shaders/runtime/runtime_transfer.spv
 shaders/runtime/runtime_transfer_store.spv
+shaders/runtime/runtime_unpack_f16.spv
 shaders/runtime/runtime_upscale.spv
 shaders/shader-constants.txt
 shaders/swin-bias-storage.txt

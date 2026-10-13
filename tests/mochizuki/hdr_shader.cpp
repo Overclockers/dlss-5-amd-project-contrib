@@ -117,8 +117,8 @@ static void Transfer(nrvk::Context& ctx, const std::filesystem::path& shaders)
         auto& answer = r.Image(w, h);
         ctx.transition(keep, VK_IMAGE_LAYOUT_GENERAL);
         auto alias = keep; alias.sampler = VK_NULL_HANDLE;
-        r.kernel.create(ctx, (shaders / "runtime_transfer.spv").string(), {}, 40,
-                        { &model, &shown, &keep, compact ? &alias : &answer });
+        r.kernel.create(ctx, (shaders / "runtime_transfer.spv").string(), {}, 48,
+                        { &model, &shown, &keep, compact ? &alias : &answer, &answer });
         for (const Pixel& source : colors)
         {
             if (source[0] < 0.f) continue; // transfer has its own gamut handling, outside this change
@@ -134,8 +134,8 @@ static void Transfer(nrvk::Context& ctx, const std::filesystem::path& shaders)
             ctx.upload(model, pixels.data(), pixels.size() * sizeof(Pixel));
             ctx.upload(shown, pixels.data(), pixels.size() * sizeof(Pixel));
             ctx.upload(keep, original.data(), original.size() * sizeof(Pixel));
-            struct { uint32_t w, h, mw, mh, passthrough; float detail, colour, guard, white; uint32_t mode; }
-                push { w, h, mw, mh, 0, 1.f, 1.f, 4.f, 1.f, mode };
+            struct { uint32_t w, h, mw, mh, passthrough; float detail, colour, guard, white; uint32_t mode, flags; float sigma; }
+                push { w, h, mw, mh, 0, 1.f, 1.f, 4.f, 1.f, mode, 0, 1.f };
             r.Run(push, w, h);
             ctx.download(compact ? keep : answer, output.data(), output.size() * sizeof(Pixel));
             for (const Pixel& p : output)
@@ -161,13 +161,13 @@ static void Composition(nrvk::Context& ctx, const std::filesystem::path& shaders
         auto& keep=r.Image(w,h,true); auto& answer=r.Image(w,h);
         ctx.transition(keep,VK_IMAGE_LAYOUT_GENERAL);
         auto alias=keep;alias.sampler=VK_NULL_HANDLE;
-        r.kernel.create(ctx,(shaders/"runtime_transfer.spv").string(),{},40,
-                        {&m,&s,&keep,compact?&alias:&answer});
+        r.kernel.create(ctx,(shaders/"runtime_transfer.spv").string(),{},48,
+                        {&m,&s,&keep,compact?&alias:&answer,&answer});
         ctx.upload(m,model.data(),model.size()*sizeof(Pixel));
         ctx.upload(s,proxy.data(),proxy.size()*sizeof(Pixel));
         ctx.upload(keep,original.data(),original.size()*sizeof(Pixel));
-        struct {uint32_t w,h,mw,mh,passthrough;float detail,colour,guard,white;uint32_t mode;}
-            push{w,h,mw,mh,1u-linear,detail,colour,4.f,1.f,mode};
+        struct {uint32_t w,h,mw,mh,passthrough;float detail,colour,guard,white;uint32_t mode,flags;float sigma;}
+            push{w,h,mw,mh,1u-linear,detail,colour,4.f,1.f,mode,mode==2?2u:0u,1.f};
         r.Run(push,w,h);
         std::vector<Pixel> out(w*h);
         ctx.download(compact?keep:answer,out.data(),out.size()*sizeof(Pixel));
@@ -187,13 +187,15 @@ static void Composition(nrvk::Context& ctx, const std::filesystem::path& shaders
             proxy[i]={x*.7f,y*.4f,.1f,1};
             model[i]={x*.6f+.07f,y*.3f+.08f,.08f,1};
         }
-        for(uint32_t mode:{0u,1u}) for(float detail:{0.f,1.f,2.f}) {
+        for(uint32_t mode:{0u,1u,2u}) for(float detail:{0.f,1.f,2.f}) {
             auto separate=run(mode,false,linear,detail,1.5f);
             auto compact=run(mode,true,linear,detail,1.5f);
             Require(separate==compact,"in-place transfer differs from separate output");
         }
         model=proxy;
-        for(uint32_t mode:{0u,1u}) {
+        // Matched residual and lighting edits vanish when model == proxy.
+        // Classic deliberately substitutes the enlarged model picture.
+        for(uint32_t mode:{1u,2u}) {
             auto out=run(mode,true,linear,1.f,1.f);
             for(size_t i=0;i<out.size();++i) for(int c=0;c<3;++c)
                 Require(std::abs(out[i][c]-original[i][c])<.003f,"spatial no-edit invariant failed");
@@ -208,7 +210,7 @@ static void Composition(nrvk::Context& ctx, const std::filesystem::path& shaders
         bool left=i%mw<mw/2; float s=left?.1f:.8f,m=left?.15f:.6f;
         proxy[i]={s,s,s,1};model[i]={m,m,m,1};
     }
-    auto matched=run(0,true,0,1,1),edge=run(1,true,0,1,1);
+    auto matched=run(1,true,0,1,1),edge=run(2,true,0,1,1);
     for(uint32_t x:{w/2-1,w/2}) {
         float target=x<w/2?.15f:.6f;size_t i=(h/2)*w+x;
         Require(std::abs(edge[i][0]-target)<std::abs(matched[i][0]-target),
@@ -217,19 +219,81 @@ static void Composition(nrvk::Context& ctx, const std::filesystem::path& shaders
     std::cout<<"PASS composition: HDR/SDR, in-place byte equality, spatial no-edit, edge separation\n";
 }
 
+// Compare actual compute conversions with the driver's reference blit. Include
+// every finite half value, signed zero, subnormals and FP32 values near half ties.
+static void FloatConversions(nrvk::Context& ctx, const std::filesystem::path& shaders)
+{
+    constexpr uint32_t w=257,h=257;
+    Resources r(ctx); r.images.reserve(5);
+    r.images.push_back(ctx.image(w,h,VK_FORMAT_R32G32B32A32_SFLOAT,false));
+    r.images.push_back(ctx.image(w,h,VK_FORMAT_R16G16B16A16_SFLOAT,true));
+    r.images.push_back(ctx.image(w,h,VK_FORMAT_R16G16B16A16_SFLOAT,false));
+    r.images.push_back(ctx.image(w,h,VK_FORMAT_R32G32B32A32_SFLOAT,false));
+    r.images.push_back(ctx.image(w,h,VK_FORMAT_R32G32B32A32_SFLOAT,false));
+    auto& source=r.images[0]; auto& half=r.images[1]; auto& reference=r.images[2];
+    auto& unpacked=r.images[3]; auto& unpackReference=r.images[4];
+    std::vector<Pixel> values(w*h), actual(w*h), expected(w*h);
+    for(size_t i=0;i<values.size()*4;++i) {
+        const uint32_t bits=uint32_t(i)%65536, exponent=(bits>>10)&31, mantissa=bits&1023;
+        float value=exponent==0 ? std::ldexp(float(mantissa),-24)
+                               : std::ldexp(float(1024+mantissa),int(exponent==31?30:exponent)-25);
+        if(bits&32768)value=-value;
+        if(i>=65536 && exponent>0 && exponent<30) {
+            value += std::ldexp(1.f,int(exponent)-26); // midpoint to the next half
+            if(i/65536%3) value=std::nextafter(value,i/65536%3==1?INFINITY:-INFINITY);
+        }
+        values[i/4][i%4]=value;
+    }
+    ctx.upload(source,values.data(),values.size()*sizeof(Pixel));
+    ctx.transition(half,VK_IMAGE_LAYOUT_GENERAL);
+    auto halfStorage=half;halfStorage.sampler=VK_NULL_HANDLE;
+    r.kernel.create(ctx,(shaders/"runtime_pack_f16.spv").string(),{},8,{&source,&halfStorage});
+    const std::array<uint32_t,2> push{w,h};r.Run(push,w,h);
+    auto blit=[&](auto& from,auto& to) {
+        const auto oldFrom=from.layout,oldTo=to.layout;
+        ctx.transition(from,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        ctx.transition(to,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        ctx.one_shot([&](VkCommandBuffer cmd) {
+            VkImageBlit area{};area.srcSubresource=area.dstSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};
+            area.srcOffsets[1]=area.dstOffsets[1]={int(w),int(h),1};
+            vkCmdBlitImage(cmd,from.handle,from.layout,to.handle,to.layout,1,&area,VK_FILTER_NEAREST);
+        });
+        ctx.transition(from,oldFrom);ctx.transition(to,oldTo);
+    };
+    blit(source,reference);
+    std::vector<uint16_t> packed(w*h*4),ref(w*h*4);
+    ctx.download(half,packed.data(),packed.size()*sizeof(uint16_t));
+    ctx.download(reference,ref.data(),ref.size()*sizeof(uint16_t));
+    Require(packed==ref,"FP16 compute writeback differs from blit");
+    r.kernel.destroy();r.kernel={};ctx.transition(half,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    r.kernel.create(ctx,(shaders/"runtime_unpack_f16.spv").string(),{},8,{&half,&unpacked});
+    r.Run(push,w,h);blit(half,unpackReference);
+    ctx.download(unpacked,actual.data(),actual.size()*sizeof(Pixel));
+    ctx.download(unpackReference,expected.data(),expected.size()*sizeof(Pixel));
+    Require(std::memcmp(actual.data(),expected.data(),actual.size()*sizeof(Pixel))==0,
+            "FP16 compute input differs from blit");
+    std::cout<<"PASS FP16 conversions: blit byte equality, HDR, negatives, alpha, subnormals, ties\n";
+}
+
 int main(int argc, char** argv)
 {
     nrvk::Context ctx;
     try
     {
-        Require(argc == 2, "usage: hdr_shader <shaders/runtime>");
+        std::cout << std::unitbuf;
+        Require(argc == 2 || (argc == 3 && std::string(argv[2]) == "--fp16-only"),
+                "usage: hdr_shader <shaders/runtime> [--fp16-only]");
         ctx.create();
         std::cout << "GPU: " << ctx.gpu_name << '\n';
-        Encode(ctx, argv[1]);
-        Transfer(ctx, argv[1]);
-        Composition(ctx, argv[1]);
+        FloatConversions(ctx, argv[1]);
+        if (argc == 2) {
+            Encode(ctx, argv[1]);
+            Transfer(ctx, argv[1]);
+            Composition(ctx, argv[1]);
+        }
         ctx.destroy();
-        std::cout << "PASS Mochizuki HDR encode/transfer: hue, SDR, alpha, bounds, scaled/unscaled\n";
+        if (argc == 2)
+            std::cout << "PASS Mochizuki HDR encode/transfer: hue, SDR, alpha, bounds, scaled/unscaled\n";
         return 0;
     }
     catch (const std::exception& e)

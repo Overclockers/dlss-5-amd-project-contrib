@@ -13,7 +13,7 @@ PIN = Path(__file__).with_name('mochizuki-owned.txt')
 RUNTIME = (
     'runtime_alpha', 'runtime_encode', 'runtime_transfer', 'runtime_upscale', 'runtime_prep',
     'runtime_depth', 'cascade_lograt', 'cascade_blur', 'cascade_feed', 'runtime_downscale', 'runtime_taps',
-    'runtime_transfer_store', 'runtime_pack_u8',
+    'runtime_transfer_store', 'runtime_pack_u8', 'runtime_pack_f16', 'runtime_unpack_f16',
 )
 MOTION = ('motion_luma', 'motion_estimate')
 

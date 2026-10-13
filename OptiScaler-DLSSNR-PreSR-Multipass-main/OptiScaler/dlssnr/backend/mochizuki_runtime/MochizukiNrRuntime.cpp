@@ -2674,7 +2674,11 @@ struct Session
         const double passes = PassMemoryFactor(key.maxPasses);
         const UINT64 activations = UINT64(double(kModelPixelBytes * model(key.width) * model(key.height)) * passes);
         const UINT64 scaled = key.scale < 1.f ? kScaledFramePixelBytes * key.width * key.height : 0;
-        return kNetworkFixedBytes + activations + scaled +
+        // Conservative upper bound for the optional private FP16 input/output
+        // conversion images. Direct input/store routes may omit one or both.
+        const UINT64 computeConversions = vk.computeQueue && key.scale >= 1.f &&
+            key.format == VK_FORMAT_R16G16B16A16_SFLOAT ? UINT64(key.width) * key.height * 16 + 131072 : 0;
+        return kNetworkFixedBytes + activations + scaled + computeConversions +
                (key.firstPass ? UINT64(key.width) * key.height * 16 + 65536 : 0);
     }
 

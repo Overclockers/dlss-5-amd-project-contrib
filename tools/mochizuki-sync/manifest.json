@@ -294,6 +294,18 @@
         "linux/package/model-tools/inspect_nr.py",
         "linux/package/model-tools/extract_model.sh"
       ]
+    },
+    {
+      "feature": "inline-fp16-conversions",
+      "path": "patches/13-inline-fp16-conversions.patch",
+      "files": [
+        "linux/build/build_network.py",
+        "linux/shaders/passes/runtime_alpha.comp",
+        "windows/build/build_network.py",
+        "windows/shaders/passes/runtime_alpha.comp",
+        "windows/src/core/nr_runtime.cpp",
+        "windows/src/core/nr_runtime.hpp"
+      ]
     }
   ],
   "source_comment_policy": "omit-sample-address-annotations-v1"

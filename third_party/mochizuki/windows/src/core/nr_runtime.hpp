@@ -439,7 +439,8 @@ public:
     const char* compute_refusal(bool motion, VkFormat motion_format, VkImageUsageFlags motion_usage, int passes,
                                 bool mask = false) const;
     // While on, recordings go to a compute-only family: an R8G8B8A8_UNORM
-    // write-back uses the compute pack, and any graphics-only command left
+    // write-back uses the compute pack; equal-extent FP16 input/write-back
+    // use optional compute conversions. Any graphics-only command left
     // throws before it is recorded. Off by default; recording is unchanged.
     void set_compute_recording(bool on);
 
