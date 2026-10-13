@@ -60,6 +60,7 @@ static void ResetSharedNrDefaults(Config* config)
     config->NrInline.reset();
     config->LmxxfInlineSlots.reset();
     config->NrCaptureBackoff.reset();
+    config->NrInlineReuse.reset();
 }
 
 // The "(?)" marker every control carries, matching the rest of the menu.
@@ -710,6 +711,10 @@ void RenderMenu(Config* config, float menuResScale)
                     HelpMarker("How often the inline worker re-checks that the game captured NR inputs."
                                "\nFixed 100 us finds ready inputs sooner at a small CPU/poll cost. Applies to the next frame."
                                "\nINI: NrCaptureBackoff (0 exponential, 1 fixed 100 us).");
+                    bool reuse = config->NrInlineReuse.value_or_default();
+                    if (MenuUi::Checkbox("Reuse inline recordings", &reuse)) config->NrInlineReuse = reuse;
+                    HelpMarker("Default off. Reuses finished per-frame inline objects with identical inputs instead of"
+                               "\ncreating them every frame, so NR can start sooner. Applies to the next frame. INI: NrInlineReuse.");
                 }
                 if (isLmxxf && inlineMode) {
                     int slots = std::clamp(config->LmxxfInlineSlots.value_or_default(), 1, 5) - 1;
@@ -790,6 +795,7 @@ void RenderMenu(Config* config, float menuResScale)
                     resetOption(config->NrInline);
                     resetOption(config->LmxxfInlineSlots);
                     resetOption(config->NrCaptureBackoff);
+                    resetOption(config->NrInlineReuse);
                     SetAllowEnhancedBarriers(config->LmxxfAllowEnhancedBarriers.value_or_default());
                     resetOption(config->LmxxfEarlyExeWrap);
                 }

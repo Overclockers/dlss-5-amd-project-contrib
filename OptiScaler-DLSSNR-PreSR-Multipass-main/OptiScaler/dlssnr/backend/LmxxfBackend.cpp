@@ -525,13 +525,16 @@ ID3D12Resource *LmxxfBackend::FinishRecord(ID3D12GraphicsCommandList *recordCmd,
     if (inlineFrame) {
         try {
             const auto desc = inlineFrame->colour->GetDesc();
-            inlineResources = std::make_shared<InlineRecording::Resources>(device, inlineFrame->colour,
+            const bool reuse = Config::Instance()->NrInlineReuse.value_or_default();
+            if (!reuse) sessionOwner->inlinePool.clear();
+            inlineResources = InlineRecording::AcquireResources(reuse ? &sessionOwner->inlinePool : nullptr, device, inlineFrame->colour,
                 static_cast<ID3D12Resource*>(privateOutput), static_cast<ID3D12Resource*>(firstPass),
                 inlineFrame->width ? inlineFrame->width : UINT(desc.Width), inlineFrame->height ? inlineFrame->height : desc.Height,
                 sessionOwner->inlinePipelines);
             sessionOwner->inlinePipelines = inlineResources->PipelineCache();
             inlineResources->captureBackoff = Config::Instance()->NrCaptureBackoff.value_or_default();
             FrameDiag::Begin(inlineResources->diag, "lmxxf", 0, 0, 0, OPTI_VERSION);
+            inlineResources->diag.inlineReuse = inlineResources->reused;
         } catch (const std::exception& error) {
             logical->Release(); api->table.InvalidateRecording(session, jobHandle); api->table.CollectRecording(session, jobHandle);
             SetStatus((std::string("lmxxf: inline unavailable: ") + error.what()).c_str()); return nullptr;

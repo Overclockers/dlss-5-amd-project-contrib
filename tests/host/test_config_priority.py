@@ -184,6 +184,7 @@ int main() {
                 "LmxxfInlineSlots",  # Host-owned inline admission limit.
                 "NrInline",  # Host-owned submission mode, no upstream environment alias.
                 "NrCaptureBackoff",  # Host-owned inline capture polling policy.
+                "NrInlineReuse",  # Host-owned inline recording reuse.
                 "EarlyExeWrap",
                 "Diagnostic",
                 "NrTimingEnabled",  # Product telemetry, not an upstream kernel option.

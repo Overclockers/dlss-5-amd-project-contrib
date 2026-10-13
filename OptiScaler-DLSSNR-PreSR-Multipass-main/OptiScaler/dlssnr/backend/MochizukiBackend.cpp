@@ -303,12 +303,15 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     std::shared_ptr<InlineRecording::Resources> inlineResources;
     if (inlineMode) {
         try {
-            inlineResources = std::make_shared<InlineRecording::Resources>(p->device.Get(), input.colour,
+            const bool reuse = Config::Instance()->NrInlineReuse.value_or_default();
+            if (!reuse) p->owner->inlinePool.clear();
+            inlineResources = InlineRecording::AcquireResources(reuse ? &p->owner->inlinePool : nullptr, p->device.Get(), input.colour,
                 static_cast<ID3D12Resource*>(job.private_output), static_cast<ID3D12Resource*>(job.first_pass_output),
                 frame.color_width, frame.color_height, p->owner->inlinePipelines);
             p->owner->inlinePipelines = inlineResources->PipelineCache();
             inlineResources->captureBackoff = Config::Instance()->NrCaptureBackoff.value_or_default();
             FrameDiag::Begin(inlineResources->diag, "mochizuki", frameId, frame.color_width, frame.color_height, OPTI_VERSION);
+            inlineResources->diag.inlineReuse = inlineResources->reused;
             const auto id0 = logical->Identity();
             inlineResources->diag.listId = id0.list;
             inlineResources->diag.generation = id0.generation;

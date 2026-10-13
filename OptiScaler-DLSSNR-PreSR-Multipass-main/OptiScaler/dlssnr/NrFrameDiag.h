@@ -81,6 +81,7 @@ struct Counters
     unsigned capturePolls = 0;
     unsigned captureBackoffUsFinal = 0;
     const char* captureBackoffMode = "-"; // exp | fixed100 (inline only)
+    bool inlineReuse = false; // recording came from the NrInlineReuse pool
     unsigned waitEnqueueOrderMs = 0;
     unsigned lockWaitMs = 0;
     unsigned recordCpuUs = 0;
@@ -101,7 +102,7 @@ inline void Emit(const Counters& c) noexcept
             "qpc_enqueue_wait_begin=%lld qpc_enqueue_wait_end=%lld qpc_vk_enqueue=%lld "
             "qpc_side_ready=%lld qpc_game_wait_exit=%lld qpc_output_done=%lld "
             "nr_frame=%llu list=%llu generation=%llu submit_serial=%llu present_serial=%llu swapchain=%p "
-            "capture_polls=%u capture_backoff=%s capture_backoff_us=%u wait_enqueue_order_ms=%u lock_wait_ms=%u "
+            "capture_polls=%u capture_backoff=%s inline_reuse=%u capture_backoff_us=%u wait_enqueue_order_ms=%u lock_wait_ms=%u "
             "record_cpu_us=%u submit_cpu_us=%u active_slots=%u spin=%u history_reset=%u "
             "res=%ux%u aco=%u fg=%d version=%s "
             "cpu_wait_enqueue_ms=%.3f cpu_record_ms=%.3f host_A_capture_to_vk_ms=%.3f host_B_side_ready_ms=%.3f",
@@ -122,7 +123,7 @@ inline void Emit(const Counters& c) noexcept
             static_cast<unsigned long long>(c.submitSerial),
             static_cast<unsigned long long>(c.presentSerial),
             c.swapchain,
-            c.capturePolls, c.captureBackoffMode ? c.captureBackoffMode : "-", c.captureBackoffUsFinal, c.waitEnqueueOrderMs, c.lockWaitMs,
+            c.capturePolls, c.captureBackoffMode ? c.captureBackoffMode : "-", c.inlineReuse ? 1u : 0u, c.captureBackoffUsFinal, c.waitEnqueueOrderMs, c.lockWaitMs,
             c.recordCpuUs, c.submitCpuUs, c.activeSlots, c.spinCount, c.historyReset ? 1u : 0u,
             c.width, c.height, c.aco, c.fg, c.version[0] ? c.version : "?",
             double(c.waitEnqueueOrderMs),

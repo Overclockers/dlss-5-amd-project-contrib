@@ -40,6 +40,7 @@ struct SessionOwner
     std::deque<void*> inlineEnqueueOrder;
     std::condition_variable_any inlineTurnChanged;
     std::shared_ptr<InlineRecording::Pipelines> inlinePipelines;
+    std::vector<std::shared_ptr<InlineRecording::Resources>> inlinePool; // NrInlineReuse only
     uint64_t inlineApplied = 0, inlineTimeouts = 0, inlineAborted = 0, inlineBypassed = 0;
     uint64_t inlineAdmitted = 0, inlineTurnWaits = 0;
     std::atomic<uint64_t> liveRecordings {0};

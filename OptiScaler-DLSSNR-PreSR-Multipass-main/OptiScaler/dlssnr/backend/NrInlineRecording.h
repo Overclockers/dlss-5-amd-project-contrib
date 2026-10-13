@@ -321,6 +321,16 @@ cbuffer Size : register(b0) { uint width; uint height; }
         decisionReadable = true;
     }
     bool Started() const { return started; }
+    // NrInlineReuse: a retired recording may serve a later frame with identical inputs.
+    // BeforeExecute already resets control/capture and continues the side-fence serial.
+    bool SameInputs(ID3D12Device* d, ID3D12Resource* s, ID3D12Resource* n, ID3D12Resource* f, UINT w, UINT h) const {
+        return device.Get() == d && output.original.Get() == s && output.neural.Get() == n &&
+               first.neural.Get() == f && output.width == w && output.height == h;
+    }
+    void PrepareReuse() {
+        captureEvents.clear(); started = false; decisionReadable = false; uncertain = noNetwork = false;
+        diag = {}; captureBackoff = 0; activityToken = 0; reused = true;
+    }
     bool RetirementUncertain() const { return uncertain || sideUncertain; }
     // Set under RecordingMutex from the lease that admitted this recording.
     uint64_t activityToken = 0;
@@ -328,6 +338,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
     FrameDiag::Counters diag;
     // Capture polling policy snapshot for this frame (0 exponential 50..5000 us, 1 fixed 100 us).
     int captureBackoff = 0;
+    bool reused = false; // came from NrInlineReuse pool
     bool Complete() const {
         if (!started) return true;
         if (RetirementUncertain() || !scheduled.load(std::memory_order_acquire) || !finalValue || !gameFence || !gameValue) return false;
@@ -454,4 +465,25 @@ cbuffer Size : register(b0) { uint width; uint height; }
         scheduled.store(true, std::memory_order_release);
     }
 };
+// Caller holds RecordingMutex. Null pool = always create (default). The pool holds one
+// reference; use_count()==1 means the owner, lease and recording have all released it.
+inline std::shared_ptr<Resources> AcquireResources(std::vector<std::shared_ptr<Resources>>* pool, ID3D12Device* device,
+    ID3D12Resource* source, ID3D12Resource* neural, ID3D12Resource* firstPass, UINT width, UINT height,
+    std::shared_ptr<Pipelines> cached)
+{
+    if (pool) {
+        for (auto& r : *pool)
+            if (r.use_count() == 1 && r->Complete() && r->SameInputs(device, source, neural, firstPass, width, height)) {
+                r->PrepareReuse(); return r;
+            }
+    }
+    auto r = std::make_shared<Resources>(device, source, neural, firstPass, width, height, std::move(cached));
+    if (pool) {
+        // Drop retired entries for other inputs (resolution/slot changes) before growing.
+        pool->erase(std::remove_if(pool->begin(), pool->end(), [](const std::shared_ptr<Resources>& e) {
+            return e.use_count() == 1 && e->Complete(); }), pool->end());
+        if (pool->size() < 8) pool->push_back(r);
+    }
+    return r;
+}
 }
