@@ -1,7 +1,7 @@
 # Mochizuki source pin and interface patches
 
 The runtime uses official core/shaders at the full SHA in `manifest.json`, plus
-ten explicit feature patches. There are no whole-file preservation overlays.
+twelve explicit feature patches. There are no whole-file preservation overlays.
 The host loads our `MochizukiNrRuntime.dll`, which wraps that core; this does not
 claim binary compatibility with an official distributed runtime.
 
@@ -30,6 +30,8 @@ Those tests also run in `run.cmd abi`.
 | 08 thirty-layer-mode | Raise one network's pass cap from 16 to 30 and size the timing readback for that | The host slider stays 1..3. 30 is a separate layer mode, default off |
 | 09 decoder-tail-barrier | Preserve the Windows ACO C64-to-fused-C32 dependency | Independent correctness proposal with its original attribution |
 | 10 inline-compute-segments | Optional second-family resource access and a recording callback around network dispatches | Default stays one command buffer; device/queues, submissions, failure policy and D3D12 integration stay in the adapter |
+| 11 inline-compute-writeback | Allow compatible inline frames to keep the entire Vulkan chain on compute | Unsupported conversions keep the segmented path; host queue and failure policy remain in the adapter |
+| 12 weights-only-extraction | Reuse the PE/weight parser with `--extract-weights`; installation skips CUDA scanning and DLL/cubin copies | Analysis defaults and `--extract` remain unchanged; both extraction entry points keep source and model hashes |
 
 The patches replay sequentially against `manifest.json`'s commit. Patches 02-05
 share header/implementation context, so do not assume their patch files apply
@@ -44,7 +46,7 @@ the C64 persistent decoder to fused C32 pair from tile chaining, preserving the
 existing barrier and associated arena lifetime boundary; other chains remain.
 Its attribution and validation are in the backend guide and source record.
 
-This ten-patch series records the product snapshot; it is not the upstream PR
+This twelve-patch series records the product snapshot; it is not the upstream PR
 series. The upstream preparation branch has reverted the ACO, buffer-optimization
 and timing-calculation snapshots and retains only optional interface proposals.
 

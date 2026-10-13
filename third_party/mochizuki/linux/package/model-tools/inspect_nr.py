@@ -201,7 +201,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", type=Path)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--extract", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--extract", action="store_true", help="Extract DLL, weights and cubins for analysis")
+    mode.add_argument("--extract-weights", action="store_true",
+                      help="Extract weights for installation; skip CUDA inventory and DLL/cubin copies")
     args = parser.parse_args()
     data = load_input(args.input)
     pe = PE(data)
@@ -212,7 +215,7 @@ def main():
     resource = matches[0]
     weights = checked(data, resource["file_offset"], resource["size"])
     records = parse_weights(weights)
-    elfs = cuda_elfs(data)
+    elfs = [] if args.extract_weights else cuda_elfs(data)
     blocks = sorted({int(m.group(1)) for r in records
                      if (m := re.match(r"block(\d+)\.", r["name"]))})
     report = dict(schema_version=1, source_name=args.input.name,
@@ -223,10 +226,14 @@ def main():
                   weights=records, cuda_elfs=elfs,
                   caveats=["Packed layer blobs; scalar encoding/layout still unresolved.",
                            "Kernel inventory includes variants, not an execution trace."])
+    if args.extract_weights:
+        report["cuda_inventory_skipped"] = True
+        report["caveats"][-1] = "CUDA inventory skipped for weights-only extraction."
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / "manifest.json").write_text(json.dumps(report, indent=2) + "\n")
     if args.extract:
         (args.output / "nvngx_dlssnr.dll").write_bytes(data)
+    if args.extract or args.extract_weights:
         (args.output / "weights_ht.bin").write_bytes(weights)
         target = args.output / "weights"
         target.mkdir(exist_ok=True)
@@ -236,6 +243,7 @@ def main():
                 raise FormatError("unsafe extraction name")
             (target / (r["name"] + ".bin")).write_bytes(
                 checked(weights, r["payload_offset"], r["payload_size"]))
+    if args.extract:
         target = args.output / "cubins"
         target.mkdir(exist_ok=True)
         for e in elfs:
@@ -243,7 +251,8 @@ def main():
                 checked(data, e["file_offset"], e["size"]))
     print(json.dumps(dict(dll_sha256=report["dll_sha256"], records=len(records),
                           blocks=len(blocks), raw_weight_bytes=report["raw_weight_bytes"],
-                          cuda_modules=len(elfs), kernels=sum(len(e["kernels"]) for e in elfs),
+                          cuda_modules=None if args.extract_weights else len(elfs),
+                          kernels=None if args.extract_weights else sum(len(e["kernels"]) for e in elfs),
                           manifest=str(args.output / "manifest.json")), indent=2))
 
 

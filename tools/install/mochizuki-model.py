@@ -30,7 +30,7 @@ def main():
             return subprocess.run([sys.executable, '-X', 'utf8', str(vendor / script), *map(str, params)],
                                   cwd=vendor, check=True, stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
                                   text=True, encoding='utf-8')
-        result = run('inspect_nr.py', source, '--output', work / 'inventory', '--extract', capture=True)
+        result = run('inspect_nr.py', source, '--output', work / 'inventory', '--extract-weights', capture=True)
         expected = 'e16bcf15e16e13f527491cdf7845b2fe6521a738d8f7c9c721866a8496e1fc8e'
         if json.loads(result.stdout)['dll_sha256'].lower() != expected:
             parser.error('The supported nvngx_dlssnr.dll 310.8.0 is required (SHA256 mismatch)')

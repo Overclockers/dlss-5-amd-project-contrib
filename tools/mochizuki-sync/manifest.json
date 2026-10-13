@@ -286,6 +286,14 @@
         "windows/src/core/nr_runtime.cpp",
         "windows/src/core/nr_runtime.hpp"
       ]
+    },
+    {
+      "feature": "weights-only-extraction",
+      "path": "patches/12-weights-only-extraction.patch",
+      "files": [
+        "linux/package/model-tools/inspect_nr.py",
+        "linux/package/model-tools/extract_model.sh"
+      ]
     }
   ],
   "source_comment_policy": "omit-sample-address-annotations-v1"

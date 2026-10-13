@@ -4,10 +4,10 @@
 - Source snapshot: `a9b13dd4cdb5f4bf43db358492d72e6e5e2acd67` (2026-10-11). Official summary: Windows native D3D10/11/12 with a Vulkan device of NR's own, ACO Mode, AMD 26.9.2 fixes, and the 0.0.4 feature set.
 - Previous pins, kept only as history: Linux-only v0.0.4 tag `9e4574e1812d7d0632d6db02721a20c9617be434`, and the old Windows v0.0.3 baseline `82560c4fbfaac347fc5e22c22025191402ae916b`. Do not mix those trees back in.
 - License: MIT for this core; the original LICENSE is retained. The product adapter under `dlssnr/backend/mochizuki_runtime/` comes from MatheusFerreiraS/neural-amd-opti `283fdb0a1df9e9c4c78de0d2d848e775cf6ae8ae` (GPL-3.0). The combined runtime is distributed under GPL-3.0, with the MIT notice retained.
-- Closure: `windows/src/core`, `windows/shaders`, `windows/build` (recipe, unroll, quad-quant, `arch/rdna4.sh`), `windows/data/aco` records and `shell-aliases.txt`, `linux/shaders`, `linux/build/build_network.py`, `linux/build/arch/rdna4.sh`. `linux/package/model-tools` was already identical and stays.
+- Closure: `windows/src/core`, `windows/shaders`, `windows/build` (recipe, unroll, quad-quant, `arch/rdna4.sh`), `windows/data/aco` records and `shell-aliases.txt`, `linux/shaders`, `linux/build/build_network.py`, `linux/build/arch/rdna4.sh`, and `linux/package/model-tools`. Patch 12 adds weights-only installation extraction; the weight parser, unpackers and model hash lists remain unchanged.
 - Not imported: `windows/src/pe`, official installers, the Vulkan loader, the ReShade add-on, OptiScaler-NR package scripts, DX9/DX10/DX11 hosts, and the INT4 host path.
 
-The source pin and six feature patches are now machine-readable in
+The source pin and twelve feature patches are machine-readable in
 [tools/mochizuki-sync/manifest.json](../../tools/mochizuki-sync/manifest.json).
 [Replay verification](../../tools/mochizuki-sync/README.md) reproduces all 173
 closure files from the pinned Git objects plus these patches, without overwriting

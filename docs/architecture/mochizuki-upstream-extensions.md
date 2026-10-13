@@ -38,7 +38,15 @@ contains no person model, ONNX worker, game hook, menu or INI schema.
 | 30-layer cap | Host layer mode asks one network for 30 sequential passes | Default stays 1. Official core rejected above 16; the timing readback buffer was the same width. Slider stays 1–3 | Local cap for the host mode. Do not treat it as an upstream default |
 | Network recording segments | Host moves inline neural work off the game's busy 3D engine | Null callback preserves the old path; optional second-family sharing, ordered timeline dependencies and same-device buffers are required | Local Windows interface extension; do not send queue creation, D3D12 polling or recovery policy as an upstream core implementation |
 
-The actual residual modifications are the two `build_network.py` scripts,
+Weights-only installation extraction is patch 12: `inspect_nr.py --extract-weights`
+uses the existing PE/resource/weight parser, skips CUDA inventory, and writes only
+the manifest, weight container and layer payloads. Both install entry points use
+it. The analysis default and `--extract` still inventory/export cubins and the DLL.
+Source SHA256, the 599-entry model list/hash checks and packed format stay unchanged.
+This is a small optional tool contribution; no model or NVIDIA binary is vendored.
+
+The actual residual modifications also include the model inspection/extraction
+entry points, the two `build_network.py` scripts,
 `nr_graph.cpp`, `nr_runtime.cpp/.hpp`, `nr_pipeline_binary.hpp`, and the
 `runtime_upscale` / `runtime_transfer` passes on both shader trees. The feature
 series separates those into reviewable patches. `nrvk.hpp` now accepts optional

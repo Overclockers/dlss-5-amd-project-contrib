@@ -19,7 +19,7 @@ trap 'rm -rf -- "$work"' EXIT
 mkdir -p -- "$work/graph"
 cp -- "$here/descriptor.json" "$work/graph/"
 
-if ! python3 "$here/inspect_nr.py" "$src" --output "$work/inventory" --extract > "$work/inspect.json" 2> "$work/inspect.err"; then
+if ! python3 "$here/inspect_nr.py" "$src" --output "$work/inventory" --extract-weights > "$work/inspect.json" 2> "$work/inspect.err"; then
     echo "Cannot read nvngx_dlssnr weights from $src (needs nvngx_dlssnr.dll version 310.8.0, or its zip)." >&2
     exit 1
 fi

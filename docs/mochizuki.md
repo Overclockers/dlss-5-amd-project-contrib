@@ -70,6 +70,26 @@ To extract from a source checkout:
 python -X utf8 tools/install/mochizuki-model.py <user-DLL-or-ZIP> <output>/dlssnr-amd/dlssnr.bin --work work/scratch
 ```
 
+Installation uses `inspect_nr.py --extract-weights`: the existing PE/resource and
+weight parser emits the manifest, weight container and layer payloads, without
+scanning CUDA ELF modules or writing DLL/cubin copies. The vendor shell installer
+uses the same mode. Developer analysis remains available through `inspect_nr.py`
+(inventory) or `--extract` (DLL, weights and cubins). No extraction code loads the DLL.
+The source SHA256, 599-entry model list, per-entry SHA256 verification and packed
+model format are unchanged; the product installer still replaces the destination
+only after verification succeeds. Patch 12 records the vendor extension.
+`tests\mochizuki\run.cmd model` covers mode separation, skipped scanning, DLL/ZIP,
+malformed weights, path safety and failed-source preservation without a GPU.
+
+Validated on 2026-10-13 with the supported 310.8.0 DLL: full analysis extraction,
+weights-only installation from DLL, weights-only installation from ZIP, and the
+existing tested model all produced 147,756,560 identical bytes, SHA256
+`2b41c888cf4155b8958c665ba64018ab0bd25c85fc71a2b6db86d0d04d1f7fbd`.
+All 599 entries passed the existing verifier; changing one extracted tensor was
+rejected before a model was written. The 12-patch/173-file upstream replay passed.
+The shell entry point received LF-normalized syntax validation on Windows; a
+Linux installation was not run.
+
 ## ReShade compatibility
 
 ReShade as `dxgi.dll` with OptiScaler as `winmm.dll` has been validated in
@@ -188,6 +208,8 @@ owned by the INI/menu and does not follow `NR_*` environment variables.
 
 **ACO mode** (`MochizukiAcoMode=true`, default) asks for AMD pipeline binaries.
 The menu checkbox is **ACO fast mode (experimental)**, next to Processing order.
+ACO is a standalone switch: group, page and NR reset buttons preserve both its
+current-session value and any choice saved for the next launch.
 The extension is chosen when the Vulkan device is created. Effective stays off
 until Install publishes the network that will run; a candidate discarded by its
 frame-buffer check leaves the installed network's effective state unchanged.

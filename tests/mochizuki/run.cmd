@@ -8,6 +8,12 @@ if /i "%~1"=="abi" (
   if errorlevel 1 exit /b 1
   python -B tests\mochizuki\test_aco_temporal.py
   if errorlevel 1 exit /b 1
+  python -B tests\mochizuki\test_model_extract.py
+  if errorlevel 1 exit /b 1
+)
+if /i "%~1"=="model" (
+  python -B tests\mochizuki\test_model_extract.py || exit /b 1
+  exit /b 0
 )
 if /i "%~1"=="source-pin" (
   python -B tests\mochizuki\test_source_pin.py || exit /b 1
