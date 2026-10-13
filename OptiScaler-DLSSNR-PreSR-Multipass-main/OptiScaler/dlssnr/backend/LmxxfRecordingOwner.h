@@ -31,8 +31,10 @@ struct SessionOwner
     std::atomic<bool> failed { false };
     NrSessionActivity activity;
     // Reserved at Attach, including recordings whose command list is not submitted yet.
-    // Completion of one recording is reclaim, not permission to record the next.
+    // Default conservatively to one; backends with private recording buffers
+    // select their limit. A reservation survives until both queues complete.
     static constexpr size_t kInlineAhead = 4;
+    size_t inlineLimit = 1;
     std::vector<std::shared_ptr<InlineRecording::Resources>> inlineInFlight;
     std::deque<void*> inlineEnqueueOrder;
     std::condition_variable_any inlineTurnChanged;
@@ -71,7 +73,7 @@ struct SessionOwner
     }
     bool InlineBusy() {
         ReclaimInlineLocked();
-        return inlineInFlight.size() >= kInlineAhead;
+        return inlineInFlight.size() >= inlineLimit;
     }
     void InlineBypassed() {
         ++inlineBypassed;
@@ -80,10 +82,15 @@ struct SessionOwner
         for (const auto& pending : inlineInFlight)
             if (pending && !pending->Started()) ++unstarted;
         LOG_WARN("NR inline bypass: cap {} in_flight {} unstarted {} bypassed {}",
-                 kInlineAhead, inlineInFlight.size(), unstarted, inlineBypassed);
+                 inlineLimit, inlineInFlight.size(), unstarted, inlineBypassed);
     }
-    void AdmitInline(const std::shared_ptr<InlineRecording::Resources>& resources) {
-        if (resources) inlineInFlight.push_back(resources);
+    bool AdmitInline(const std::shared_ptr<InlineRecording::Resources>& resources) {
+        ReclaimInlineLocked();
+        if (!resources) return false;
+        if (std::find(inlineInFlight.begin(), inlineInFlight.end(), resources) != inlineInFlight.end()) return true;
+        if (inlineInFlight.size() >= inlineLimit) return false;
+        inlineInFlight.push_back(resources);
+        return true;
     }
     void ForgetUnstarted(const std::shared_ptr<InlineRecording::Resources>& resources) {
         if (!resources || resources->Started()) return;
@@ -130,7 +137,7 @@ struct SessionOwner
         }
         if (module) FreeLibrary(module);
     }
-    static std::shared_ptr<SessionOwner> Create(const LmxxfNrApi& api, void* context)
+    static std::shared_ptr<SessionOwner> Create(const LmxxfNrApi& api, void* context, size_t inlineLimit = 1)
     {
         std::shared_ptr<SessionOwner> owner;
         try { owner = std::make_shared<SessionOwner>(); }
@@ -138,6 +145,7 @@ struct SessionOwner
         if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
                                reinterpret_cast<LPCWSTR>(api.Destroy), &owner->module)) return {};
         owner->api = api; owner->context = context;
+        owner->inlineLimit = std::clamp(inlineLimit, size_t(1), size_t(5));
         return owner;
     }
 };
@@ -183,8 +191,8 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
             owner->RecordFailure("identity", E_UNEXPECTED, e.queue, "invalidated or mismatched recording");
             return E_UNEXPECTED;
         }
-        // Replay of this same recording while its fences are open. Another frame
-        // in flight is not a reason to drop this submission.
+        // Replay must reserve capacity again after an earlier completion was reclaimed.
+        // Reject before resetting flags or appending queue work.
         if (inlineResources && inlineResources->Started() && !inlineResources->Complete()) return E_PENDING;
         tracing = traceId && traceExecutions < 2;
         if (tracing) ++traceExecutions;
@@ -192,8 +200,11 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
         enqueued = false;
         runtimeRetirementUncertain = false;
         if (inlineResources) {
-            inlineResetSerial = e.serial;
-            try { inlineResources->BeforeExecute(e.queue); }
+            try {
+                if (!owner->AdmitInline(inlineResources)) return E_PENDING;
+                inlineResetSerial = e.serial;
+                inlineResources->BeforeExecute(e.queue);
+            }
             catch (const std::exception& error) {
                 owner->RecordFailure("inline reset", E_FAIL, e.queue, error.what()); owner->failed = true; return E_FAIL;
             }
@@ -240,14 +251,13 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
         std::unique_ptr<Work> work(static_cast<Work*>(context));
         auto lease = work->lease;
         try {
-            const bool captured = lease->inlineResources->WaitCapture();
-            bool ordered = false;
-            unsigned waitedMs = 0;
-            if (captured) {
-                const auto turnStart = GetTickCount64();
-                ordered = lease->WaitInlineTurn();
-                waitedMs = static_cast<unsigned>(GetTickCount64() - turnStart);
-            }
+            // Capture polling submits work to the shared side queue. Only its
+            // current enqueue owner may poll; ahead workers would otherwise
+            // delay the frame that releases their game-queue consumer waits.
+            const auto turnStart = GetTickCount64();
+            const bool ordered = lease->WaitInlineTurn();
+            const auto waitedMs = static_cast<unsigned>(GetTickCount64() - turnStart);
+            const bool captured = ordered && lease->inlineResources->WaitCapture();
             std::lock_guard lock(Submission::RecordingMutex());
             if (captured && ordered) {
                 if (waitedMs >= 2) {
@@ -257,11 +267,11 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
                 }
                 Submission::RecordingExecution side {}; side.queue = lease->inlineResources->SideQueue();
                 lease->Between(side);
-            } else if (!captured) {
-                lease->owner->RecordFailure("inline capture", E_FAIL, nullptr, "input capture was not observed; network was not started");
+            } else if (!ordered) {
+                lease->owner->RecordFailure("inline order", E_FAIL, nullptr, "inline enqueue turn timed out");
                 lease->owner->failed = true;
             } else {
-                lease->owner->RecordFailure("inline order", E_FAIL, nullptr, "inline enqueue turn timed out");
+                lease->owner->RecordFailure("inline capture", E_FAIL, nullptr, "input capture was not observed; network was not started");
                 lease->owner->failed = true;
             }
             lease->inlineResources->NetworkQueued(lease->enqueued);
@@ -481,7 +491,7 @@ inline std::shared_ptr<Lease> Attach(const std::shared_ptr<SessionOwner>& owner,
     try
     {
         owner->ReclaimInlineLocked();
-        if (inlineResources && owner->inlineInFlight.size() >= SessionOwner::kInlineAhead) {
+        if (inlineResources && owner->inlineInFlight.size() >= owner->inlineLimit) {
             owner->api.InvalidateRecording(owner->context, job);
             owner->api.CollectRecording(owner->context, job);
             return {};

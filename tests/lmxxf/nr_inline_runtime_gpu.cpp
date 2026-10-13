@@ -67,7 +67,7 @@ int main(int argc, char** argv) {
         ok(defaults(&controls), "ACO defaults"); controls.aco_mode = 1; ok(set(context, &controls), "ACO request before device");
     }
     ok(api.PrepareSession(context), "PrepareSession");
-    auto owner = Own::SessionOwner::Create(api, context); Require(bool(owner), "module/session owner");
+    auto owner = Own::SessionOwner::Create(api, context, Own::SessionOwner::kInlineAhead); Require(bool(owner), "module/session owner");
     if (!mochi) { LmxxfNrTimings timing {sizeof timing}; ok(api.GetTimings(context, &timing), "enable physical HIP event timing"); }
     const UINT width = large ? 2560 : (mochi ? 256 : 1280), height = large ? 1440 : (mochi ? 256 : 720);
     D3D12_RESOURCE_DESC desc {}; desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -96,7 +96,7 @@ int main(int argc, char** argv) {
         Check(l->Close(), "motion close"); In::Execute(game.Get(), l.Get()); WaitQueue(device.Get(), game.Get());
     }
     auto mzPrepare = reinterpret_cast<PFN_MochizukiNrPrepareFrame>(GetProcAddress(dll, "MochizukiNrPrepareFrame"));
-    auto prepare = [&](ID3D12GraphicsCommandList* list, UINT64 tag = 1, ID3D12Resource* source = nullptr) {
+    auto prepare = [&](ID3D12GraphicsCommandList* list, UINT64 tag = 1, ID3D12Resource* source = nullptr, bool inlineFrame = true) {
         if (!source) source = colour.Get();
         LmxxfNrJob job {}; job.struct_size = sizeof job;
         const auto deadline = GetTickCount64() + 180000;
@@ -120,6 +120,7 @@ int main(int argc, char** argv) {
                 f.color = source; f.color_width = width; f.color_height = height;
                 f.color_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
                 f.flags = LMXXF_NR_FRAME_FLAG_STRENGTH;
+                f.inline_slots = inlineFrame ? static_cast<unsigned>(owner->inlineLimit) : 0;
                 f.transfer_strength = f.color_strength = f.model_scale = f.paper_white = f.pre_exposure = f.exposure_scale = 1;
                 rc = api.PrepareFrame(context, &f, &job);
             }
@@ -141,7 +142,7 @@ int main(int argc, char** argv) {
     Check(device->CreateCommandAllocator(q.Type, IID_PPV_ARGS(&ca)), "consumer allocator");
     Check(device->CreateCommandList(0, q.Type, pa.Get(), nullptr, IID_PPV_ARGS(&producer)), "producer");
     Check(device->CreateCommandList(0, q.Type, ca.Get(), nullptr, IID_PPV_ARGS(&consumer)), "consumer");
-    auto baseline = prepare(producer.Get());
+    auto baseline = prepare(producer.Get(), 1, nullptr, false);
     ok(api.RecordInputs(context, baseline.handle, producer.Get()), "baseline inputs"); Check(producer->Close(), "producer close");
     ok(api.RecordOutputs(context, baseline.handle, consumer.Get()), "baseline outputs"); Check(consumer->Close(), "consumer close");
     ok(api.BeginRecordingExecution(context, baseline.handle, game.Get()), "baseline begin");
@@ -164,7 +165,7 @@ int main(int argc, char** argv) {
     Check(device->CreateQueryHeap(&query, IID_PPV_ARGS(&queries)), "query heap");
     proxy->BeginQuery(queries.Get(), D3D12_QUERY_TYPE_PIPELINE_STATISTICS, 0);
     auto job = prepare(proxy.Get(), 2);
-    auto resources = std::make_shared<In::Resources>(device.Get(), colour.Get(), static_cast<ID3D12Resource*>(job.private_output), nullptr, width, height);
+    auto resources = std::make_shared<In::Resources>(device.Get(), colour.Get(), static_cast<ID3D12Resource*>(job.private_output), nullptr, width, height, std::shared_ptr<In::Pipelines>{});
     owner->inlinePipelines = resources->PipelineCache();
     std::shared_ptr<Own::Lease> lease;
     {
@@ -285,10 +286,11 @@ int main(int argc, char** argv) {
         std::printf("inline temporal history consumed=%u%% PASS\n", info.history_consumed_pct);
     }
     if (ahead && !temporalRequested) {
-        constexpr unsigned kPatterns = 4;
-        Ptr<ID3D12Resource> patterns[kPatterns];
-        uint64_t originalHashByPattern[kPatterns] {};
-        uint64_t neuralHashByPattern[kPatterns] {};
+        const unsigned kPatterns = mochi ? 4 : 5;
+        owner->inlineLimit = kPatterns;
+        Ptr<ID3D12Resource> patterns[5];
+        uint64_t originalHashByPattern[5] {};
+        uint64_t neuralHashByPattern[5] {};
         for (unsigned i = 0; i < kPatterns; ++i) {
             Check(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &desc,
                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, IID_PPV_ARGS(&patterns[i])), "ahead colour");
@@ -365,7 +367,7 @@ int main(int argc, char** argv) {
                 std::shared_ptr<In::Resources> resources;
                 std::shared_ptr<Own::Lease> lease;
             };
-            Frame frames[kPatterns] {};
+            Frame frames[5] {};
             for (unsigned i = 0; i < n; ++i) {
                 Check(device->CreateCommandAllocator(q.Type, IID_PPV_ARGS(&frames[i].alloc)), "ahead allocator");
                 Check(device->CreateCommandList(0, q.Type, frames[i].alloc.Get(), nullptr, IID_PPV_ARGS(&frames[i].raw)), "ahead native");
@@ -457,7 +459,7 @@ int main(int argc, char** argv) {
             }
             std::printf("inline ahead %u timeout=%u PASS\n", n, timeoutMode);
         };
-        burst(2); burst(3); burst(4);
+        burst(2); burst(3); burst(4); if (!mochi) burst(5);
         // Game order: submit frame 0, then record frame 1 while that execution is still open.
         {
             struct Frame {

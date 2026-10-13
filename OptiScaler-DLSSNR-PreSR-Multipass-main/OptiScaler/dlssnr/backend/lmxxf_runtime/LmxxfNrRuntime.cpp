@@ -25,6 +25,7 @@
 #undef HIP_PROBE_RUNTIME_MODULE
 #include "LmxxfRecordingLease.h"
 #include "RecordingGpuTiming.h"
+#include "InlineFrame.h"
 
 #include <atomic>
 #include <cstdio>
@@ -74,7 +75,7 @@ struct CpuTiming
     };
 };
 
-static_assert(sizeof(LmxxfNrFrameInfo) == 160, "package frame layout");
+static_assert(sizeof(LmxxfNrFrameInfo) == 168, "package frame layout");
 
 // Bound each D3D12 queue wait during EnqueueHip recovery to limit stalls.
 // Teardown keeps its 30 s wait; HIP stream synchronization is not bounded here.
@@ -1081,7 +1082,8 @@ struct RecordingJob : Job
     std::shared_ptr<LmxxfRuntime::ExposureRecording> exposure;
     std::vector<std::shared_ptr<LmxxfRuntime::RecordingCompletion>> completions;
     bool valid = true, sealed = false, executing = false, unconfirmed = false, started = false;
-    bool bridgeDeferred = false;
+    bool bridgeDeferred = false, inlineSubmitted = false;
+    std::unique_ptr<LmxxfRuntime::InlineFrame> inlineFrame;
     ID3D12CommandQueue* executionQueue = nullptr;
     ~RecordingJob() { if (executionQueue) executionQueue->Release(); }
 };
@@ -1117,6 +1119,8 @@ struct Session
     Job job {};
     bool recordingLeases = false;
     bool inlineQueue = false;
+    unsigned inlineSlots = 0;
+    std::vector<std::unique_ptr<LmxxfRuntime::InlineFrame>> inlinePool;
     Job* preparing = nullptr;
     std::map<void*, std::unique_ptr<RecordingJob>> recordings;
     std::shared_ptr<RecordingChain> recordingChain;
@@ -1753,6 +1757,10 @@ int32_t PrepareFrame(void *context, const LmxxfNrFrameInfo *info, LmxxfNrJob *jo
         if (info->struct_size != sizeof(LmxxfNrFrameInfo) ||
             job->struct_size != sizeof(LmxxfNrJob))
             return Fail(LMXXF_NR_INVALID_ARGUMENT, "PrepareFrame: struct_size mismatch");
+        if (info->inline_slots > 5 || (info->inline_slots && !session->inlineQueue))
+            return Fail(LMXXF_NR_INVALID_ARGUMENT, "PrepareFrame: inline slots require an inline session and range 1..5");
+        session->inlineSlots = info->inline_slots;
+        while (session->inlinePool.size() > session->inlineSlots) session->inlinePool.pop_back();
         job->handle = nullptr;
         job->private_output = nullptr;
         job->first_pass_output = nullptr;
@@ -2375,6 +2383,38 @@ int32_t PrepareFrame(void *context, const LmxxfNrFrameInfo *info, LmxxfNrJob *jo
             static_cast<Job&>(*lease) = session->job;
             lease->chain = session->recordingChain;
             PrepareHistory(session,info,*lease);
+            auto capturedInfo = *info;
+            if (info->inline_slots) {
+                if (!session->inlinePool.empty()) {
+                    lease->inlineFrame = std::move(session->inlinePool.back()); session->inlinePool.pop_back();
+                } else lease->inlineFrame = std::make_unique<LmxxfRuntime::InlineFrame>();
+                auto& f = *lease->inlineFrame; f.Open(session->device);
+                lease->color = f.CaptureInput(session->device, color, lease->colorState);
+                lease->colorState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+                lease->sourceExposure = f.CaptureInput(session->device, frameExposure, frameExposureState);
+                lease->sourceExposureState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+                if (lease->temporal) {
+                    capturedInfo.motion = f.CaptureInput(session->device, static_cast<ID3D12Resource*>(info->motion),
+                        static_cast<D3D12_RESOURCE_STATES>(info->motion_state));
+                    capturedInfo.depth = f.CaptureInput(session->device, static_cast<ID3D12Resource*>(info->depth),
+                        static_cast<D3D12_RESOURCE_STATES>(info->depth_state));
+                    capturedInfo.motion_state = capturedInfo.depth_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+                }
+                auto* result = session->decode->BufferOutput() ? session->decodeDisplay : session->decode->Output();
+                LmxxfRuntime::InlineFrame::Texture(session->device, result, f.output);
+                if (session->firstPass) LmxxfRuntime::InlineFrame::Texture(session->device, session->firstPass->decode->Output(), f.first);
+                else f.first.Reset();
+            }
+            // Immutable descriptor heaps are pinned below. The next recording may
+            // bind a different capture, or switch back to the game's split input.
+            session->encode->RebindInputAfterCompletion(0, lease->color);
+            session->decode->RebindInputAfterCompletion(2, lease->color);
+            if (session->firstPass) session->firstPass->decode->RebindInputAfterCompletion(2, lease->color);
+            if (lease->temporal && lease->inlineFrame) {
+                lease->historyInfo = capturedInfo;
+                lease->historyBinding = LmxxfNativeTemporal::History::Binding(session->device,
+                    static_cast<ID3D12Resource*>(capturedInfo.motion), static_cast<ID3D12Resource*>(capturedInfo.depth));
+            }
             // Capture dependencies before recording any command, including failure paths.
             session->encode->PinRecording(lease->pins.objects);
             session->rgbInput->PinRecording(lease->pins.objects);
@@ -2400,6 +2440,13 @@ int32_t PrepareFrame(void *context, const LmxxfNrFrameInfo *info, LmxxfNrJob *jo
                                    ? static_cast<void *>(session->decodeDisplay)
                                    : static_cast<void *>(session->decode->Output());
         job->first_pass_output = session->firstPass ? session->firstPass->decode->Output() : nullptr;
+        if (session->recordingLeases) {
+            auto* lease = static_cast<RecordingJob*>(session->preparing);
+            if (lease->inlineFrame) {
+                job->private_output = lease->inlineFrame->output.Get();
+                job->first_pass_output = lease->inlineFrame->first.Get();
+            }
+        }
         if (!keepLastError)
             SetError("");
         return static_cast<int32_t>(LMXXF_NR_OK);
@@ -2424,6 +2471,10 @@ int32_t RecordInputs(void *context, void *job, void *command_list)
         if (session->recordingLeases && (session->preparing != j || static_cast<RecordingJob*>(j)->started))
             return Fail(LMXXF_NR_INVALID_ARGUMENT, "Record: job is not the current recording");
         ListContract(session, list);
+        if (session->recordingLeases) {
+            auto* lease = static_cast<RecordingJob*>(j);
+            if (lease->inlineFrame) { lease->inlineFrame->RecordCapture(list); list = lease->inlineFrame->pre.Get(); }
+        }
         auto* timing = session->recordingLeases ? static_cast<RecordingJob*>(j)->gpuTiming.get() : nullptr;
         if (timing) timing->Begin(list, 0);
 
@@ -2555,6 +2606,22 @@ int32_t EnqueueHip(void *context, void *job, void *command_queue)
                 if (!same || (type != D3D12_COMMAND_LIST_TYPE_COMPUTE && type != D3D12_COMMAND_LIST_TYPE_DIRECT))
                     return Fail(LMXXF_NR_INVALID_ARGUMENT, "EnqueueHip: side queue device/type mismatch");
             }
+            auto* side = static_cast<ID3D12CommandQueue*>(command_queue);
+            if (lease->inlineFrame) {
+                if (side->GetDesc().Type != D3D12_COMMAND_LIST_TYPE_COMPUTE)
+                    return Fail(LMXXF_NR_INVALID_ARGUMENT, "EnqueueHip: isolated inline requires a compute side queue");
+                lease->unconfirmed = lease->chain->unconfirmed = true;
+                for (const auto& c : lease->chain->completions) {
+                    if (c->fence->GetCompletedValue() == UINT64_MAX) throw std::runtime_error("inline prior completion removed");
+                    if (c->queue != side) LmxxfRuntime::InlineFrame::Check(side->Wait(c->fence,c->value));
+                }
+                BeginHistory(session,*lease,side);
+                // BeginHistory has its own certificate; keep this submission uncertain until post is signalled.
+                lease->unconfirmed = lease->chain->unconfirmed = true;
+                if (!j->codec_passthrough && lease->chain->bridge->BeginRecordedExecution(side,lease->temporal))
+                    throw std::runtime_error("inline shared arena execution not retired");
+                ID3D12CommandList* pre[] {lease->inlineFrame->pre.Get()}; side->ExecuteCommandLists(1,pre);
+            }
             if (!j->codec_passthrough)
             {
                 auto* bridge = lease->chain->bridge.get();
@@ -2573,6 +2640,18 @@ int32_t EnqueueHip(void *context, void *job, void *command_queue)
                 }
                 else bridge->EnqueueAfterProducer(static_cast<ID3D12CommandQueue*>(command_queue), j->seed, lease->temporal);
                 lease->historyEnqueued=lease->temporal;
+            }
+            if (lease->inlineFrame) {
+                auto& f = *lease->inlineFrame;
+                ID3D12CommandList* post[] {f.post.Get()}; side->ExecuteCommandLists(1,post);
+                if (!j->codec_passthrough) lease->chain->bridge->EndRecordedExecution(side,true,true);
+                LmxxfRuntime::InlineFrame::Check(side->Signal(f.completion.Get(),++f.value));
+                auto certificate = std::make_shared<LmxxfRuntime::RecordingCompletion>(f.completion.Get(),side,f.value);
+                lease->completions.push_back(certificate); lease->chain->completions.push_back(certificate);
+                if (lease->gpuTiming && session->performance.Enabled())
+                    lease->gpuTiming->Submitted(certificate,true,j->frameId,lease->executionId,session->performance.Epoch());
+                lease->inlineSubmitted = true;
+                lease->unconfirmed = lease->chain->unconfirmed = false;
             }
             SetError("");
             return static_cast<int32_t>(LMXXF_NR_OK);
@@ -2685,6 +2764,8 @@ int32_t RecordOutputs(void *context, void *job, void *command_list)
         if (session->recordingLeases && (session->preparing != j || static_cast<RecordingJob*>(j)->started))
             return Fail(LMXXF_NR_INVALID_ARGUMENT, "Record: job is not the current recording");
         ListContract(session, list);
+        auto* inlineFrame = session->recordingLeases ? static_cast<RecordingJob*>(j)->inlineFrame.get() : nullptr;
+        if (inlineFrame) list = inlineFrame->post.Get();
         auto* timing = session->recordingLeases ? static_cast<RecordingJob*>(j)->gpuTiming.get() : nullptr;
         if (timing) timing->Begin(list, 1);
 
@@ -2764,6 +2845,8 @@ int32_t RecordOutputs(void *context, void *job, void *command_list)
             list->ResourceBarrier(2, barriers);
         }
         if (timing) timing->End(list, 1);
+        if (inlineFrame) inlineFrame->Close(session->decode->BufferOutput() ? session->decodeDisplay : session->decode->Output(),
+            session->firstPass ? session->firstPass->decode->Output() : nullptr);
         j->state = LMXXF_NR_JOB_CONSUMER_COMPLETE;
         if (session->recordingLeases)
         {
@@ -2852,14 +2935,17 @@ int32_t BeginRecordingExecution(void* context, void* job, void* actualQueue)
                                 [](const auto& c) { return c->Complete(); }), certificates.end());
         };
         prune(j->chain->completions); prune(j->completions);
-        for (const auto& c : j->chain->completions)
+        for (const auto& c : j->completions)
+            if (j->inlineFrame && !c->Complete())
+                return Fail(LMXXF_NR_UNAVAILABLE, "BeginRecordingExecution: inline recording still in flight");
+        if (!j->inlineFrame) for (const auto& c : j->chain->completions)
         {
             if (c->fence->GetCompletedValue() == UINT64_MAX)
                 return Fail(LMXXF_NR_UNAVAILABLE, "BeginRecordingExecution: removed/unknown fence");
             if (c->queue != queue && FAILED(queue->Wait(c->fence, c->value)))
                 return Fail(LMXXF_NR_FAILED, "BeginRecordingExecution: previous consumer wait failed");
         }
-        BeginHistory(session,*j,queue);
+        if (!j->inlineFrame) BeginHistory(session,*j,queue);
         if (!j->sealed)
         {
             // A failed Record may have appended private commands to a live game
@@ -2868,10 +2954,11 @@ int32_t BeginRecordingExecution(void* context, void* job, void* actualQueue)
             j->chain->bridge->CancelUnsubmitted();
         }
         else {
-            if (!j->codec_passthrough)
+            if (!j->inlineFrame && !j->codec_passthrough)
                 j->bridgeDeferred = j->chain->bridge->BeginRecordedExecution(queue, j->temporal);
         }
         if (j->gpuTiming) j->gpuTiming->BeforeExecution(session->performance);
+        j->inlineSubmitted = false;
         j->started = true;
         j->executionId = ++session->timingExecution;
         queue->AddRef();
@@ -2916,11 +3003,15 @@ int32_t EndRecordingExecution(void* context, void* job, void* actualQueue,
             if (!same) return Fail(LMXXF_NR_INVALID_ARGUMENT, "EndRecordingExecution: fence device mismatch");
             auto certificate = std::make_shared<LmxxfRuntime::RecordingCompletion>(fence, queue, value);
             j->completions.push_back(certificate);
-            j->chain->completions.push_back(certificate);
-            if (j->gpuTiming && session->performance.Enabled())
+            if (!j->inlineFrame) j->chain->completions.push_back(certificate);
+            if (!j->inlineFrame && j->gpuTiming && session->performance.Enabled())
                 j->gpuTiming->Submitted(certificate, consumer, j->frameId, j->executionId, session->performance.Epoch());
         }
-        if (j->sealed && !j->codec_passthrough) {
+        if (producer && j->inlineFrame && !j->inlineSubmitted) {
+            session->failed = true;
+            return Fail(LMXXF_NR_UNAVAILABLE, "EndRecordingExecution: inline side work lacks completion proof");
+        }
+        if (!j->inlineFrame && j->sealed && !j->codec_passthrough) {
             if (j->bridgeDeferred) j->chain->bridge->AbandonDeferredBegin();
             else j->chain->bridge->EndRecordedExecution(queue, producer, consumer);
             j->bridgeDeferred = false;
@@ -2973,6 +3064,10 @@ int32_t CollectRecording(void* context, void* job)
         if (!removed) {
             session->CollectTiming(j->chain->bridge.get());
             if (j->gpuTiming) j->gpuTiming->Collect(session->performance);
+        }
+        if (!removed && j->sealed && j->inlineFrame && session->inlinePool.size() < session->inlineSlots) {
+            j->inlineFrame->ReleaseSources();
+            session->inlinePool.push_back(std::move(j->inlineFrame));
         }
         session->recordings.erase(job);
         SetError("");

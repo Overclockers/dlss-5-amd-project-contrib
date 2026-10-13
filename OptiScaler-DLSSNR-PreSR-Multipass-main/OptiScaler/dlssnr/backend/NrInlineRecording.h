@@ -224,6 +224,8 @@ public:
         capture = Buffer(D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
         sample = Buffer(D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
         decision = Buffer(D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
+        control->SetName(L"NR inline atomic control"); capture->SetName(L"NR inline atomic capture");
+        sample->SetName(L"NR inline sample"); decision->SetName(L"NR inline decision");
         readback = Buffer(D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST, false);
         decisionReadback = Buffer(D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST, false);
         if (cached && cached->device.Get() == dev && cached->sideQueue) {

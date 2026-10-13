@@ -106,7 +106,7 @@ struct MochizukiBackend::Impl
             Status("mochizuki: host/runtime mismatch; overwrite with the complete current package");
             return false;
         }
-        owner = LmxxfRecording::SessionOwner::Create(api, session);
+        owner = LmxxfRecording::SessionOwner::Create(api, session, LmxxfRecording::SessionOwner::kInlineAhead);
         if (!owner) { api.Destroy(session); Status("mochizuki: session ownership allocation failed"); return false; }
         owner->onFailure = SubmissionFailure;
         // ACO is chosen when the Vulkan device is created. Push the current ini before PrepareSession.

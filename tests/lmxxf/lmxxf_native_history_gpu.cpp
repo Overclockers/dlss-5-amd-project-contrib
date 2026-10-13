@@ -12,7 +12,8 @@ struct Recording {
     ComPtr<ID3D12Fence> fence;UINT64 value=0;
 };
 int main(int argc,char** argv)try {
-    Require(argc==3||(argc==4&&(!std::strcmp(argv[3],"--history-excludes-adaptive")||!std::strcmp(argv[3],"--history-900"))),"runtime DLL, modules directory, optional --history-excludes-adaptive or --history-900");
+    Require(argc==3||(argc==4&&(!std::strcmp(argv[3],"--inline")||!std::strcmp(argv[3],"--history-excludes-adaptive")||!std::strcmp(argv[3],"--history-900"))),"runtime DLL, modules directory, optional --history-excludes-adaptive or --history-900");
+    const bool inlineMode=argc==4&&!std::strcmp(argv[3],"--inline");
     const bool adaptive=argc==4&&!std::strcmp(argv[3],"--history-excludes-adaptive");
     const bool norm900=argc==4&&!std::strcmp(argv[3],"--history-900");
     if(norm900)for(auto kv:{std::pair{"DLSS5_FAST_NUMERIC","1"},{"DLSS5_NETWORK_FREE_RES","1"},{"DLSS5_SKIP_BLOCKS","none"}}){
@@ -37,7 +38,7 @@ int main(int argc,char** argv)try {
     LmxxfNrApi api{};api.struct_size=sizeof(api);Require(get&&get(LMXXF_NR_ABI_VERSION,&api)==0,"current ABI");
     auto ok=[&](int32_t rc,const char* step){if(rc){char error[512]{};api.GetLastError(error,sizeof(error));throw std::runtime_error(std::string(step)+": "+error);}};
     std::string moduleArg=argv[2];std::wstring modules(moduleArg.begin(),moduleArg.end());
-    LmxxfNrCreateInfo ci{};ci.struct_size=sizeof(ci);ci.device=g.device.Get();ci.queue=g.queue.Get();ci.assets_directory=modules.c_str();ci.flags=LMXXF_NR_CREATE_FLAG_RECORDING_LEASES;
+    LmxxfNrCreateInfo ci{};ci.struct_size=sizeof(ci);ci.device=g.device.Get();ci.queue=g.queue.Get();ci.assets_directory=modules.c_str();ci.flags=LMXXF_NR_CREATE_FLAG_RECORDING_LEASES | (inlineMode?LMXXF_NR_CREATE_FLAG_INLINE_QUEUE:0);
     void* session=nullptr;ok(api.Create(&ci,&session),"create");ok(api.PrepareSession(session),"prepare session");
     const UINT w=norm900?1600:1280,h=norm900?900:720;
     auto colour=g.Texture(w,h,DXGI_FORMAT_R32G32B32A32_FLOAT),motion=g.Texture(w,h,DXGI_FORMAT_R32G32_FLOAT),depth=g.Texture(w,h,DXGI_FORMAT_R32_FLOAT);
@@ -45,6 +46,8 @@ int main(int argc,char** argv)try {
     for(UINT i=0;i<w*h;++i){pixels[i*4]=.25f+.15f*float(i%w)/w;pixels[i*4+3]=1;}
     g.Upload(colour.Get(),pixels);g.Upload(motion.Get(),mv);g.Upload(depth.Get(),z);
     ComPtr<ID3D12CommandQueue> other;D3D12_COMMAND_QUEUE_DESC qd{};Check(g.device->CreateCommandQueue(&qd,IID_PPV_ARGS(&other)),"second queue");
+    ComPtr<ID3D12CommandQueue> side;
+    if(inlineMode){qd.Type=D3D12_COMMAND_LIST_TYPE_COMPUTE;Check(g.device->CreateCommandQueue(&qd,IID_PPV_ARGS(&side)),"inline compute queue");}
     std::vector<std::unique_ptr<Recording>> frames;
     auto record=[&](uint64_t sequence,bool history=true,bool guides=true,uint32_t flags=0){
         auto r=std::make_unique<Recording>();
@@ -55,6 +58,7 @@ int main(int argc,char** argv)try {
         Check(g.device->CreateCommandList(0,D3D12_COMMAND_LIST_TYPE_DIRECT,r->ca.Get(),nullptr,IID_PPV_ARGS(&r->c)),"consumer");
         Check(g.device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&r->fence)),"fence");
         LmxxfNrFrameInfo f{};f.struct_size=sizeof(f);f.frame_id=sequence;f.command_list=r->p.Get();f.color=colour.Get();f.color_width=w;f.color_height=h;f.color_state=ReadState;
+        f.inline_slots=inlineMode?5:0;
         f.paper_white=f.model_scale=f.pre_exposure=f.exposure_scale=f.transfer_strength=f.color_strength=1;
         f.temporal_flags=(history?LMXXF_NR_TEMPORAL_MODEL_HISTORY:0)|LMXXF_NR_TEMPORAL_INPUTS_VALID|flags;
         f.motion=guides?motion.Get():nullptr;f.depth=depth.Get();f.motion_state=f.depth_state=ReadState;
@@ -69,7 +73,15 @@ int main(int argc,char** argv)try {
     auto run=[&](Recording* r,ID3D12CommandQueue* q,bool consumer=true){
         const auto before=decisionCount();
         ok(api.BeginRecordingExecution(session,r->token,q),"begin");
-        ID3D12CommandList* p=r->p.Get();q->ExecuteCommandLists(1,&p);ok(api.EnqueueHip(session,r->token,q),"HIP");
+        ID3D12CommandList* p=r->p.Get();q->ExecuteCommandLists(1,&p);
+        if(inlineMode){
+            // Offline fixture's capture proof. Production uses the atomic marker.
+            Check(q->Signal(r->fence.Get(),++r->value),"capture proof");
+            Check(r->fence->SetEventOnCompletion(r->value,g.event),"capture event");
+            Require(WaitForSingleObject(g.event,30000)==WAIT_OBJECT_0,"capture complete");
+            ok(api.EnqueueHip(session,r->token,side.Get()),"HIP side");
+            Check(side->Signal(r->fence.Get(),++r->value),"side tail");Check(q->Wait(r->fence.Get(),r->value),"side consumer dependency");
+        }else ok(api.EnqueueHip(session,r->token,q),"HIP");
         ID3D12CommandList* c=r->c.Get();if(consumer)q->ExecuteCommandLists(1,&c);
         HRESULT signal=q->Signal(r->fence.Get(),++r->value);
         ok(api.EndRecordingExecution(session,r->token,q,consumer?3:1,r->fence.Get(),r->value,signal),"end");

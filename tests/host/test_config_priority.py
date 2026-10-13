@@ -18,6 +18,65 @@ MENU = (ROOT / "OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/dlssnr/DlssNr_
 
 class ConfigPriorityTests(unittest.TestCase):
     @unittest.skipUnless(os.name == "nt" and shutil.which("cl"), "requires MSVC")
+    def test_mochizuki_reset_preserves_standalone_aco(self):
+        product = ROOT / 'OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler'
+        header = (product / 'Config.h').read_text(encoding='utf-8')
+        options = (product / 'dlssnr/backend/MochizukiOptions.inc').read_text(encoding='utf-8')
+        fields = []
+        for kind, name, default in re.findall(r'MZ_([FUB])\((\w+),\s*([^,]+),', options):
+            fields.append(f'CustomOptional<{dict(F="float", U="uint32_t", B="bool")[kind]}> {name}{{{default}}};')
+        source = '''
+#include <optional>
+#include <concepts>
+#include <utility>
+#include <cstdint>
+#include <string_view>
+#include <cassert>
+#include "ConfigKeys.h"
+'''
+        source += header[header.index('enum HasDefaultValue'):header.index('constexpr inline int UnboundKey')]
+        source += '\nstruct Config {\n' + '\n'.join(fields) + '''
+CustomOptional<bool> MochizukiUnlockPasses{false};
+CustomOptional<uint32_t> MochizukiLayerMode{0};
+};
+namespace PipelineUi { enum class Section {Input, Model, Output}; }
+namespace AmdBridge {void InvalidateHistory(){}}
+'''
+        source += MENU[MENU.index('static bool MochizukiOptionOnPage'):MENU.index('static bool MochizukiChoice')]
+        source += '''
+int main() {
+    using Section = PipelineUi::Section;
+    for (bool current : {false, true}) for (bool pending : {false, true})
+    for (bool captured : {false, true}) for (int group = -1; group < 8; ++group)
+    for (int page = -1; page < 3; ++page) {
+        Config config;
+        config.MochizukiAcoMode = current;
+        config.MochizukiAcoMode.set_for_next_launch(pending);
+        AcoMenu() = {captured, current, pending};
+        ResetMochizuki(&config, group, page < 0 ? std::nullopt : std::optional<Section>(Section(page)));
+        assert(config.MochizukiAcoMode.value_or_default() == current);
+        assert(config.MochizukiAcoMode.value_for_config().value_or(true) == pending);
+        assert(AcoMenu().captured == captured && AcoMenu().session == current && AcoMenu().shown == pending);
+    }
+    Config ordinary;
+    ordinary.MochizukiIntensity = 1.7f;
+    ResetMochizuki(&ordinary);
+    assert(ordinary.MochizukiIntensity.value_or_default() == 1.f);
+}
+'''
+        work = ROOT / 'exports/config-aco-reset'
+        work.mkdir(parents=True, exist_ok=True)
+        cpp, exe = work / 'reset.cpp', work / 'reset.exe'
+        cpp.write_text(source, encoding='utf-8')
+        result = subprocess.run(['cl', '/nologo', '/std:c++20', '/EHsc', '/utf-8',
+                                 '/I' + str(product), '/I' + str(product / 'dlssnr'), str(cpp),
+                                 '/Fo' + str(work / 'reset.obj'), '/Fe' + str(exe)],
+                                capture_output=True, text=True, errors='replace', timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        run = subprocess.run([str(exe)], capture_output=True, text=True, errors='replace', timeout=10)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+
+    @unittest.skipUnless(os.name == "nt" and shutil.which("cl"), "requires MSVC")
     def test_unlocked_mochizuki_passes_reload(self):
         # Compile the actual Reload statements with a real SimpleIni reader;
         # an independently expected round-trip catches the old unconditional clamp.
@@ -122,6 +181,7 @@ int main() {
                 "AutoExposureScale",
                 "PaperWhite",
                 "AllowEnhancedBarriers",
+                "LmxxfInlineSlots",  # Host-owned inline admission limit.
                 "NrInline",  # Host-owned submission mode, no upstream environment alias.
                 "EarlyExeWrap",
                 "Diagnostic",

@@ -962,42 +962,19 @@ bool Evaluate(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* params, ID3D1
         effectRecorded = true;
         const bool isLmxxf = g_activeKind.load(std::memory_order_acquire) == static_cast<int>(DlssNr::Backend::Kind::Lmxxf);
         if (person && personPasses == 1) firstPass = replacement;
-        ID3D12Resource* effectMotion = f.motion;
-        ID3D12Resource* effectDepth = f.depth;
-        auto effectMotionState = f.motionState;
-        auto effectDepthState = f.depthState;
-        UINT effectMotionW = f.motionWidth ? f.motionWidth : f.width;
-        UINT effectMotionH = f.motionHeight ? f.motionHeight : f.height;
-        float effectScaleX = f.motionScaleX, effectScaleY = f.motionScaleY;
-        float effectJitterX = f.jitterX, effectJitterY = f.jitterY;
-        bool effectJittered = f.motionJittered;
-        if (mochiNativePost && post && post->storage && post->storage->guides && post->storage->motion &&
-            post->storage->depth)
-        {
-            const UINT srcW = f.motionWidth ? f.motionWidth : renderWidth;
-            const UINT srcH = f.motionHeight ? f.motionHeight : renderHeight;
-            effectMotion = post->storage->motion.Get();
-            effectDepth = post->storage->depth.Get();
-            effectMotionState = effectDepthState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-            effectMotionW = f.width;
-            effectMotionH = f.height;
-            effectScaleX = srcW ? f.motionScaleX * float(f.width) / float(srcW) : f.motionScaleX;
-            effectScaleY = srcH ? f.motionScaleY * float(f.height) / float(srcH) : f.motionScaleY;
-            effectJitterX = effectJitterY = 0;
-            effectJittered = false;
-        }
+        DlssNr::Effects::Guides effectGuides {f.motion, f.depth, f.motionState, f.depthState,
+            f.motionWidth ? f.motionWidth : f.width, f.motionHeight ? f.motionHeight : f.height,
+            f.motionScaleX, f.motionScaleY, f.jitterX, f.jitterY, f.preExposure, f.exposureScale,
+            f.depthInverted, f.motionJittered, f.reset};
+        if (mochiNativePost)
+            effectGuides = DlssNr::PostSr::ResampledEffectGuides(f, post ? post->storage.get() : nullptr,
+                                                               renderWidth, renderHeight);
         if (person) replacement = DlssNr::Person::Record(cmd, f.colour, firstPass, replacement,
             f.colourState, f.width, f.height,
-            {effectMotion, effectDepth, effectMotionState, effectDepthState,
-             effectMotionW, effectMotionH,
-             effectScaleX, effectScaleY, effectJitterX, effectJitterY, f.preExposure, f.exposureScale,
-             f.depthInverted, effectJittered, f.reset}, DlssNr::Person::Worker().Latest(), personSettings);
+            effectGuides, DlssNr::Person::Worker().Latest(), personSettings);
         replacement = DlssNr::Effects::Record(cmd, f.colour, replacement, f.colourState, f.width, f.height,
             cfg.NrOverallIntensity.value_or_default(), isLmxxf && cfg.NrTimingEnabled.value_or_default(),
-            {effectMotion, effectDepth, effectMotionState, effectDepthState,
-             effectMotionW, effectMotionH,
-             effectScaleX, effectScaleY, effectJitterX, effectJitterY, f.preExposure, f.exposureScale,
-             f.depthInverted, effectJittered, f.reset},
+            effectGuides,
             {cfg.NrStabilizerEnabled.value_or_default(), cfg.NrStabilizerAlpha.value_or_default(),
              cfg.NrStabilizerThreshold.value_or_default()},
             {cfg.NrResidualLowGain.value_or_default(), cfg.NrResidualDetailGain.value_or_default(),

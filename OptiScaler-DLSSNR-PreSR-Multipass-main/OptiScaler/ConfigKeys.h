@@ -39,6 +39,7 @@ inline constexpr const char *AutoExposureScale = "LmxxfAutoExposureScale";
 inline constexpr const char *PaperWhite = "LmxxfPaperWhite";
 inline constexpr const char *AllowEnhancedBarriers = "LmxxfAllowEnhancedBarriers";
 inline constexpr const char *NrInline = "NrInline";
+inline constexpr const char *LmxxfInlineSlots = "LmxxfInlineSlots";
 inline constexpr const char *EarlyExeWrap = "LmxxfEarlyExeWrap";
 inline constexpr const char *Diagnostic = "LmxxfDiagnostic";
 inline constexpr const char *NrTimingEnabled = "NrTimingEnabled";
@@ -296,6 +297,7 @@ inline constexpr const char *const kKnown[] = {
     PaperWhite,
     AllowEnhancedBarriers,
     NrInline,
+    LmxxfInlineSlots,
     EarlyExeWrap,
     Diagnostic,
     NetworkHeight,

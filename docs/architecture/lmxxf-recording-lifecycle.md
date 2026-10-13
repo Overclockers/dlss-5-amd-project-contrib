@@ -1,6 +1,6 @@
 # lmxxf recording lifecycle
 
-The product backend negotiates ABI v5 and attaches a recording lease before appending
+The product backend negotiates ABI v6 and attaches a recording lease before appending
 private commands. Each lease owns its immutable bindings and session independently of
 the active backend. NR off or backend shutdown drops the active owner; closed game
 recordings remain executable until successful Reset or final Release invalidates them.

@@ -11,8 +11,8 @@ last completed integration; `sync-state.json` records any pending attempt.
 
 ## Current ownership after PR #12
 
-The product adds three explicit, opt-in interface patches (`first-pass-output.patch`,
-`inline-side-queue.patch`, and `inline-ahead-capture.patch`) on this unchanged upstream base. The side-queue patch lets
+The product adds explicit, opt-in interface patches (`first-pass-output.patch`,
+`inline-side-queue.patch`, `inline-ahead-capture.patch`, and `inline-compute-recording.patch`) on this unchanged upstream base. The side-queue patch lets
 recording leases use a same-device side queue after host capture proof; game and
 side completion remain host-owned. The ahead-capture patch records the next frame
 while one lease is still executing, and only arms that deferred execution when the
@@ -20,6 +20,12 @@ host enqueues it. See [inline recording](../../docs/architecture/nr-inline-recor
 `hip-runtime-loader.patch` adds a product-only HIP loader hook. The wrapper selects
 HIP 7 using the shared controlled search; other upstream consumers retain System32
 loading. The source pin, network options and inference modules are unchanged.
+`inline-compute-recording.patch` also permits DIRECT/COMPUTE recording-list and
+execution-queue type changes only with recording leases and explicit side-queue
+permission. Device identity, active-execution ordering and legacy type checks
+remain enforced. The product supplies private per-recording captures/results and
+serializes all shared codec/history/HIP work on its compute side queue; see
+[lmxxf slots](../../docs/lmxxf-inline-slots.md).
 No inference module/arithmetic change is involved. No file pins are
 restored. The zero-source-patch description below records the PR #12 baseline;
 current ownership and hardware acceptance limits are documented in
@@ -30,7 +36,7 @@ final-pass auxiliary interface. The current integration targets its corrective
 follow-up `48a41fccb89300cd6636b16bc7b86010384c4cc1`.
 [Review, exact-source proof and validation](../../docs/lmxxf-pr12-merged-review.md).
 
-`tools/lmxxf-sync/manifest.json` has no pinned files; it replays the three optional
+`tools/lmxxf-sync/manifest.json` has no pinned files; it replays the optional
 interface patches described above.
 All selected headers (including `hip_d3d12_bridge.h`), top-level HIP sources and
 includes, and top-level HLSL follow the resolved official SHA. Missing required

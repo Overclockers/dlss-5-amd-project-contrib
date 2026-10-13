@@ -16,6 +16,7 @@
 | [architecture/lmxxf-native-history.md](architecture/lmxxf-native-history.md) | 原生 temporal history：执行顺序、资源、ABI 与支持范围 |
 | [architecture/lmxxf-recording-lifecycle.md](architecture/lmxxf-recording-lifecycle.md) | 录制租约、实际提交凭证、重放与异步回收 |
 | [architecture/nr-inline-recording.md](architecture/nr-inline-recording.md) | 实验性内联执行：查询、增强布局、有限等待与双队列回收 |
+| [lmxxf-inline-slots.md](lmxxf-inline-slots.md) | lmxxf inline 1–5 槽、即时切换、离线一致性及相对 split 的同会话性能 |
 | [architecture/nr-output-effects.md](architecture/nr-output-effects.md) | 三后端整体强度、残差分频与肤色/边缘保护、稳定器、历史/资源归属及验证范围 |
 | [architecture/installer.md](architecture/installer.md) | 安装器与卸载器：后端选择、升级流程、ini 与 flags 文件、双架构模块包校验、卸载范围 |
 | [lmxxf-037-consumer-review.md](lmxxf-037-consumer-review.md) | 0.37 消费者重审：实际宏、验证范围、pinned bridge 和暂缓项 |

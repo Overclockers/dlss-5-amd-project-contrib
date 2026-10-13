@@ -1,6 +1,6 @@
 @echo off
 rem lmxxf runtime and submission tests. Every test in tests\lmxxf belongs to exactly one tier below.
-rem Usage: tests\lmxxf\run.cmd abi^|warp^|device^|inline^|inline-discard^|inline-gpu^|split-state^|early-unity^|hip-passthrough^|gpu [out-dir]
+rem Usage: tests\lmxxf\run.cmd abi^|warp^|device^|inline^|inline-discard^|inline-gpu^|slots^|split-state^|early-unity^|hip-passthrough^|gpu [out-dir]
 rem   abi    : lmxxf_nr_abi, lmxxf_zero_fallback_abi.c, test_runtime_validation.py (no GPU)
 rem   warp   : lmxxf_same_frame_boundary, lmxxf_color_probe (D3D12 WARP; no GPU)
 rem   split-state: focused inherited-legacy/enhanced split admission and pixel readback (also in warp).
@@ -8,6 +8,7 @@ rem   device : lmxxf_list_split, lmxxf_list1_wrap, lmxxf_create_execute, lmxxf_e
 rem            plus early Unity caller admission, retained split/Reset (hardware D3D12 adapter)
 rem   early-unity: only the early caller/retained-list regression (also included in device).
 rem   hip-passthrough: focused HIP round-trip/codec comparison (also included in gpu).
+rem   slots  : private inline history/lifetime, split vs 1..5 hashes and timed GPU sweeps.
 rem   gpu    : runtime formats/exposure/output hashes, recording lifecycle and bridge regressions.
 rem            Bridge fixtures use /std:c++17 for upstream header compatibility.
 rem            Needs AMD GPU and LMXXF_ASSETS = native-game-tiled-assets weights folder.
@@ -43,8 +44,9 @@ if /i "%TIER%"=="hip-passthrough" goto hip-passthrough
 if /i "%TIER%"=="inline" goto inline
 if /i "%TIER%"=="inline-discard" goto inline-discard
 if /i "%TIER%"=="inline-gpu" goto inline-gpu
+if /i "%TIER%"=="slots" goto slots
 if /i "%TIER%"=="split-state" goto split-state
-echo usage: tests\lmxxf\run.cmd abi^|warp^|device^|inline^|inline-discard^|inline-gpu^|split-state^|early-unity^|hip-passthrough^|gpu [out-dir]
+echo usage: tests\lmxxf\run.cmd abi^|warp^|device^|inline^|inline-discard^|inline-gpu^|slots^|split-state^|early-unity^|hip-passthrough^|gpu [out-dir]
 exit /b 2
 
 :abi
@@ -112,6 +114,16 @@ goto pass
 %CXX% /I"%INC%" tests\lmxxf\nr_inline_recording.cpp /Fe"%OUT%\nr_split_state.exe" /Fo"%OUT%\nr_split_state.obj" /link %D3D% d3dcompiler.lib || exit /b 1
 "%OUT%\nr_split_state.exe" --split-state
 exit /b %errorlevel%
+
+:slots
+if not defined LMXXF_ASSETS goto fail
+set "LMXXF_WEIGHTS_DIR=%LMXXF_ASSETS%"
+call :Runtime || goto fail
+%CXX% /O2 /I"%INC%" tests\lmxxf\nr_slots_benchmark.cpp /Fe"%OUT%\nr_slots_benchmark.exe" /Fo"%OUT%\nr_slots_benchmark.obj" /link %D3D% d3dcompiler.lib "%DETOURS%" || goto fail
+%CXX% tests\lmxxf\lmxxf_native_history_gpu.cpp /Fe"%OUT%\lmxxf_native_history_gpu.exe" /Fo"%OUT%\lmxxf_native_history_gpu.obj" /link %D3D% d3dcompiler.lib || goto fail
+"%OUT%\lmxxf_native_history_gpu.exe" "%LMXXF_TEST_RUNTIME%" "%MODS%" --inline || goto fail
+%AMD_TEST_PYTHON% -B tests\lmxxf\compare_slots.py "%OUT%\nr_slots_benchmark.exe" "%LMXXF_TEST_RUNTIME%" "%MODS%" "%OUT%" || goto fail
+goto pass
 
 :inline-gpu
 if not defined LMXXF_ASSETS goto fail

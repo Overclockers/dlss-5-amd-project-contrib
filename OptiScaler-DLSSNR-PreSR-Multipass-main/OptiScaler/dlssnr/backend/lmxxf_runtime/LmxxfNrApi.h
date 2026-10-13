@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-#define LMXXF_NR_ABI_VERSION 5u
+#define LMXXF_NR_ABI_VERSION 6u
 
 
 /* Optional recovery when HIP enqueue or the session queue contract fails.
@@ -133,6 +133,7 @@ typedef struct LmxxfNrFrameInfo
     void *motion, *depth;
     uint32_t motion_state, depth_state, motion_width, motion_height;
     float motion_scale_x, motion_scale_y, jitter_x, jitter_y;
+    uint32_t inline_slots; /* 0 = split; 1..5 = private captures/results on a COMPUTE side queue. */
 } LmxxfNrFrameInfo;
 
 typedef struct LmxxfNrJob

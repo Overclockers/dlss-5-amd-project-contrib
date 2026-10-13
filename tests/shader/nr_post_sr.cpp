@@ -405,6 +405,26 @@ int main()
     base.jitterX = .5f;
     base.jitterY = -.5f;
     std::string reason;
+    for (bool jittered : {false, true}) for (bool reset : {false, true})
+    {
+        auto r = NewRecording(d.Get());
+        auto f = base; f.motionJittered = jittered; f.reset = reset;
+        auto l = PostSr::Prepare(r.proxy.Get(), f, 16, 12, reason, PostSr::GuideMode::KeepCallerGuides);
+        Require(bool(l), "Mochizuki post-SR effect guides");
+        auto guides = PostSr::ResampledEffectGuides(f, l->storage.get(), 16, 12);
+        Require(guides.jittered == jittered && guides.reset == (reset || jittered),
+                "post-SR jittered vectors preserve their contract and reject stale effect history");
+        Require(guides.motion == l->storage->motion.Get() && guides.motionWidth == 32 &&
+                guides.motionHeight == 24 && guides.motionScaleX == -32 && guides.motionScaleY == 24 &&
+                guides.jitterX == 0 && guides.jitterY == 0, "effect guide coordinates use the SR grid");
+        Require(f.motion == base.motion && f.motionWidth == 16 && f.jitterX == .5f && f.reset == reset,
+                "effect fallback does not change Mochizuki native guides or reset its network");
+        l->storage->guides = false; // Writeback-only mode has no resampled guides.
+        guides = PostSr::ResampledEffectGuides(f, l->storage.get(), 16, 12);
+        Require(guides.motion == base.motion && guides.jittered == jittered && guides.reset == (reset || jittered),
+                "writeback-only fallback also preserves the jitter contract");
+        l->storage->guides = true;
+    }
     auto record = [&](bool finish = true, bool split = false)
     {
         auto r = NewRecording(d.Get());

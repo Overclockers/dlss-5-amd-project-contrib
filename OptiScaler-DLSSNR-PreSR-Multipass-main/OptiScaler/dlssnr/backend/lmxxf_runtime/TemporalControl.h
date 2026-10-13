@@ -41,14 +41,15 @@ public:
                 std::vector<std::shared_ptr<RecordingCompletion>>& chain) {
         using LmxxfTemporal::Check;
         if(size>256)throw std::runtime_error("temporal control capacity");
+        const auto type=queue->GetDesc().Type;
         Slot* s=nullptr;
-        for(auto& candidate:slots)if(!candidate->completion||candidate->completion->Complete()){
+        for(auto& candidate:slots)if(candidate->list->GetType()==type && (!candidate->completion||candidate->completion->Complete())){
             s=candidate.get();break;
         }
         if(!s){
             auto candidate=std::make_unique<Slot>();candidate->upload=Buffer(device,D3D12_HEAP_TYPE_UPLOAD);
-            Check(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,IID_PPV_ARGS(&candidate->allocator)),"control allocator");
-            Check(device->CreateCommandList(0,D3D12_COMMAND_LIST_TYPE_DIRECT,candidate->allocator.Get(),nullptr,IID_PPV_ARGS(&candidate->list)),"control list");
+            Check(device->CreateCommandAllocator(type,IID_PPV_ARGS(&candidate->allocator)),"control allocator");
+            Check(device->CreateCommandList(0,type,candidate->allocator.Get(),nullptr,IID_PPV_ARGS(&candidate->list)),"control list");
             Check(candidate->list->Close(),"control initial close");
             Check(device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&candidate->fence)),"control fence");
             s=candidate.get();slots.push_back(std::move(candidate));

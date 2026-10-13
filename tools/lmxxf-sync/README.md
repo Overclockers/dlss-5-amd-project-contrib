@@ -3,6 +3,7 @@
 当前还增加显式 `inline-side-queue.patch`，仅在录制租约和产品许可下允许同设备独立队列提交；
 输入捕获、有限等待与双队列完成证明由宿主管理，见 [内联执行](../../docs/architecture/nr-inline-recording.md)。
 `inline-ahead-capture.patch` 允许下一帧在上一笔执行尚未结束时写入独立的捕获相位，并只在该帧有序入队时才武装桥接。
+`inline-compute-recording.patch` 在显式录制租约与 side-queue 许可下允许 DIRECT/COMPUTE 列表及执行队列类型切换；产品层将共享 codec、历史与 HIP 计算串接在 compute 队列，游戏仅捕获私有输入。设备身份和旧调用方的类型限制不变，见 [槽位验证](../../docs/lmxxf-inline-slots.md)。
 原上游 SHA 和内核模块保持不变。人物分区实验的 `first-pass-output.patch` 仅提供可选第一层输出。
 `hip-runtime-loader.patch` 提供产品专用 HIP 7 加载钩子；宿主 wrapper 必须在任何 vendor
 头文件之前定义钩子。搜索、错误码和加载日志由产品共享加载器负责，上游默认 System32 策略保留。

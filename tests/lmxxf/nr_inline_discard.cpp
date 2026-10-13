@@ -157,6 +157,87 @@ int main() try {
     {std::lock_guard lock(Sub::RecordingMutex());owner->PopInlineEnqueue(reinterpret_cast<void*>(199));}
     waiter.join();Require(woke,"pop notifies queued worker");
     {std::lock_guard lock(Sub::RecordingMutex());owner->PopInlineEnqueue(turn->job);}
+    // Cancel a queued turn before its actual threadpool callback starts. There
+    // is deliberately no capture: polling before the turn would spend 10 s on
+    // the GPU and misreport this as a capture failure instead of order failure.
+    Runtime cancelledRuntime;
+    auto cancelledOwner=std::make_shared<Own::SessionOwner>();
+    cancelledOwner->api=owner->api;cancelledOwner->context=&cancelledRuntime;
+    auto cancelledResources=std::make_shared<In::Resources>(device.Get(),original.Get(),candidate.Get(),
+        nullptr,8,8,owner->inlinePipelines);
+    cancelledResources->BeforeExecute(game.Get());
+    auto cancelled=std::make_shared<Own::Lease>(cancelledOwner,reinterpret_cast<void*>(299),Sub::RecordingIdentity{});
+    cancelled->inlineResources=cancelledResources;cancelled->begun=cancelled->ready=true;
+    {
+        std::lock_guard lock(Sub::RecordingMutex());
+        cancelledOwner->NoteInlineEnqueue(cancelled->job);
+        cancelled->ProducerSubmitted({});
+        cancelledOwner->PopInlineEnqueue(cancelled->job);
+    }
+    const auto cancelUntil=GetTickCount64()+3000;
+    for(;;) {
+        bool done=false;
+        {std::lock_guard lock(Sub::RecordingMutex());done=cancelled->inlineEnqueueFinished;}
+        if(done)break;
+        Require(GetTickCount64()<cancelUntil,"cancelled turn skips capture polling");Sleep(1);
+    }
+    Require(cancelledRuntime.enqueueFailures==0 && cancelledOwner->failed &&
+        std::strcmp(cancelledOwner->failure.phase,"inline order")==0,"cancelled turn reports order, not capture");
+    cancelledResources->CertifyWithoutNetwork(nullptr,0,E_FAIL);
+    while(!cancelledResources->Complete()) {
+        Require(GetTickCount64()<cancelUntil,"cancelled callback side tail completes");Sleep(1);
+    }
+    std::puts("INLINE_CANCELLED_TURN_OK no capture polling or network enqueue");
+    // The shared-buffer backend admits one reservation, including before submit.
+    // Private-buffer backends explicitly opt into four. Completed replays must
+    // reacquire a slot before any reset commands or runtime Begin can run.
+    Runtime admissionRuntime;
+    auto admission=std::make_shared<Own::SessionOwner>();
+    admission->api=owner->api;admission->context=&admissionRuntime;
+    auto makeResources=[&] { return std::make_shared<In::Resources>(device.Get(),original.Get(),candidate.Get(),
+        nullptr,8,8,owner->inlinePipelines); };
+    auto first=makeResources(), second=makeResources();
+    Require(admission->inlineLimit==1,"shared-buffer backend defaults to one slot");
+    Require(admission->AdmitInline(first)&&admission->InlineBusy(),"unsubmitted frame reserves shared buffers");
+    Require(!admission->AdmitInline(second),"second capture cannot overwrite reserved shared buffers");
+    admission->ForgetUnstarted(first);
+    Require(admission->AdmitInline(second),"discard releases single-frame capacity");
+    second->BeforeExecute(game.Get());
+    Ptr<ID3D12Fence> heldTail;Check(device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&heldTail)),"admission game tail");
+    second->NetworkQueued(false);second->GameSubmitted(heldTail.Get(),1,S_OK);
+    Require(!admission->AdmitInline(first),"timeout side completion cannot release an unfinished game tail");
+    Check(heldTail->Signal(1),"admission game complete");
+    const auto admissionUntil=GetTickCount64()+5000;
+    while(!second->Complete()){Require(GetTickCount64()<admissionUntil,"admission side complete");Sleep(1);}
+    Require(admission->AdmitInline(first),"both completions release shared buffers");
+    auto replay=std::make_shared<Own::Lease>(admission,reinterpret_cast<void*>(300),Sub::RecordingIdentity{});
+    replay->inlineResources=second;
+    Sub::RecordingExecution replayExecution{};replayExecution.queue=game.Get();replayExecution.serial=1;
+    Require(replay->BeforeExecute(replayExecution)==E_PENDING,"retained replay cannot bypass another reservation");
+    Require(second->Complete()&&!replay->begun&&admission->inlineEnqueueOrder.empty(),"rejected replay did not reset or Begin");
+    admission->ForgetUnstarted(first);
+    replayExecution.serial=2;
+    Check(replay->BeforeExecute(replayExecution),"replay after capacity released");
+    Require(admission->inlineInFlight.size()==1&&admission->InlineBusy(),"replay reserves capacity again");
+    replayExecution.status=E_FAIL;replay->Executed(replayExecution); // No producer: certify the reset only.
+    const auto replayUntil=GetTickCount64()+5000;
+    while(!second->Complete()){Require(GetTickCount64()<replayUntil,"aborted replay reset completes");Sleep(1);}
+    admission->ReclaimInlineLocked();Require(!admission->InlineBusy(),"aborted replay releases capacity");
+    admission->inlineLimit=Own::SessionOwner::kInlineAhead;
+    std::vector<std::shared_ptr<In::Resources>> privateFrames;
+    for(unsigned n=0;n<4;++n) {
+        privateFrames.push_back(makeResources());
+        Require(admission->AdmitInline(privateFrames.back()),"private buffers retain four-frame admission");
+    }
+    Require(!admission->AdmitInline(first),"private buffer fifth reservation rejected");
+    admission->inlineLimit=1;
+    Require(admission->inlineInFlight.size()==4&&!admission->AdmitInline(first),"shrink preserves existing reservations and blocks new work");
+    admission->inlineLimit=5;
+    Require(admission->AdmitInline(first),"grow admits fifth frame immediately");
+    Require(!admission->AdmitInline(second),"five-slot cap");
+    admission->ForgetUnstarted(first);
+    for(auto& frame:privateFrames)admission->ForgetUnstarted(frame);
+    std::puts("INLINE_ADMISSION_OK shared single slot, dual completion, retained replay, private four slots");
     // Truly unknown game submission is retained, but cannot become actionable
     // merely by rearming a collection timer every 100 ms.
     auto unknown=std::make_shared<In::Resources>(device.Get(),original.Get(),candidate.Get(),nullptr,8,8,owner->inlinePipelines);

@@ -506,6 +506,31 @@ inline std::shared_ptr<Lease> Prepare(ID3D12GraphicsCommandList* cmd, AmdPreSr::
         return {};
     }
 }
+// Public effects consume the SR grid while Mochizuki keeps the caller's guides.
+// Resampling removes the spatial sampling jitter, not the jitter delta encoded
+// in motion values. Keep that contract and discard effect history in that case.
+inline Effects::Guides ResampledEffectGuides(const AmdPreSr::Frame& f, const Storage* storage,
+                                             UINT renderWidth, UINT renderHeight)
+{
+    Effects::Guides guides {f.motion, f.depth, f.motionState, f.depthState,
+        f.motionWidth ? f.motionWidth : f.width, f.motionHeight ? f.motionHeight : f.height,
+        f.motionScaleX, f.motionScaleY, f.jitterX, f.jitterY, f.preExposure, f.exposureScale,
+        f.depthInverted, f.motionJittered, f.reset || f.motionJittered};
+    if (storage && storage->guides && storage->motion && storage->depth)
+    {
+        const UINT srcW = f.motionWidth ? f.motionWidth : renderWidth;
+        const UINT srcH = f.motionHeight ? f.motionHeight : renderHeight;
+        guides.motion = storage->motion.Get();
+        guides.depth = storage->depth.Get();
+        guides.motionState = guides.depthState = Read;
+        guides.motionWidth = f.width;
+        guides.motionHeight = f.height;
+        guides.motionScaleX = srcW ? f.motionScaleX * float(f.width) / float(srcW) : f.motionScaleX;
+        guides.motionScaleY = srcH ? f.motionScaleY * float(f.height) / float(srcH) : f.motionScaleY;
+        guides.jitterX = guides.jitterY = 0;
+    }
+    return guides;
+}
 inline bool Finish(ID3D12GraphicsCommandList* cmd, const std::shared_ptr<Lease>& l, ID3D12Resource* result,
                    D3D12_RESOURCE_STATES targetState)
 {

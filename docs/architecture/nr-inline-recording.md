@@ -5,10 +5,17 @@ for lmxxf and Mochizuki. Default is false; ordinary command-list splitting remai
 available. The control appears on the NR input page. Daniel's existing inline mode
 is independent. Neither path artificially ends or restarts the game's queries.
 
+For lmxxf, `LmxxfInlineSlots` selects 1–5 reservations (default 3). The menu only
+shows this control while inline is checked. Changes affect new admission immediately:
+growing admits more jobs; shrinking preserves existing jobs and refuses new ones until
+occupancy falls below the new limit. No restart or model rebuild is needed. Switching
+to split waits for inline reservations to retire. This does not change Daniel's
+`AmdSlots` or Mochizuki's four-recording limit.
+
 ## Recording and execution
 
 The host attaches a recording lease before appending private commands. Inputs are
-recorded normally, followed by a D3D12 capture flag. A Windows threadpool worker
+captured into recording-owned resources, followed by a D3D12 capture flag. A Windows threadpool worker
 samples that flag through an independent D3D12 compute queue (50 microseconds
 exponential backoff to 5 ms, at most 2048 samples and a 10 s deadline); readback is read only
 after that queue's fence completes. Sampling and completion use separate buffers.
@@ -19,11 +26,26 @@ Sampling backoff uses a private high-resolution waitable timer (ordinary timer
 fallback), without changing the global timer period. This avoids 50-us sleeps
 turning into whole Windows timer ticks.
 Enqueue ordering uses a condition variable notified after the preceding runtime End.
+The worker acquires its enqueue turn **before** sampling capture. This applies to
+both lmxxf and Mochizuki: ahead workers must not flood the shared side queue with
+poll/readback work while the current frame is trying to release the game queue.
+Order failure skips capture entirely and reports `inline order`; capture failure
+after admission reports `inline capture`. Failure still publishes a fresh side
+tail, and neither path releases a reservation without the actual game tail.
 
 After observing capture, the worker calls the current recording ABI's Enqueue on
 the same-device side compute queue. Existing HIP/Vulkan external-fence ordering
 remains: side queue input Signal, network wait/run/signal, side queue output Wait.
-A side-queue shader then publishes the D3D12 completion flag. Putting the input
+For lmxxf, the same compute queue first executes the recording's private pre-list
+(exposure, codec, RGB input and temporal warp), then waits for HIP, executes its
+post-list (history update, decode, first-pass decode and private result copy), and
+only then publishes the D3D12 completion flag. Shared model weights and compute
+buffers remain single-instance. Game frame N+1 can capture while N runs; no game
+producer writes the shared HIP input or reads the preceding network output.
+Temporal work is ordered after the preceding side post-list, including when a game
+wait timed out. Each recording owns immutable colour/exposure/motion/depth captures,
+result textures, descriptor bindings and command allocators. This preserves the
+same network/history arithmetic as split. A side-queue shader then publishes the D3D12 completion flag. Putting the input
 Signal behind the entire waiting game list would create a circular dependency;
 the side queue and capture proof are essential.
 
@@ -41,8 +63,7 @@ not the compute/pixel stage of the D3D12 waiting shader.
 The game list contains 64 bounded wait dispatches, each limited to 32768 iterations.
 UAV barriers serialize slices and the final success snapshot. This is a work budget,
 not a portable millisecond timeout. D3D12 does not guarantee concurrent queue progress. Bounded slices prevent an
-unbounded shader loop but cannot establish a frame-time or TDR-safe bound. The frozen snapshot predicates the runtime's
-output work. A host composition shader selects either that output or this frame's
+unbounded shader loop but cannot establish a frame-time or TDR-safe bound. The frozen snapshot predicates game-list output work (lmxxf finishes its private side output independently). A host composition shader selects either that output or this frame's
 original colour into a private texture (FP32 for FP32 sources, otherwise FP16). Optional first-pass output uses the
 same decision. Late completion cannot change a failed frame's frozen selection.
 
@@ -95,17 +116,29 @@ source views pass through. A runtime's own format/geometry restrictions still ap
 
 ## Ownership and package ABI
 
-ABI v5 adds `LMXXF_NR_CREATE_FLAG_INLINE_QUEUE`; it requires recording leases.
+ABI v6 adds `LmxxfNrFrameInfo.inline_slots` (0=split, 1–5=isolated inline) and
+rejects earlier packages. `LMXXF_NR_CREATE_FLAG_INLINE_QUEUE` requires recording leases.
 Both host and runtimes must come from the complete current package. Old ABIs are
 rejected. The lmxxf bridge's side-queue interface is an explicit optional patch
 on the unchanged official pin; it does not change network modules or arithmetic.
 
 The lease retains both side-queue completion and the actual game-list tail fence.
-A separate lmxxf consumer fence certifies game completion. It never signals the
-shared HIP fence: a larger game value must not falsely release a late network wait.
-A game tail alone cannot release a late network. New records on that session wait
-by passing through until both sides complete. A timeout resets history before the
-next accepted frame. Reset/final Release during an asynchronous execution defers
+The bridge's separate consumer fence certifies the queue that actually consumed its
+shared output: the side queue for isolated lmxxf inline, the game queue for split.
+It never advances the HIP fence. The job additionally retains the real game tail;
+a game tail alone cannot release a late network. Only side completion is attached
+to the shared inline chain, so the next side job does not wait on a game list that
+may itself be waiting for NR. A timed-out frame keeps its frozen original selection.
+Mochizuki permits four reservations with its own private frame buffers.
+
+Invalidated recordings enter the lmxxf reuse pool only after both queue proofs.
+Closed, still replayable recordings keep their buffers even after execution;
+replay must reacquire host admission. The pool is bounded by the requested slot
+count and trimmed on subsequent PrepareFrame calls. Retained game command lists
+can therefore keep more physical buffers alive than the active admission limit.
+Lowering the limit cannot free resources still referenced by those lists.
+
+Reset/final Release during an asynchronous execution defers
 runtime invalidation until the worker's End event, then collects only after both
 queues finish. Enqueue failure still poisons the runtime session. The host appends a fresh
 side-queue tail even when no network succeeded, and reclaims its reservation only
@@ -120,7 +153,7 @@ the host recording mutex.
 
 Each session now retains one compute side queue in its pipeline cache. New recordings
 reuse that queue identity while keeping their own flags, allocators, fences and output
-textures. The session's single-pending-execution admission rule still applies. This
+textures. Admission follows the backend's buffer ownership rule above. This
 prevents artificial Mochizuki producer switches, history resets and retained producer
 queues from growing with the number of new recordings. Actual game queue changes and
 history discontinuities retain their safety checks.
@@ -162,7 +195,9 @@ reclaim still owns them. This prevents four discarded command lists from permane
 occupying the admission cap. `tests/lmxxf/run.cmd inline-discard` uses WARP and a mock
 runtime to exercise 12 alternating real proxy Reset/Release operations, verify exact
 job retirement and capacity reuse, and retain a started reservation until its
-certified side-reset completion. No model or hardware GPU run is needed.
+certified side-reset completion. It also checks single-slot rejection before
+submission, dual-completion reuse, replay admission, and the explicit four-slot
+private-buffer policy, live shrinking without dropping reservations, and expansion to five. No model or hardware GPU run is needed.
 
 ## Failure and capacity reports
 
@@ -199,6 +234,6 @@ by deferred invalidation/collection. Commands:
 
 These are mechanism/fixture results, not Crimson Desert compatibility or performance
 certification. Cold-start game testing, other adapters/drivers, full temporal/multi-pass
-acceptance and long hot-switch stress remain outstanding. Multiple simultaneously
-executing inline records on the same session are unsupported and rejected before
-batch submission. Keep the option off by default.
+acceptance and long hot-switch stress remain outstanding. lmxxf now supports 1–5 private inline captures; Mochizuki
+allows four with private buffers. See [lmxxf slots validation](../lmxxf-inline-slots.md) for the newer acceptance and performance scope. Retained recordings must reacquire admission
+before replay resets flags or appends queue work. Keep the option off by default.

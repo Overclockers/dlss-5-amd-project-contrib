@@ -57,6 +57,7 @@ static void ResetSharedNrDefaults(Config* config)
     config->NrTimingEnabled = std::optional<bool>{};
     config->NrTimingLog = std::optional<bool>{};
     config->NrInline.reset();
+    config->LmxxfInlineSlots.reset();
 }
 
 // The "(?)" marker every control carries, matching the rest of the menu.
@@ -188,27 +189,14 @@ static AcoMenuChoice& AcoMenu()
 static void ResetMochizuki(Config* config, int selectedGroup = -1,
     std::optional<PipelineUi::Section> page = std::nullopt)
 {
-    const bool resetAco = (selectedGroup < 0 || selectedGroup == 7) &&
-        (!page || *page == PipelineUi::Section::Model);
-    const bool sessionAco = config->MochizukiAcoMode.value_or_default();
+    // ACO is a standalone startup switch; reset actions preserve both current and saved choices.
 #define MZ_F(name, def, low, high, group, label, target) if ((selectedGroup < 0 || selectedGroup == group) && (!page || MochizukiOptionOnPage(CfgKey::name, *page))) config->name = std::optional<float>{};
 #define MZ_U(name, def, low, high, group, label, target) if ((selectedGroup < 0 || selectedGroup == group) && (!page || MochizukiOptionOnPage(CfgKey::name, *page))) config->name = std::optional<uint32_t>{};
-#define MZ_B(name, def, low, high, group, label, target) if ((selectedGroup < 0 || selectedGroup == group) && (!page || MochizukiOptionOnPage(CfgKey::name, *page))) config->name = std::optional<bool>{};
+#define MZ_B(name, def, low, high, group, label, target) if (std::string_view(CfgKey::name) != CfgKey::MochizukiAcoMode && (selectedGroup < 0 || selectedGroup == group) && (!page || MochizukiOptionOnPage(CfgKey::name, *page))) config->name = std::optional<bool>{};
 #include "backend/MochizukiOptions.inc"
 #undef MZ_F
 #undef MZ_U
 #undef MZ_B
-    if (resetAco)
-    {
-        // Device creation already chose the compiler. Keep this session on it.
-        if (sessionAco)
-            config->MochizukiAcoMode = sessionAco;
-        config->MochizukiAcoMode.set_for_next_launch(true); // the default
-        auto& choice = AcoMenu();
-        choice.captured = true;
-        choice.session = sessionAco;
-        choice.shown = false;
-    }
     if ((selectedGroup < 0 || selectedGroup == 1) &&
         (!page || *page == PipelineUi::Section::Model))
     {
@@ -450,7 +438,7 @@ static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const 
             }
 #define MZ_F(name, def, low, high, group, label, target) if (g == group && MochizukiOptionOnPage(CfgKey::name, page)) { float v = config->name.value_or_default(); if (MochizukiFloatControl(label, CfgKey::name, &v, low, high)) { config->name = v; changed = true; } }
 #define MZ_U(name, def, low, high, group, label, target) if (g == group && MochizukiOptionOnPage(CfgKey::name, page) && std::string_view(CfgKey::name) != CfgKey::MochizukiPasses && std::string_view(CfgKey::name) != CfgKey::MochizukiMaxPasses) { int v = static_cast<int>(config->name.value_or_default()); if (MochizukiIntegerControl(label, CfgKey::name, &v, low, high)) { config->name = static_cast<uint32_t>(v); changed = true; } }
-#define MZ_B(name, def, low, high, group, label, target) if (g == group && MochizukiOptionOnPage(CfgKey::name, page)) { bool v = config->name.value_or_default(); if (MenuUi::Checkbox(label, &v)) { config->name = v; changed = true; } }
+#define MZ_B(name, def, low, high, group, label, target) if (std::string_view(CfgKey::name) != CfgKey::MochizukiAcoMode && g == group && MochizukiOptionOnPage(CfgKey::name, page)) { bool v = config->name.value_or_default(); if (MenuUi::Checkbox(label, &v)) { config->name = v; changed = true; } }
 #include "backend/MochizukiOptions.inc"
 #undef MZ_F
 #undef MZ_U
@@ -708,6 +696,15 @@ void RenderMenu(Config* config, float menuResScale)
                 if (MenuUi::Checkbox("Experimental inline execution", &inlineMode)) config->NrInline = inlineMode;
                 HelpMarker("Keeps the game command list intact. Bounded wait selects the original frame on timeout."
                            "\nShared by lmxxf and Mochizuki. INI: NrInline. Off uses command-list splitting.");
+                if (isLmxxf && inlineMode) {
+                    int slots = std::clamp(config->LmxxfInlineSlots.value_or_default(), 1, 5) - 1;
+                    const char* choices[] = {"1", "2", "3", "4", "5"};
+                    if (MenuUi::Combo("NR slots##lmxxf", &slots, choices, IM_ARRAYSIZE(choices)))
+                        config->LmxxfInlineSlots = slots + 1;
+                    HelpMarker("Maximum frames in flight. Applies without restarting. Busy slots bypass NR."
+                               "\nEach frame keeps private inputs and results; the model is shared."
+                               "\nLowering the limit lets existing work finish before buffers are released.");
+                }
                 bool enhanced = config->LmxxfAllowEnhancedBarriers.value_or_default();
                 if (MenuUi::Checkbox("Allow enhanced barriers", &enhanced)) {
                     config->LmxxfAllowEnhancedBarriers = enhanced; SetAllowEnhancedBarriers(enhanced);
@@ -776,6 +773,7 @@ void RenderMenu(Config* config, float menuResScale)
                     CfgKey::PutEnvAlias(CfgKey::Pdl, config->LmxxfPdl.value_or_default());
                     resetOption(config->LmxxfAllowEnhancedBarriers);
                     resetOption(config->NrInline);
+                    resetOption(config->LmxxfInlineSlots);
                     SetAllowEnhancedBarriers(config->LmxxfAllowEnhancedBarriers.value_or_default());
                     resetOption(config->LmxxfEarlyExeWrap);
                 }
