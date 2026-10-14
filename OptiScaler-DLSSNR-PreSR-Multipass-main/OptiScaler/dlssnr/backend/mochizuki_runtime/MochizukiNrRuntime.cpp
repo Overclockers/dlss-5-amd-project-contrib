@@ -569,6 +569,22 @@ Format MotionFormat(DXGI_FORMAT f)
     }
 }
 
+// Plan A: one network format per session, so a cutscene's transient colour-format flip (FF7 Rebirth flips
+// R11G11B10 <-> RGBA16F at camera cuts) no longer forces a full network rebuild.
+//
+// The canonical format is not a constant: it is the *first* colour format the session sees, i.e. the format the
+// network was already built for before Plan A existed. Until the game hands a *different* format, nothing changes
+// at all -- no canonical image, no conversion pass, the same network key and buffers as before (so a game that
+// always outputs one format, R11G11B10, RGBA16F or anything else, pays nothing). Only when a later frame's
+// format differs is that frame converted into the canonical format by a compute pass (ConvertPass), the network
+// and its history are kept, and the answer is converted back into the game's format for the readback. Frames in
+// the canonical format itself keep taking the original path. vkCmdBlitImage cannot do the conversion: the two
+// formats are in different Vulkan format compatibility classes.
+//
+// Both directions are supported for the R11G11B10 / RGBA16F pair (runtime_planA_convert_* and
+// runtime_planA_unconvert_*, one module per destination format). Any other pair keeps the pre-Plan-A behaviour
+// (a new key, i.e. a rebuild) and is logged once.
+
 // Scene-referred float colour: the network sees it through the runtime's sRGB encode.
 bool IsLinear(VkFormat f)
 {
@@ -1216,7 +1232,9 @@ struct Image
     VkImage image {};
     VkDeviceMemory memory {};
 
-    void Create(Vulkan& vk, VkFormat format, uint32_t w, uint32_t h)
+    // `usage` adds to kImageUsage: Plan A's canonical image is also written by a compute pass, which needs
+    // STORAGE_IMAGE (its blit-free conversion pass, ConvertPass).
+    void Create(Vulkan& vk, VkFormat format, uint32_t w, uint32_t h, VkImageUsageFlags usage = kImageUsage)
     {
         VkImageCreateInfo ci { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
         ci.imageType = VK_IMAGE_TYPE_2D;
@@ -1225,7 +1243,7 @@ struct Image
         ci.mipLevels = ci.arrayLayers = 1;
         ci.samples = VK_SAMPLE_COUNT_1_BIT;
         ci.tiling = VK_IMAGE_TILING_OPTIMAL;
-        ci.usage = kImageUsage;
+        ci.usage = usage;
         // Native pre/post blocks may directly sample/store this adapter image.
         // The phase timeline orders accesses across both queue families.
         const uint32_t queueFamilies[] {vk.family, vk.computeFamily};
@@ -1285,6 +1303,466 @@ void Blit(VkCommandBuffer c, VkImage src, VkImage dst, VkOffset2D s0, VkOffset2D
     b.dstOffsets[1] = { d1.x, d1.y, 1 };
     vkCmdBlitImage(c, src, VK_IMAGE_LAYOUT_GENERAL, dst, VK_IMAGE_LAYOUT_GENERAL, 1, &b, filter);
 }
+
+// Plan A's colour-format conversion, both directions, as compute passes rather than blits:
+//
+//   input  (runtime_planA_convert.comp)    the game's frame      -> the canonical image the network runs on
+//   output (runtime_planA_unconvert.comp)  the network's answer -> the game's image the readback expects
+//
+// A blit cannot do either: vkCmdBlitImage only converts *inside* one Vulkan format compatibility class, keyed by
+// (bits per pixel, component count), and the pair FF7 Rebirth flips between -- R11G11B10_UFLOAT (32 bpp) and
+// R16G16B16A16_SFLOAT (64 bpp) -- is in different classes. Recording such a blit is an invalid command inside the
+// game's own command list: Close() then fails with E_INVALIDARG and the device is removed with
+// DXGI_ERROR_INVALID_CALL, which surfaces later as the DXGI_ERROR_DEVICE_REMOVED crash. A compute pass has no such
+// rule: it reads the source through a sampler (no format qualifier on the binding) and writes the destination
+// through a storage image (format-qualified), and the texel values carry over unchanged. ColourConvertible
+// decides whether this can be built at all; both directions are checked before.
+//
+// The output pass is not optional once the input one is taken. The readback is not format-agnostic: the buffer's
+// row pitch and the D3D12 CopyTextureRegion placed footprint both come from colourFootprint, which is built for
+// the *game's* format. Copying the canonical answer out with that layout reads a 4-byte-per-texel image as if it
+// were 8-byte-per-texel -- half of every row, at twice the stride -- so the colours come out wrong and every row
+// is offset by half its width. Hence the answer is converted back into colourImage (the game's format) first, and
+// everything downstream of the copy is unchanged.
+//
+// A storage image's format qualifier belongs to the module, so the output pass exists once per destination
+// format (see PLAN_A_DST_FORMAT in build_network.py). Only the formats ColourConvertible accepts are built;
+// otherwise a frame could be canonicalised with no way to get the answer back into the game's layout.
+//
+// One pass per frame's buffer set, created with it (the images are the set's) and destroyed with it. The passes
+// are built once per session and shared: only the descriptor sets are per set, since they name the set's images.
+struct ConvertPass
+{
+    // The session-wide half: sampler, pipeline and layouts, none of which depend on the images.
+    struct Pipeline
+    {
+        VkSampler sampler {};
+        VkDescriptorSetLayout setLayout {};
+        VkPipelineLayout layout {};
+
+        // The input pass's module is format-qualified as well (PLAN_A_DST_FORMAT = the canonical format), so
+        // there is one input pipeline per canonical format too. Keyed by the canonical VkFormat.
+        std::vector<std::pair<VkFormat, VkPipeline>> convertPipelines;
+        // The output pass's module is format-qualified (PLAN_A_DST_FORMAT), so there is one pipeline per
+        // destination format the runtime offers a canonical channel for. Keyed by that VkFormat.
+        std::vector<std::pair<VkFormat, VkPipeline>> unconvertPipelines;
+
+        // Reads a SPIR-V module from dlssnr-amd/shaders/runtime/, the same directory the core loads its
+        // runtime passes from.
+        static VkShaderModule LoadModule(Vulkan& vk, const char* name)
+        {
+            const std::string path = RootUtf8(DataDirectory()) + "/dlssnr-amd/shaders/runtime/" + name;
+            std::ifstream file(path, std::ios::binary | std::ios::ate);
+            if (!file)
+                throw std::runtime_error(std::string("plan A's conversion pass is missing (") + path + ")");
+            const std::streamsize bytes = file.tellg();
+            if (bytes <= 0 || (bytes % 4) || bytes > (1 << 20))
+                throw std::runtime_error(std::string("plan A's conversion pass is not a SPIR-V module (") + path + ")");
+            std::vector<uint32_t> code(size_t(bytes) / 4);
+            file.seekg(0);
+            file.read(reinterpret_cast<char*>(code.data()), bytes);
+            if (!file || code[0] != 0x07230203u)
+                throw std::runtime_error(std::string("plan A's conversion pass is not a SPIR-V module (") + path + ")");
+
+            VkShaderModuleCreateInfo si { VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
+            si.codeSize = size_t(bytes);
+            si.pCode = code.data();
+            VkShaderModule made {};
+            VkCheck(vkCreateShaderModule(vk.device, &si, nullptr, &made), "vkCreateShaderModule (plan A convert)");
+            return made;
+        }
+
+        static VkPipeline MakePipeline(Vulkan& vk, VkPipelineLayout layout, VkShaderModule module)
+        {
+            VkComputePipelineCreateInfo ci { VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
+            ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+            ci.stage.module = module;
+            ci.stage.pName = "main";
+            ci.layout = layout;
+            VkPipeline made {};
+            VkCheck(vkCreateComputePipelines(vk.device, VK_NULL_HANDLE, 1, &ci, nullptr, &made),
+                    "vkCreateComputePipelines (plan A convert)");
+            return made;
+        }
+
+        // `formats` are the game's colour formats the output pass is built for; each needs its own module
+        // (the storage image qualifier) and pipeline. One of them failing does not stop the others, nor the
+        // input pass: ColourConvertible only offers the channel for a format that got both.
+        void Create(Vulkan& vk, const std::vector<VkFormat>& formats)
+        {
+            VkSamplerCreateInfo sci { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
+            sci.magFilter = sci.minFilter = VK_FILTER_NEAREST; // texelFetch: exact, no filtering
+            sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+            sci.addressModeU = sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            sci.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+            VkCheck(vkCreateSampler(vk.device, &sci, nullptr, &sampler), "vkCreateSampler (plan A convert)");
+
+            // binding 0: the source, sampled, in whatever format it is in. binding 1: the destination image.
+            VkDescriptorSetLayoutBinding bindings[2] {};
+            bindings[0].binding = 0;
+            bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[0].descriptorCount = 1;
+            bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            bindings[1].binding = 1;
+            bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            bindings[1].descriptorCount = 1;
+            bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            VkDescriptorSetLayoutCreateInfo sli { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+            sli.bindingCount = 2;
+            sli.pBindings = bindings;
+            VkCheck(vkCreateDescriptorSetLayout(vk.device, &sli, nullptr, &setLayout),
+                    "vkCreateDescriptorSetLayout (plan A convert)");
+
+            VkPushConstantRange push {};
+            push.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            push.offset = 0;
+            push.size = sizeof(uint32_t) * 2; // {width, height}: the valid subrect
+            VkPipelineLayoutCreateInfo pli { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+            pli.setLayoutCount = 1;
+            pli.pSetLayouts = &setLayout;
+            pli.pushConstantRangeCount = 1;
+            pli.pPushConstantRanges = &push;
+            VkCheck(vkCreatePipelineLayout(vk.device, &pli, nullptr, &layout),
+                    "vkCreatePipelineLayout (plan A convert)");
+
+            for (const VkFormat format : formats)
+            {
+                VkShaderModule module {};
+                VkPipeline made {};
+                try
+                {
+                    module = LoadModule(vk, ConvertModule(format));
+                    made = MakePipeline(vk, layout, module);
+                }
+                catch (const std::exception& e)
+                {
+                    nr::logf("[mochizuki] plan A: no input conversion pass into VkFormat %d (%s); it cannot be "
+                             "a session's canonical format", int(format), e.what());
+                    if (module) vkDestroyShaderModule(vk.device, module, nullptr);
+                    continue;
+                }
+                vkDestroyShaderModule(vk.device, module, nullptr);
+                convertPipelines.emplace_back(format, made);
+            }
+
+            for (const VkFormat format : formats)
+            {
+                VkShaderModule module {};
+                VkPipeline made {};
+                try
+                {
+                    module = LoadModule(vk, UnconvertModule(format));
+                    made = MakePipeline(vk, layout, module);
+                }
+                catch (const std::exception& e)
+                {
+                    nr::logf("[mochizuki] plan A: no output conversion pass for VkFormat %d (%s); that colour "
+                             "format keeps its own path", int(format), e.what());
+                    if (module) vkDestroyShaderModule(vk.device, module, nullptr);
+                    continue;
+                }
+                vkDestroyShaderModule(vk.device, module, nullptr);
+                unconvertPipelines.emplace_back(format, made);
+            }
+        }
+
+        // The input module for a canonical format (the destination of the input pass).
+        static const char* ConvertModule(VkFormat format)
+        {
+            switch (format)
+            {
+            case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
+                return "runtime_planA_convert_r11g11b10.spv";
+            case VK_FORMAT_R16G16B16A16_SFLOAT:
+                return "runtime_planA_convert_rgba16f.spv";
+            default:
+                throw std::runtime_error("plan A: no input conversion module for this format");
+            }
+        }
+
+        // The input pipeline into canonical `format`, or null when there is none.
+        VkPipeline Convert(VkFormat format) const
+        {
+            for (const auto& [f, p] : convertPipelines)
+                if (f == format)
+                    return p;
+            return nullptr;
+        }
+
+        // The output module for a game's colour format. Only the formats listed here are built, and
+        // Unconvertible keeps them and the module list in step (see ColourConvertible).
+        static const char* UnconvertModule(VkFormat format)
+        {
+            switch (format)
+            {
+            case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
+                return "runtime_planA_unconvert_r11g11b10.spv";
+            case VK_FORMAT_R16G16B16A16_SFLOAT:
+                return "runtime_planA_unconvert_rgba16f.spv";
+            default:
+                throw std::runtime_error("plan A: no output conversion module for this format");
+            }
+        }
+
+        // The output pipeline for `format`, or null when the format has none (then the channel is not offered).
+        VkPipeline Unconvert(VkFormat format) const
+        {
+            for (const auto& [f, p] : unconvertPipelines)
+                if (f == format)
+                    return p;
+            return nullptr;
+        }
+
+        void Release(VkDevice device)
+        {
+            for (const auto& [format, made] : unconvertPipelines)
+                vkDestroyPipeline(device, made, nullptr);
+            unconvertPipelines.clear();
+            for (const auto& [format, made] : convertPipelines)
+                vkDestroyPipeline(device, made, nullptr);
+            convertPipelines.clear();
+            if (layout) vkDestroyPipelineLayout(device, layout, nullptr);
+            if (setLayout) vkDestroyDescriptorSetLayout(device, setLayout, nullptr);
+            if (sampler) vkDestroySampler(device, sampler, nullptr);
+            *this = {};
+        }
+    };
+
+    // The per-set half. The input set names (colourImage -> canonicalColour); the output set names the same two
+    // images the other way round, so one descriptor set could serve both -- but a storage image's format
+    // qualifier is baked into the module, so the output pass is a different pipeline, and it keeps its own set
+    // so a frame that is not canonicalised never binds one it will not run.
+    VkImageView srcView {}, dstView {};
+    VkDescriptorPool pool {};
+    VkDescriptorSet set {};
+
+    // Plan A's output-side set: canonicalColour -> colourImage, so the readback below finds the answer in the
+    // game's own format. Zero when the frame is not canonicalised or the format has no output pass.
+    VkImageView unconvertSrcView {}, unconvertDstView {};
+    VkDescriptorPool unconvertPool {};
+    VkDescriptorSet unconvertSet {};
+    // The game format an output pipeline was built for, or UNDEFINED when there is none. Recorded rather than
+    // looked up so CanUnconvert cannot be fooled by a module name whose pipeline failed to build.
+    VkFormat unconvertFor = VK_FORMAT_UNDEFINED;
+    // The canonical format the input pipeline was built for (the destination of the input pass), or UNDEFINED.
+    VkFormat convertFor = VK_FORMAT_UNDEFINED;
+
+    // `srcImage` in the game's format, `dstImage` in the canonical one. Both GENERAL, as the caller leaves them.
+    void Create(Vulkan& vk, const Pipeline& p, VkImage srcImage, VkFormat srcFormat, VkImage dstImage,
+                VkFormat dstFormat)
+    {
+        if (!p.Convert(dstFormat))
+            throw std::logic_error("plan A: no input conversion pipeline for the canonical colour format");
+        // Made into locals and moved out at the end, so a throw anywhere leaves nothing behind.
+        auto view = [&](VkImage image, VkFormat format)
+        {
+            VkImageViewCreateInfo vi { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+            vi.image = image;
+            vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            vi.format = format;
+            vi.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+            VkImageView made {};
+            VkCheck(vkCreateImageView(vk.device, &vi, nullptr, &made), "vkCreateImageView (plan A convert)");
+            return made;
+        };
+        VkImageView src = view(srcImage, srcFormat);
+        VkImageView dst {};
+        VkDescriptorPool madePool {};
+        VkDescriptorSet madeSet {};
+        struct Guard
+        {
+            VkDevice device;
+            VkImageView src {}, dst {};
+            VkDescriptorPool pool {};
+            VkDescriptorSet set {};
+            ~Guard()
+            {
+                if (set && pool) vkFreeDescriptorSets(device, pool, 1, &set);
+                if (pool) vkDestroyDescriptorPool(device, pool, nullptr);
+                if (src) vkDestroyImageView(device, src, nullptr);
+                if (dst) vkDestroyImageView(device, dst, nullptr);
+            }
+        } guard { vk.device, src, dst };
+        dst = view(dstImage, dstFormat);
+
+        VkDescriptorPoolSize sizes[2] {};
+        sizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        sizes[0].descriptorCount = 1;
+        sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        sizes[1].descriptorCount = 1;
+        VkDescriptorPoolCreateInfo pi { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
+        pi.maxSets = 1;
+        pi.poolSizeCount = 2;
+        pi.pPoolSizes = sizes;
+        VkCheck(vkCreateDescriptorPool(vk.device, &pi, nullptr, &madePool), "vkCreateDescriptorPool (plan A convert)");
+        guard.pool = madePool;
+
+        VkDescriptorSetAllocateInfo ai { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
+        ai.descriptorPool = madePool;
+        ai.descriptorSetCount = 1;
+        ai.pSetLayouts = &p.setLayout;
+        VkCheck(vkAllocateDescriptorSets(vk.device, &ai, &madeSet), "vkAllocateDescriptorSets (plan A convert)");
+        guard.set = madeSet;
+
+        VkDescriptorImageInfo infos[2] {};
+        infos[0].sampler = p.sampler;
+        infos[0].imageView = src;
+        infos[0].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        infos[1].imageView = dst;
+        infos[1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        VkWriteDescriptorSet writes[2] {};
+        for (uint32_t i = 0; i < 2; ++i)
+        {
+            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstSet = madeSet;
+            writes[i].dstBinding = i;
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType = i == 0 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+                                              : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            writes[i].pImageInfo = &infos[i];
+        }
+        vkUpdateDescriptorSets(vk.device, 2, writes, 0, nullptr);
+
+        srcView = src;
+        dstView = dst;
+        pool = madePool;
+        set = madeSet;
+        convertFor = dstFormat;
+        guard.src = guard.dst = nullptr;
+        guard.pool = nullptr;
+        guard.set = nullptr;
+
+        // The output set: the same two images, the other way round, so the network's answer lands back in
+        // the game's format before the readback. Only when an output pipeline exists for that format --
+        // CanonicalFor does not offer the channel otherwise, so this is belt and braces.
+        //
+        // The pipeline is selected by the *source* format, which is the game's: the pass reads the canonical
+        // image and stores into `srcImage`, so the game's format is the destination the module has to name.
+        if (!p.Unconvert(srcFormat))
+            return;
+        VkImageView backSrc = view(dstImage, dstFormat);
+        VkImageView backDst = view(srcImage, srcFormat);
+        VkDescriptorPool backPool {};
+        VkDescriptorSet backSet {};
+        struct BackGuard
+        {
+            VkDevice device;
+            VkImageView src {}, dst {};
+            VkDescriptorPool pool {};
+            VkDescriptorSet set {};
+            ~BackGuard()
+            {
+                if (set && pool) vkFreeDescriptorSets(device, pool, 1, &set);
+                if (pool) vkDestroyDescriptorPool(device, pool, nullptr);
+                if (src) vkDestroyImageView(device, src, nullptr);
+                if (dst) vkDestroyImageView(device, dst, nullptr);
+            }
+        } backGuard { vk.device, backSrc, backDst };
+        try
+        {
+            VkDescriptorPoolCreateInfo bpi { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
+            bpi.maxSets = 1;
+            bpi.poolSizeCount = 2;
+            bpi.pPoolSizes = sizes;
+            VkCheck(vkCreateDescriptorPool(vk.device, &bpi, nullptr, &backPool), "vkCreateDescriptorPool (plan A unconvert)");
+            backGuard.pool = backPool;
+
+            VkDescriptorSetAllocateInfo bai { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
+            bai.descriptorPool = backPool;
+            bai.descriptorSetCount = 1;
+            bai.pSetLayouts = &p.setLayout;
+            VkCheck(vkAllocateDescriptorSets(vk.device, &bai, &backSet), "vkAllocateDescriptorSets (plan A unconvert)");
+            backGuard.set = backSet;
+
+            infos[0].imageView = backSrc;
+            infos[1].imageView = backDst;
+            for (uint32_t i = 0; i < 2; ++i)
+            {
+                writes[i].dstSet = backSet;
+                writes[i].pImageInfo = &infos[i];
+            }
+            vkUpdateDescriptorSets(vk.device, 2, writes, 0, nullptr);
+        }
+        catch (const std::exception&)
+        {
+            // The input set is already owned by `this`, so the frame still converts in; without this one it
+            // would convert in and then read back with the wrong layout, so it must not be left half made.
+            Release(vk.device);
+            throw;
+        }
+
+        unconvertSrcView = backSrc;
+        unconvertDstView = backDst;
+        unconvertPool = backPool;
+        unconvertSet = backSet;
+        unconvertFor = srcFormat;
+        backGuard.src = backGuard.dst = nullptr;
+        backGuard.pool = nullptr;
+        backGuard.set = nullptr;
+    }
+
+    // The valid w x h subrect of `src` into `dst`, both GENERAL. The caller has already made the writes to `src`
+    // visible to a shader read (see the caller's barriers) and left `dst` GENERAL for a shader write.
+    void Dispatch(VkCommandBuffer c, const Pipeline& p, uint32_t w, uint32_t h)
+    {
+        const VkPipeline pipeline = p.Convert(convertFor);
+        if (!set || !pipeline)
+            return;
+        vkCmdBindPipeline(c, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+        vkCmdBindDescriptorSets(c, VK_PIPELINE_BIND_POINT_COMPUTE, p.layout, 0, 1, &set, 0, nullptr);
+        const uint32_t push[2] { w, h };
+        vkCmdPushConstants(c, p.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof push, push);
+        vkCmdDispatch(c, (w + 7) / 8, (h + 7) / 8, 1);
+    }
+
+    // The output direction: the network's answer in the canonical image into `gameFormat`'s image, so the
+    // readback's row pitch and placed footprint (both built for the game's format) describe it correctly.
+    // Same preconditions as Dispatch, with the two images the other way round.
+    //
+    // Refuses rather than returns when there is nothing to run: the caller copies `net->image` out with the
+    // game's row pitch afterwards, and after this point that image is the canonical one, so a skipped
+    // conversion here is the wrong-layout readback itself, not a lost optimisation.
+    void DispatchUnconvert(VkCommandBuffer c, const Pipeline& p, VkFormat gameFormat, uint32_t w, uint32_t h)
+    {
+        const VkPipeline pipeline = p.Unconvert(gameFormat);
+        if (!unconvertSet || !pipeline)
+            throw std::logic_error("plan A: no output conversion pipeline for the game's colour format");
+        vkCmdBindPipeline(c, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+        vkCmdBindDescriptorSets(c, VK_PIPELINE_BIND_POINT_COMPUTE, p.layout, 0, 1, &unconvertSet, 0, nullptr);
+        const uint32_t push[2] { w, h };
+        vkCmdPushConstants(c, p.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof push, push);
+        vkCmdDispatch(c, (w + 7) / 8, (h + 7) / 8, 1);
+    }
+
+    // Whether the answer can be brought back into the game's format. A canonicalised frame without this would
+    // be read back with the wrong layout, so RunNetwork refuses rather than copying a canonical image out
+    // with the game's row pitch -- that is the defect this pass exists to prevent.
+    //
+    // The test is `unconvertFor` -- the format an output pipeline was actually built for, recorded by Create --
+    // and not Pipeline::UnconvertModule, which is only a file name: Pipeline::Create skips a format whose
+    // module or pipeline failed to build, after which the name is still there but nothing can run. Asking the
+    // module would let such a frame through and then read it back exactly as if Plan A were not there.
+    bool CanUnconvert(VkFormat gameFormat) const
+    {
+        return unconvertSet && unconvertFor == gameFormat;
+    }
+
+    void Release(VkDevice device)
+    {
+        if (unconvertSet && unconvertPool)
+            vkFreeDescriptorSets(device, unconvertPool, 1, &unconvertSet);
+        if (unconvertPool) vkDestroyDescriptorPool(device, unconvertPool, nullptr);
+        if (unconvertSrcView) vkDestroyImageView(device, unconvertSrcView, nullptr);
+        if (unconvertDstView) vkDestroyImageView(device, unconvertDstView, nullptr);
+        if (set && pool)
+            vkFreeDescriptorSets(device, pool, 1, &set);
+        if (pool) vkDestroyDescriptorPool(device, pool, nullptr);
+        if (srcView) vkDestroyImageView(device, srcView, nullptr);
+        if (dstView) vkDestroyImageView(device, dstView, nullptr);
+        *this = {};
+    }
+};
 
 // The part of `image` in [0, W) x [0, H) past its valid w x h, filled as the image's own edge is past its border: the
 // right strip repeats column w - 1, then the bottom strip, corner included, repeats row h - 1. Exact texel copies, each
@@ -1383,6 +1861,9 @@ struct Job
     bool firstPass = false;
     bool inlineExecution = false;
     bool enqueued = false; // EnqueueHip ran for it: a second call does nothing
+    // Plan A: this frame's colour is converted (compute pass, not a blit) into the geometry's canonical image
+    // before the network sees it. Only for a frame whose format differs from the session's first-seen one.
+    bool canonicalise = false;
     ID3D12Resource* colour {};
     D3D12_RESOURCE_STATES colourState {};
     ID3D12Resource* motion {};
@@ -1407,18 +1888,57 @@ void* JobHandle(uint64_t gen) { return reinterpret_cast<void*>(uintptr_t((gen <<
 struct Geometry
 {
     UINT width = 0, height = 0;
+    // Plan A: on a converted frame this is the canonical format's DXGI twin (for the key and the logs);
+    // otherwise the game's own, as before. A flip still changes the geometry through gameColourFormat below,
+    // which remakes the frame's buffers (not the network).
     DXGI_FORMAT colourFormat = DXGI_FORMAT_UNKNOWN;
+    // The game's own colour format, always. It IS part of operator==: the colour buffers, the colour image and
+    // the upload's footprint are all built for it, and a buffer-to-image copy cannot convert. When Plan A's
+    // channel is on, a flip therefore retires the geometry -- which remakes the *input side* (the adapter, Plan
+    // A's third step) -- while the network key stays on the canonical format, so the network and its weights are
+    // kept (whether the temporal history survives the adapter remake is to be confirmed in-game). That is exactly the split Plan A asks for; without it the footprint would describe
+    // the old format while the game hands the new one, which is an invalid command in the game's own list.
+    DXGI_FORMAT gameColourFormat = DXGI_FORMAT_UNKNOWN;
     UINT64 colourWidth = 0;
     UINT colourHeight = 0;
     DXGI_FORMAT motionFormat = DXGI_FORMAT_UNKNOWN;
     UINT motionWidth = 0, motionHeight = 0;
     bool firstPass = false;
     bool bucketed = false; // the motion buffer is the allocation's, and a bucket-sized motion image is made too
-    bool operator==(const Geometry&) const = default;
+    // Plan A: this geometry's colour is converted by a compute pass into canonicalVk before the network sees it.
+    // False when the frame is already in the session's canonical (first-seen) format, or the pair cannot be
+    // converted both ways (then the key keeps the game's format, i.e. the pre-Plan-A rebuild). Part of the
+    // geometry so the buffers and the key's format agree.
+    bool canonicalise = false;
+    // Plan A: the canonical format the network runs on when canonicalise is set (UNDEFINED otherwise).
+    VkFormat canonicalVk = VK_FORMAT_UNDEFINED;
+    bool operator==(const Geometry& o) const
+    {
+        return width == o.width && height == o.height && colourFormat == o.colourFormat &&
+               gameColourFormat == o.gameColourFormat && colourWidth == o.colourWidth &&
+               colourHeight == o.colourHeight && motionFormat == o.motionFormat &&
+               motionWidth == o.motionWidth && motionHeight == o.motionHeight && firstPass == o.firstPass &&
+               bucketed == o.bucketed && canonicalise == o.canonicalise && canonicalVk == o.canonicalVk;
+    }
 };
 
-// What a network is built for: the frame extent (the bucket, with dynamic resolution), colour format, model scale
-// (quantised), pass count and colour encoding.
+// Plan A: the DXGI twin of a canonical format, for Geometry::colourFormat (which only decides equality, the key
+// and the logs, never the frame's buffers). UNKNOWN for a format Plan A does not convert.
+inline DXGI_FORMAT CanonicalDxgi(VkFormat f)
+{
+    switch (f)
+    {
+    case VK_FORMAT_B10G11R11_UFLOAT_PACK32: return DXGI_FORMAT_R11G11B10_FLOAT;
+    case VK_FORMAT_R16G16B16A16_SFLOAT: return DXGI_FORMAT_R16G16B16A16_FLOAT;
+    default: return DXGI_FORMAT_UNKNOWN;
+    }
+}
+
+
+// What a network is built for: the frame extent (the bucket, with dynamic resolution), model scale
+// (quantised), pass count and colour encoding. Plan A: once a session has seen a second colour
+// format, `format` stays the session's first-seen (canonical) format and the other format is converted to it on
+// the input side, so a transient colour-format flip no longer changes this key and never rebuilds.
 struct NetworkKey
 {
     UINT width = 0, height = 0;
@@ -1471,6 +1991,11 @@ struct FrameBuffers
     VkFormat colourVk = VK_FORMAT_UNDEFINED, motionVk = VK_FORMAT_UNDEFINED;
     SharedBuffer input, output, motionBuffer, firstOutput;
     Image colourImage, motionImage, firstColour;
+    // Plan A: the frame in the canonical format, when the game's own differs from it. Null when the game
+    // already gives the canonical format (then colourImage is fed to the network as is, no conversion).
+    Image canonicalColour;
+    // Plan A: the compute pass that fills canonicalColour from colourImage (no set when not canonicalised).
+    ConvertPass convert;
     Image motionScaled; // bucketed geometry with motion: the vectors laid over the subrect, at the bucket's extent
     ID3D12Resource* firstResult {};
     ID3D12Resource* result {};
@@ -1500,6 +2025,8 @@ struct FrameBuffers
         firstResult = std::exchange(other.firstResult, nullptr);
         motionBuffer = std::exchange(other.motionBuffer, {});
         colourImage = std::exchange(other.colourImage, {});
+        canonicalColour = std::exchange(other.canonicalColour, {});
+        convert = std::exchange(other.convert, {});
         motionImage = std::exchange(other.motionImage, {});
         motionScaled = std::exchange(other.motionScaled, {});
         result = std::exchange(other.result, nullptr);
@@ -1516,6 +2043,8 @@ struct FrameBuffers
             firstColour.Release(device);
             motionBuffer.Release(device);
             colourImage.Release(device);
+            canonicalColour.Release(device);
+            convert.Release(device);
             motionImage.Release(device);
             motionScaled.Release(device);
         }
@@ -1804,6 +2333,10 @@ struct Session
     uint64_t phaseValue = 0;
     size_t loggedPhaseCount = 0;
     bool loggedFullCompute = false;
+    // Plan A: frames whose answer was converted back into the game's format before the readback. Logged on a
+    // period so the output pass is visible in a session log without a line per frame; before this existed the
+    // only sign of Plan A was the input-side line, which a same-format frame also prints.
+    uint64_t unconvertDispatches = 0, loggedUnconvertAt = 0;
     uint64_t chainPathChanges = 0;
     std::string loggedChainWhy;
     const char* computeChainOff = nullptr; // set once a compute-family recording hit a graphics-only command
@@ -1940,6 +2473,14 @@ struct Session
     VkFormat colourVk = VK_FORMAT_UNDEFINED, motionVk = VK_FORMAT_UNDEFINED;
     SharedBuffer input, output, motionBuffer, firstOutput;
     Image colourImage, motionImage, motionScaled, firstColour;
+    // Plan A: the frame in the canonical format, when geometry.canonicalise is set. Null otherwise.
+    Image canonicalColour;
+    // Plan A: this set's conversion pass descriptor set (the pipeline itself is the session's, below).
+    ConvertPass convert;
+    // Plan A: the conversion pipelines, built once for the session (they name no image); each frame's buffer
+    // set allocates its own descriptor sets from them. Empty until Start made them, and left empty when the
+    // passes are not there, which keeps every frame on its own format (the pre-Plan-A path).
+    ConvertPass::Pipeline convertPipeline;
     ID3D12Resource* firstResult {};
     ID3D12Resource* result {}; // what Super Resolution gets in place of the game's colour
 
@@ -1961,6 +2502,13 @@ struct Session
     // Colour and motion formats the bucket may blit (Blittable), render thread only.
     std::vector<std::pair<VkFormat, VkFormatFeatureFlags>> formatFeatures;
     bool drsRefusedLogged = false;
+    // Plan A, render thread only. firstColourVk: the first colour format the session saw, which is the format
+    // the network was built for and so the session's canonical format. canonicalChannel: latched on the first
+    // frame whose format differs from it and can be converted both ways; until then nothing about Plan A runs.
+    VkFormat firstColourVk = VK_FORMAT_UNDEFINED;
+    bool canonicalChannel = false;
+    // The last game colour format logged as converted / unconvertible, so each is logged once per change.
+    VkFormat loggedGameColourFormat = VK_FORMAT_UNDEFINED;
     // The last frame's valid extent: a change restarts the history. The atomics are GetStatus's copy.
     UINT validWidth = 0, validHeight = 0;
     std::atomic<uint32_t> infoValidWidth { 0 }, infoValidHeight { 0 };
@@ -2715,6 +3263,8 @@ struct Session
         b.firstResult = std::exchange(firstResult, nullptr);
         b.motionBuffer = std::exchange(motionBuffer, {});
         b.colourImage = std::exchange(colourImage, {});
+        b.canonicalColour = std::exchange(canonicalColour, {});
+        b.convert = std::exchange(convert, {});
         b.motionImage = std::exchange(motionImage, {});
         b.motionScaled = std::exchange(motionScaled, {});
         b.result = std::exchange(result, nullptr);
@@ -2759,7 +3309,8 @@ struct Session
         UINT64 first = 0;
         if (g.firstPass)
         {
-            const UINT64 pixelBytes = ColourFormat(g.colourFormat).bytes;
+            // Plan A: the buffers are built for the game's own format, which colourFormat may no longer name.
+            const UINT64 pixelBytes = ColourFormat(g.gameColourFormat ? g.gameColourFormat : g.colourFormat).bytes;
             const UINT64 pitch = (UINT64(g.width) * pixelBytes + 255) & ~UINT64(255);
             // The shared buffer/Vulkan image use the bucket, but the returned
             // D3D texture preserves the game's full colour allocation extent.
@@ -2833,14 +3384,33 @@ struct Session
     // Any thread: the device calls are free-threaded, and nothing the frames use is touched.
     void MakeBuffers(FrameBuffers& b, const Geometry& g, const D3D12_RESOURCE_DESC& desc)
     {
-        const Format cf = ColourFormat(g.colourFormat), mf = MotionFormat(g.motionFormat);
+        // Plan A: the colour buffers and colourImage are built for the *game's* format (gameColourFormat), since
+        // the upload (a buffer-to-image copy) cannot convert; the colourFormat the equality test sees may be the
+        // canonical one. They always agree unless the frame is canonicalised.
+        const DXGI_FORMAT colourDxgi = g.gameColourFormat ? g.gameColourFormat : g.colourFormat;
+        const Format cf = ColourFormat(colourDxgi), mf = MotionFormat(g.motionFormat);
         b.geometry = g;
         b.resultDesc = desc;
-        b.colourFootprint = Footprint(g.colourFormat, cf.bytes, g.width, g.height);
+        b.colourFootprint = Footprint(colourDxgi, cf.bytes, g.width, g.height);
         b.colourVk = cf.vk;
         b.input.Create(device, vk, b.colourFootprint.bytes);
         b.output.Create(device, vk, b.colourFootprint.bytes);
-        b.colourImage.Create(vk, cf.vk, g.width, g.height);
+        // Plan A: when the frame is canonicalised the answer comes back out of the canonical image *into this
+        // one* (the readback's layout is the game's), so it needs to be a storage image as well as a sampled
+        // and transfer one. Otherwise the plain usage, which is all a non-canonicalised frame ever needs.
+        b.colourImage.Create(vk, cf.vk, g.width, g.height,
+                             g.canonicalise ? kImageUsage | VK_IMAGE_USAGE_STORAGE_BIT : kImageUsage);
+        // Plan A: when the geometry says to canonicalise (the frame's format differs from the session's first-seen
+        // one), a canonical image is made here and the frame is converted into it by a compute pass (RunNetwork),
+        // so a colour-format flip costs one dispatch instead of a whole network rebuild. Otherwise colourImage is
+        // fed as is, exactly as before Plan A.
+        if (g.canonicalise)
+        {
+            b.canonicalColour.Create(vk, g.canonicalVk, g.width, g.height,
+                                     kImageUsage | VK_IMAGE_USAGE_STORAGE_BIT);
+            b.convert.Create(vk, convertPipeline, b.colourImage.image, b.colourVk, b.canonicalColour.image,
+                             g.canonicalVk);
+        }
         b.motionVk = mf.vk;
         if (mf.vk)
         {
@@ -2886,6 +3456,8 @@ struct Session
         firstResult = std::exchange(b.firstResult, nullptr);
         motionBuffer = std::exchange(b.motionBuffer, {});
         colourImage = std::exchange(b.colourImage, {});
+        canonicalColour = std::exchange(b.canonicalColour, {});
+        convert = std::exchange(b.convert, {});
         motionImage = std::exchange(b.motionImage, {});
         motionScaled = std::exchange(b.motionScaled, {});
         result = std::exchange(b.result, nullptr);
@@ -3203,6 +3775,20 @@ struct Session
         for (VkFence& f : fallbackDone)
             VkCheck(vkCreateFence(vk.device, &fi, nullptr, &f), "vkCreateFence (passthrough)");
         vram.Open(device->GetAdapterLuid());
+        // Plan A's colour-format conversion passes, both directions, for R11G11B10 and RGBA16F. They are optional:
+        // when one is missing or will not build, a pair that needs it is never converted (CanonicalFor) and the
+        // frame keeps its own format, i.e. the pre-Plan-A behaviour (a format change rebuilds the network).
+        try
+        {
+            convertPipeline.Create(vk, { VK_FORMAT_B10G11R11_UFLOAT_PACK32, VK_FORMAT_R16G16B16A16_SFLOAT });
+            nr::logf("[mochizuki] plan A: conversion passes ready (%zu input, %zu output)",
+                     convertPipeline.convertPipelines.size(), convertPipeline.unconvertPipelines.size());
+        }
+        catch (const std::exception& e)
+        {
+            nr::logf("[mochizuki] plan A conversion unavailable (%s); a colour-format change rebuilds the network "
+                     "as before", e.what());
+        }
         nr::logf("[mochizuki] Vulkan device %s, queue family %u%s", vk.name.c_str(), vk.family,
                  vk.buildQueue != vk.queue ? ", a second queue for the network builds" : "");
         if (DataDirectory() != DllDirectory())
@@ -3925,6 +4511,141 @@ struct Session
         return (known->second & need) == need;
     }
 
+    // Plan A: Vulkan's vkCmdBlitImage only accepts formats in the *same* format compatibility class --
+    // the BLIT_SRC/BLIT_DST feature bits are necessary but not sufficient. The classes are keyed by
+    // (bits per pixel, component count), so B10G11R11_UFLOAT_PACK32 (32 bpp, 4 lanes) and
+    // R16G16B16A16_SFLOAT (64 bpp) are in DIFFERENT classes and a blit between them is an invalid
+    // command. That invalid command is recorded into the game's command list, which poisons it:
+    // Close() then fails with E_INVALIDARG (so it looks like "already closed", and the split path dies)
+    // and the device is removed with DXGI_ERROR_INVALID_CALL -- which surfaces later as the
+    // AllocateTexture / DXGI_ERROR_DEVICE_REMOVED crash (seen on the RGBA16F save-load screen).
+    // Returns 0 for a format we have no class for, so it is never treated as cross-convertible. Kept as the
+    // record of why the conversion is a compute pass and not a blit; the conversion never calls this.
+    [[maybe_unused]] static int BlitClass(VkFormat f)
+    {
+        switch (f)
+        {
+        // 32 bpp, 4 lanes.
+        case VK_FORMAT_R8G8B8A8_UNORM:
+        case VK_FORMAT_R8G8B8A8_SRGB:
+        case VK_FORMAT_R8G8B8A8_SNORM:
+        case VK_FORMAT_R8G8B8A8_UINT:
+        case VK_FORMAT_R8G8B8A8_SINT:
+        case VK_FORMAT_B8G8R8A8_UNORM:
+        case VK_FORMAT_B8G8R8A8_SRGB:
+        case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
+        case VK_FORMAT_A2B10G10R10_UINT_PACK32:
+        case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
+        case VK_FORMAT_E5B9G9R9_UFLOAT_PACK32:
+        case VK_FORMAT_R32_SFLOAT:
+        case VK_FORMAT_R32_UINT:
+        case VK_FORMAT_R32_SINT:
+            return 0x20 | 4; // 32 bpp, 4 lanes
+        // 64 bpp, 4 lanes.
+        case VK_FORMAT_R16G16B16A16_SFLOAT:
+        case VK_FORMAT_R16G16B16A16_UNORM:
+        case VK_FORMAT_R16G16B16A16_SNORM:
+        case VK_FORMAT_R16G16B16A16_UINT:
+        case VK_FORMAT_R16G16B16A16_SINT:
+            return 0x40 | 4;
+        // 128 bpp, 4 lanes.
+        case VK_FORMAT_R32G32B32A32_SFLOAT:
+        case VK_FORMAT_R32G32B32A32_UINT:
+        case VK_FORMAT_R32G32B32A32_SINT:
+            return 0x80 | 4;
+        // 32 bpp, 2 lanes.
+        case VK_FORMAT_R16G16_SFLOAT:
+        case VK_FORMAT_R16G16_UNORM:
+        case VK_FORMAT_R16G16_SNORM:
+        case VK_FORMAT_R16G16_UINT:
+        case VK_FORMAT_R16G16_SINT:
+            return 0x20 | 2;
+        // 64 bpp, 2 lanes.
+        case VK_FORMAT_R32G32_SFLOAT:
+        case VK_FORMAT_R32G32_UINT:
+        case VK_FORMAT_R32G32_SINT:
+            return 0x40 | 2;
+        default:
+            return 0; // unknown: never assume cross-class blit is legal
+        }
+    }
+
+    // Plan A: whether this GPU can convert the game's colour format `from` into canonical format `to` and the
+    // answer back again. The conversion is a compute pass (ConvertPass), not a blit, so the formats need NOT
+    // share a Vulkan format compatibility class (see BlitClass). Both formats must be samplable (each is read by
+    // one of the passes) and usable as a storage image (each is written by the other), and both pipelines must
+    // exist. Without the output direction the frame would be read back with the wrong layout, which is worse
+    // than not converting at all. Render thread, cached like Blittable.
+    //
+    // The bits come from VkFormatFeatureFlags (the `formatFeatures` cache holds that field, as Blittable does);
+    // the sampled/storage-image bits have the same values in VkFormatFeatureFlags2.
+    bool ColourConvertible(VkFormat from, VkFormat to)
+    {
+        if (from == VK_FORMAT_UNDEFINED || to == VK_FORMAT_UNDEFINED || from == to ||
+            !convertPipeline.Convert(to) || !convertPipeline.Unconvert(from))
+            return false;
+        auto flags = [&](VkFormat f)
+        {
+            auto known =
+                std::find_if(formatFeatures.begin(), formatFeatures.end(), [f](const auto& p) { return p.first == f; });
+            if (known == formatFeatures.end())
+            {
+                VkFormatProperties p {};
+                vkGetPhysicalDeviceFormatProperties(vk.physical, f, &p);
+                formatFeatures.emplace_back(f, p.optimalTilingFeatures);
+                known = formatFeatures.end() - 1;
+            }
+            return known->second;
+        };
+        constexpr VkFormatFeatureFlags need = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT;
+        return (flags(from) & need) == need && (flags(to) & need) == need;
+    }
+
+    // Plan A: the canonical format this frame is converted into, or UNDEFINED for the original path.
+    // Render thread only.
+    //  * The first frame records its format as the session's canonical one (the network is built for it) and
+    //    takes the original path. So does every later frame in that same format: a game that never switches
+    //    formats runs exactly as before Plan A, with no canonical image and no dispatch.
+    //  * A frame in another format is converted into the canonical one when the pair can go both ways
+    //    (ColourConvertible); the network key stays on the canonical format, so the network and its history are
+    //    kept. This works in either direction (first R11G11B10 then RGBA16F, or the reverse).
+    //  * A pair that cannot be converted keeps the frame's own format: the key changes and the network is rebuilt,
+    //    which is the pre-Plan-A behaviour. Logged once per format.
+    // MZ_TEST_NO_PLAN_A=1 disables the channel outright, for isolating the conversion from the rest of the runtime.
+    VkFormat CanonicalFor(VkFormat gameVk)
+    {
+        static const bool disabled = [] {
+            const char* v = std::getenv("MZ_TEST_NO_PLAN_A");
+            return v && *v && *v != '0';
+        }();
+        if (disabled || gameVk == VK_FORMAT_UNDEFINED)
+            return VK_FORMAT_UNDEFINED;
+        if (firstColourVk == VK_FORMAT_UNDEFINED)
+            firstColourVk = gameVk;
+        if (gameVk == firstColourVk)
+            return VK_FORMAT_UNDEFINED;
+        if (!ColourConvertible(gameVk, firstColourVk))
+        {
+            if (loggedGameColourFormat != gameVk)
+            {
+                loggedGameColourFormat = gameVk;
+                nr::logf("[mochizuki] plan A: colour format changed VkFormat %d -> %d but this pair has no conversion "
+                         "both ways on this device; keeping the pre-Plan-A path (the network is rebuilt)",
+                         int(firstColourVk), int(gameVk));
+            }
+            return VK_FORMAT_UNDEFINED;
+        }
+        if (!canonicalChannel || loggedGameColourFormat != gameVk)
+        {
+            loggedGameColourFormat = gameVk;
+            nr::logf("[mochizuki] plan A: colour format changed VkFormat %d -> %d; converting it to the session's "
+                     "first format %d (compute pass both ways; the network and its history are kept)",
+                     int(firstColourVk), int(gameVk), int(firstColourVk));
+        }
+        canonicalChannel = true;
+        return firstColourVk;
+    }
+
     // The extent the network and the frame's buffers are built for (W x H), for a frame whose render subrect is w x h
     // in the colour allocation `desc`, under MochizukiNrControls::drs_mode `mode`; `bucketed` when it is the bucket.
     // Exact (0), or motion vectors the bucket cannot blit: the subrect. Auto (1): the subrect too until one smaller
@@ -4288,6 +5009,34 @@ struct Session
             Pad(c, colour.image, w, h, W, H);
             ready(colour.image);
         }
+        // Plan A: the network is built for the session's first-seen (canonical) format. When this frame is in
+        // another one (FF7 Rebirth's cutscene flip), convert it here with one compute dispatch and hand the network
+        // the canonical image instead; the network and its history are kept, so the flip is invisible.
+        // `net` is the image and format the core is given; it is the frame's own when no conversion is needed.
+        const Image* net = &colour;
+        VkFormat netVk = colourVk;
+        if (job.canonicalise && canonicalColour.image && convert.set)
+        {
+            // `colour.image` is GENERAL with its last transfer writes visible to transfers (upload's barrier,
+            // Pad's, or ready()'s), which a compute read does not follow; make them visible to a shader read
+            // instead. The pass writes canonicalColour, which starts UNDEFINED: GENERAL, for a shader write.
+            ImageBarrier(c, colour.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+            ImageBarrier(c, canonicalColour.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_ACCESS_SHADER_WRITE_BIT);
+            convert.Dispatch(c, convertPipeline, w, h);
+            // The dispatch's writes visible to the copies Pad makes next (its first copy relies on this).
+            ImageBarrier(c, canonicalColour.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT);
+            if (padded)
+                Pad(c, canonicalColour.image, w, h, W, H);
+            ready(canonicalColour.image);
+            net = &canonicalColour;
+            netVk = convert.convertFor;
+        }
         // The image the network reads the vectors from, and its extent: the uploaded one, or the bucket-sized one with
         // the vectors laid over the subrect (dynamic resolution).
         VkImage motionSource = motionImage.image;
@@ -4366,8 +5115,8 @@ struct Session
             });
         }
         nr::EngineFrame frame {};
-        frame.colour.image = colour.image;
-        frame.colour.format = colourVk;
+        frame.colour.image = net->image;
+        frame.colour.format = netVk;
         frame.colour.width = W;
         frame.colour.height = H;
         frame.colour.usage = kImageUsage;
@@ -4464,13 +5213,62 @@ struct Session
             gpuMsCount = std::min(gpuMsCount + 1, kGpuSamples);
         }
 
-        ImageBarrier(c, colour.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                     VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                     VK_ACCESS_TRANSFER_READ_BIT);
+        // Plan A, output side: the network wrote its answer into the canonical image, but the readback below
+        // is not format-agnostic -- colourFootprint (and so both this copy's row pitch and the D3D12
+        // CopyTextureRegion placed footprint) is built for the *game's* format. Copying a 4-byte-per-texel
+        // canonical image out with an 8-byte-per-texel RGBA16F layout would read half of every row at twice
+        // the stride, so the colours come out wrong and every row is offset by half its width. Convert the
+        // answer back into `colour`, which is in the game's format, and read *that* out instead: nothing
+        // downstream of this point has to know a conversion happened.
+        if (net != &colour)
+        {
+            if (!convert.CanUnconvert(colourVk))
+                throw std::logic_error("plan A: the answer cannot be converted back into the game's colour format");
+            // The network's writes are in GENERAL with its last writes visible to all commands (ready()'s
+            // barrier), which a compute read does not follow; make them visible to a shader read instead.
+            // `colour` is GENERAL and, as an input conversion destination, no longer holds anything we need.
+            ImageBarrier(c, net->image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                         VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_WRITE_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+            ImageBarrier(c, colour.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT);
+            convert.DispatchUnconvert(c, convertPipeline, colourVk, w, h);
+            // The store's writes visible to the copy below.
+            ImageBarrier(c, colour.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+            ++unconvertDispatches;
+            net = &colour;
+        }
+        else
+        {
+            // No conversion: the network wrote into the frame's own image, so that is what is copied out.
+            // (When there was one, the conversion's own barrier already left `colour` TRANSFER_SRC_OPTIMAL.)
+            ImageBarrier(c, net->image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                         VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_WRITE_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+        }
+
+        // The answer is where the core wrote it: the frame's own image, or (Plan A, above) the game's own image
+        // the canonical answer was just converted into. Either way the readback takes the same valid w x h
+        // from the top-left, with colourFootprint's -- the game's -- row pitch.
         VkBufferImageCopy out = colourFootprint.vk;
         out.imageExtent = { w, h, 1 };
-        vkCmdCopyImageToBuffer(c, colour.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, output.buffer, 1, &out);
+        vkCmdCopyImageToBuffer(c, net->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, output.buffer, 1, &out);
         VkCheck(vkEndCommandBuffer(c), "vkEndCommandBuffer");
+
+        // Plan A: report the output pass. The first conversions are named individually (they are what tells a
+        // cutscene's RGBA16F frames apart from the same-format ones), then every 3600. The row pitch is the
+        // one the readback used -- the game's, not the canonical format's -- which is the whole point.
+        if (const uint64_t n = unconvertDispatches; n != loggedUnconvertAt && (n <= 5 || n % 3600 == 0))
+        {
+            loggedUnconvertAt = n;
+            nr::logf("[mochizuki] plan A: output conversion pass ran%llu times (VkFormat %d -> %d, answer read back "
+                     "at the game's row pitch %u bytes)",
+                     static_cast<unsigned long long>(n), int(netVk), int(colourVk),
+                     unsigned(colourFootprint.d3d.Footprint.RowPitch));
+        }
 
         // The producer half is already on the game queue: after Follow, its signal releases our submit, ours releases
         // the rest.
@@ -4576,6 +5374,7 @@ struct Session
         }
         toVk.Release(vk.device);
         fromVk.Release(vk.device);
+        convertPipeline.Release(vk.device);
         vk.Destroy();
         ReleaseGameQueues();
     }
@@ -4748,7 +5547,8 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
             const UINT w = std::min<UINT>(info->color_width, UINT(cd.Width));
             const UINT h = std::min<UINT>(info->color_height, cd.Height);
             Geometry g;
-            g.colourFormat = cd.Format;
+            g.gameColourFormat = cd.Format; // Plan A: never changes on the geometry test; the buffers are built for it
+            g.colourFormat = cd.Format;     // plan A may replace this with the canonical twin just below
             g.colourWidth = cd.Width;
             g.colourHeight = cd.Height;
             // The motion fields up to reset; a FrameInfo too short for them has no motion.
@@ -4805,6 +5605,10 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
             // Automatic capacity grows as needed and is retained when fewer passes run.
             // An explicit prebuild count requests that exact capacity, at least the frame's passes.
             const uint32_t maxPasses = maxPassesSetting ? std::clamp(maxPassesSetting, passes, kMaxPasses) : passes;
+            // The colour encoding stays the *game's* own: Plan A converts the frame to the canonical format
+            // on the input side, so a linear (HDR/scene-referred) frame must still be seen as linear whatever
+            // the canonical format is. Deriving this from the canonical format would treat
+            // HDR as sRGB and wash the picture out.
             const bool linear = linearMode == 0 ? IsLinear(cf.vk) : linearMode == 1;
             // The extent the network and the frame's buffers are built for: the frame's subrect, or with dynamic
             // resolution the bucket, whose motion buffer is the motion allocation's.
@@ -4819,10 +5623,29 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
             // Neither a network nor buffers that cannot be had now fail the session: the frame goes without NR, and
             // they are tried again as their holds say.
             s->prepWanted = s->prepWanted || model.preprocess.active();
-            g.firstPass = (info->flags & LMXXF_NR_FRAME_FLAG_FIRST_PASS) && passes > 1 &&
+            // Plan A: a frame whose colour format differs from the session's first-seen one is converted to that
+            // format on the input side, so a cutscene's transient flip (FF7 Rebirth: R11G11B10 <-> RGBA16F) does not
+            // rebuild the network. A session that only ever sees one format never canonicalises (see CanonicalFor).
+            const VkFormat canonicalVk = s->CanonicalFor(cf.vk);
+            g.canonicalise = canonicalVk != VK_FORMAT_UNDEFINED;
+            g.canonicalVk = canonicalVk;
+            // Plan A: the network's first-pass output and firstColour would be in different formats on a converted
+            // frame, and RunNetwork's blit between them would cross compatibility classes (an illegal command that
+            // removes the device). So once the session has switched formats at all, the first pass is no longer
+            // offered -- on every frame, not just converted ones, or the key would toggle firstPass on each flip and
+            // rebuild. Costs at most one rebuild at the first switch, and only when the first pass was in use (it
+            // needs passes > 1; FF7 Rebirth runs one pass).
+            g.firstPass = (info->flags & LMXXF_NR_FRAME_FLAG_FIRST_PASS) && passes > 1 && !s->canonicalChannel &&
                 model.apply_model && !model.preprocess.active() && s->Blittable(cf.vk);
-            const NetworkKey key { g.width, g.height, cf.vk, scale, maxPasses, linear, s->prepWanted, compactTransfer,
-                                    g.firstPass, aco };
+            // Plan A: on a converted frame the geometry's colourFormat is the canonical twin (for the key and logs);
+            // the buffers stay built for gameColourFormat.
+            if (g.canonicalise && CanonicalDxgi(canonicalVk) != DXGI_FORMAT_UNKNOWN)
+                g.colourFormat = CanonicalDxgi(canonicalVk);
+            // Plan A: the key's format is the canonical one on a converted frame; otherwise the game's, which is
+            // then the first-seen format itself (or, for an unconvertible pair, the new one: a rebuild, as before).
+            const VkFormat keyFormat = g.canonicalise ? canonicalVk : cf.vk;
+            const NetworkKey key { g.width, g.height, keyFormat, scale, maxPasses, linear, s->prepWanted,
+                                    compactTransfer, g.firstPass, aco };
             std::string why;
             s->infoRequestedPasses = passes;
             if (!s->EnsureNetwork(key, g, colour, why, maxPassesSetting == 0, drsMode != 0 && !g.bucketed))
@@ -4840,6 +5663,13 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
                 else
                     nr::logf("[mochizuki] frame %ux%u colour DXGI %u, motion %ux%u DXGI %u", g.width, g.height,
                              unsigned(g.colourFormat), g.motionWidth, g.motionHeight, unsigned(g.motionFormat));
+                // Plan A: the input side (footprint, colour image, upload) is built for the game's own format,
+                // which is what changed here; the network and its history are kept, so a flip costs one set of
+                // buffers rather than a rebuild.
+                if (g.canonicalise)
+                    nr::logf("[mochizuki] plan A: input adapter remade for the game's colour DXGI %u (the network "
+                             "keeps the canonical VkFormat %d)",
+                             unsigned(g.gameColourFormat), int(g.canonicalVk));
             }
             // A new valid extent restarts the history: it holds the frame's content where the old one had it.
             if (w != s->validWidth || h != s->validHeight)
@@ -4875,6 +5705,7 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
             Job next;
             next.colour = colour;
             next.colourState = static_cast<D3D12_RESOURCE_STATES>(info->color_state);
+            next.canonicalise = g.canonicalise;
             next.width = w;
             next.height = h;
             next.controls = std::move(model);

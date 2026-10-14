@@ -31,10 +31,18 @@ GLSLANG = R / 'toolchain/glslang/bin/glslang'
 RUNTIME = ['runtime_alpha', 'runtime_encode', 'runtime_transfer', 'runtime_upscale', 'runtime_prep', 'runtime_depth', 'cascade_lograt', 'cascade_blur', 'cascade_feed',
            'runtime_downscale', 'runtime_taps']
 # runtime passes built from another pass's source with defines: name -> (source, defines)
+# runtime_planA_convert_* / runtime_planA_unconvert_* are Plan A's input/output passes, one per destination format: a storage image's
+# format qualifier is a compile-time property of the module, so the game format (known only at run time) is
+# substituted by PLAN_A_DST_FORMAT. Only the formats ColourConvertible accepts are built here; that function
+# and this table must agree, or a frame would be canonicalised with no way to convert the answer back.
 RUNTIME_VARIANTS = {'runtime_transfer_store': ('runtime_transfer', ['NR_STORE_NATIVE']),
                     'runtime_pack_u8': ('runtime_alpha', ['NR_PACK_U8']),
                     'runtime_pack_f16': ('runtime_alpha', ['NR_PACK_F16']),
-                    'runtime_unpack_f16': ('runtime_alpha', ['NR_UNPACK_F16'])}
+                    'runtime_unpack_f16': ('runtime_alpha', ['NR_UNPACK_F16']),
+                    'runtime_planA_convert_r11g11b10': ('runtime_planA_convert', ['PLAN_A_DST_FORMAT=r11f_g11f_b10f', 'PLAN_A_DST_MAX=65024.0']),
+                    'runtime_planA_convert_rgba16f': ('runtime_planA_convert', ['PLAN_A_DST_FORMAT=rgba16f', 'PLAN_A_DST_MAX=65504.0']),
+                    'runtime_planA_unconvert_r11g11b10': ('runtime_planA_unconvert', ['PLAN_A_DST_FORMAT=r11f_g11f_b10f', 'PLAN_A_DST_MAX=65024.0']),
+                    'runtime_planA_unconvert_rgba16f': ('runtime_planA_unconvert', ['PLAN_A_DST_FORMAT=rgba16f', 'PLAN_A_DST_MAX=65504.0'])}
 MOTION = ['motion_luma', 'motion_estimate']
 
 

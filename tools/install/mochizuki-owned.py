@@ -14,6 +14,12 @@ RUNTIME = (
     'runtime_alpha', 'runtime_encode', 'runtime_transfer', 'runtime_upscale', 'runtime_prep',
     'runtime_depth', 'cascade_lograt', 'cascade_blur', 'cascade_feed', 'runtime_downscale', 'runtime_taps',
     'runtime_transfer_store', 'runtime_pack_u8', 'runtime_pack_f16', 'runtime_unpack_f16',
+    # Plan A's colour-format conversion, both directions. The unconvert pass is one module per destination
+    # format (PLAN_A_DST_FORMAT is a compile-time storage-image qualifier), and so is the
+    # convert pass; ConvertPass::Pipeline::ConvertModule/UnconvertModule name the same set, and a
+    # format missing from either side only means that colour format keeps its own path.
+    'runtime_planA_convert_r11g11b10', 'runtime_planA_convert_rgba16f',
+    'runtime_planA_unconvert_r11g11b10', 'runtime_planA_unconvert_rgba16f',
 )
 MOTION = ('motion_luma', 'motion_estimate')
 
