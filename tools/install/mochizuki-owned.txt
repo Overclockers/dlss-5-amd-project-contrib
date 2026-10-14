@@ -121,6 +121,9 @@ aco/shaders/runtime/runtime_encode.spv
 aco/shaders/runtime/runtime_pack_f16.spv
 aco/shaders/runtime/runtime_pack_u8.spv
 aco/shaders/runtime/runtime_pack_r11.spv
+aco/shaders/runtime/runtime_pack_u10.spv
+aco/shaders/runtime/runtime_pack_u10_bgra.spv
+aco/shaders/runtime/runtime_pack_u8_bgra.spv
 aco/shaders/runtime/runtime_planA_convert_r11g11b10.spv
 aco/shaders/runtime/runtime_planA_convert_rgba16f.spv
 aco/shaders/runtime/runtime_planA_unconvert_r11g11b10.spv
@@ -210,6 +213,9 @@ shaders/runtime/runtime_encode.spv
 shaders/runtime/runtime_pack_f16.spv
 shaders/runtime/runtime_pack_u8.spv
 shaders/runtime/runtime_pack_r11.spv
+shaders/runtime/runtime_pack_u10.spv
+shaders/runtime/runtime_pack_u10_bgra.spv
+shaders/runtime/runtime_pack_u8_bgra.spv
 shaders/runtime/runtime_planA_convert_r11g11b10.spv
 shaders/runtime/runtime_planA_convert_rgba16f.spv
 shaders/runtime/runtime_planA_unconvert_r11g11b10.spv

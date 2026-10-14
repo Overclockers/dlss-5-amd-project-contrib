@@ -11,9 +11,10 @@
 // Diagnostic: GPU timestamp pairs around the core's linear-input encode and transfer pass
 // (MochizukiNrInfo::gpu_ms_encode_last / gpu_ms_transfer_last). Absent: none are written.
 #define MOCHIZUKI_NR_FRAME_FLAG_STAGE_TIMING (1u << 10)
-// NrInlineComputeConvert (default off): an inline B10G11R11 (R11G11B10_FLOAT) colour frame converts its
-// input on the compute family (copy + runtime_unpack_f16) instead of a graphics blit, so the whole
-// chain can stay on compute. Only honoured where the write-back needs no blit; may rebuild the network.
+// NrInlineComputeConvert (default off): an inline colour frame in one of the listed formats (B10G11R11,
+// RGBA8/BGRA8 UNORM or SRGB, A2B10G10R10 / A2R10G10B10 UNORM) converts its input (copy + runtime_unpack_f16)
+// and its write-back (a compute pack per format) on the compute family instead of graphics blits, so the
+// whole chain can stay on compute. May rebuild the network.
 #define MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_CONVERT (1u << 11)
 typedef struct MochizukiNrFrameInfo
 {

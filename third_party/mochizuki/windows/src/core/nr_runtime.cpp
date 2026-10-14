@@ -335,6 +335,7 @@ struct Runtime::Impl {
     nrvk::Kernel unpack_f16, pack_f16;
     nrvk::Context::Image input_f16{}, output_f16{};
     bool f16_built{};
+    const char* convert_refusal{}; // compute_convert_colour: why a listed format kept the blits (menu status)
     bool compute_recording{}, graphics_family{true};
     void graphics_only(const char* what) const {
         if (compute_recording)
@@ -1492,47 +1493,67 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
     }
     // Optional compute conversions preserve FP16/HDR values. Private images keep
     // descriptors stable across caller recordings; only copies touch caller images.
-    // compute_convert_r11g11b10: the same input conversion for B10G11R11 (texelFetch of the
-    // sampled frame copy is the blit's own conversion). Its write-back must already avoid a
-    // blit (direct_out / store_native); runtime_pack_f16 stores rgba16f and is not used for it.
-    const bool f16_colour = config.colour_format == VK_FORMAT_R16G16B16A16_SFLOAT;
-    const bool r11_colour = config.compute_convert_r11g11b10 &&
-        config.colour_format == VK_FORMAT_B10G11R11_UFLOAT_PACK32;
-    // Without direct_out/store_native, B10G11R11 is written back by runtime_pack_r11: an imageStore
-    // through an r11f_g11f_b10f storage image (the format conversion of the blit), then a copy.
-    bool r11_pack = false;
-    if (r11_colour && !impl_->scaled && !(impl_->direct_out || impl_->store_native)) {
-        VkFormatProperties rp{}; vkGetPhysicalDeviceFormatProperties(host.physical, VK_FORMAT_B10G11R11_UFLOAT_PACK32, &rp);
-        const VkFormatFeatureFlags need = VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT | VK_FORMAT_FEATURE_TRANSFER_SRC_BIT;
-        r11_pack = (rp.optimalTilingFeatures & need) == need && std::filesystem::exists(adapters / "runtime_pack_r11.spv");
+    // compute_convert_colour: the same input conversion for the listed formats (texelFetch of the
+    // sampled frame copy is the blit's own conversion; an *_SRGB frame is copied into its UNORM
+    // twin, as the blit path does, so the network still sees the encoded values). Write-back is
+    // direct_out / store_native, or one compute pack per format into a private image, then a copy:
+    //   B10G11R11              runtime_pack_r11      (r11f_g11f_b10f storage image)
+    //   R8G8B8A8 UNORM/SRGB    runtime_pack_u8       (R32_UINT; the answer already holds k/255)
+    //   B8G8R8A8 UNORM/SRGB    runtime_pack_u8_bgra  (R32_UINT, R/B swapped)
+    //   A2B10G10R10 UNORM      runtime_pack_u10      (R32_UINT, round to nearest)
+    //   A2R10G10B10 UNORM      runtime_pack_u10_bgra (R32_UINT, R/B swapped)
+    const VkFormat cfmt = config.colour_format;
+    const bool f16_colour = cfmt == VK_FORMAT_R16G16B16A16_SFLOAT;
+    const char* pack_name = nullptr; VkFormat pack_format = VK_FORMAT_R32_UINT;
+    switch (cfmt) {
+        case VK_FORMAT_B10G11R11_UFLOAT_PACK32: pack_name = "runtime_pack_r11.spv"; pack_format = cfmt; break;
+        case VK_FORMAT_R8G8B8A8_UNORM: case VK_FORMAT_R8G8B8A8_SRGB: pack_name = "runtime_pack_u8.spv"; break;
+        case VK_FORMAT_B8G8R8A8_UNORM: case VK_FORMAT_B8G8R8A8_SRGB: pack_name = "runtime_pack_u8_bgra.spv"; break;
+        case VK_FORMAT_A2B10G10R10_UNORM_PACK32: pack_name = "runtime_pack_u10.spv"; break;
+        case VK_FORMAT_A2R10G10B10_UNORM_PACK32: pack_name = "runtime_pack_u10_bgra.spv"; break;
+        default: break;
     }
-    const bool r11_store = impl_->direct_out || impl_->store_native || r11_pack;
-    if (r11_colour && (impl_->scaled || !r11_store))
-        nr::logf("[nr] B10G11R11 compute input conversion not used: %s",
-                 impl_->scaled ? "model scale below 1 needs a downscale blit"
-                               : "the write-back has no compute store for this format (no B10G11R11 storage image)");
+    const bool listed_colour = config.compute_convert_colour && pack_name != nullptr;
+    const VkFormat input_format = transfer == Transfer::Encoded ? unorm : cfmt;
+    bool colour_pack = false, input_ok = false;
+    if (listed_colour && !impl_->scaled) {
+        VkFormatProperties ip{}; vkGetPhysicalDeviceFormatProperties(host.physical, input_format, &ip);
+        input_ok = impl_->direct_in || (ip.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
+        if (!(impl_->direct_out || impl_->store_native)) {
+            VkFormatProperties pp{}; vkGetPhysicalDeviceFormatProperties(host.physical, pack_format, &pp);
+            const VkFormatFeatureFlags need = VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT | VK_FORMAT_FEATURE_TRANSFER_SRC_BIT;
+            colour_pack = (pp.optimalTilingFeatures & need) == need && std::filesystem::exists(adapters / pack_name);
+        }
+    }
+    const bool colour_store = impl_->direct_out || impl_->store_native || colour_pack;
+    if (listed_colour && (impl_->scaled || !colour_store || !input_ok)) {
+        impl_->convert_refusal = impl_->scaled ? "model scale below 1 needs a downscale blit"
+                                : !input_ok ? "the frame format cannot be sampled for the compute input"
+                                            : "the write-back has no compute store for this format";
+        nr::logf("[nr] colour format %u compute conversion not used: %s", unsigned(cfmt), impl_->convert_refusal);
+    }
     if ((host.secondary_family != VK_QUEUE_FAMILY_IGNORED || !impl_->graphics_family) &&
-        !impl_->scaled && (f16_colour || (r11_colour && r11_store)) &&
+        !impl_->scaled && (f16_colour || (listed_colour && colour_store && input_ok)) &&
         std::filesystem::exists(adapters / "runtime_unpack_f16.spv") &&
         (!f16_colour || std::filesystem::exists(adapters / "runtime_pack_f16.spv"))) {
         if (!impl_->direct_in) {
-            // Sampled only for B10G11R11: its storage support is optional and the input never needs it.
-            impl_->input_f16 = s.ctx.image(config.width, config.height, config.colour_format, true, true, f16_colour);
+            // Sampled only outside FP16: storage support is optional and the input never needs it.
+            impl_->input_f16 = s.ctx.image(config.width, config.height, f16_colour ? cfmt : input_format, true, true, f16_colour);
             s.ctx.transition(impl_->input_f16, VK_IMAGE_LAYOUT_GENERAL);
             auto input = s.tex_in; input.sampler = VK_NULL_HANDLE; input.layout = VK_IMAGE_LAYOUT_GENERAL;
             auto sampled = impl_->input_f16; sampled.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             impl_->unpack_f16.create(s.ctx, (adapters / "runtime_unpack_f16.spv").string(), {}, 8,
                                     {&sampled, &input});
         }
-        if (!impl_->direct_out && (f16_colour || r11_pack)) {
-            impl_->output_f16 = s.ctx.image(config.width, config.height, config.colour_format, false);
-            impl_->pack_f16.create(s.ctx, (adapters / (r11_pack ? "runtime_pack_r11.spv" : "runtime_pack_f16.spv")).string(), {}, 8,
+        if (!impl_->direct_out && (f16_colour || colour_pack)) {
+            impl_->output_f16 = s.ctx.image(config.width, config.height, f16_colour ? cfmt : pack_format, false);
+            impl_->pack_f16.create(s.ctx, (adapters / (colour_pack ? pack_name : "runtime_pack_f16.spv")).string(), {}, 8,
                                   {answer, &impl_->output_f16});
         }
         impl_->f16_built = true;
-        if (r11_colour)
-            nr::logf("[nr] B10G11R11 input converted on compute (runtime_unpack_f16), write-back %s",
-                     impl_->direct_out ? "direct" : r11_pack ? "packed on compute (runtime_pack_r11)" : "stored in its own format");
+        if (listed_colour)
+            nr::logf("[nr] colour format %u input converted on compute (runtime_unpack_f16), write-back %s",
+                     unsigned(cfmt), impl_->direct_out ? "direct" : colour_pack ? pack_name : "stored in its own format");
     }
     if (!impl_->graphics_family && compute_refusal(false, VK_FORMAT_UNDEFINED, 0, 1))
         throw std::invalid_argument("NR colour format conversion requires a graphics-capable queue");
@@ -2186,7 +2207,7 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
         // the conversion the blit used to.
         vkCmdCopyImage(cmd, frame.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                        colour_dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-    } else if(encoded.handle) {
+    } else if(encoded.handle && !(impl_->compute_recording && impl_->f16_built)) {
         barrier(cmd,encoded.handle,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT,
                 VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT);
@@ -2201,8 +2222,8 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
         barrier(cmd,encoded.handle,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,
                 VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT,
                 VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT|VK_ACCESS_TRANSFER_WRITE_BIT);
-    } else if (impl_->transfer == Transfer::DirectBlit) {
-        // FP16 / 16-bit UNORM / 10-bit packed: no sRGB transfer function to route
+    } else if (impl_->transfer == Transfer::DirectBlit || (impl_->compute_recording && impl_->f16_built)) {
+        // FP16 / 16-bit UNORM / 10-bit packed (and, compute-converted, the listed 8-bit/sRGB formats): no sRGB transfer function to route
         // around, so the blit's own format conversion is the whole of it.
         if (impl_->compute_recording && impl_->f16_built) {
             auto image = impl_->input_f16.handle;
@@ -2805,7 +2826,7 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
             // Already the frame's bits (an *_SRGB frame takes its UNORM twin's).
             vkCmdCopyImage(cmd, out, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                            wb, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-        } else if(encoded.handle) {
+        } else if(encoded.handle && !((impl_->pack_built || impl_->f16_built) && impl_->compute_recording)) {
             barrier(cmd,encoded.handle,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                     VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT,
                     VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT);

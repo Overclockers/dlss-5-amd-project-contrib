@@ -1951,7 +1951,7 @@ struct NetworkKey
     bool compactTransfer = true;
     bool firstPass = false;
     bool aco = false; // this build imports the ACO network; the device must already expose pipeline binaries
-    bool computeConvert = false; // NrInlineComputeConvert on a B10G11R11 key (RuntimeConfig::compute_convert_r11g11b10)
+    bool computeConvert = false; // NrInlineComputeConvert on a listed-format key (RuntimeConfig::compute_convert_colour)
     bool operator==(const NetworkKey&) const = default;
     bool SameModel(const NetworkKey& other) const
     {
@@ -4107,7 +4107,7 @@ struct Session
             config.compact_transfer = key.compactTransfer;
             config.separate_answer = !key.compactTransfer;
             config.first_pass_output = key.firstPass;
-            config.compute_convert_r11g11b10 = key.computeConvert;
+            config.compute_convert_colour = key.computeConvert;
             // The linear path's frame is a proxy made with the soft knee, which the preprocess undoes first.
             config.preprocess_unknee = key.linear;
             nr::TemporalConfig temporal;
@@ -5652,10 +5652,13 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
             // Plan A: the key's format is the canonical one on a converted frame; otherwise the game's, which is
             // then the first-seen format itself (or, for an unconvertible pair, the new one: a rebuild, as before).
             const VkFormat keyFormat = g.canonicalise ? canonicalVk : cf.vk;
-            // NrInlineComputeConvert: only a B10G11R11 key carries it (other formats never rebuild for it). Not tied to
-            // the inline flag, so switching inline/split does not rebuild; split never records on compute.
-            const bool computeConvert = (info->flags & MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_CONVERT) &&
-                                        keyFormat == VK_FORMAT_B10G11R11_UFLOAT_PACK32;
+            // NrInlineComputeConvert: only a listed-format key carries it (other formats never rebuild for it). Not tied
+            // to the inline flag, so switching inline/split does not rebuild; split never records on compute.
+            const bool convertListed = keyFormat == VK_FORMAT_B10G11R11_UFLOAT_PACK32 ||
+                keyFormat == VK_FORMAT_R8G8B8A8_UNORM || keyFormat == VK_FORMAT_R8G8B8A8_SRGB ||
+                keyFormat == VK_FORMAT_B8G8R8A8_UNORM || keyFormat == VK_FORMAT_B8G8R8A8_SRGB ||
+                keyFormat == VK_FORMAT_A2B10G10R10_UNORM_PACK32 || keyFormat == VK_FORMAT_A2R10G10B10_UNORM_PACK32;
+            const bool computeConvert = (info->flags & MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_CONVERT) && convertListed;
             const NetworkKey key { g.width, g.height, keyFormat, scale, maxPasses, linear, s->prepWanted,
                                     compactTransfer, g.firstPass, aco, computeConvert };
             std::string why;

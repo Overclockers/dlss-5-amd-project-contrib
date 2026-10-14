@@ -180,11 +180,10 @@ struct RuntimeConfig {
     // separate_answer: do not use store_native; keep a distinct answer image.
     bool compact_transfer = false;
     bool separate_answer = false;
-    // Default off. A B10G11R11 colour frame also takes the compute input conversion
-    // (copy into a private same-format image + runtime_unpack_f16, texelFetch) instead
-    // of the graphics blit. Write-back is direct_out, store_native, or runtime_pack_r11
-    // (r11f_g11f_b10f storage image + copy); otherwise the blit path and its refusal remain.
-    bool compute_convert_r11g11b10 = false;
+    // Default off. The listed colour formats (B10G11R11, RGBA8/BGRA8 UNORM and SRGB, A2B10G10R10 /
+    // A2R10G10B10 UNORM) take the compute input conversion and a compute write-back pack instead
+    // of the graphics blits; otherwise the blit path and its refusal remain.
+    bool compute_convert_colour = false;
     // Optional full-frame RGBA32F of pass 0, recorded before later passes
     // overwrite it. Requires ordinary multi-pass transfer (no native compose,
     // no mask, max_passes >= 2). The image lives as long as the runtime.

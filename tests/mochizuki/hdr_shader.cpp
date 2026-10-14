@@ -363,6 +363,74 @@ static void R11G11B10Pack(nrvk::Context& ctx, const std::filesystem::path& shade
     std::cout<<"PASS B10G11R11 compute write-back: blit bit equality, codes, ties, random, negative, above max\n";
 }
 
+// NrInlineComputeConvert, 32-bit UNORM formats: runtime_unpack_f16 (input) must equal the reference blit
+// into RGBA32F bit for bit, and the per-format pack (write-back) must equal the reference blit
+// RGBA32F -> format. 8-bit: exact on k/255 answers (what the alpha pass leaves), at most 1 LSB elsewhere.
+// 10-bit: at most 1 LSB (blit rounding is implementation-defined); the counts are printed.
+static void PackedUnorm(nrvk::Context& ctx, const std::filesystem::path& shaders)
+{
+    struct Case { VkFormat format; const char* pack; bool ten; const char* name; };
+    const Case cases[] = {
+        {VK_FORMAT_R8G8B8A8_UNORM, "runtime_pack_u8.spv", false, "R8G8B8A8_UNORM"},
+        {VK_FORMAT_B8G8R8A8_UNORM, "runtime_pack_u8_bgra.spv", false, "B8G8R8A8_UNORM"},
+        {VK_FORMAT_A2B10G10R10_UNORM_PACK32, "runtime_pack_u10.spv", true, "A2B10G10R10_UNORM"},
+        {VK_FORMAT_A2R10G10B10_UNORM_PACK32, "runtime_pack_u10_bgra.spv", true, "A2R10G10B10_UNORM"},
+    };
+    constexpr uint32_t w=256,h=256;
+    for (const Case& c : cases) {
+        VkFormatProperties fp{}; vkGetPhysicalDeviceFormatProperties(ctx.physical, c.format, &fp);
+        const VkFormatFeatureFlags need = VK_FORMAT_FEATURE_BLIT_DST_BIT | VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+        if ((fp.optimalTilingFeatures & need) != need) { std::cout<<"SKIP "<<c.name<<": no blit/sampled support\n"; continue; }
+        Resources r(ctx); r.images.reserve(5);
+        r.images.push_back(ctx.image(w,h,VK_FORMAT_R32G32B32A32_SFLOAT,false));   // answer
+        r.images.push_back(ctx.image(w,h,VK_FORMAT_R32_UINT,false));              // packed
+        r.images.push_back(ctx.image(w,h,c.format,true,true,false));              // reference (blit dst) / unpack source
+        r.images.push_back(ctx.image(w,h,VK_FORMAT_R32G32B32A32_SFLOAT,false));   // unpacked
+        r.images.push_back(ctx.image(w,h,VK_FORMAT_R32G32B32A32_SFLOAT,false));   // unpack reference
+        auto& answer=r.images[0]; auto& packed=r.images[1]; auto& ref=r.images[2]; auto& unpacked=r.images[3]; auto& uref=r.images[4];
+        std::vector<Pixel> in(w*h); uint32_t rng=777u; auto next=[&]{ rng=rng*1664525u+1013904223u; return rng>>8; };
+        const float steps = c.ten ? 1023.f : 255.f, asteps = c.ten ? 3.f : 255.f;
+        for (uint32_t i=0;i<in.size();++i) {
+            const bool exact = (i & 1u) == 0;
+            auto v=[&](float n){ return exact ? float(next()%uint32_t(n+1))/n : float(next()%1000001u)/1000000.f; };
+            in[i]={v(steps),v(steps),v(steps),v(asteps)};
+        }
+        ctx.upload(answer,in.data(),in.size()*sizeof(Pixel));
+        ctx.transition(answer,VK_IMAGE_LAYOUT_GENERAL); ctx.transition(packed,VK_IMAGE_LAYOUT_GENERAL);
+        r.kernel.create(ctx,(shaders/c.pack).string(),{},8,{&answer,&packed});
+        const std::array<uint32_t,2> push{w,h}; r.Run(push,w,h);
+        ctx.transition(answer,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL); ctx.transition(ref,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        VkImageBlit area{}; area.srcSubresource=area.dstSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};
+        area.srcOffsets[1]=area.dstOffsets[1]={int(w),int(h),1};
+        ctx.one_shot([&](VkCommandBuffer cmd){ vkCmdBlitImage(cmd,answer.handle,answer.layout,ref.handle,ref.layout,1,&area,VK_FILTER_NEAREST); });
+        ctx.transition(packed,VK_IMAGE_LAYOUT_GENERAL); ctx.transition(ref,VK_IMAGE_LAYOUT_GENERAL);
+        std::vector<uint32_t> got(w*h), want(w*h);
+        ctx.download(packed,got.data(),got.size()*4); ctx.download(ref,want.data(),want.size()*4);
+        uint32_t exactDiff=0, otherDiff=0, maxLsb=0;
+        for (uint32_t i=0;i<got.size();++i) if (got[i]!=want[i]) {
+            ((i&1u)==0 ? exactDiff : otherDiff)++;
+            const int bits[4] = {c.ten?10:8,c.ten?10:8,c.ten?10:8,c.ten?2:8};
+            int shift=0;
+            for (int k=0;k<4;++k) { const uint32_t mask=(1u<<bits[k])-1u;
+                const int a=int((got[i]>>shift)&mask), b=int((want[i]>>shift)&mask);
+                maxLsb=std::max<uint32_t>(maxLsb,uint32_t(std::abs(a-b))); shift+=bits[k]; }
+        }
+        std::cout<<c.name<<" pack vs blit: exact-input diff="<<exactDiff<<" other diff="<<otherDiff<<" max LSB="<<maxLsb<<'\n';
+        Require(maxLsb<=1, "compute write-back differs from blit by more than 1 LSB");
+        Require(c.ten || exactDiff==0, "8-bit compute write-back differs from blit on k/255 answers");
+        // Input side: the blit's own bits, unpacked both ways.
+        ctx.transition(ref,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL); ctx.transition(unpacked,VK_IMAGE_LAYOUT_GENERAL);
+        Resources u(ctx); u.kernel.create(ctx,(shaders/"runtime_unpack_f16.spv").string(),{},8,{&ref,&unpacked}); u.Run(push,w,h);
+        ctx.transition(ref,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL); ctx.transition(uref,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        ctx.one_shot([&](VkCommandBuffer cmd){ vkCmdBlitImage(cmd,ref.handle,ref.layout,uref.handle,uref.layout,1,&area,VK_FILTER_NEAREST); });
+        ctx.transition(unpacked,VK_IMAGE_LAYOUT_GENERAL); ctx.transition(uref,VK_IMAGE_LAYOUT_GENERAL);
+        std::vector<Pixel> ua(w*h), ub(w*h);
+        ctx.download(unpacked,ua.data(),ua.size()*sizeof(Pixel)); ctx.download(uref,ub.data(),ub.size()*sizeof(Pixel));
+        Require(std::memcmp(ua.data(),ub.data(),ua.size()*sizeof(Pixel))==0, "UNORM compute input differs from blit");
+        std::cout<<"PASS "<<c.name<<" compute input (bit equal) and write-back\n";
+    }
+}
+
 int main(int argc, char** argv)
 {
     nrvk::Context ctx;
@@ -376,6 +444,7 @@ int main(int argc, char** argv)
         FloatConversions(ctx, argv[1]);
         R11G11B10Unpack(ctx, argv[1]);
         R11G11B10Pack(ctx, argv[1]);
+        PackedUnorm(ctx, argv[1]);
         if (argc == 2) {
             Encode(ctx, argv[1]);
             Transfer(ctx, argv[1]);

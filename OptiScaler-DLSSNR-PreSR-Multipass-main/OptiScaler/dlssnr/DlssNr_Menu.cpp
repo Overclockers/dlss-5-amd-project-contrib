@@ -772,12 +772,13 @@ void RenderMenu(Config* config, float menuResScale)
                     ImGui::Unindent();
                     if (!gpuHandoff) MenuUi::TextDisabled("Spin options need GPU-armed handoff.");
                     bool computeConvert = config->NrInlineComputeConvert.value_or_default();
-                    if (MenuUi::Checkbox("Compute-queue colour conversion (R11G11B10)", &computeConvert))
+                    if (MenuUi::Checkbox("Compute-queue colour conversion", &computeConvert))
                         config->NrInlineComputeConvert = computeConvert;
-                    HelpMarker("Default off. Experimental. An R11G11B10_FLOAT colour frame (e.g. Clair Obscur) converts its input"
-                               "\non the compute queue instead of a graphics blit, so the inline chain is not split across queues."
+                    HelpMarker("Default off. Experimental. R11G11B10_FLOAT, RGBA8/BGRA8 (UNORM and sRGB) and RGB10A2 colour"
+                               "\nframes convert input and write-back on the compute queue instead of graphics blits,"
+                               "\nso the inline chain is not split across queues."
                                "\nNeeds model scale 1; motion vectors that need rescaling still split it (see the log)."
-                               "\nRebuilds the network for R11G11B10 frames. INI: NrInlineComputeConvert.");
+                               "\nRebuilds the network for those formats. INI: NrInlineComputeConvert.");
                     }
                     const bool armedActive = armedApplies && gpuHandoff;
                     ImGui::BeginDisabled(armedActive);

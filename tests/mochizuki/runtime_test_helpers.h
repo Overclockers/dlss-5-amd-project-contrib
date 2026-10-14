@@ -69,6 +69,13 @@ struct Frame {
             else if(fmt==DXGI_FORMAT_R8G8B8A8_UNORM_SRGB||fmt==DXGI_FORMAT_R8G8B8A8_UNORM) {
                 auto* p=reinterpret_cast<uint8_t*>(row)+x*4;
                 for(int k=0;k<3;k++)p[k]=uint8_t(std::round(base*(1.f-.2f*k)*255));p[3]=255;
+            } else if(fmt==DXGI_FORMAT_B8G8R8A8_UNORM_SRGB||fmt==DXGI_FORMAT_B8G8R8A8_UNORM) {
+                auto* p=reinterpret_cast<uint8_t*>(row)+x*4;
+                for(int k=0;k<3;k++)p[2-k]=uint8_t(std::round(base*(1.f-.2f*k)*255));p[3]=255;
+            } else if(fmt==DXGI_FORMAT_R10G10B10A2_UNORM) {
+                uint32_t v=3u<<30;
+                for(int k=0;k<3;k++)v|=uint32_t(std::round(base*(1.f-.2f*k)*1023))<<(10*k);
+                reinterpret_cast<uint32_t*>(row)[x]=v;
             } else {
                 auto* p=reinterpret_cast<uint16_t*>(row)+x*4;
                 for(int k=0;k<3;k++)p[k]=DirectX::PackedVector::XMConvertFloatToHalf(base*(1.f-.2f*k));p[3]=0x3c00;

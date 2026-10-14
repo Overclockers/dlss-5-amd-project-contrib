@@ -110,4 +110,5 @@ These are fixture results, not new game acceptance or FPS measurements.
 
 No game scene was part of this integration. Official timing numbers are not reused as local results. INT4 stays off. The same-repo draft's explicit barrier switch was not added.
 
-Patch 16 adds untime_pack_r11 (B10G11R11 compute write-back via an r11f_g11f_b10f storage image) so NrInlineComputeConvert does not need direct_out/store_native.
+Patch 16 adds runtime_pack_r11 (B10G11R11 compute write-back via an r11f_g11f_b10f storage image) so NrInlineComputeConvert does not need direct_out/store_native.
+Patch 17 extends the same toggle (RuntimeConfig::compute_convert_colour) to RGBA8/BGRA8 UNORM/sRGB and A2B10G10R10/A2R10G10B10 with runtime_pack_u8_bgra, runtime_pack_u10 and runtime_pack_u10_bgra.
