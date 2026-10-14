@@ -27,8 +27,12 @@ static UINT gLateCapture = 0;
 // gate stays claimed, the side queue holds the network on the GPU until the capture proves the copies
 // done, so the network reads complete input (its private output equals the split baseline); no hang.
 static UINT gLateCopy = 0;
+// --stuck-copy=N (needs --gpu-handoff): like --late-copy but N far exceeds the post-claim wait cap, i.e. the
+// capture never lands within it. Expect: the capped side wait ends, seen=0 gate=1, original frame, history
+// reset (timeout reclaim), resources released, no hang/TDR.
+static UINT gStuckCopy = 0;
 struct BackoffResources : In::Resources {
-    template<class... A> explicit BackoffResources(A&&... a) : In::Resources(std::forward<A>(a)...) { captureBackoff = gCaptureBackoff; gpuArmed = gGpuHandoff; spinPollDelay = gPollDelay; spinSlices = gSpinSlices; watchSlices = gWatchSlices; watchStartDelay = gWatchStart; testInputDelay = gLateCapture; testCopyDelay = gLateCopy; }
+    template<class... A> explicit BackoffResources(A&&... a) : In::Resources(std::forward<A>(a)...) { captureBackoff = gCaptureBackoff; gpuArmed = gGpuHandoff; spinPollDelay = gPollDelay; spinSlices = gSpinSlices; watchSlices = gWatchSlices; watchStartDelay = gWatchStart; testInputDelay = gLateCapture; testCopyDelay = gLateCopy + gStuckCopy; }
 };
 // --reuse routes every recording through the NrInlineReuse pool (AcquireResources).
 static bool gReuse = false;
@@ -40,7 +44,7 @@ static std::shared_ptr<In::Resources> MakeResources(ID3D12Device* d, ID3D12Resou
     std::lock_guard lock(Sub::RecordingMutex());
     auto r = In::AcquireResources(&gPool, d, s, n, f, w, h, std::move(cached));
     if (r->reused) ++gReuseHits;
-    r->captureBackoff = gCaptureBackoff; r->gpuArmed = gGpuHandoff; r->spinPollDelay = gPollDelay; r->spinSlices = gSpinSlices; r->watchSlices = gWatchSlices; r->watchStartDelay = gWatchStart; r->testInputDelay = gLateCapture; r->testCopyDelay = gLateCopy; return r;
+    r->captureBackoff = gCaptureBackoff; r->gpuArmed = gGpuHandoff; r->spinPollDelay = gPollDelay; r->spinSlices = gSpinSlices; r->watchSlices = gWatchSlices; r->watchStartDelay = gWatchStart; r->testInputDelay = gLateCapture; r->testCopyDelay = gLateCopy + gStuckCopy; return r;
 }
 
 int main(int argc, char** argv) {
@@ -70,6 +74,8 @@ int main(int argc, char** argv) {
     for (int i = 3; i < argc; ++i) if (std::strncmp(argv[i], "--watch-start=", 14) == 0) gWatchStart = UINT(std::atoi(argv[i] + 14));
     for (int i = 3; i < argc; ++i) if (std::strncmp(argv[i], "--late-capture=", 15) == 0) gLateCapture = UINT(std::atoi(argv[i] + 15));
     for (int i = 3; i < argc; ++i) if (std::strncmp(argv[i], "--late-copy=", 12) == 0) gLateCopy = UINT(std::atoi(argv[i] + 12));
+    for (int i = 3; i < argc; ++i) if (std::strncmp(argv[i], "--stuck-copy=", 13) == 0) gStuckCopy = UINT(std::atoi(argv[i] + 13));
+    Require(!gStuckCopy || (gGpuHandoff && !timeoutMode && !gLateCapture && !gLateCopy), "--stuck-copy needs --gpu-handoff alone");
     Require(!gLateCapture || (gGpuHandoff && !timeoutMode), "--late-capture needs --gpu-handoff without --timeout");
     Require(!gLateCopy || (gGpuHandoff && !timeoutMode && !gLateCapture), "--late-copy needs --gpu-handoff without --timeout/--late-capture");
     Require(!aco || mochi, "ACO fixture requires Mochizuki");
@@ -245,6 +251,20 @@ int main(int argc, char** argv) {
             Require(GetTickCount64() < deadline, "inline actual network/worker timeout"); Sleep(1);
         }
         const bool late = gLateCapture != 0;
+        if (gStuckCopy) {
+            Require(!owner->failed, "stuck copy: no runtime failure");
+            UINT seen = 9, gate = 9; Require(resources->ArmedOutcome(seen, gate), "stuck copy: armed outcome readable");
+            std::printf("stuck copy replay=%u seen=%u gate=%u applied=%u\n", replay, seen, gate, unsigned(resources->Succeeded()));
+            Require(seen == 0 && gate == 1, "stuck copy: capped claimed wait expired unseen");
+            Require(!resources->Succeeded(), "stuck copy: bypass (network result not applied)");
+            Require(Hash(device.Get(), queue, resources->OutputTexture()) == originalHash, "stuck copy: output is the original frame");
+            std::lock_guard lock(Sub::RecordingMutex());
+            const auto timeouts = owner->inlineTimeouts; owner->ReclaimInlineLocked();
+            Require(owner->inlineTimeouts == timeouts + 1, "stuck copy: reclaimed as timeout (history reset)");
+            std::puts("stuck copy: capped wait ended, original frame, history reset, reclaimed, no hang PASS");
+            lease.reset(); resources.reset(); gPool.clear(); std::puts("actual inline runtime PASS"); std::fflush(stdout);
+            TerminateProcess(GetCurrentProcess(), 0);
+        }
         if (gLateCopy) {
             // The game's own bounded wait starts after its (late) copies, like the network, so the frame
             // normally applies; either way the network must have read the completed input.

@@ -116,3 +116,8 @@
 - 画质：输入从 R11G11B10 扩到 FP32，无损；写回仍是游戏自己的 R11G11B10 量化。**尚未在 E33 实测**，需要 Model scale = 1。
 
 - 包：`OptScaler-NR-1.12.0-alpha2-local-20261014-214810-264.zip`（第 9–11 节的代码）。游戏内未验证。
+
+## Post-claim wait cap (always on)
+
+The armed side-queue wait after a claimed input gate (op 14) is now bounded: kClaimWaitSlices = 4 x kWaitSlices dispatches of kWaitIterations polls, each exiting at once after the capture lands. If the capture never lands, the frame records unseen, publishes bypass (original frame, timeout reclaim = history reset). The network still executes behind it but its output is discarded. Test: run.cmd inline-armed adds --stuck-copy=1024 (seen=0 gate=1, original, reclaimed, PASS); --late-copy=64 still applies with network == split baseline.
+

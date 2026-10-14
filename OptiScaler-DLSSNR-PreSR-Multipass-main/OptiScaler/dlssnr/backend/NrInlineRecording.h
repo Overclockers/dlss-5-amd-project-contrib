@@ -20,6 +20,8 @@ template<class T> using Ptr = Microsoft::WRL::ComPtr<T>;
 inline constexpr UINT kWaitSlices = 64;
 inline constexpr UINT kWaitIterations = 32768;
 inline constexpr UINT kCaptureWatchSlices = 4;
+// Post-claim capture wait cap: 4x the game-side wait budget (kWaitSlices x kWaitIterations polls).
+inline constexpr UINT kClaimWaitSlices = 4 * kWaitSlices;
 // NrGpuHandoff: after closing the input gate, a game that already claimed it is finishing its
 // input copy. The side queue then waits on the GPU for that capture (op 14) before the network
 // starts: no budget can release the network while the copy is still in flight. Termination needs
@@ -278,16 +280,17 @@ cbuffer Args : register(b0) { uint operation; uint iterations; uint pollDelay; }
  else if (operation == 1 || operation == 2) { flag.InterlockedExchange(0, 1, value); DeviceMemoryBarrier(); }
  else if (operation == 3) { flag.InterlockedCompareExchange(0, 0, 0, value); target.Store(0, value); }
  else if (operation == 14) {
-  // Claimed wait: the gate was claimed before op 12 could close it, so the game's input copies are
-  // running or about to. Wait for its capture store (issued after those copies) with no iteration
-  // cap; an open/closed gate means the copies are skipped and nothing is waited for.
+  // Claimed wait (one bounded slice of kClaimWaitSlices): the gate was claimed before op 12 could close
+  // it, so the game's input copies are running or about to. Poll for its capture store (issued after
+  // those copies). Capped: if every slice expires, op 8 records unseen and op 9 publishes bypass
+  // (original frame, history reset); an open/closed gate means nothing is waited for.
   uint gate = 0; flag.InterlockedCompareExchange(4, 0, 0, gate);
-  if (gate == 1) {
-   uint i = 0;
-   [loop] [allow_uav_condition] while (true) {
+  flag.InterlockedCompareExchange(0, 0, 0, value);
+  if (gate == 1 && value == 0) {
+   [loop] [allow_uav_condition] for (uint i = 0; i < iterations; ++i) {
     DeviceMemoryBarrier();
     flag.InterlockedCompareExchange(0, 0, 0, value); if (value != 0) break;
-    uint acc = i++;
+    uint acc = i;
     [loop] for (uint d = 0; d < pollDelay; ++d) acc = acc * 1664525u + 1013904223u;
     if (acc == 0x7fffffffu && pollDelay == 0xffffffffu) target.Store(16, acc);
    }
@@ -610,7 +613,9 @@ cbuffer Size : register(b0) { uint width; uint height; }
         // never reads input the game is still writing (its output is discarded: bypass + history reset).
         // A game that claimed it is copying: wait on the GPU until its capture proves the copies done.
         Op(armList.Get(), 12, sample.Get()); UavBarrier(armList.Get(), capture.Get());
-        Op(armList.Get(), 14, sample.Get()); UavBarrier(armList.Get(), capture.Get());
+        // Bounded claimed wait (always on): kClaimWaitSlices short dispatches, each exits at once after
+        // the capture lands. A capture that never lands ends the wait (unseen -> bypass) well under TDR.
+        for (UINT i = 0; i < kClaimWaitSlices; ++i) { Op(armList.Get(), 14, sample.Get(), kWaitIterations); UavBarrier(armList.Get(), capture.Get()); }
         Op(armList.Get(), 8, sample.Get()); UavBarrier(armList.Get(), sample.Get());
         Check(armList->Close(), "inline arm close");
         sideUncertain = true;
