@@ -342,7 +342,9 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
             const bool ordered = lease->WaitInlineTurn();
             const auto waitedMs = static_cast<unsigned>(GetTickCount64() - turnStart);
             if (diag.active) { diag.qpcEnqueueWaitEnd = FrameDiag::Qpc(); diag.waitEnqueueOrderMs = waitedMs; }
-            const bool captured = ordered && lease->inlineResources->WaitCapture();
+            // NrGpuHandoff: no CPU capture wait; the side queue watches and gates the network itself.
+            const bool captured = ordered && (lease->inlineResources->GpuArmed()
+                ? lease->inlineResources->ArmCapture() : lease->inlineResources->WaitCapture());
             std::lock_guard lock(Submission::RecordingMutex());
             if (captured && ordered) {
                 if (waitedMs >= 2) {

@@ -42,6 +42,7 @@ inline constexpr const char *NrInline = "NrInline";
 inline constexpr const char *LmxxfInlineSlots = "LmxxfInlineSlots";
 inline constexpr const char *NrCaptureBackoff = "NrCaptureBackoff";
 inline constexpr const char *NrInlineReuse = "NrInlineReuse";
+inline constexpr const char *NrGpuHandoff = "NrGpuHandoff";
 inline constexpr const char *EarlyExeWrap = "LmxxfEarlyExeWrap";
 inline constexpr const char *Diagnostic = "LmxxfDiagnostic";
 inline constexpr const char *NrTimingEnabled = "NrTimingEnabled";
@@ -304,6 +305,7 @@ inline constexpr const char *const kKnown[] = {
     LmxxfInlineSlots,
     NrCaptureBackoff,
     NrInlineReuse,
+    NrGpuHandoff,
     EarlyExeWrap,
     Diagnostic,
     NetworkHeight,

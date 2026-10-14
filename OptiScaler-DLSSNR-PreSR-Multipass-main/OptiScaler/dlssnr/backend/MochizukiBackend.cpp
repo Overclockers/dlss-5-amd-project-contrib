@@ -321,6 +321,7 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
                 frame.color_width, frame.color_height, p->owner->inlinePipelines);
             p->owner->inlinePipelines = inlineResources->PipelineCache();
             inlineResources->captureBackoff = Config::Instance()->NrCaptureBackoff.value_or_default();
+            inlineResources->gpuArmed = Config::Instance()->NrGpuHandoff.value_or_default();
             FrameDiag::Begin(inlineResources->diag, "mochizuki", frameId, frame.color_width, frame.color_height, OPTI_VERSION);
             inlineResources->diag.inlineReuse = inlineResources->reused;
             const auto id0 = logical->Identity();

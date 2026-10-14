@@ -109,6 +109,10 @@ class Resources
     Ptr<ID3D12PipelineState> controlPso, composePso;
     Ptr<ID3D12Resource> control, capture, sample, readback, decision, decisionReadback;
     Ptr<ID3D12Fence> sideFence, gameFence;
+    // NrGpuHandoff: the game queue signals armFence just before this list runs (BeforeExecute); the side
+    // queue waits on it (no spin while the game is still on earlier work), then watches the capture flag.
+    Ptr<ID3D12Fence> armFence; UINT64 armValue = 0;
+    Ptr<ID3D12CommandAllocator> armAlloc; Ptr<ID3D12GraphicsCommandList> armList;
     struct KernelHandle {
         HANDLE value = nullptr;
         ~KernelHandle() { if (value) CloseHandle(value); }
@@ -116,7 +120,7 @@ class Resources
     // Unique registrations are never reused for another fence value. Retain
     // even timed-out registrations until this recording's completion proof.
     std::vector<std::unique_ptr<KernelHandle>> captureEvents;
-    UINT64 serial = 0, finalValue = 0, gameValue = 0;
+    UINT64 serial = 0, finalValue = 0, gameValue = 0, armSerial = 0;
     std::atomic<bool> scheduled {false};
     bool started = false, uncertain = false;
     std::atomic<bool> sideUncertain {false};
@@ -154,7 +158,7 @@ class Resources
     }
     void Op(ID3D12GraphicsCommandList* list, UINT op, ID3D12Resource* target, UINT iterations = 0) {
         list->SetPipelineState(controlPso.Get()); list->SetComputeRootSignature(controlRoot.Get());
-        list->SetComputeRootUnorderedAccessView(0, (op == 1 || op == 3 || op == 6 || op == 7 ? capture : control)->GetGPUVirtualAddress());
+        list->SetComputeRootUnorderedAccessView(0, (op == 1 || op == 3 || op == 6 || op == 7 || op == 8 ? capture : control)->GetGPUVirtualAddress());
         list->SetComputeRootUnorderedAccessView(1, target->GetGPUVirtualAddress());
         const UINT args[] {op, iterations}; list->SetComputeRoot32BitConstants(2, 2, args, 0);
         list->Dispatch(1, 1, 1);
@@ -266,6 +270,12 @@ cbuffer Args : register(b0) { uint operation; uint iterations; }
    flag.InterlockedCompareExchange(0, 0, 0, value); if (value != 0) break;
   }
   if (operation == 4) target.Store(8, spun);
+ } else if (operation == 8) {
+  // GPU-armed handoff: record whether the watch saw the capture before the network was released.
+  flag.InterlockedCompareExchange(0, 0, 0, value); target.Store(12, value != 0 ? 1 : 0); DeviceMemoryBarrier();
+ } else if (operation == 9) {
+  // GPU-armed handoff done: network output is valid only if the capture was seen first; else bypass (original).
+  uint seen = target.Load(12); flag.InterlockedExchange(0, seen != 0 ? 1 : 2, value); DeviceMemoryBarrier();
  } else { flag.InterlockedCompareExchange(0, 0, 0, value); target.Store2(0, uint2(value == 1 ? 1 : 0, 0)); }
 })");
         D3D12_DESCRIPTOR_RANGE ranges[2] {};
@@ -351,7 +361,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
     }
     void PrepareReuse() {
         captureEvents.clear(); started = false; decisionReadable = false; uncertain = noNetwork = false;
-        diag = {}; captureBackoff = 0; activityToken = 0; reused = true;
+        diag = {}; captureBackoff = 0; gpuArmed = false; activityToken = 0; reused = true;
     }
     bool RetirementUncertain() const { return uncertain || sideUncertain; }
     // Set under RecordingMutex from the lease that admitted this recording.
@@ -361,6 +371,8 @@ cbuffer Size : register(b0) { uint width; uint height; }
     // Capture discovery policy snapshot for this frame (0 exponential 50..5000 us, 1 fixed 100 us,
     // 2 event: a bounded side-queue spin on the capture flag, then a fence event wakes the worker).
     int captureBackoff = 0;
+    // NrGpuHandoff snapshot for this frame: release the network from the side queue when the capture lands.
+    bool gpuArmed = false;
     bool reused = false; // came from NrInlineReuse pool
     bool Complete() const {
         if (!started) return true;
@@ -396,6 +408,15 @@ cbuffer Size : register(b0) { uint width; uint height; }
         sideUncertain = false;
         // No CPU GPU wait under RecordingMutex. Only the producer depends on this clear.
         Check(game->Wait(sideFence.Get(), reset), "inline producer reset wait");
+        armValue = 0;
+        if (gpuArmed && !bypass) {
+            if (!armFence) Check(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&armFence)), "inline arm fence");
+            // Queue-level signal before the producer list: everything earlier on the game queue is done.
+            const UINT64 next = armFence->GetCompletedValue() == UINT64_MAX ? 0 : armSerial + 1;
+            if (!next) throw std::runtime_error("inline arm fence lost");
+            Check(game->Signal(armFence.Get(), next), "inline arm signal");
+            armSerial = armValue = next;
+        }
     }
     void GameSubmitted(ID3D12Fence* fence, UINT64 value, HRESULT hr) {
         if (FAILED(hr) || !fence || !value || value == UINT64_MAX) { uncertain = true; return; }
@@ -413,7 +434,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
         const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(10);
         const bool fixedBackoff = captureBackoff == 1, eventWake = captureBackoff == 2;
         if (diag.active) { diag.capturePolls = 0; diag.captureBackoffUsFinal = 0;
-            diag.captureBackoffMode = eventWake ? "event" : fixedBackoff ? "fixed100" : "exp"; }
+            diag.captureBackoffMode = eventWake ? "event" : fixedBackoff ? "fixed100" : "exp";  diag.handoff = "cpu"; }
         // The event wakes this worker promptly; the fence remains the proof.
         // Reusing one event across values can let a late signal wake a new wait.
         auto waitFence = [&](UINT64 value) {
@@ -475,6 +496,30 @@ cbuffer Size : register(b0) { uint width; uint height; }
         }
         return false;
     }
+    // NrGpuHandoff replacement for WaitCapture: no CPU wait. Side queue: Wait(arm) -> bounded watch on the
+    // capture flag -> record seen/unseen. The caller then enqueues the network behind it on the same queue;
+    // NetworkQueued's done op publishes 1 (apply) only if the watch saw the capture, else 2 (original frame).
+    bool GpuArmed() const { return armValue != 0; }
+    bool ArmCapture() {
+        if (!armValue || !armFence) return false;
+        if (diag.active) { diag.capturePolls = 0; diag.captureBackoffUsFinal = 0; diag.captureBackoffMode = "gpu"; diag.handoff = "gpu"; }
+        if (!armAlloc) {
+            Check(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COMPUTE, IID_PPV_ARGS(&armAlloc)), "inline arm allocator");
+            Check(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COMPUTE, armAlloc.Get(), nullptr, IID_PPV_ARGS(&armList)), "inline arm list");
+        } else {
+            // Previous use retired: BeforeExecute requires Complete(), and finalValue follows this list on side.
+            Check(armAlloc->Reset(), "inline arm allocator reset"); Check(armList->Reset(armAlloc.Get(), nullptr), "inline arm list reset");
+        }
+        for (UINT i = 0; i < kWaitSlices; ++i) { Op(armList.Get(), 7, sample.Get(), kWaitIterations); UavBarrier(armList.Get(), capture.Get()); }
+        Op(armList.Get(), 8, sample.Get()); UavBarrier(armList.Get(), sample.Get());
+        Check(armList->Close(), "inline arm close");
+        sideUncertain = true;
+        Check(side->Wait(armFence.Get(), armValue), "inline arm wait");
+        Execute(side.Get(), armList.Get());
+        sideUncertain = false;
+        if (diag.active) diag.qpcCaptureSeen = FrameDiag::Qpc(); // armed (not seen): handoff is GPU-side
+        return true;
+    }
     void NetworkQueued(bool ok) {
         if (diag.active) diag.qpcSideReady = FrameDiag::Qpc();
         // Failure can follow partial runtime submission. Append a fresh side tail,
@@ -489,7 +534,9 @@ cbuffer Size : register(b0) { uint width; uint height; }
             if (diag.active && !sideStamps) sideStamps = FrameDiag::GpuStamps::Acquire(device.Get(), 1);
             const bool stamp = diag.active && sideStamps;
             if (stamp) sideStamps->Stamp(doneList.Get(), 0);
-            Op(doneList.Get(), 2, sample.Get()); UavBarrier(doneList.Get(), control.Get());
+            if (armValue) { UavBarrier(doneList.Get(), sample.Get()); Op(doneList.Get(), 9, sample.Get()); }
+            else Op(doneList.Get(), 2, sample.Get());
+            UavBarrier(doneList.Get(), control.Get());
             if (stamp) sideStamps->Resolve(doneList.Get());
             Check(doneList->Close(), "inline done close"); Execute(side.Get(), doneList.Get());
         }

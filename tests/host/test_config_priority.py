@@ -185,6 +185,7 @@ int main() {
                 "NrInline",  # Host-owned submission mode, no upstream environment alias.
                 "NrCaptureBackoff",  # Host-owned inline capture polling policy.
                 "NrInlineReuse",  # Host-owned inline recording reuse.
+                "NrGpuHandoff",  # Host-owned GPU-armed inline handoff.
                 "EarlyExeWrap",
                 "Diagnostic",
                 "NrTimingEnabled",  # Product telemetry, not an upstream kernel option.

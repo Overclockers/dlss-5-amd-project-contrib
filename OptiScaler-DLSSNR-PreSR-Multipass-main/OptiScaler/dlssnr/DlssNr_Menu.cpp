@@ -61,6 +61,7 @@ static void ResetSharedNrDefaults(Config* config)
     config->LmxxfInlineSlots.reset();
     config->NrCaptureBackoff.reset();
     config->NrInlineReuse.reset();
+    config->NrGpuHandoff.reset();
 }
 
 // The "(?)" marker every control carries, matching the rest of the menu.
@@ -716,6 +717,11 @@ void RenderMenu(Config* config, float menuResScale)
                     if (MenuUi::Checkbox("Reuse inline recordings", &reuse)) config->NrInlineReuse = reuse;
                     HelpMarker("Default off. Reuses finished per-frame inline objects with identical inputs instead of"
                                "\ncreating them every frame, so NR can start sooner. Applies to the next frame. INI: NrInlineReuse.");
+                    bool gpuHandoff = config->NrGpuHandoff.value_or_default();
+                    if (MenuUi::Checkbox("GPU-armed handoff", &gpuHandoff)) config->NrGpuHandoff = gpuHandoff;
+                    HelpMarker("Default off. Mochizuki inline: the GPU side queue watches for this frame's capture and starts NR"
+                               "
+without a CPU round trip. Missed capture shows the original frame. Applies to the next frame. INI: NrGpuHandoff.");
                 }
                 if (isLmxxf && inlineMode) {
                     int slots = std::clamp(config->LmxxfInlineSlots.value_or_default(), 1, 5) - 1;
@@ -797,6 +803,7 @@ void RenderMenu(Config* config, float menuResScale)
                     resetOption(config->LmxxfInlineSlots);
                     resetOption(config->NrCaptureBackoff);
                     resetOption(config->NrInlineReuse);
+                    resetOption(config->NrGpuHandoff);
                     SetAllowEnhancedBarriers(config->LmxxfAllowEnhancedBarriers.value_or_default());
                     resetOption(config->LmxxfEarlyExeWrap);
                 }
