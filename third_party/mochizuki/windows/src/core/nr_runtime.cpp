@@ -1643,6 +1643,7 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
                 const VkFormatFeatureFlags need = VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT | VK_FORMAT_FEATURE_TRANSFER_SRC_BIT;
                 if (name && (pp.optimalTilingFeatures & need) == need && std::filesystem::exists(adapters / name)) {
                     impl_->first_packed = s.ctx.image(config.width, config.height, fmt, false);
+                    s.ctx.transition(impl_->first_packed, VK_IMAGE_LAYOUT_GENERAL);
                     impl_->first_pack.create(s.ctx, (adapters / name).string(), {}, 8,
                                              {&impl_->first_full, &impl_->first_packed});
                     nr::logf("[nr] first-pass export packed on compute (%s)", name);
@@ -3007,7 +3008,7 @@ void Runtime::record_first_pack(VkCommandBuffer cmd, uint32_t w, uint32_t h) {
     barrier(cmd, m.first_packed.handle, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
             VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
-    // pass 0 is written again by the next recording's transfer
+    // WAR: pass 0 is written again by the next recording's network
     barrier(cmd, m.first_full.handle, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,
             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT);

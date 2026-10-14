@@ -1,5 +1,5 @@
 diff --git a/windows/src/core/nr_runtime.cpp b/windows/src/core/nr_runtime.cpp
-index 6383508..6214e1e 100644
+index 6383508..a78fd3f 100644
 --- a/windows/src/core/nr_runtime.cpp
 +++ b/windows/src/core/nr_runtime.cpp
 @@ -348,6 +348,7 @@ struct Runtime::Impl {
@@ -19,7 +19,7 @@ index 6383508..6214e1e 100644
          if (prep_k.device) prep_k.destroy();
          if (prep_back_k.device) prep_back_k.destroy();
          if (transfer_prep.device) transfer_prep.destroy();
-@@ -1625,6 +1628,29 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
+@@ -1625,6 +1628,30 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
              s.ctx.transition(impl_->first_full, VK_IMAGE_LAYOUT_GENERAL);
              impl_->first_transfer.create(s.ctx, (adapters / "runtime_transfer.spv").string(), {}, sizeof(TransferPush),
                                           {&s.surf0, shown, keep, &impl_->first_full, up_r});
@@ -38,6 +38,7 @@ index 6383508..6214e1e 100644
 +                const VkFormatFeatureFlags need = VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT | VK_FORMAT_FEATURE_TRANSFER_SRC_BIT;
 +                if (name && (pp.optimalTilingFeatures & need) == need && std::filesystem::exists(adapters / name)) {
 +                    impl_->first_packed = s.ctx.image(config.width, config.height, fmt, false);
++                    s.ctx.transition(impl_->first_packed, VK_IMAGE_LAYOUT_GENERAL);
 +                    impl_->first_pack.create(s.ctx, (adapters / name).string(), {}, 8,
 +                                             {&impl_->first_full, &impl_->first_packed});
 +                    nr::logf("[nr] first-pass export packed on compute (%s)", name);
@@ -49,7 +50,7 @@ index 6383508..6214e1e 100644
          }
      }
      if (config.preprocess && !mask_config.width) {
-@@ -2966,6 +2992,26 @@ float Runtime::last_transfer_ms() const { return impl_->transfer_ms; }
+@@ -2966,6 +2993,26 @@ float Runtime::last_transfer_ms() const { return impl_->transfer_ms; }
  float Runtime::last_network_ms() const { return impl_->network_ms; }
  float Runtime::last_other_ms() const { return impl_->other_ms; }
  VkImage Runtime::first_pass_output() const { return impl_->first_full.handle; }
@@ -68,7 +69,7 @@ index 6383508..6214e1e 100644
 +    barrier(cmd, m.first_packed.handle, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
 +            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
 +            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
-+    // pass 0 is written again by the next recording's transfer
++    // WAR: pass 0 is written again by the next recording's network
 +    barrier(cmd, m.first_full.handle, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
 +            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,
 +            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT);

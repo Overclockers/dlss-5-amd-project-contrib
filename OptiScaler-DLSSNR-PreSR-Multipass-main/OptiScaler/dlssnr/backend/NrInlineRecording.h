@@ -11,7 +11,6 @@
 #include <thread>
 #include <algorithm>
 #include <cmath>
-#include <string_view>
 #include <memory>
 #include <vector>
 #include <mutex>
@@ -58,20 +57,16 @@ struct AdaptiveWaitBudget {
     void Timeout() {
         clean.store(0, std::memory_order_relaxed);
         const UINT now = Slices(), next = std::max(kAdaptiveMinSlices, now / 2);
-        if (next != now) { slices.store(next, std::memory_order_relaxed); Changed("shrink", next); }
+        if (next != now) { slices.store(next, std::memory_order_relaxed); Changed(true); }
     }
     void Clean() {
         if (clean.fetch_add(1, std::memory_order_relaxed) + 1 < kAdaptiveCleanToGrow) return;
         clean.store(0, std::memory_order_relaxed);
         const UINT now = Slices(), cap = Cap(), next = std::min(cap, std::max(now * 2, kAdaptiveMinSlices));
-        if (next != now) { slices.store(next, std::memory_order_relaxed); Changed(next > now ? "grow" : "fit", next); }
+        if (next != now) { slices.store(next, std::memory_order_relaxed); Changed(false); }
     }
-    void Changed(const char* why, UINT next) {
-        const UINT n = (std::string_view(why) == "shrink" ? shrinks : grows).fetch_add(1, std::memory_order_relaxed) + 1;
-        if (n <= 4 || n % 1000 == 0)
-            LOG_INFO("NR adaptive wait budget {}: {} slices ({:.0f} iterations/ms, cap {})", why, next,
-                     itersPerMs.load(std::memory_order_relaxed), Cap());
-    }
+    // Counted only (this header stays logger-free for the standalone tests).
+    void Changed(bool shrink) { (shrink ? shrinks : grows).fetch_add(1, std::memory_order_relaxed); }
 };
 inline AdaptiveWaitBudget& AdaptiveBudget() { static AdaptiveWaitBudget budget; return budget; }
 struct AbortChannel {
