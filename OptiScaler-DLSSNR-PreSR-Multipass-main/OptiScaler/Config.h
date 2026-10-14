@@ -392,8 +392,10 @@ class Config
     // Allow NR on command lists that use D3D12 enhanced barriers (CommandListProxy::Barrier).
     // State is not fully modeled for those groups (layout/access), and a split can cut a
     // SYNC_SPLIT barrier group across two submits. Default false (fail-closed reject).
-    // true opts in for games that need those lists on the NR path.
-    CustomOptional<bool> LmxxfAllowEnhancedBarriers { false };
+    // true opts in for games that need those lists on the NR path. Unset = auto: on when the exe name
+    // contains "forza" (Mochizuki needs it there), off otherwise. Read it through
+    // AllowEnhancedBarriersEffective(); explicit true/false always wins.
+    CustomOptional<bool, NoDefault> LmxxfAllowEnhancedBarriers;
     CustomOptional<int> LmxxfInlineSlots { 3 };
     // Inline capture discovery: 0 = exponential 50..5000 us (default), 1 = fixed 100 us, 2 = event. Applies per frame.
     CustomOptional<int> NrCaptureBackoff { 0 };
@@ -1202,6 +1204,10 @@ class Config
 
     bool LoadFromPath(const wchar_t* InPath);
     bool SaveIni();
+    // LmxxfAllowEnhancedBarriers resolved: the explicit value, else auto (on for Forza).
+    bool AllowEnhancedBarriersEffective();
+    // The host exe's file name contains "forza" (case-insensitive). Cached.
+    static bool ExeIsForza();
     bool SaveXeFG();
 
     void CheckUpscalerFiles();
