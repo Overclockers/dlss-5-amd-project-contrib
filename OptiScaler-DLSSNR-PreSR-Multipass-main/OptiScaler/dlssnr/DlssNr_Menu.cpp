@@ -465,15 +465,16 @@ static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const 
             const char* sources[] = {"Off", "Follow game", "Own meter", "Auto"};
             const uint32_t stored = config->MochizukiWhitePointSource.value_or_default();
             int source = stored <= 3u ? int(stored) : 0;
-            if (MenuUi::Combo("Mochizuki white point source", &source, sources, IM_ARRAYSIZE(sources)))
+            if (MenuUi::Combo("White point source", &source, sources, IM_ARRAYSIZE(sources)))
                 config->MochizukiWhitePointSource = uint32_t(source);
             HelpMarker("Mochizuki backend only. Where its linear/HDR white point comes from. Default Off.\nOff: manual White point only.\nFollow game: use the game's exposure; manual when the game gives none.\nOwn meter: ignore the game and measure the frame itself (one tiny GPU pass, one frame late).\nAuto: the game's exposure when usable, else the own meter, else manual.\nTry Own meter or Auto when skin turns red at overall intensity above 1 (e.g. Monster Hunter Wilds).\nINI: MochizukiWhitePointSource (0-3).");
             float wp = config->MochizukiWhitePoint.value_or_default();
-            if (MochizukiFloatControl("White point", CfgKey::MochizukiWhitePoint, &wp, .01f, 100.f))
+            if (MochizukiFloatControl("White point / brightness trim", CfgKey::MochizukiWhitePoint, &wp, .01f, 100.f))
             {
                 config->MochizukiWhitePoint = wp;
                 AmdBridge::InvalidateHistory();
             }
+            HelpMarker("With white point source off, this is the white point. With any auto source, it is a brightness trim on top of the automatic result; 1.0 = no change. Mochizuki backend only.");
         }
         ImGui::PushID(g);
         const char* label = g == 1 ? (page == PipelineUi::Section::Input ? "Resolution" : "Model passes") :
