@@ -14,6 +14,7 @@ import runpy
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '_lib'))
 from lmxxf_fixtures import damage_modules, make_modules, snapshot_files
+from mochizuki_fixtures import int4_tools
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -112,7 +113,8 @@ Add-Type -TypeDefinition 'public static class PackageFixture { public static int
         for name in ('OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/library/vulkan/vulkan-1.lib',
                      'tools/build/mochizuki-manifest.py', 'tools/build/build-mochizuki-runtime.py',
                      'tools/build/build-mochizuki-runtime.cmd', 'tools/build/mochizuki-deps.py',
-                     'tools/build/mochizuki-aco.py',
+                     'tools/build/mochizuki-aco.py', 'tools/build/mochizuki-renodx.py',
+                     'tools/install/mochizuki-int4.ps1',
                      'tools/install/mochizuki-model.py', 'tools/install/mochizuki-python.ps1', 'docs/mochizuki.md',
                      'OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/dlssnr/backend/lmxxf_runtime/LmxxfNrApi.h',
                      'OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/dlssnr/NrPerformance.h'):
@@ -151,6 +153,7 @@ Add-Type -TypeDefinition 'public static class PackageFixture { public static int
         (mz / 'dlssnr-amd/pipeline.cache').write_bytes(b'local pipeline cache')
         (mz / 'dlssnr-amd/aco-cache').mkdir()
         (mz / 'dlssnr-amd/aco-cache/local.nrb').write_bytes(b'local aco cache')
+        int4_tools(mz / 'model-tools')
         runpy.run_path(str(self.root / 'tools/build/mochizuki-manifest.py'))['write'](mz)
         (mz / 'abi-ci.sha256').write_text(hashlib.sha256((mz / 'MochizukiNrRuntime.dll').read_bytes()).hexdigest())
 

@@ -84,6 +84,94 @@ extern "C"
         uint32_t enlarge_mode;     /* 0 matched residual (default), 1 edge-aware, 2 classic; reduced model scale only */
         uint32_t classic_scaler;   /* 0 bilinear, 1 Catmull-Rom (default), 2 Lanczos3, 3 FSR1; used when enlarge_mode is 2 */
         uint32_t aco_mode;         /* 0 off, 1 ACO (default; falls back to the driver compiler when unavailable); fixed when the Vulkan device is created; a change needs a restart */
+        uint32_t int4_mixed;
+        uint32_t renodx_enabled;
+        uint32_t noise_every_frame;
+        uint32_t reno_nr_enabled;
+        float reno_intensity;
+        uint32_t reno_style;
+        float reno_local_tone;
+        float reno_local_structure;
+        float reno_skin_structure;
+        uint32_t reno_auto_mask;
+        uint32_t reno_skin_independent;
+        uint32_t reno_passes;
+        uint32_t reno_unlock_passes;
+        uint32_t reno_chained_history;
+        float reno_pass_transfer_0;
+        float reno_pass_color_0;
+        float reno_pass_intensity_0;
+        uint32_t reno_pass_follow_0;
+        uint32_t reno_pass_style_0;
+        float reno_pass_local_tone_0;
+        float reno_pass_local_structure_0;
+        float reno_pass_skin_structure_0;
+        uint32_t reno_pass_auto_mask_0;
+        float reno_pass_transfer_1;
+        float reno_pass_color_1;
+        float reno_pass_intensity_1;
+        uint32_t reno_pass_follow_1;
+        uint32_t reno_pass_style_1;
+        float reno_pass_local_tone_1;
+        float reno_pass_local_structure_1;
+        float reno_pass_skin_structure_1;
+        uint32_t reno_pass_auto_mask_1;
+        float reno_pass_transfer_2;
+        float reno_pass_color_2;
+        float reno_pass_intensity_2;
+        uint32_t reno_pass_follow_2;
+        uint32_t reno_pass_style_2;
+        float reno_pass_local_tone_2;
+        float reno_pass_local_structure_2;
+        float reno_pass_skin_structure_2;
+        uint32_t reno_pass_auto_mask_2;
+        float reno_color_strength;
+        float reno_transfer_strength;
+        float reno_chroma_clamp_stops;
+        uint32_t reno_transfer_mode;
+        float reno_style_highlight_guard;
+        uint32_t reno_detail_stability;
+        float reno_resolution_scale;
+        uint32_t reno_follow_input_res;
+        uint32_t reno_look_upsample;
+        uint32_t reno_look_mode;
+        float reno_look_strength;
+        float reno_look_brighten;
+        float reno_look_darken;
+        float reno_look_colour;
+        float reno_look_hue;
+        float reno_look_shadows;
+        float reno_look_midtones;
+        float reno_look_highlights;
+        float reno_look_max_brighten;
+        float reno_look_max_darken;
+        float reno_look_max_colour;
+        float reno_look_tone;
+        float reno_look_detail;
+        float reno_look_detail_radius;
+        float reno_look_halo;
+        float reno_look_halo_bright;
+        uint32_t reno_look_stabilize;
+        float reno_look_stabilize_ms;
+        uint32_t reno_look_stabilize_detail;
+        uint32_t reno_sdr_black_restore;
+        uint32_t reno_display_pedestal;
+        uint32_t reno_codec_mode;
+        uint32_t reno_neural_floor_guard;
+        uint32_t reno_source_encoding;
+        float reno_linear_unit_nits;
+        float reno_proxy_anchor_nits;
+        float reno_paper_white_scale;
+        float reno_diffuse_white_nits;
+        float reno_pq_calibration;
+        uint32_t reno_feed_mode;
+        uint32_t reno_norm_governor;
+        uint32_t reno_norm_cut_aware;
+        float reno_norm_attack_stops;
+        float reno_norm_release_stops;
+        float reno_norm_slew_stops;
+        float reno_mvec_scale_x;
+        float reno_mvec_scale_y;
     } MochizukiNrControls;
 
     /* What the session is doing, for a menu. Safe to ask from any thread, at any rate. */
@@ -115,6 +203,7 @@ extern "C"
         uint32_t aco_requested; /* the setting last given to SetControls */
         uint32_t aco_effective; /* 1 when this device was created with ACO and it stayed on */
         char aco_fallback[128]; /* why ACO is off, or that a change waits for the next start; empty when unused */
+        uint32_t int4_requested, int4_effective, renodx_effective;
         /* struct_size includes the current definition's tail padding. */
     } MochizukiNrInfo;
 

@@ -938,7 +938,8 @@ bool Evaluate(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* params, ID3D1
     const auto personSettings = DlssNr::Person::Settings {
         cfg.NrPersonStrength.value_or_default(), cfg.NrPersonDetailGain.value_or_default(),
         cfg.NrPersonDebugMask.value_or_default() }.Bounded();
-    const bool personWanted = cfg.NrPersonPartition.value_or_default() && kind != DlssNr::Backend::Kind::Daniel &&
+    const bool reno = kind == DlssNr::Backend::Kind::Mochizuki && cfg.MochizukiRenoDX.value_or_default();
+    const bool personWanted = cfg.NrPersonPartition.value_or_default() && !reno && kind != DlssNr::Backend::Kind::Daniel &&
         (personPasses > 1 || personSettings.ChangesSinglePass()) && cfg.NrOverallIntensity.value_or_default() != 0.f;
     const int personModel = cfg.NrPersonModel.value_or_default();
     const unsigned faceSize=personModel==2?DlssNr::Person::Face::BoundedSize(cfg.NrFaceInputSize.value_or_default()):320;

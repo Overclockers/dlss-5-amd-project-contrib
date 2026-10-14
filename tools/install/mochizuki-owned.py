@@ -43,6 +43,25 @@ def owned_paths():
     records = vendor / 'windows/data/aco/records'
     paths += [f'aco/records/{path.name}' for path in records.iterdir() if path.is_file()]
     paths.append('aco/shell-aliases.txt')
+    table = json.loads((vendor / 'linux/shaders/rdna4/pipelines.json').read_text())
+    int4 = json.loads((vendor / 'linux/shaders/rdna4/pipelines-int4.json').read_text())
+    for prefix in ('aco/int4/shaders', 'int4/shaders'):
+        names = set(table['pipelines']) | set(int4['new'])
+        paths += [f'{prefix}/g_{name}.spv' for name in names]
+        paths += [f'{prefix}/{name}' for name in table['markers']]
+        paths += [f'{prefix}/g_{name}.spv.iu4' for name in int4['iu4']]
+        paths += [f'{prefix}/temporal/{name}.spv' for name in list(table['variants']) + list(MOTION)]
+        paths += [f'{prefix}/temporal/shader-constants.txt', f'{prefix}/hs-pipelines.txt']
+    paths += [f'aco/int4/records/{p.name}' for p in (vendor / 'windows/data/aco/int4/records').iterdir() if p.is_file()]
+    paths.append('aco/int4/shell-aliases.txt')
+    data = vendor / 'linux/data/int4/rdna4'
+    paths += ['int4/' + p.relative_to(data).as_posix() for directory in ('vit', 'swin')
+              for p in (data / directory).rglob('*') if p.is_file()]
+    paths.append('int4/settings.txt')
+    renodx = vendor / 'windows/shaders/renodx'
+    paths += ['shaders/renodx/renodx_' + p.name.removesuffix('.cs_5_1.hlsl') + '.spv'
+              for p in renodx.glob('*.cs_5_1.hlsl')]
+    paths += ['shaders/renodx/renodx_prep.spv', 'shaders/renodx/renodx_prep_encode.spv', 'shaders/renodx/RenoDX-LICENSE.txt']
     unique = sorted(set(paths))
     if len(unique) != len(paths):
         raise SystemExit('Mochizuki ownership pin has a duplicate path')

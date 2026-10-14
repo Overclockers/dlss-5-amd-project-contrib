@@ -235,6 +235,22 @@ static bool MochizukiChoice(const char* label, std::string_view key, int* value,
         return MenuUi::Combo(label, value, "Auto\0Linear\0Encoded\0");
     if (key == CfgKey::MochizukiDynamicResolution)
         return MenuUi::Combo(label, value, "Exact\0Auto bucket\0Always bucket\0");
+    if (key == CfgKey::MochizukiRenoStyle) return MenuUi::Combo(label, value, "Standard\0Natural\0Cinematic\0");
+    if (key == CfgKey::MochizukiRenoPass2Style) return MenuUi::Combo(label, value, "Standard\0Natural\0Cinematic\0");
+    if (key == CfgKey::MochizukiRenoPass3Style) return MenuUi::Combo(label, value, "Standard\0Natural\0Cinematic\0");
+    if (key == CfgKey::MochizukiRenoPass4Style) return MenuUi::Combo(label, value, "Standard\0Natural\0Cinematic\0");
+    if (key == CfgKey::MochizukiRenoTransferMode) return MenuUi::Combo(label, value, "Bounded ratio\0Consistent\0");
+    if (key == CfgKey::MochizukiRenoDetailStability) return MenuUi::Combo(label, value, "Auto\0Off\0Always\0");
+    if (key == CfgKey::MochizukiRenoLookUpsample) return MenuUi::Combo(label, value, "Auto\0Edge-aware\0Classic\0Area input\0");
+    if (key == CfgKey::MochizukiRenoLookStabilize) return MenuUi::Combo(label, value, "Off\0Static\0Motion\0");
+    if (key == CfgKey::MochizukiRenoSdrBlackRestore) return MenuUi::Combo(label, value, "Auto\0Every block\0Smooth\0");
+    if (key == CfgKey::MochizukiRenoDisplayPedestal) return MenuUi::Combo(label, value, "Auto\0Always\0Smooth\0");
+    if (key == CfgKey::MochizukiRenoCodecMode) return MenuUi::Combo(label, value, "Classic\0Anchored\0Auto\0Display\0");
+    if (key == CfgKey::MochizukiRenoSourceEncoding) return MenuUi::Combo(label, value, "From the format\0SDR\0Linear\0PQ\0");
+    if (key == CfgKey::MochizukiRenoFeedMode) return MenuUi::Combo(label, value, "Auto\0Content meter\0Game exposure\0");
+    if (key == CfgKey::MochizukiRenoNormGovernor) return MenuUi::Combo(label, value, "Off\0Slew\0Stable\0");
+    if (key == CfgKey::MochizukiRenoPasses && !Config::Instance()->MochizukiRenoUnlockPasses.value_or_default())
+        high = 4;
     return MenuUi::SliderInt(label, value, low, high);
 }
 
@@ -278,7 +294,7 @@ static bool MochizukiIntegerControl(const char* label, std::string_view key, int
 
 static bool MochizukiFloatControl(const char* label, std::string_view key, float* value, float low, float high)
 {
-    if (key == CfgKey::MochizukiModelScale) {
+    if (key == CfgKey::MochizukiModelScale || key == CfgKey::MochizukiRenoResolutionScale) {
         float percent = *value * 100.f;
         if (!RebuildSlider("Model resolution", &percent, low * 100.f, high * 100.f, false)) return false;
         *value = percent / 100.f;
@@ -313,7 +329,8 @@ static void RenderSharedOutputEffects(Config* config)
     const auto personKind = Backend::ActiveKindFromConfig();
     const auto personPasses = personKind == Backend::Kind::Lmxxf ? config->LmxxfMultiPass.value_or_default() :
         personKind == Backend::Kind::Mochizuki ? config->MochizukiEffectivePasses() : 0;
-    const bool personSupported = personKind == Backend::Kind::Lmxxf || personKind == Backend::Kind::Mochizuki;
+    const bool renoPerson = personKind == Backend::Kind::Mochizuki && config->MochizukiRenoDX.value_or_default();
+    const bool personSupported = !renoPerson && (personKind == Backend::Kind::Lmxxf || personKind == Backend::Kind::Mochizuki);
     bool person = config->NrPersonPartition.value_or_default();
     ImGui::BeginDisabled(!personSupported);
     if (MenuUi::Checkbox("Person protection", &person)) {
@@ -359,13 +376,14 @@ static void RenderSharedOutputEffects(Config* config)
             (prepExposure > 2 || prepExposure == 1 || (prepExposure == 2 && config->MochizukiPreprocessBiasEv.value_or_default() != 0.f) ||
              config->MochizukiPreprocessCurve.value_or_default() != 0u || config->MochizukiPreprocessContrast.value_or_default() != 1.f ||
              config->MochizukiPreprocessSaturation.value_or_default() != 1.f);
-        if (personKind == Backend::Kind::Mochizuki && personPasses > 1 && prepActive)
+        if (personKind == Backend::Kind::Mochizuki && !renoPerson && personPasses > 1 && prepActive)
             MenuUi::TextColored(ImVec4(0.95f, 0.70f, 0.20f, 1.0f),
                                "Preprocessing is on: person protection does not work in multi-pass. Turn off preprocessing.");
         if (personSupported && personPasses == 1 && strength == 1.f && detail == 1.f && !debugMask)
             MenuUi::TextWrapped("Single pass: lower person strength or detail to apply protection.");
     }
-    if (!personSupported) MenuUi::TextDisabled("Available with lmxxf and Mochizuki.");
+    if (renoPerson) MenuUi::TextWrapped("Person protection is unavailable with RenoDX. Your settings are preserved for the original mode.");
+    else if (!personSupported) MenuUi::TextDisabled("Available with lmxxf and Mochizuki.");
     else if (person) {
         // Translate each fixed status independently; preserve diagnostic details
         // and the numeric CPU timing instead of treating a joined line as a key.
@@ -448,16 +466,25 @@ static void RenderEarlyCommandListWrap(Config* config)
 
 static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const std::string& status)
 {
-    static const char* groups[] = {"Model response", "Quality", "Temporal history", "Before the model", "Advanced", "Pass 2", "Pass 3", "After the model"};
-    static constexpr int order[] = {1, 0, 5, 6, 7, 2, 3, 4};
+    static const char* groups[] = {"Model response", "Quality", "Temporal history", "Before the model", "Advanced", "Pass 2", "Pass 3", "After the model", "RenoDX: Neural Rendering", "RenoDX: Network", "RenoDX: Passes", "RenoDX: Pass 2", "RenoDX: Pass 3", "RenoDX: Pass 4 and later", "RenoDX: Composition", "RenoDX: Resolution", "RenoDX: Adjust NR's look", "RenoDX: Encoding", "RenoDX: Guides"};
+    static constexpr int order[] = {1, 0, 5, 6, 7, 2, 3, 4, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18};
+    if (page == PipelineUi::Section::Model) MenuUi::TextWrapped("Ctrl+F11 switches the default network and INT4 mixed. ACO preference is unchanged; INT4 requires active ACO. Save Settings to keep the selection.");
+    if (config->MochizukiRenoDX.value_or_default()) MenuUi::TextWrapped("RenoDX uses its own model, codec and look settings below. Native settings are preserved. Shared output effects still apply; preprocessing runs inside the RenoDX stage.");
     for (int g : order)
     {
         const bool shown = page == PipelineUi::Section::Input ? (g == 1 || g == 3 || g == 4) :
-            page == PipelineUi::Section::Model ? (g == 1 || g == 0 || g == 5 || g == 6 || g == 2 || g == 4) : g == 7;
-        if (!shown) continue;
+            page == PipelineUi::Section::Model ? (g == 1 || g == 0 || g == 5 || g == 6 || g == 2 || g == 4 || g >= 8) : g == 7;
+        const bool reno = config->MochizukiRenoDX.value_or_default();
+        if (!shown || (g >= 8 && !reno) || (reno && (g == 0 || g == 5 || g == 6 || g == 7))) continue;
+        const auto optionVisible = [&](std::string_view key) {
+            if (reno && (key == CfgKey::MochizukiModelScale || key == CfgKey::MochizukiWhitePoint ||
+                         key == CfgKey::MochizukiLinearInput || key == CfgKey::MochizukiMaxPasses)) return false;
+            if (page == PipelineUi::Section::Input && key == CfgKey::MochizukiWhitePoint) return false;
+            return MochizukiOptionOnPage(key, page);
+        };
         const auto passes = config->MochizukiEffectivePasses();
         if ((g == 5 && passes < 2) || (g == 6 && passes < 3)) continue;
-        if (g == 4 && page == PipelineUi::Section::Input)
+        if (g == 4 && page == PipelineUi::Section::Input && !reno)
         {
             // White point source and the manual white point sit together, outside the collapsed
             // "Advanced input" node, so the choice is visible next to the value it replaces.
@@ -482,7 +509,7 @@ static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const 
         if (MenuUi::TreeNodeEx(label, (g == 0 || g == 1 || g == 5 || g == 6) ? ImGuiTreeNodeFlags_DefaultOpen : 0))
         {
             bool changed = false;
-            if (g == 1 && page == PipelineUi::Section::Model)
+            if (g == 1 && page == PipelineUi::Section::Model && !reno)
             {
                 bool unlock = config->MochizukiUnlockPasses.value_or_default();
                 if (MenuUi::Checkbox("Allow up to 30 layers", &unlock))
@@ -508,14 +535,14 @@ static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const 
                     changed = true;
                 }
             }
-#define MZ_F(name, def, low, high, group, label, target) if (g == group && MochizukiOptionOnPage(CfgKey::name, page) && !(page == PipelineUi::Section::Input && std::string_view(CfgKey::name) == CfgKey::MochizukiWhitePoint)) { float v = config->name.value_or_default(); if (MochizukiFloatControl(label, CfgKey::name, &v, low, high)) { config->name = v; changed = true; } }
-#define MZ_U(name, def, low, high, group, label, target) if (g == group && MochizukiOptionOnPage(CfgKey::name, page) && std::string_view(CfgKey::name) != CfgKey::MochizukiPasses && std::string_view(CfgKey::name) != CfgKey::MochizukiMaxPasses) { int v = static_cast<int>(config->name.value_or_default()); if (MochizukiIntegerControl(label, CfgKey::name, &v, low, high)) { config->name = static_cast<uint32_t>(v); changed = true; } }
-#define MZ_B(name, def, low, high, group, label, target) if (std::string_view(CfgKey::name) != CfgKey::MochizukiAcoMode && g == group && MochizukiOptionOnPage(CfgKey::name, page)) { bool v = config->name.value_or_default(); if (MenuUi::Checkbox(label, &v)) { config->name = v; changed = true; } }
+#define MZ_F(name, def, low, high, group, label, target) if (g == group && optionVisible(CfgKey::name)) { float v = config->name.value_or_default(); if (MochizukiFloatControl(label, CfgKey::name, &v, low, high)) { config->name = v; changed = true; } }
+#define MZ_U(name, def, low, high, group, label, target) if (g == group && optionVisible(CfgKey::name) && std::string_view(CfgKey::name) != CfgKey::MochizukiPasses && std::string_view(CfgKey::name) != CfgKey::MochizukiMaxPasses) { int v = static_cast<int>(config->name.value_or_default()); if (MochizukiIntegerControl(label, CfgKey::name, &v, low, high)) { config->name = static_cast<uint32_t>(v); changed = true; } }
+#define MZ_B(name, def, low, high, group, label, target) if (std::string_view(CfgKey::name) != CfgKey::MochizukiAcoMode && g == group && optionVisible(CfgKey::name)) { bool v = config->name.value_or_default(); if (MenuUi::Checkbox(label, &v)) { config->name = v; changed = true; } }
 #include "backend/MochizukiOptions.inc"
 #undef MZ_F
 #undef MZ_U
 #undef MZ_B
-            if (g == 4 && page == PipelineUi::Section::Model)
+            if (g == 4 && page == PipelineUi::Section::Model && !reno)
             {
                 const int cap = config->MochizukiUnlockPasses.value_or_default() ? static_cast<int>(Config::kMochizukiLayerPasses) : 3;
                 int prebuild = static_cast<int>(config->MochizukiMaxPasses.value_or_default());
@@ -560,6 +587,9 @@ static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const 
         }
         if (timing.aco_requested)
             MenuUi::TextWrapped("ACO requested, effective %u. %s", timing.aco_effective, timing.aco_fallback);
+        if (timing.int4_requested)
+            MenuUi::TextWrapped(timing.int4_effective ? "INT4 mixed active" : "INT4 mixed requested; running the original network. Check ACO and install the complete package to prepare INT4 weights.");
+        if (timing.renodx_effective) MenuUi::TextWrapped("RenoDX processing active; GPU timing shows the network only");
         MenuUi::TextWrapped("Completed-sample means. Network includes fused temporal shaders; Other covers core input, history copies and composition. Bridge copies, shared effects and whole-frame latency are excluded.");
         bool logging = config->NrTimingLog.value_or_default();
         if (MenuUi::Checkbox("Write timing summary to log", &logging)) config->NrTimingLog = logging;
@@ -614,7 +644,7 @@ void RenderMenu(Config* config, float menuResScale)
             const Kind active = DlssNr::Backend::ActiveKindFromConfig();
             const bool isLmxxf = (active == Kind::Lmxxf);
             // Runtime name belongs with Enable NR — tight pair, not a separate group.
-            const char* ver = active == Kind::Mochizuki ? "mochizuki v0.0.4" : isLmxxf ? "lmxxf 0.41" : DlssNr::AmdBridge::RuntimeName();
+            const char* ver = active == Kind::Mochizuki ? "mochizuki v0.0.5-win-preview" : isLmxxf ? "lmxxf 0.41" : DlssNr::AmdBridge::RuntimeName();
             const bool haveVer = ver && *ver;
             HGap(0.12f);
             MenuUi::TextDisabled("%s", haveVer ? ver : (isLmxxf ? "lmxxf 0.41" : "pass1?"));

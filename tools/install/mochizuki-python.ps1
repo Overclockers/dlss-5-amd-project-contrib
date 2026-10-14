@@ -41,5 +41,14 @@ if ($MyInvocation.InvocationName -ne '.') {
     if ($result -ne 0) {
         Write-Host 'Model extraction failed. Python was found; see the error above and check nvngx_dlssnr.dll 310.8.0. See docs/mochizuki.md.' -ForegroundColor Yellow
     }
+    if ($result -eq 0) {
+        try {
+            . (Join-Path $PSScriptRoot 'mochizuki-int4.ps1')
+            Initialize-MochizukiInt4 -Model $Output -Data (Join-Path $PSScriptRoot 'dlssnr-amd/int4') -Tools (Join-Path $PSScriptRoot 'model-tools')
+        } catch {
+            Write-Host $_.Exception.Message -ForegroundColor Yellow
+            exit 1
+        }
+    }
     exit $result
 }
