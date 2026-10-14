@@ -135,6 +135,16 @@ captures, selection of the newest completed frame and explicit rejection after
 251 ms. Production code and the 250 ms threshold are unchanged. The PR records
 the subsequent Release result and commit SHA.
 
+The second run on `a389a417`
+([38611902669](https://github.com/Overclockers/dlss-5-amd-project/actions/runs/38611902669))
+passed host compilation, host CI, both runtime ABIs, shader/WARP (including the
+fixed capture test), lmxxf WARP, and the 74-case installer and 27-case package
+groups. The existing 25-minute build/test step limit interrupted the remaining
+suite before the complete CI receipt could be issued. The step now allows 40
+minutes, with a 60-minute job limit for subsequent replay, signing and ZIP checks.
+No suite, assertion or package gate was removed; that interrupted run is not
+reported as full CI success.
+
 The fixture reports INT4 image difference from the default network, network query
 samples and execution/readback wall time. These are synthetic comparisons without
 a quality ground truth, not game FPS or steady-state throughput claims. RenoDX's
