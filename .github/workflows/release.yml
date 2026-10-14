@@ -48,7 +48,7 @@ env:
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -234,7 +234,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build host and run CI concurrently
-        timeout-minutes: 25
+        # A cold run exceeded 25 minutes after passing WARP and the 74/27-case
+        # install/package groups. Keep the complete remaining suites and allow
+        # them to finish before source replay, signing and final ZIP checks.
+        timeout-minutes: 40
         shell: pwsh
         run: |
           ./tools/build/build-ci.ps1
