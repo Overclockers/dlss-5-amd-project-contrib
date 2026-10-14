@@ -20,6 +20,8 @@ int wmain(int argc, wchar_t** argv) try {
     HMODULE dll=LoadLibraryW(argv[1]); Require(dll!=nullptr,"runtime load");
     auto get=reinterpret_cast<PFN_MochizukiNrGetApi>(GetProcAddress(dll,"MochizukiNrGetApi"));
     api.struct_size=sizeof api; Require(get!=nullptr,"API export"); Rc(get(LMXXF_NR_ABI_VERSION,&api));
+    auto logging=reinterpret_cast<void(*)(uint32_t)>(GetProcAddress(dll,"MochizukiNrSetLogging"));
+    Require(logging!=nullptr,"logging export"); logging(1);
     auto defaults=reinterpret_cast<PFN_MochizukiNrGetControlDefaults>(GetProcAddress(dll,"MochizukiNrGetControlDefaults"));
     auto set=reinterpret_cast<PFN_MochizukiNrSetControls>(GetProcAddress(dll,"MochizukiNrSetControls"));
     auto prepare=reinterpret_cast<PFN_MochizukiNrPrepareFrame>(GetProcAddress(dll,"MochizukiNrPrepareFrame"));
@@ -89,6 +91,10 @@ int wmain(int argc, wchar_t** argv) try {
     };
     auto release=[&](Recording& r) {Rc(api.InvalidateRecording(context,r.job.handle));Rc(api.CollectRecording(context,r.job.handle));};
     std::ofstream output(argv[3],std::ios::binary|std::ios::trunc); Require(bool(output),"output file");
+    // Disk stalls must not trigger the product's intentional 250 ms idle reset.
+    // Keep the temporal sequence in memory and write it after GPU comparisons.
+    std::vector<unsigned char> completed;
+    completed.reserve(rowBytes * height * frames);
     std::unique_ptr<Recording> retained; std::vector<unsigned char> first;
     uint32_t lastConsumed=0;
     for(UINT n=0;n<=frames+3;++n) {
@@ -122,7 +128,10 @@ int wmain(int argc, wchar_t** argv) try {
         MochizukiNrInfo sample{sizeof sample}; Rc(info(context,&sample));
         const uint32_t consumed=n>=3?lastConsumed+(n>3?1u:0u):uint32_t(std::lround(sample.history_consumed_pct*(n+1)/100.0));
         if(n!=frames+3 || !firstPass) {
-            if(n>=3 && n<64) Require(sample.history_consumed_pct==consumed*100/(n+1),"unexpected temporal reset");
+            if(n>=3 && n<64 && sample.history_consumed_pct!=consumed*100/(n+1)) {
+                fprintf(stderr,"TEMPORAL_RESET frame=%u expected=%u actual=%u\n",n,consumed*100/(n+1),sample.history_consumed_pct);
+                Require(false,"unexpected temporal reset (check runtime history reset reason/time gap)");
+            }
             if(n>=67) Require(sample.history_consumed_pct==100,"continuous history reset after 64-frame window");
         } // Turning apply_model off disables first-pass export and intentionally rebuilds that layout.
         lastConsumed=std::min(consumed,64u);
@@ -134,13 +143,14 @@ int wmain(int argc, wchar_t** argv) try {
                 uint16_t half; memcpy(&half,bytes.data()+p,2);
                 Require(std::isfinite(DirectX::PackedVector::XMConvertHalfToFloat(half)),"non-finite temporal output");
             }
-            output.write(reinterpret_cast<const char*>(bytes.data()),std::streamsize(bytes.size())); Require(bool(output),"write temporal output");
+            completed.insert(completed.end(),bytes.begin(),bytes.end());
             if(n==3) {first=bytes;retained=std::move(r);}
         }
         if(r) release(*r);
     }
     Rc(api.ResetHistory(context)); if(moving) update(3);
     Require(retained && execute(*retained,1)==first,"retained recording changed on replay"); release(*retained); retained.reset();
+    output.write(reinterpret_cast<const char*>(completed.data()),std::streamsize(completed.size())); Require(bool(output),"write temporal output");
     output.close(); Rc(api.Destroy(context)); FreeLibrary(dll);
     printf("ACO_TEMPORAL_CASE_OK %ux%u format=%s passes=%u frames=%u moving=%u scale=%.2f capacity=%u replay=passed\n",
            width,height,fp16?"fp16":"srgb",passes,frames,unsigned(moving),scale,capacity);

@@ -14,7 +14,7 @@ struct BoundRecording
     Recording& r;
     Job savedJob;
     FrameBuffers savedBuffers;
-    std::shared_ptr<nr::Runtime> savedNetwork;
+    std::shared_ptr<ProductRuntime> savedNetwork;
     NetworkKey savedNet;
     BoundRecording(Session& session, Recording& record) : s(session), r(record)
     {

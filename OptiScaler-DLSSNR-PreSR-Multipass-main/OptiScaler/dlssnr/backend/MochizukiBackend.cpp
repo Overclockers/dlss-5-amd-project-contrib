@@ -327,7 +327,8 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     frame.frame_id = frameId;
     frame.flags = LMXXF_NR_FRAME_FLAG_STRENGTH | (temporal ? MOCHIZUKI_NR_FRAME_FLAG_TEMPORAL : 0) |
         (first ? LMXXF_NR_FRAME_FLAG_FIRST_PASS : 0) |
-        (inlineMode ? MOCHIZUKI_NR_FRAME_FLAG_INLINE_EXECUTION : 0);
+        (inlineMode ? MOCHIZUKI_NR_FRAME_FLAG_INLINE_EXECUTION : 0) |
+        (input.nativeGuideScale ? MOCHIZUKI_NR_FRAME_FLAG_AFTER_UPSCALE : 0);
     const auto desc = input.colour->GetDesc();
     frame.color = input.colour;
     frame.color_width = input.width && input.width <= desc.Width ? input.width : UINT(desc.Width);
@@ -352,8 +353,12 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     // the meter off, so it records nothing.
     {
         const uint32_t source = cfg->MochizukiWhitePointSource.value_or_default();
-        const bool useGame = source == 1u || source == 3u;
-        const bool useMeter = source == 2u || source == 3u;
+        const bool reno = cfg->MochizukiRenoDX.value_or_default();
+        // RenoDX has its own feed/meter settings. Native white-point preferences
+        // remain stored and apply again when RenoDX is disabled.
+        const bool useGame = reno ? cfg->MochizukiRenoFeedMode.value_or_default() != 1u :
+                                   source == 1u || source == 3u;
+        const bool useMeter = !reno && (source == 2u || source == 3u);
         void* texture = useGame ? static_cast<void*>(input.exposure) : nullptr;
         const float pre = std::isfinite(input.preExposure) && input.preExposure > 0.f ? input.preExposure : 1.f;
         const float scale = std::isfinite(input.exposureScale) && input.exposureScale > 0.f ? input.exposureScale : 1.f;

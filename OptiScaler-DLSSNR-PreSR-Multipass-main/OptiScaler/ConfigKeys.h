@@ -76,6 +76,95 @@ inline constexpr const char *MochizukiEnlargeMode = "MochizukiEnlargeMode";
 inline constexpr const char *MochizukiClassicScaler = "MochizukiClassicScaler";
 inline constexpr const char *MochizukiCompactTransfer = "MochizukiCompactTransfer";
 inline constexpr const char *MochizukiAcoMode = "MochizukiAcoMode";
+inline constexpr const char *MochizukiInt4Mixed = "MochizukiInt4Mixed";
+inline constexpr const char *MochizukiRenoDX = "MochizukiRenoDX";
+inline constexpr const char *MochizukiNoiseEveryFrame = "MochizukiNoiseEveryFrame";
+inline constexpr const char *MochizukiRenoNeuralUplift = "MochizukiRenoNeuralUplift";
+inline constexpr const char *MochizukiRenoIntensity = "MochizukiRenoIntensity";
+inline constexpr const char *MochizukiRenoStyle = "MochizukiRenoStyle";
+inline constexpr const char *MochizukiRenoLocalTone = "MochizukiRenoLocalTone";
+inline constexpr const char *MochizukiRenoLocalStructure = "MochizukiRenoLocalStructure";
+inline constexpr const char *MochizukiRenoSkinStructure = "MochizukiRenoSkinStructure";
+inline constexpr const char *MochizukiRenoAutoMask = "MochizukiRenoAutoMask";
+inline constexpr const char *MochizukiRenoSkinIndependent = "MochizukiRenoSkinIndependent";
+inline constexpr const char *MochizukiRenoPasses = "MochizukiRenoPasses";
+inline constexpr const char *MochizukiRenoUnlockPasses = "MochizukiRenoUnlockPasses";
+inline constexpr const char *MochizukiRenoChainedHistory = "MochizukiRenoChainedHistory";
+inline constexpr const char *MochizukiRenoPass2Transfer = "MochizukiRenoPass2Transfer";
+inline constexpr const char *MochizukiRenoPass2Color = "MochizukiRenoPass2Color";
+inline constexpr const char *MochizukiRenoPass2Intensity = "MochizukiRenoPass2Intensity";
+inline constexpr const char *MochizukiRenoPass2FollowPass1 = "MochizukiRenoPass2FollowPass1";
+inline constexpr const char *MochizukiRenoPass2Style = "MochizukiRenoPass2Style";
+inline constexpr const char *MochizukiRenoPass2LocalTone = "MochizukiRenoPass2LocalTone";
+inline constexpr const char *MochizukiRenoPass2Structure = "MochizukiRenoPass2Structure";
+inline constexpr const char *MochizukiRenoPass2Skin = "MochizukiRenoPass2Skin";
+inline constexpr const char *MochizukiRenoPass2AutoMask = "MochizukiRenoPass2AutoMask";
+inline constexpr const char *MochizukiRenoPass3Transfer = "MochizukiRenoPass3Transfer";
+inline constexpr const char *MochizukiRenoPass3Color = "MochizukiRenoPass3Color";
+inline constexpr const char *MochizukiRenoPass3Intensity = "MochizukiRenoPass3Intensity";
+inline constexpr const char *MochizukiRenoPass3FollowPass1 = "MochizukiRenoPass3FollowPass1";
+inline constexpr const char *MochizukiRenoPass3Style = "MochizukiRenoPass3Style";
+inline constexpr const char *MochizukiRenoPass3LocalTone = "MochizukiRenoPass3LocalTone";
+inline constexpr const char *MochizukiRenoPass3Structure = "MochizukiRenoPass3Structure";
+inline constexpr const char *MochizukiRenoPass3Skin = "MochizukiRenoPass3Skin";
+inline constexpr const char *MochizukiRenoPass3AutoMask = "MochizukiRenoPass3AutoMask";
+inline constexpr const char *MochizukiRenoPass4Transfer = "MochizukiRenoPass4Transfer";
+inline constexpr const char *MochizukiRenoPass4Color = "MochizukiRenoPass4Color";
+inline constexpr const char *MochizukiRenoPass4Intensity = "MochizukiRenoPass4Intensity";
+inline constexpr const char *MochizukiRenoPass4FollowPass1 = "MochizukiRenoPass4FollowPass1";
+inline constexpr const char *MochizukiRenoPass4Style = "MochizukiRenoPass4Style";
+inline constexpr const char *MochizukiRenoPass4LocalTone = "MochizukiRenoPass4LocalTone";
+inline constexpr const char *MochizukiRenoPass4Structure = "MochizukiRenoPass4Structure";
+inline constexpr const char *MochizukiRenoPass4Skin = "MochizukiRenoPass4Skin";
+inline constexpr const char *MochizukiRenoPass4AutoMask = "MochizukiRenoPass4AutoMask";
+inline constexpr const char *MochizukiRenoColorStrength = "MochizukiRenoColorStrength";
+inline constexpr const char *MochizukiRenoTransferStrength = "MochizukiRenoTransferStrength";
+inline constexpr const char *MochizukiRenoChromaClamp = "MochizukiRenoChromaClamp";
+inline constexpr const char *MochizukiRenoTransferMode = "MochizukiRenoTransferMode";
+inline constexpr const char *MochizukiRenoStyleHighlightGuard = "MochizukiRenoStyleHighlightGuard";
+inline constexpr const char *MochizukiRenoDetailStability = "MochizukiRenoDetailStability";
+inline constexpr const char *MochizukiRenoResolutionScale = "MochizukiRenoResolutionScale";
+inline constexpr const char *MochizukiRenoFollowInputRes = "MochizukiRenoFollowInputRes";
+inline constexpr const char *MochizukiRenoLookUpsample = "MochizukiRenoLookUpsample";
+inline constexpr const char *MochizukiRenoLookMode = "MochizukiRenoLookMode";
+inline constexpr const char *MochizukiRenoLookStrength = "MochizukiRenoLookStrength";
+inline constexpr const char *MochizukiRenoLookBrighten = "MochizukiRenoLookBrighten";
+inline constexpr const char *MochizukiRenoLookDarken = "MochizukiRenoLookDarken";
+inline constexpr const char *MochizukiRenoLookColour = "MochizukiRenoLookColour";
+inline constexpr const char *MochizukiRenoLookHue = "MochizukiRenoLookHue";
+inline constexpr const char *MochizukiRenoLookShadows = "MochizukiRenoLookShadows";
+inline constexpr const char *MochizukiRenoLookMidtones = "MochizukiRenoLookMidtones";
+inline constexpr const char *MochizukiRenoLookHighlights = "MochizukiRenoLookHighlights";
+inline constexpr const char *MochizukiRenoLookMaxBrighten = "MochizukiRenoLookMaxBrighten";
+inline constexpr const char *MochizukiRenoLookMaxDarken = "MochizukiRenoLookMaxDarken";
+inline constexpr const char *MochizukiRenoLookMaxColour = "MochizukiRenoLookMaxColour";
+inline constexpr const char *MochizukiRenoLookTone = "MochizukiRenoLookTone";
+inline constexpr const char *MochizukiRenoLookDetail = "MochizukiRenoLookDetail";
+inline constexpr const char *MochizukiRenoLookDetailRadius = "MochizukiRenoLookDetailRadius";
+inline constexpr const char *MochizukiRenoLookHalo = "MochizukiRenoLookHalo";
+inline constexpr const char *MochizukiRenoLookHaloBrightSide = "MochizukiRenoLookHaloBrightSide";
+inline constexpr const char *MochizukiRenoLookStabilize = "MochizukiRenoLookStabilize";
+inline constexpr const char *MochizukiRenoLookStabilizeMs = "MochizukiRenoLookStabilizeMs";
+inline constexpr const char *MochizukiRenoLookStabilizeDetail = "MochizukiRenoLookStabilizeDetail";
+inline constexpr const char *MochizukiRenoSdrBlackRestore = "MochizukiRenoSdrBlackRestore";
+inline constexpr const char *MochizukiRenoDisplayPedestal = "MochizukiRenoDisplayPedestal";
+inline constexpr const char *MochizukiRenoCodecMode = "MochizukiRenoCodecMode";
+inline constexpr const char *MochizukiRenoNeuralFloorGuard = "MochizukiRenoNeuralFloorGuard";
+inline constexpr const char *MochizukiRenoSourceEncoding = "MochizukiRenoSourceEncoding";
+inline constexpr const char *MochizukiRenoLinearUnitNits = "MochizukiRenoLinearUnitNits";
+inline constexpr const char *MochizukiRenoProxyAnchor = "MochizukiRenoProxyAnchor";
+inline constexpr const char *MochizukiRenoPaperWhiteScale = "MochizukiRenoPaperWhiteScale";
+inline constexpr const char *MochizukiRenoDiffuseWhiteNits = "MochizukiRenoDiffuseWhiteNits";
+inline constexpr const char *MochizukiRenoPQCalibration = "MochizukiRenoPQCalibration";
+inline constexpr const char *MochizukiRenoFeedMode = "MochizukiRenoFeedMode";
+inline constexpr const char *MochizukiRenoNormGovernor = "MochizukiRenoNormGovernor";
+inline constexpr const char *MochizukiRenoNormCutAware = "MochizukiRenoNormCutAware";
+inline constexpr const char *MochizukiRenoNormAttackStops = "MochizukiRenoNormAttackStops";
+inline constexpr const char *MochizukiRenoNormReleaseStops = "MochizukiRenoNormReleaseStops";
+inline constexpr const char *MochizukiRenoNormSlewStops = "MochizukiRenoNormSlewStops";
+inline constexpr const char *MochizukiRenoMVecScaleX = "MochizukiRenoMVecScaleX";
+inline constexpr const char *MochizukiRenoMVecScaleY = "MochizukiRenoMVecScaleY";
+
 inline constexpr const char *MochizukiWhitePoint = "MochizukiWhitePoint";
 inline constexpr const char *MochizukiModelScale = "MochizukiModelScale";
 inline constexpr const char *MochizukiUnlockPasses = "MochizukiUnlockPasses";
@@ -243,6 +332,95 @@ inline constexpr const char *const kKnown[] = {
     MochizukiClassicScaler,
     MochizukiCompactTransfer,
     MochizukiAcoMode,
+    MochizukiInt4Mixed,
+    MochizukiRenoDX,
+    MochizukiNoiseEveryFrame,
+    MochizukiRenoNeuralUplift,
+    MochizukiRenoIntensity,
+    MochizukiRenoStyle,
+    MochizukiRenoLocalTone,
+    MochizukiRenoLocalStructure,
+    MochizukiRenoSkinStructure,
+    MochizukiRenoAutoMask,
+    MochizukiRenoSkinIndependent,
+    MochizukiRenoPasses,
+    MochizukiRenoUnlockPasses,
+    MochizukiRenoChainedHistory,
+    MochizukiRenoPass2Transfer,
+    MochizukiRenoPass2Color,
+    MochizukiRenoPass2Intensity,
+    MochizukiRenoPass2FollowPass1,
+    MochizukiRenoPass2Style,
+    MochizukiRenoPass2LocalTone,
+    MochizukiRenoPass2Structure,
+    MochizukiRenoPass2Skin,
+    MochizukiRenoPass2AutoMask,
+    MochizukiRenoPass3Transfer,
+    MochizukiRenoPass3Color,
+    MochizukiRenoPass3Intensity,
+    MochizukiRenoPass3FollowPass1,
+    MochizukiRenoPass3Style,
+    MochizukiRenoPass3LocalTone,
+    MochizukiRenoPass3Structure,
+    MochizukiRenoPass3Skin,
+    MochizukiRenoPass3AutoMask,
+    MochizukiRenoPass4Transfer,
+    MochizukiRenoPass4Color,
+    MochizukiRenoPass4Intensity,
+    MochizukiRenoPass4FollowPass1,
+    MochizukiRenoPass4Style,
+    MochizukiRenoPass4LocalTone,
+    MochizukiRenoPass4Structure,
+    MochizukiRenoPass4Skin,
+    MochizukiRenoPass4AutoMask,
+    MochizukiRenoColorStrength,
+    MochizukiRenoTransferStrength,
+    MochizukiRenoChromaClamp,
+    MochizukiRenoTransferMode,
+    MochizukiRenoStyleHighlightGuard,
+    MochizukiRenoDetailStability,
+    MochizukiRenoResolutionScale,
+    MochizukiRenoFollowInputRes,
+    MochizukiRenoLookUpsample,
+    MochizukiRenoLookMode,
+    MochizukiRenoLookStrength,
+    MochizukiRenoLookBrighten,
+    MochizukiRenoLookDarken,
+    MochizukiRenoLookColour,
+    MochizukiRenoLookHue,
+    MochizukiRenoLookShadows,
+    MochizukiRenoLookMidtones,
+    MochizukiRenoLookHighlights,
+    MochizukiRenoLookMaxBrighten,
+    MochizukiRenoLookMaxDarken,
+    MochizukiRenoLookMaxColour,
+    MochizukiRenoLookTone,
+    MochizukiRenoLookDetail,
+    MochizukiRenoLookDetailRadius,
+    MochizukiRenoLookHalo,
+    MochizukiRenoLookHaloBrightSide,
+    MochizukiRenoLookStabilize,
+    MochizukiRenoLookStabilizeMs,
+    MochizukiRenoLookStabilizeDetail,
+    MochizukiRenoSdrBlackRestore,
+    MochizukiRenoDisplayPedestal,
+    MochizukiRenoCodecMode,
+    MochizukiRenoNeuralFloorGuard,
+    MochizukiRenoSourceEncoding,
+    MochizukiRenoLinearUnitNits,
+    MochizukiRenoProxyAnchor,
+    MochizukiRenoPaperWhiteScale,
+    MochizukiRenoDiffuseWhiteNits,
+    MochizukiRenoPQCalibration,
+    MochizukiRenoFeedMode,
+    MochizukiRenoNormGovernor,
+    MochizukiRenoNormCutAware,
+    MochizukiRenoNormAttackStops,
+    MochizukiRenoNormReleaseStops,
+    MochizukiRenoNormSlewStops,
+    MochizukiRenoMVecScaleX,
+    MochizukiRenoMVecScaleY,
+
     MochizukiWhitePoint,
     MochizukiModelScale,
     MochizukiUnlockPasses,

@@ -704,12 +704,26 @@ $srcA = Find-AuthorRuntime
 
 $mochizukiRuntime = Find-FirstFile @((Join-Path $release 'MochizukiNrRuntime.dll'), (Join-Path $Root 'exports/mochizuki-runtime/MochizukiNrRuntime.dll'))
 $mochizukiAssets = if ($mochizukiRuntime) { Join-Path (Split-Path -Parent $mochizukiRuntime) 'dlssnr-amd' } else { $null }
-$canMochizuki = [bool]($mochizukiRuntime -and (Test-Path -LiteralPath (Join-Path $mochizukiAssets 'shaders') -PathType Container))
-if ($canMochizuki -and (
-    -not (Test-Path -LiteralPath (Join-Path $mochizukiAssets 'aco/shaders/shader-constants.txt') -PathType Leaf) -or
-    -not (Test-Path -LiteralPath (Join-Path $mochizukiAssets 'aco/records') -PathType Container) -or
-    -not (Test-Path -LiteralPath (Join-Path $mochizukiAssets 'aco/shell-aliases.txt') -PathType Leaf))) {
-    Fail 'Incomplete Mochizuki package: runtime, native shaders and ACO assets must be supplied together. Re-extract the complete update.'
+$mochizukiTools = if ($mochizukiRuntime) { Join-Path (Split-Path -Parent $mochizukiRuntime) 'model-tools' } else { $null }
+$int4Helper = Find-FirstFile @((Join-Path $Root 'mochizuki-int4.ps1'), (Join-Path $PSScriptRoot 'install/mochizuki-int4.ps1'))
+$mochizukiPin = Find-FirstFile @((Join-Path $Root 'mochizuki-owned.txt'), (Join-Path $PSScriptRoot 'install/mochizuki-owned.txt'))
+$canMochizuki = [bool]$mochizukiRuntime
+if ($canMochizuki) {
+    if (-not $mochizukiPin -or -not $int4Helper) {
+        Fail 'Incomplete Mochizuki package: asset inventory or INT4 helper missing. Re-extract the complete update.'
+    }
+    $required = @([IO.File]::ReadAllLines($mochizukiPin) | Where-Object { $_.Trim() -and -not $_.StartsWith('#') })
+    if ($required.Count -eq 0) { Fail 'Incomplete Mochizuki package: empty asset inventory.' }
+    foreach ($relative in $required) {
+        if (-not (Test-Path -LiteralPath (Join-Path $mochizukiAssets $relative) -PathType Leaf)) {
+            Fail "Incomplete Mochizuki package: missing dlssnr-amd/$relative. Re-extract the complete update."
+        }
+    }
+    foreach ($name in @('dlssnr-int4-weights.exe', 'dlssnr-int4.sha256')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $mochizukiTools $name) -PathType Leaf)) {
+            Fail "Incomplete Mochizuki package: missing model-tools/$name. Re-extract the complete update."
+        }
+    }
 }
 $installMochizuki = $false
 $canLmxxf  = [bool]($lmxxfRuntime -and $lmxxfMods -and $lmxxfShaders)
@@ -1410,6 +1424,18 @@ if ($installMochizuki) {
         }
     }
     if ($mochizukiModel) { Install-One $mochizukiModel 'dlssnr-amd/dlssnr.bin' }
+    $int4Root = Join-Path $mochizukiAssets 'int4'
+    if (Test-Path -LiteralPath $int4Root -PathType Container) {
+        foreach ($file in @(Get-LmxxfUnlinkedFiles $int4Root)) {
+            $relative = $file.FullName.Substring($int4Root.Length).TrimStart('\','/')
+            Install-One $file.FullName (Join-Path 'dlssnr-amd/int4' $relative)
+        }
+        $installedModel = Join-Path $game 'dlssnr-amd/dlssnr.bin'
+        if (Test-MochizukiModelHeader $installedModel) {
+            . $int4Helper
+            Initialize-MochizukiInt4 -Model $installedModel -Data (Join-Path $game 'dlssnr-amd/int4') -Tools $mochizukiTools
+        }
+    }
     if (-not (Test-Path -LiteralPath (Join-Path $game 'dlssnr-amd/dlssnr.bin'))) {
         Write-Host 'Mochizuki model not installed. Run Mochizuki-Model.bat beside Setup.bat with your nvngx_dlssnr.dll, then run Setup again.' -ForegroundColor Yellow
     }

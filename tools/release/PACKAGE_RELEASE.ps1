@@ -675,9 +675,14 @@ foreach ($relative in $mochizukiOwned) {
 }
 Copy-Item -LiteralPath $mochizukiPin -Destination (Join-Path $stage 'mochizuki-owned.txt') -Force
 Copy-Item -LiteralPath (Join-Path $root 'third_party/mochizuki/LICENSE') -Destination (Join-Path $stage 'Licenses/Mochizuki_MIT.txt')
+Copy-Item -LiteralPath (Join-Path $root 'third_party/mochizuki/windows/src/core/renodx/LICENSE') -Destination (Join-Path $stage 'Licenses/RenoDX_MIT.txt')
 Copy-Item -LiteralPath (Join-Path $root 'third_party/mochizuki/UPSTREAM.md') -Destination (Join-Path $stage 'Licenses/Mochizuki_SOURCES.md')
 New-Item -ItemType Directory -Force (Join-Path $stage 'model-tools'), (Join-Path $stage 'docs') | Out-Null
 Get-ChildItem (Join-Path $root 'third_party/mochizuki/linux/package/model-tools') -File | Where-Object { $_.Extension -in @('.py','.json','.txt','.sha256') } | Copy-Item -Destination (Join-Path $stage 'model-tools')
+foreach ($name in @('dlssnr-int4-weights.exe', 'dlssnr-int4.sha256')) {
+    Copy-Item -LiteralPath (Join-Path $mochizukiBuild "model-tools/$name") -Destination (Join-Path $stage 'model-tools')
+}
+Copy-Item -LiteralPath (Join-Path $root 'tools/install/mochizuki-int4.ps1') -Destination $stage
 Copy-Item -LiteralPath (Join-Path $root 'tools/install/mochizuki-model.py') -Destination $stage
 Copy-Item -LiteralPath (Join-Path $root 'tools/install/mochizuki-python.ps1') -Destination $stage
 $mzDoc = [IO.File]::ReadAllText((Join-Path $root 'docs/mochizuki.md'))
