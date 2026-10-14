@@ -324,6 +324,18 @@
       ]
     },
     {
+      "feature": "plan-a-colour-conversion",
+      "path": "patches/15a-plan-a-colour-conversion.patch",
+      "files": [
+        "linux/build/build_network.py",
+        "windows/build/build_network.py",
+        "linux/shaders/passes/runtime_planA_convert.comp",
+        "linux/shaders/passes/runtime_planA_unconvert.comp",
+        "windows/shaders/passes/runtime_planA_convert.comp",
+        "windows/shaders/passes/runtime_planA_unconvert.comp"
+      ]
+    },
+    {
       "feature": "inline-r11g11b10-compute-writeback",
       "path": "patches/16-inline-r11g11b10-compute-writeback.patch",
       "files": [
@@ -347,6 +359,12 @@
         "windows/src/core/nr_runtime.hpp"
       ]
     }
+  ],
+  "added": [
+    "linux/shaders/passes/runtime_planA_convert.comp",
+    "linux/shaders/passes/runtime_planA_unconvert.comp",
+    "windows/shaders/passes/runtime_planA_convert.comp",
+    "windows/shaders/passes/runtime_planA_unconvert.comp"
   ],
   "source_comment_policy": "omit-sample-address-annotations-v1"
 }

@@ -30,6 +30,13 @@ def verify(repo, upstream, manifest_path=MANIFEST):
     files = [relative(p) for p in manifest['files']]
     if not files or len(set(files)) != len(files):
         raise ValueError('Source closure is empty or has duplicate paths')
+    # Files that do not exist at the pin and are created by a recorded patch.
+    added = [relative(p) for p in manifest.get('added', [])]
+    if len(set(added)) != len(added) or set(added) & set(files):
+        raise ValueError('Patch-added files are duplicated or also in the pinned closure')
+    declared = {relative(f) for patch in manifest['patches'] for f in patch.get('files', [])}
+    if not set(added) <= declared:
+        raise ValueError('A patch-added file is not declared by any patch: ' + repr(sorted(set(added) - declared)))
     vendor = (repo / relative(manifest['vendor'])).resolve()
     if not vendor.is_relative_to(repo):
         raise ValueError('Vendor is outside this repository')
@@ -81,14 +88,15 @@ def verify(repo, upstream, manifest_path=MANIFEST):
                   if p.is_file() and '.git' not in p.relative_to(stage).parts}
         actual = {p.relative_to(vendor).as_posix() for p in vendor.rglob('*')
                   if p.is_file() and '__pycache__' not in p.parts and p.relative_to(vendor).as_posix() != 'UPSTREAM.md'}
-        if staged != set(files) or actual != set(files):
-            raise ValueError('Closure inventory differs: extra=' + repr(sorted(actual - set(files))) +
-                             ' missing=' + repr(sorted(set(files) - actual)))
-        different = [path for path in files
+        closure = set(files) | set(added)
+        if staged != closure or actual != closure:
+            raise ValueError('Closure inventory differs: extra=' + repr(sorted(actual - closure)) +
+                             ' missing=' + repr(sorted(closure - actual)))
+        different = [path for path in sorted(closure)
                      if normalize(path, (stage / path).read_bytes()) != normalize(path, (vendor / path).read_bytes())]
         if different:
             raise ValueError('Unrecorded vendor changes or stale patches: ' + ', '.join(different))
-    print(f'MOCHIZUKI_SOURCE_PIN_OK {pin} files={len(files)} patches={len(manifest["patches"])}')
+    print(f'MOCHIZUKI_SOURCE_PIN_OK {pin} files={len(files)} added={len(added)} patches={len(manifest["patches"])}')
 
 
 def main():

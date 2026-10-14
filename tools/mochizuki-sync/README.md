@@ -1,7 +1,7 @@
 # Mochizuki source pin and interface patches
 
 The runtime uses official core/shaders at the full SHA in `manifest.json`, plus
-fifteen explicit feature patches. There are no whole-file preservation overlays.
+eighteen explicit feature patches. There are no whole-file preservation overlays.
 The host loads our `MochizukiNrRuntime.dll`, which wraps that core; this does not
 claim binary compatibility with an official distributed runtime.
 
@@ -36,6 +36,7 @@ Those tests also run in `run.cmd abi`.
 | 14 core-stage-timing | Optional diagnostic timestamp pairs around the linear-input encode and transfer pass | Off unless the host sets it per frame; reuses the timing ring, never waits |
 | 15 inline-r11g11b10-compute-convert | Optional B10G11R11 input conversion on compute (copy + runtime_unpack_f16), so such inline frames can keep the whole chain on compute | Off unless RuntimeConfig::compute_convert_r11g11b10; only when the write-back already needs no blit (direct_out / store_native) and model scale is 1; otherwise the blit and its refusal remain |
 | 16 inline-r11g11b10-compute-writeback | When write-back is not direct/store_native, pack the answer through runtime_pack_r11 (r11f_g11f_b10f storage image + copy) so B10G11R11 inline frames keep the whole chain on compute | Same toggle as 15; requires B10G11R11 storage-image support and runtime_pack_r11.spv |
+| 15a plan-a-colour-conversion | Plan A input/output conversion passes (`runtime_planA_convert.comp`, `runtime_planA_unconvert.comp`, new files) and their R11G11B10/RGBA16F variants in both `build_network.py` tables. Applied after 15; 16 and 17 build on its table lines | Product-only; new files are listed under `added` in the manifest, which the checker requires to be declared by a patch |
 | 17 inline-compute-convert-formats | Extends 15/16 to RGBA8/BGRA8 (UNORM and sRGB via the UNORM twin) and A2B10G10R10/A2R10G10B10: compute input via runtime_unpack_f16 and write-back via runtime_pack_u8, runtime_pack_u8_bgra, runtime_pack_u10, runtime_pack_u10_bgra into an R32_UINT image + copy; RuntimeConfig::compute_convert_r11g11b10 becomes compute_convert_colour | Off unless RuntimeConfig::compute_convert_colour; a format whose sampled/storage/transfer support or shader is missing keeps its blit and logs the reason once |
 
 The patches replay sequentially against `manifest.json`'s commit. Patches 02-05
@@ -51,7 +52,7 @@ the C64 persistent decoder to fused C32 pair from tile chaining, preserving the
 existing barrier and associated arena lifetime boundary; other chains remain.
 Its attribution and validation are in the backend guide and source record.
 
-This fifteen-patch series records the product snapshot; it is not the upstream PR
+This eighteen-patch series records the product snapshot; it is not the upstream PR
 series. The upstream preparation branch has reverted the ACO, buffer-optimization
 and timing-calculation snapshots and retains only optional interface proposals.
 

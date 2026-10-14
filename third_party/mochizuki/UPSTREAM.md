@@ -7,10 +7,10 @@
 - Closure: `windows/src/core`, `windows/shaders`, `windows/build` (recipe, unroll, quad-quant, `arch/rdna4.sh`), `windows/data/aco` records and `shell-aliases.txt`, `linux/shaders`, `linux/build/build_network.py`, `linux/build/arch/rdna4.sh`, and `linux/package/model-tools`. Patch 12 adds weights-only installation extraction; the weight parser, unpackers and model hash lists remain unchanged.
 - Not imported: `windows/src/pe`, official installers, the Vulkan loader, the ReShade add-on, OptiScaler-NR package scripts, DX9/DX10/DX11 hosts, and the INT4 host path.
 
-The source pin and fifteen feature patches are machine-readable in
+The source pin and eighteen feature patches are machine-readable in
 [tools/mochizuki-sync/manifest.json](../../tools/mochizuki-sync/manifest.json).
 [Replay verification](../../tools/mochizuki-sync/README.md) reproduces all 173
-closure files from the pinned Git objects plus these patches, without overwriting
+closure files (plus the four patch-added Plan A shaders) from the pinned Git objects plus these patches, without overwriting
 vendor. [Extension decisions](../../docs/architecture/mochizuki-upstream-extensions.md)
 record their consumers, upstream suitability and missing validation.
 
