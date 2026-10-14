@@ -32,6 +32,10 @@
 namespace DlssNr
 {
 
+#ifndef DLSSNR_SHOW_NGX_WHITE_POINT_UI
+#define DLSSNR_SHOW_NGX_WHITE_POINT_UI 0
+#endif
+
 static void ResetSharedEffectsDefaults(Config* config)
 {
     config->NrPersonPartition = std::optional<bool>{};
@@ -453,6 +457,24 @@ static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const 
         if (!shown) continue;
         const auto passes = config->MochizukiEffectivePasses();
         if ((g == 5 && passes < 2) || (g == 6 && passes < 3)) continue;
+        if (g == 4 && page == PipelineUi::Section::Input)
+        {
+            // White point source and the manual white point sit together, outside the collapsed
+            // "Advanced input" node, so the choice is visible next to the value it replaces.
+            // Reset stays with group 4 (ResetMochizuki).
+            const char* sources[] = {"Off", "Follow game", "Own meter", "Auto"};
+            const uint32_t stored = config->MochizukiWhitePointSource.value_or_default();
+            int source = stored <= 3u ? int(stored) : 0;
+            if (MenuUi::Combo("Mochizuki white point source", &source, sources, IM_ARRAYSIZE(sources)))
+                config->MochizukiWhitePointSource = uint32_t(source);
+            HelpMarker("Mochizuki backend only. Where its linear/HDR white point comes from. Default Off.\nOff: manual White point only.\nFollow game: use the game's exposure; manual when the game gives none.\nOwn meter: ignore the game and measure the frame itself (one tiny GPU pass, one frame late).\nAuto: the game's exposure when usable, else the own meter, else manual.\nTry Own meter or Auto when skin turns red at overall intensity above 1 (e.g. Monster Hunter Wilds).\nINI: MochizukiWhitePointSource (0-3).");
+            float wp = config->MochizukiWhitePoint.value_or_default();
+            if (MochizukiFloatControl("White point", CfgKey::MochizukiWhitePoint, &wp, .01f, 100.f))
+            {
+                config->MochizukiWhitePoint = wp;
+                AmdBridge::InvalidateHistory();
+            }
+        }
         ImGui::PushID(g);
         const char* label = g == 1 ? (page == PipelineUi::Section::Input ? "Resolution" : "Model passes") :
             g == 4 ? (page == PipelineUi::Section::Input ? "Advanced input" : "Prebuild capacity") : groups[g];
@@ -485,22 +507,13 @@ static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const 
                     changed = true;
                 }
             }
-#define MZ_F(name, def, low, high, group, label, target) if (g == group && MochizukiOptionOnPage(CfgKey::name, page)) { float v = config->name.value_or_default(); if (MochizukiFloatControl(label, CfgKey::name, &v, low, high)) { config->name = v; changed = true; } }
+#define MZ_F(name, def, low, high, group, label, target) if (g == group && MochizukiOptionOnPage(CfgKey::name, page) && !(page == PipelineUi::Section::Input && std::string_view(CfgKey::name) == CfgKey::MochizukiWhitePoint)) { float v = config->name.value_or_default(); if (MochizukiFloatControl(label, CfgKey::name, &v, low, high)) { config->name = v; changed = true; } }
 #define MZ_U(name, def, low, high, group, label, target) if (g == group && MochizukiOptionOnPage(CfgKey::name, page) && std::string_view(CfgKey::name) != CfgKey::MochizukiPasses && std::string_view(CfgKey::name) != CfgKey::MochizukiMaxPasses) { int v = static_cast<int>(config->name.value_or_default()); if (MochizukiIntegerControl(label, CfgKey::name, &v, low, high)) { config->name = static_cast<uint32_t>(v); changed = true; } }
 #define MZ_B(name, def, low, high, group, label, target) if (std::string_view(CfgKey::name) != CfgKey::MochizukiAcoMode && g == group && MochizukiOptionOnPage(CfgKey::name, page)) { bool v = config->name.value_or_default(); if (MenuUi::Checkbox(label, &v)) { config->name = v; changed = true; } }
 #include "backend/MochizukiOptions.inc"
 #undef MZ_F
 #undef MZ_U
 #undef MZ_B
-            if (g == 4 && page == PipelineUi::Section::Input)
-            {
-                const char* sources[] = {"Off", "Follow game", "Own meter", "Auto"};
-                const uint32_t stored = config->MochizukiWhitePointSource.value_or_default();
-                int source = stored <= 3u ? int(stored) : 0;
-                if (MenuUi::Combo("White point source", &source, sources, IM_ARRAYSIZE(sources)))
-                    config->MochizukiWhitePointSource = uint32_t(source);
-                HelpMarker("Where the linear/HDR white point comes from. Default Off.\nOff: manual White point only.\nFollow game: use the game's exposure; manual when the game gives none.\nOwn meter: ignore the game and measure the frame itself (one tiny GPU pass, one frame late).\nAuto: the game's exposure when usable, else the own meter, else manual.\nTry Own meter or Auto when skin turns red at overall intensity above 1 (e.g. Monster Hunter Wilds).\nINI: MochizukiWhitePointSource (0-3).");
-            }
             if (g == 4 && page == PipelineUi::Section::Model)
             {
                 const int cap = config->MochizukiUnlockPasses.value_or_default() ? static_cast<int>(Config::kMochizukiLayerPasses) : 3;
@@ -2214,6 +2227,12 @@ void RenderMenu(Config* config, float menuResScale)
             ImGui::TreePop();
         }
 
+        // The global white point (DlssNrWhitePointSource / DlssNrWhitePointScale / DlssNrWhitePointTrim and the
+        // exposure-scan anchors) is consumed only by ResolveWhitePoint / encode on the NGX NR path
+        // (shaders/dlssnr/DlssNr_Dx12.cpp, dlssnr/DlssNrFeature_Vk.cpp). That path is skipped whenever
+        // AmdBridge::Evaluate succeeds, and this branch is AMD-only, so the controls are hidden. Code, Config
+        // and ini keys are kept; build with DLSSNR_SHOW_NGX_WHITE_POINT_UI=1 to show them again.
+#if DLSSNR_SHOW_NGX_WHITE_POINT_UI
         MenuUi::TextDisabled("The model was trained on finished, sRGB-encoded frames. The upscaler's\n"
                             "output is not one: it is linear and open-ended. These decide how it is\n"
                             "mapped into something the model recognises. A frame the game reports as\n"
@@ -2537,6 +2556,8 @@ void RenderMenu(Config* config, float menuResScale)
                        "\n\nAt strength zero the frame is still bit-identical whatever this says.");
         }
 
+#endif // DLSSNR_SHOW_NGX_WHITE_POINT_UI
+
         // Highlight guard, directly under the white point / trim -- it bounds the model's edit and
         // belongs with the exposure controls it works alongside.
         float maxRatio = config->DlssNrMaxRatio.value_or_default();
@@ -2554,6 +2575,7 @@ void RenderMenu(Config* config, float menuResScale)
                        "\nlight turning into a string of coloured cells. Raise it only if bright areas"
                        "\nlook clipped.");
 
+#if DLSSNR_SHOW_NGX_WHITE_POINT_UI
         // Directly under the white point, because that is the number it moves and the number the
         // anchor captures. It used to sit under Inspect, a whole section away from the slider it
         // reads, which left "Anchor here" looking like a control for something else entirely.
@@ -2778,6 +2800,7 @@ void RenderMenu(Config* config, float menuResScale)
 
 
         }
+#endif // DLSSNR_SHOW_NGX_WHITE_POINT_UI
 
         MenuUi::SeparatorText("Compare");
 
