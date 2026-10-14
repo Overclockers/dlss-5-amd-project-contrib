@@ -12,6 +12,8 @@ int wmain(int argc,wchar_t**argv){
   auto input=[](unsigned f){return std::make_shared<Person::Image>(Person::Image{9,f,GetTickCount64(),1920,1080,std::vector<float>(3*640*640,.5f)});};
   Require(Person::WorkerThreads(16)==4&&Person::WorkerThreads(32)==4&&Person::WorkerThreads(8)==2,"CPU budget");
   configure("normal");Until([&]{return p.Ready();});
+  Sleep(5200); // The peer must remain ready even when no frame arrives for >5s.
+  Require(p.Ready(),"idle worker stays ready for delayed capture");
   for(unsigned f=1;f<=40;++f){Require(p.Submit(input(f)),"submit");Until([&]{return p.Ready();});auto m=p.Latest();Require(m&&m->frame==f&&m->epoch==9&&m->values[0]==float(f%2),"response must match submitted frame");}
   for(auto mode:{"offset","frame","version","legacy","exit"}){
    configure(mode);
@@ -23,6 +25,6 @@ int wmain(int argc,wchar_t**argv){
   }
   for(unsigned i=0;i<20;++i){configure("slow");Until([&]{return p.Ready();});Require(p.Submit(input(i+1)),"shutdown submit");Sleep(i%4*10);p.Configure(false,dir);}
   configure("normal");Until([&]{return p.Ready();});p.Configure(false,dir);
-  Require(!p.Available(),"disabled provider");puts("person worker IPC: PASS (frame ownership, startup, repeated stop/response races, malformed peer, failure latch)");return 0;
+  Require(!p.Available(),"disabled provider");puts("person worker IPC: PASS (idle lifetime, frame ownership, startup, repeated stop/response races, malformed peer, failure latch)");return 0;
  }catch(const std::exception&e){fprintf(stderr,"FAIL: %s\n",e.what());return 1;}
 }
