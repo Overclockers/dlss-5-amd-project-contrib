@@ -364,10 +364,17 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
             p->owner->inlinePipelines = inlineResources->PipelineCache();
             inlineResources->captureBackoff = Config::Instance()->NrCaptureBackoff.value_or_default();
             inlineResources->gpuArmed = Config::Instance()->NrGpuHandoff.value_or_default();
-            inlineResources->spinPollDelay = UINT(std::clamp(Config::Instance()->NrSpinPollDelay.value_or_default(), 0, 4096));
-            {   const int sl = Config::Instance()->NrSpinSlices.value_or_default();
-                inlineResources->spinSlices = sl == 1 || sl == 4 || sl == 8 || sl == 16 || sl == 256 ? UINT(sl) : 0u; }
+            {   // Spin experiments; only validated values are accepted (8 or fewer slices / delay >= 256 hitched offline).
+                const auto* c = Config::Instance();
+                const int pd = c->NrSpinPollDelay.value_or_default(), sl = c->NrSpinSlices.value_or_default();
+                const int wsl = c->NrWatchSlices.value_or_default(), wsd = c->NrWatchStartDelay.value_or_default();
+                inlineResources->spinPollDelay = pd == 16 || pd == 64 ? UINT(pd) : 0u;
+                inlineResources->spinSlices = sl == 256 || sl == 1024 ? UINT(sl) : 0u;
+                inlineResources->watchSlices = wsl == 256 || wsl == 1024 ? UINT(wsl) : 0u;
+                inlineResources->watchStartDelay = wsd >= 1 && wsd <= 8 ? UINT(wsd) : 0u; }
             FrameDiag::Begin(inlineResources->diag, "mochizuki", frameId, frame.color_width, frame.color_height, OPTI_VERSION);
+            inlineResources->diag.spinPollDelay = inlineResources->spinPollDelay; inlineResources->diag.spinSlices = inlineResources->spinSlices;
+            inlineResources->diag.watchSlices = inlineResources->watchSlices; inlineResources->diag.watchStartDelay = inlineResources->watchStartDelay;
             inlineResources->diag.inlineReuse = inlineResources->reused;
             const auto id0 = logical->Identity();
             inlineResources->diag.listId = id0.list;

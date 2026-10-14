@@ -64,6 +64,8 @@ static void ResetSharedNrDefaults(Config* config)
     config->NrGpuHandoff.reset();
     config->NrSpinPollDelay.reset();
     config->NrSpinSlices.reset();
+    config->NrWatchSlices.reset();
+    config->NrWatchStartDelay.reset();
 }
 
 // The "(?)" marker every control carries, matching the rest of the menu.
@@ -743,19 +745,27 @@ void RenderMenu(Config* config, float menuResScale)
                     if (MenuUi::Checkbox("GPU-armed handoff", &gpuHandoff)) config->NrGpuHandoff = gpuHandoff;
                     HelpMarker("Default off. Mochizuki inline: the GPU side queue watches for this frame's capture and starts NR"
                                "\nwithout a CPU round trip. Missed capture shows the original frame. Applies to the next frame. INI: NrGpuHandoff.");
-                    {
-                        const int delays[] = {0, 16, 64, 256, 1024};
-                        const char* delayChoices[] = {"Off (default)", "16", "64", "256", "1024"};
-                        int di = 0; for (int i = 0; i < 5; ++i) if (delays[i] == config->NrSpinPollDelay.value_or_default()) di = i;
-                        if (MenuUi::Combo("Spin poll delay##nr", &di, delayChoices, IM_ARRAYSIZE(delayChoices))) config->NrSpinPollDelay = delays[di];
-                        HelpMarker("Experimental. ALU work between GPU flag polls while inline waits, so the spin issues fewer"
-                                   "\nmemory atomics. Applies to the next frame. INI: NrSpinPollDelay.");
-                        const int slices[] = {0, 1, 4, 8, 16, 256};
-                        const char* sliceChoices[] = {"64 (default)", "1", "4", "8", "16", "256"};
-                        int si = 0; for (int i = 0; i < 6; ++i) if (slices[i] == config->NrSpinSlices.value_or_default()) si = i;
-                        if (MenuUi::Combo("Spin dispatches##nr", &si, sliceChoices, IM_ARRAYSIZE(sliceChoices))) config->NrSpinSlices = slices[si];
-                        HelpMarker("Experimental. Number of GPU wait dispatches (same total timeout). Applies to the next frame."
-                                   "\nINI: NrSpinSlices.");
+                    if (MenuUi::TreeNode("Inline spin experiments##nr")) {
+                        auto pick = [](const char* label, CustomOptional<int>& opt, const int* values, const char* const* names, int n) {
+                            int idx = 0; for (int i = 0; i < n; ++i) if (values[i] == opt.value_or_default()) idx = i;
+                            if (MenuUi::Combo(label, &idx, names, n)) opt = values[idx];
+                        };
+                        const int slices[] = {0, 256, 1024}; const char* sliceNames[] = {"64 (default)", "256", "1024"};
+                        pick("Game wait dispatches##nr", config->NrSpinSlices, slices, sliceNames, 3);
+                        HelpMarker("Experimental. Splits the game-queue inline wait into shorter GPU dispatches (same timeout)."
+                                   "\nApplies to the next frame. INI: NrSpinSlices.");
+                        pick("Side watch dispatches##nr", config->NrWatchSlices, slices, sliceNames, 3);
+                        HelpMarker("Experimental, GPU-armed handoff only. Splits the side-queue capture watch into shorter dispatches."
+                                   "\nApplies to the next frame. INI: NrWatchSlices.");
+                        const int starts[] = {0, 1, 2, 4, 8}; const char* startNames[] = {"Off (default)", "1", "2", "4", "8"};
+                        pick("Side watch start delay##nr", config->NrWatchStartDelay, starts, startNames, 5);
+                        HelpMarker("Experimental, GPU-armed handoff only. ALU-only dispatches before the watch starts polling."
+                                   "\nCan delay NR start if the capture comes early. Applies to the next frame. INI: NrWatchStartDelay.");
+                        const int delays[] = {0, 16, 64}; const char* delayNames[] = {"Off (default)", "16", "64"};
+                        pick("Spin poll delay##nr", config->NrSpinPollDelay, delays, delayNames, 3);
+                        HelpMarker("Experimental. ALU work between GPU flag polls (game wait and side watch)."
+                                   "\nApplies to the next frame. INI: NrSpinPollDelay.");
+                        ImGui::TreePop();
                     }
                 }
                 if (isLmxxf && inlineMode) {
@@ -844,6 +854,8 @@ void RenderMenu(Config* config, float menuResScale)
                     resetOption(config->NrGpuHandoff);
                     resetOption(config->NrSpinPollDelay);
                     resetOption(config->NrSpinSlices);
+                    resetOption(config->NrWatchSlices);
+                    resetOption(config->NrWatchStartDelay);
                     SetAllowEnhancedBarriers(config->LmxxfAllowEnhancedBarriers.value_or_default());
                     resetOption(config->LmxxfEarlyExeWrap);
                     resetOption(config->LmxxfEarlyAnyModuleWrap);

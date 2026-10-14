@@ -188,6 +188,8 @@ int main() {
                 "NrGpuHandoff",  # Host-owned GPU-armed inline handoff.
                 "NrSpinPollDelay",  # Host-owned inline spin experiment.
                 "NrSpinSlices",  # Host-owned inline spin experiment.
+                "NrWatchSlices",  # Host-owned inline spin experiment.
+                "NrWatchStartDelay",  # Host-owned inline spin experiment.
                 "EarlyExeWrap",
                 "EarlyAnyModuleWrap",
                 "Diagnostic",

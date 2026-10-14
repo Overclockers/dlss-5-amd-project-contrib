@@ -179,6 +179,7 @@ struct Counters
     unsigned captureBackoffUsFinal = 0;
     const char* captureBackoffMode = "-"; // exp | fixed100 | event (inline only)
     bool inlineReuse = false; // recording came from the NrInlineReuse pool
+    unsigned spinPollDelay = 0, spinSlices = 0, watchSlices = 0, watchStartDelay = 0; // inline spin experiments (0 = default)
     const char* handoff = "-"; // inline: cpu (worker discovers capture) | gpu (NrGpuHandoff)
     unsigned waitEnqueueOrderMs = 0;
     unsigned lockWaitMs = 0;
@@ -208,7 +209,7 @@ inline void Emit(const Counters& c) noexcept
             "res=%ux%u aco=%u fg=%d version=%s "
             "cpu_wait_enqueue_ms=%.3f cpu_record_ms=%.3f host_A_capture_to_vk_ms=%.3f host_B_side_ready_ms=%.3f "
             "gpu_capture_ms=%.3f gpu_capture_to_resume_ms=%.3f gpu_core_ms=%.3f gpu_handoff_ms=%.3f "
-            "gpu_capture_to_vkdone_ms=%.3f gpu_vkdone_to_resume_ms=%.3f gpu_writeback_ms=%.3f handoff=%s",
+            "gpu_capture_to_vkdone_ms=%.3f gpu_vkdone_to_resume_ms=%.3f gpu_writeback_ms=%.3f handoff=%s spin_delay=%u spin_slices=%u watch_slices=%u watch_start=%u",
             c.backend, c.mode, c.outcome,
             static_cast<long long>(QpcFrequency()),
             static_cast<long long>(c.qpcRecordBegin),
@@ -241,7 +242,7 @@ inline void Emit(const Counters& c) noexcept
             MsBetween(c.gpuQpc[kGpuCapEnd], c.gpuSideVkDone),
             MsBetween(c.gpuSideVkDone, c.gpuQpc[kGpuResume]),
             MsBetween(c.gpuQpc[kGpuResume], c.gpuQpc[kGpuDone]),
-            c.handoff ? c.handoff : "-");
+            c.handoff ? c.handoff : "-", c.spinPollDelay, c.spinSlices, c.watchSlices, c.watchStartDelay);
         if (n <= 0) return;
         const auto path = ModuleDirectory() / L"NrFrameDiag.log";
         Diagnostics::Append(path, std::string_view(line, size_t(n)), 8ull * 1024 * 1024);

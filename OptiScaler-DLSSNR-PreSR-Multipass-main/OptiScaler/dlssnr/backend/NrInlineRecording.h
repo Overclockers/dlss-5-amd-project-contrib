@@ -275,6 +275,11 @@ cbuffer Args : register(b0) { uint operation; uint iterations; uint pollDelay; }
    if (acc == 0x7fffffffu && pollDelay == 0xffffffffu) target.Store(16, acc);
   }
   if (operation == 4) target.Store(8, spun);
+ } else if (operation == 10) {
+  // Watch start delay: dependent ALU only, no memory access until the final (never-taken) store.
+  uint acc = iterations;
+  [loop] for (uint d = 0; d < iterations; ++d) acc = acc * 1664525u + 1013904223u;
+  if (acc == 0x7fffffffu && iterations == 0xffffffffu) target.Store(16, acc);
  } else if (operation == 8) {
   // GPU-armed handoff: record whether the watch saw the capture before the network was released.
   flag.InterlockedCompareExchange(0, 0, 0, value); target.Store(12, value != 0 ? 1 : 0); DeviceMemoryBarrier();
@@ -370,7 +375,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
     }
     void PrepareReuse() {
         captureEvents.clear(); started = false; decisionReadable = false; uncertain = noNetwork = false;
-        diag = {}; captureBackoff = 0; gpuArmed = false; spinPollDelay = spinSlices = 0; activityToken = 0; reused = true;
+        diag = {}; captureBackoff = 0; gpuArmed = false; spinPollDelay = spinSlices = watchSlices = watchStartDelay = 0; activityToken = 0; reused = true;
     }
     bool RetirementUncertain() const { return uncertain || sideUncertain; }
     // Set under RecordingMutex from the lease that admitted this recording.
@@ -385,6 +390,8 @@ cbuffer Size : register(b0) { uint width; uint height; }
     // Spin-cost experiments (default 0 = unchanged): ALU iterations between flag polls (game wait +
     // side watch) and game-wait dispatch count (budget preserved). Snapshotted before recording.
     UINT spinPollDelay = 0, spinSlices = 0;
+    // Armed side-watch experiments: watch dispatch count (budget kept) and ALU-only start delay dispatches.
+    UINT watchSlices = 0, watchStartDelay = 0;
     bool reused = false; // came from NrInlineReuse pool
     bool Complete() const {
         if (!started) return true;
@@ -522,7 +529,11 @@ cbuffer Size : register(b0) { uint width; uint height; }
             // Previous use retired: BeforeExecute requires Complete(), and finalValue follows this list on side.
             Check(armAlloc->Reset(), "inline arm allocator reset"); Check(armList->Reset(armAlloc.Get(), nullptr), "inline arm list reset");
         }
-        for (UINT i = 0; i < kWaitSlices; ++i) { Op(armList.Get(), 7, sample.Get(), kWaitIterations); UavBarrier(armList.Get(), capture.Get()); }
+        // NrWatchStartDelay: ALU-only dispatches (no memory traffic) before the watch starts polling.
+        for (UINT i = 0; i < watchStartDelay; ++i) Op(armList.Get(), 10, sample.Get(), kWaitIterations);
+        // NrWatchSlices: same watch budget in shorter dispatches (shorter-resident waves).
+        const UINT ws = watchSlices ? watchSlices : kWaitSlices, wi = UINT(UINT64(kWaitSlices) * kWaitIterations / ws);
+        for (UINT i = 0; i < ws; ++i) { Op(armList.Get(), 7, sample.Get(), wi); UavBarrier(armList.Get(), capture.Get()); }
         Op(armList.Get(), 8, sample.Get()); UavBarrier(armList.Get(), sample.Get());
         Check(armList->Close(), "inline arm close");
         sideUncertain = true;
