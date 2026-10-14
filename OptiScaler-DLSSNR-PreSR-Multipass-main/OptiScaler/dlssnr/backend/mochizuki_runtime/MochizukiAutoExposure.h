@@ -13,7 +13,17 @@
 // smoothed in the log domain with the same 0.25 factor the other two runtimes use.
 //
 // The value feeds the existing "white = controls.white / gameExposure" path in MochizukiNrRuntime.cpp, so no ABI
-// field, no new INI key and no third_party change is needed: MochizukiWhitePoint stays the paper-white trim.
+// field and no third_party change is needed: MochizukiWhitePoint stays the paper-white trim. The meter only runs
+// when the host turns it on (MochizukiNrSetAutoExposure, INI MochizukiAutoExposureMeter, default off), so a game
+// that already looks right keeps exactly the level it had.
+//
+// Robustness (integration of PR #9): 64x64 samples (4x4 per thread), a two-stage reduction that first takes the
+// log-average G and then the arithmetic mean of min(luma, 16 G) - the arithmetic mean the other lanes are calibrated
+// on, with specular highlights, the sky and UI sparks clipped so one bright object cannot swing the level - a
+// 1/16 EV deadband against shimmer on a static frame, and the exposure clamped to +-6 EV.
+//
+// Probe also has a texel mode: it copies a game's 1x1 exposure texture to a readback through the same fence-gated
+// slots, so a game exposure reaches the CPU-side white point one frame late without any wait.
 //
 // D3DCompile is loaded from System32 the way amd/AmdPreSr.cpp:953 loads it: the game may already have an older
 // d3dcompiler next to it and we must not import an entry point that resolves to that one.
@@ -28,13 +38,14 @@
 
 namespace MochizukiAutoExposure
 {
-    inline constexpr UINT kGrid = 16;              // samples per axis (one thread each)
+    inline constexpr UINT kGrid = 64;              // samples per axis (16 threads x 4 samples each)
     inline constexpr float kEncodedKey = 0.45f;    // encoded mean the reference runtimes target
     inline constexpr float kKeyExposure = 0.2073f; // pow(kEncodedKey, 2.2) / (1 - pow(kEncodedKey, 2.2))
     inline constexpr float kSmoothing = 0.25f;     // log-domain blend per measurement
     inline constexpr float kMinMean = 1e-4f;
-    inline constexpr float kMinExposure = 1e-4f;
-    inline constexpr float kMaxExposure = 100.0f;
+    inline constexpr float kMinExposure = 1.0f / 64.0f; // -6 EV
+    inline constexpr float kMaxExposure = 64.0f;        // +6 EV
+    inline constexpr float kDeadbandEv = 1.0f / 16.0f;  // smaller changes are shimmer, not a new scene level
 
     // Mean linear luminance of the sampled region -> exposure that puts the encoded mean on the key.
     inline float Target(float mean)
@@ -49,12 +60,15 @@ namespace MochizukiAutoExposure
     inline float Blend(float previous, float target, bool warm)
     {
         if (!warm || !(previous > 0.0f) || !std::isfinite(previous)) return target;
+        // Deadband: a static frame whose samples shimmer must not make the level breathe.
+        if (std::fabs(std::log2(target / previous)) < kDeadbandEv) return previous;
         return std::exp(previous == target ? std::log(previous)
                                            : std::log(previous) + (std::log(target) - std::log(previous)) * kSmoothing);
     }
 
-    // One 16x16 group, one thread per grid cell, groupshared tree reduction into a 1-float buffer.
-    // Region is the measured rectangle inside the colour image (Origin in pixels, Extent at least 1).
+    // One 16x16 group, 4x4 samples per thread (a 64x64 grid), groupshared tree reductions into a 1-float buffer.
+    // Stage 1 is the log-average G of the usable samples; stage 2 the arithmetic mean of min(luma, 16 G), which is
+    // what Target is keyed on. Region is the measured rectangle inside the colour image (Origin, Extent >= 1).
     inline constexpr char kMeterShader[] = R"(
 Texture2D<float4> Colour : register(t0);
 RWByteAddressBuffer Mean : register(u0);
@@ -66,17 +80,8 @@ cbuffer Region : register(b0)
 groupshared float Partial[256];
 groupshared uint Samples[256];
 
-[numthreads(16, 16, 1)]
-void main(uint3 thread : SV_GroupThreadID)
+void Reduce(uint slot)
 {
-    const uint slot = thread.y * 16u + thread.x;
-    const uint2 offset = min(uint2((float2(thread.xy) + 0.5f) * float2(Extent) / 16.0f), Extent - 1u);
-    const float3 colour = max(Colour.Load(int3(int2(Origin + offset), 0)).rgb, 0.0f);
-    const float luma = dot(colour, float3(0.2126f, 0.7152f, 0.0722f));
-    // One non-finite sample must not poison the whole mean: drop it, and divide by what was usable instead of 256.
-    const bool usable = !isnan(luma) && !isinf(luma);
-    Partial[slot] = usable ? luma : 0.0f;
-    Samples[slot] = usable ? 1u : 0u;
     GroupMemoryBarrierWithGroupSync();
     [unroll] for (uint step = 128u; step > 0u; step >>= 1u)
     {
@@ -87,6 +92,39 @@ void main(uint3 thread : SV_GroupThreadID)
         }
         GroupMemoryBarrierWithGroupSync();
     }
+}
+
+[numthreads(16, 16, 1)]
+void main(uint3 thread : SV_GroupThreadID)
+{
+    const uint slot = thread.y * 16u + thread.x;
+    float luma[16];
+    float logSum = 0.0f;
+    uint usable = 0u;
+    [unroll] for (uint i = 0u; i < 16u; ++i)
+    {
+        const uint2 cell = thread.xy * 4u + uint2(i & 3u, i >> 2u);
+        const uint2 offset = min(uint2((float2(cell) + 0.5f) * float2(Extent) / 64.0f), Extent - 1u);
+        const float3 colour = max(Colour.Load(int3(int2(Origin + offset), 0)).rgb, 0.0f);
+        const float l = dot(colour, float3(0.2126f, 0.7152f, 0.0722f));
+        // A non-finite sample must not poison the level: drop it and divide by what was usable.
+        const bool ok = !isnan(l) && !isinf(l);
+        luma[i] = ok ? l : -1.0f;
+        logSum += ok ? log(max(l, 1e-5f)) : 0.0f;
+        usable += ok ? 1u : 0u;
+    }
+    Partial[slot] = logSum;
+    Samples[slot] = usable;
+    Reduce(slot);
+    const uint n = Samples[0];
+    const float ceiling = n ? 16.0f * exp(Partial[0] / float(n)) : 0.0f;
+    GroupMemoryBarrierWithGroupSync();
+    float sum = 0.0f;
+    [unroll] for (uint k = 0u; k < 16u; ++k)
+        sum += luma[k] >= 0.0f ? min(luma[k], ceiling) : 0.0f;
+    Partial[slot] = sum;
+    Samples[slot] = usable;
+    Reduce(slot);
     // Nothing usable in the frame: store 0, which Poll reads as "no measurement" rather than as a black frame.
     if (slot == 0u) Mean.Store(0u, Samples[0] ? asuint(Partial[0] / float(Samples[0])) : 0u);
 }
@@ -212,12 +250,83 @@ void main(uint3 thread : SV_GroupThreadID)
         Probe& operator=(const Probe&) = delete;
         ~Probe() { Destroy(); }
 
-        bool Ready() const { return pso_ != nullptr; }
+        // Meter mode needs its pipeline; texel mode (CreateTexel) only the readbacks.
+        bool Ready() const { return texel_ ? device_ != nullptr : pso_ != nullptr; }
+        bool Texel() const { return texel_; }
         const std::string& Error() const { return error_; }
         float Exposure() const { return exposure_; }
         float Mean() const { return mean_; }
         UINT Measured() const { return measured_; }
         UINT Skipped() const { return skipped_; }
+
+        // Texel mode: no pipeline, only the fence-gated readbacks; RecordTexel copies a game's 1x1 exposure texel.
+        bool CreateTexel(ID3D12Device* device)
+        {
+            Destroy();
+            if (!device)
+            {
+                error_ = "no D3D12 device";
+                return false;
+            }
+            device_ = device;
+            device_->AddRef();
+            texel_ = true;
+            for (Slot& slot : slots_)
+            {
+                slot.readback = Buffer(D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST, false);
+                if (!slot.readback)
+                {
+                    Describe("exposure texel readback", nullptr);
+                    Destroy();
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // Whether `texture` is a game exposure this lane can read: the same contract the lmxxf runtime enforces
+        // (a 1x1 R16_FLOAT / R32_FLOAT texture; anything else costs the game its exposure, never the frame).
+        static bool UsableExposureTexture(ID3D12Resource* texture)
+        {
+            if (!texture) return false;
+            const D3D12_RESOURCE_DESC d = texture->GetDesc();
+            return d.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D && d.Width == 1 && d.Height == 1 &&
+                   d.MipLevels == 1 && d.DepthOrArraySize == 1 && d.SampleDesc.Count == 1 &&
+                   (d.Format == DXGI_FORMAT_R16_FLOAT || d.Format == DXGI_FORMAT_R32_FLOAT);
+        }
+
+        // Copies the game's exposure texel into a free readback slot; picked up by Poll once the tail has passed.
+        bool RecordTexel(ID3D12GraphicsCommandList* list, ID3D12Resource* texture, D3D12_RESOURCE_STATES state)
+        {
+            if (!texel_ || !Ready() || !list || pending_ >= 0 || !UsableExposureTexture(texture))
+            {
+                ++skipped_;
+                return false;
+            }
+            const int free = Free();
+            if (free < 0)
+            {
+                ++skipped_;
+                return false;
+            }
+            Slot& slot = slots_[free];
+            const D3D12_RESOURCE_DESC d = texture->GetDesc();
+            slot.half = d.Format == DXGI_FORMAT_R16_FLOAT;
+            D3D12_TEXTURE_COPY_LOCATION src {};
+            src.pResource = texture;
+            src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            src.SubresourceIndex = 0;
+            D3D12_TEXTURE_COPY_LOCATION dst {};
+            dst.pResource = slot.readback;
+            dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+            dst.PlacedFootprint.Offset = 0;
+            dst.PlacedFootprint.Footprint = { d.Format, 1, 1, 1, kBytes };
+            Transition(list, texture, state, D3D12_RESOURCE_STATE_COPY_SOURCE);
+            list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+            Transition(list, texture, D3D12_RESOURCE_STATE_COPY_SOURCE, state);
+            pending_ = free;
+            return true;
+        }
 
         bool Create(ID3D12Device* device)
         {
@@ -353,6 +462,7 @@ void main(uint3 thread : SV_GroupThreadID)
             lastTail_ = nullptr;
             lastTailValue_ = 0;
             warm_ = false;
+            texel_ = false;
             mean_ = 0.0f;
             exposure_ = 0.0f;
             measured_ = 0;
@@ -364,7 +474,7 @@ void main(uint3 thread : SV_GroupThreadID)
         bool Record(ID3D12GraphicsCommandList* list, ID3D12Resource* colour, D3D12_RESOURCE_STATES state, UINT width,
                     UINT height)
         {
-            if (!Ready() || !list || !colour || !width || !height || pending_ >= 0)
+            if (texel_ || !Ready() || !list || !colour || !width || !height || pending_ >= 0)
             {
                 ++skipped_;
                 return false;
@@ -432,7 +542,17 @@ void main(uint3 thread : SV_GroupThreadID)
                 // A frame with nothing usable stores 0, and a mean below kMinMean is not evidence of a 1e-4-luminance
                 // image either: both are no measurement, so the exposure keeps its history instead of blending toward
                 // the clamp (a fade to black would otherwise darken the next frames by up to kMaxExposure).
-                if (Read(slot, &mean) && std::isfinite(mean) && mean > kMinMean)
+                if (texel_)
+                {
+                    // The game's own exposure: taken as is (the game already smooths it), only sanity-checked.
+                    if (Read(slot, &mean) && std::isfinite(mean) && mean > 0.0f && mean < 1e6f)
+                    {
+                        mean_ = exposure_ = mean;
+                        ++measured_;
+                        produced = true;
+                    }
+                }
+                else if (Read(slot, &mean) && std::isfinite(mean) && mean > kMinMean)
                 {
                     mean_ = mean;
                     exposure_ = Blend(exposure_, Target(mean), warm_);
@@ -479,6 +599,7 @@ void main(uint3 thread : SV_GroupThreadID)
             ID3D12Fence* fence {};
             uint64_t tailValue {};
             bool bound {};
+            bool half {}; // texel mode: the readback holds an R16_FLOAT
         };
 
         void Describe(const char* what, ID3DBlob* messages)
@@ -528,7 +649,19 @@ void main(uint3 thread : SV_GroupThreadID)
             const D3D12_RANGE range { 0, sizeof(float) };
             void* data = nullptr;
             if (FAILED(slot.readback->Map(0, &range, &data)) || !data) return false;
-            *mean = *static_cast<const float*>(data);
+            if (slot.half)
+            {
+                // IEEE half -> float, no DirectXMath dependency in this header.
+                const uint16_t h = *static_cast<const uint16_t*>(data);
+                const uint32_t sign = uint32_t(h & 0x8000u) << 16, exponent = (h >> 10) & 0x1fu, mantissa = h & 0x3ffu;
+                float v;
+                if (exponent == 0) v = std::ldexp(float(mantissa), -24);
+                else if (exponent == 31) v = mantissa ? NAN : INFINITY;
+                else v = std::ldexp(float(mantissa | 0x400u), int(exponent) - 25);
+                *mean = sign ? -v : v;
+            }
+            else
+                *mean = *static_cast<const float*>(data);
             const D3D12_RANGE written { 0, 0 };
             slot.readback->Unmap(0, &written);
             return true;
@@ -552,6 +685,7 @@ void main(uint3 thread : SV_GroupThreadID)
         int pending_ { -1 };
         UINT stale_ {};
         bool warm_ {};
+        bool texel_ {};
         float mean_ {};
         float exposure_ {};
         UINT measured_ {};

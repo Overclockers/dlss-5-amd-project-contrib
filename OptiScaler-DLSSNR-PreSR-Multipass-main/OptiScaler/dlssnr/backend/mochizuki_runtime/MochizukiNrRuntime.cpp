@@ -1882,6 +1882,13 @@ struct Job
     bool reset = false;
     nr::Controls controls;            // the frame's, sanitised: validate() cannot refuse them
     float history = 1.f, white = 1.f; // set on the runtime before the frame is recorded
+    // Exposure sources for CoreRecordInputs (PR #9 follow-up): whether the white point is a linear encode at all
+    // (the meter is skipped otherwise: white is unused), whether the host enabled the meter, and the game's
+    // exposure texture to read back, if the host handed one over (MochizukiNrSetExposureTexture).
+    bool linear = false;
+    bool meter = false;
+    ID3D12Resource* exposureTexture {};
+    D3D12_RESOURCE_STATES exposureState {};
 };
 
 // The handle PrepareFrame hands out for job generation gen: odd, so never null and never a pointer.
@@ -2470,6 +2477,18 @@ struct Session
     // point of the frame below is put through. 0 until the first measurement lands, and it stays the game's exposure
     // that wins while the host supplies one.
     std::atomic<float> meteredExposure { 0.f };
+    // MochizukiNrSetAutoExposure: the host's switch for the meter above (INI MochizukiAutoExposureMeter). Off by
+    // default, so a session whose host never calls it keeps the manual white point exactly as before PR #9.
+    std::atomic<bool> meterEnabled { false };
+    // MochizukiNrSetExposureTexture: the game's 1x1 exposure texture with its scale and pre-exposure. Its texel is
+    // read back through `gameTexel` (fence-gated, one frame late), and textureExposure = texel * scale / pre is the
+    // divisor, the same expression lmxxf's codec evaluates on the GPU (native_codec_encode.hlsl EffectivePaperWhite).
+    // Written under controlsMutex; the job copies the pointer, the host keeps the texture alive for the frame.
+    ID3D12Resource* exposureTexture {};
+    D3D12_RESOURCE_STATES exposureTextureState {};
+    float exposurePre = 1.f, exposureScale = 1.f;
+    std::atomic<float> textureExposure { 0.f };
+    MochizukiAutoExposure::Probe gameTexel;
     // Frames since the meter last produced a measurement. It can stop for good (a colour image it cannot read, no free
     // slot, a recording that never published a tail), and dividing the white point by an exposure from an arbitrary
     // earlier frame is worse than the manual setting: after this many frames the manual white point is back in charge.
@@ -5211,13 +5230,9 @@ struct Session
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT);
         }
         const nr::Preprocess& prep = job.controls.preprocess;
-        float prepEv = NAN, prepTarget = NAN;
+        float prepEv = NAN;
         if (prep.active() && prep.exposure == 1)
-        {
-            const std::pair<float, float> meter = runtime->preprocess_meter();
-            prepEv = meter.first + prep.bias_ev;
-            prepTarget = meter.second;
-        }
+            prepEv = runtime->preprocess_meter().first + prep.bias_ev;
         infoPrepEv.store(prepEv, std::memory_order_relaxed);
         historyBits.store((historyBits.load(std::memory_order_relaxed) << 1) | uint64_t(consumed),
                           std::memory_order_relaxed);
@@ -5350,6 +5365,7 @@ struct Session
         // The meter's own D3D12 objects go first: nothing can reference them (Destroy refuses live recordings, and
         // every recording that carried a measurement has been collected), and they hold the device themselves.
         exposure.Destroy();
+        gameTexel.Destroy();
         StopWatchdog();
         JoinBuilder();
         StopReleaser(); // what it has not freed is in `retired`
@@ -5485,10 +5501,14 @@ int32_t Create(const LmxxfNrCreateInfo* info, void** context)
     // MochizukiNrSetExposure, so without this the linear encode is handed a white point of 1.0 and the frame's
     // highlights are normalised by the wrong level (lmxxf_runtime/LmxxfNrRuntime.cpp:1020-1028 measures the same
     // thing for the same reason). Built once here; a failure only means the frames keep the white point they had.
+    // Built here, used only when the host enables it (MochizukiNrSetAutoExposure).
     if (s->exposure.Create(s->device))
-        nr::logf("[mochizuki] auto exposure: metering the frame, one grid sample per 16x16 threads");
+        nr::logf("[mochizuki] auto exposure meter ready (64x64 samples, highlight-clipped mean; off until the host "
+                 "enables it)");
     else
         nr::logf("[mochizuki] auto exposure unavailable: %s", s->exposure.Error().c_str());
+    if (!s->gameTexel.CreateTexel(s->device))
+        nr::logf("[mochizuki] game exposure readback unavailable: %s", s->gameTexel.Error().c_str());
     *context = s;
     return LMXXF_NR_OK;
 }
@@ -5626,16 +5646,26 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
             float history = 1.f, white = 1.f;
             uint32_t linearMode = 0, maxPassesSetting = 0, drsMode = 0;
             bool compactTransfer = true, aco = false, prepRequested = false;
+            ID3D12Resource* exposureTexture = nullptr;
+            D3D12_RESOURCE_STATES exposureState {};
             {
                 std::lock_guard lock(s->controlsMutex);
                 model = s->controls.model;
                 history = s->controls.history;
                 white = s->controls.white;
                 linearMode = s->controls.linearMode;
-                if (const float e = s->gameExposure.load(std::memory_order_relaxed); e > 0.f)
+                // Priority: the game's exposure texture (read back), then a scalar game exposure
+                // (MochizukiNrSetExposure, e.g. 1/pre-exposure), then the lane's meter when the host enabled it,
+                // then the manual white point alone.
+                if (const float t = s->textureExposure.load(std::memory_order_relaxed); t > 0.f && s->exposureTexture)
+                    white = std::clamp(white / t, 1e-4f, 1e4f);
+                else if (const float e = s->gameExposure.load(std::memory_order_relaxed); e > 0.f)
                     white = std::clamp(white / e, 1e-4f, 1e4f);
-                else if (const float m = s->meteredExposure.load(std::memory_order_relaxed); m > 0.f)
+                else if (const float m = s->meteredExposure.load(std::memory_order_relaxed);
+                         m > 0.f && s->meterEnabled.load(std::memory_order_relaxed))
                     white = std::clamp(white / m, 1e-4f, 1e4f); // the lane's own meter, MochizukiAutoExposure.h
+                exposureTexture = s->exposureTexture;
+                exposureState = s->exposureTextureState;
                 maxPassesSetting = s->controls.maxPasses;
                 drsMode = s->controls.drsMode;
                 compactTransfer = s->controls.compactTransfer;
@@ -5696,14 +5726,16 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
             {
                 s->inputLogAt = GetTickCount64();
                 nr::logf("[mochizuki] input: %ux%u frame %ux%u colour VkFormat %d key VkFormat %d DXGI %u linearMode=%u linear=%d "
-                         "white=%.4f exposure=%.4f meter=%.4f prep(want=%d latch=%d active=%d mode=%d curve=%d "
+                         "white=%.4f exposure=%.4f texture=%.4f meter=%.4f(%s) prep(want=%d latch=%d active=%d mode=%d curve=%d "
                          "bias=%.2f) "
                          "aco=%d compact=%d passes=%u capacity=%u scale=%.2f history=%.3f "
                          "controls(intensity=%.3f style=%d tone=%.2f structure=%.2f skin=%.2f mask=%d detail=%.3f "
                          "colour=%.3f)",
                          g.width, g.height, w, h, int(cf.vk), int(keyFormat), unsigned(cd.Format), linearMode, linear ? 1 : 0, white,
                          s->gameExposure.load(std::memory_order_relaxed),
-                         s->meteredExposure.load(std::memory_order_relaxed), s->prepWanted ? 1 : 0,
+                         s->textureExposure.load(std::memory_order_relaxed),
+                         s->meteredExposure.load(std::memory_order_relaxed),
+                         s->meterEnabled.load(std::memory_order_relaxed) ? "on" : "off", s->prepWanted ? 1 : 0,
                          prepRequested ? 1 : 0, model.preprocess.active() ? 1 : 0, model.preprocess.exposure,
                          model.preprocess.curve, model.preprocess.bias_ev, aco ? 1 : 0, compactTransfer ? 1 : 0,
                          passes, maxPasses, scale, history, model.intensity, model.style, model.local_tone,
@@ -5778,6 +5810,10 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
             next.controls.passes = int(served);
             next.history = history;
             next.white = white;
+            next.linear = linear;
+            next.meter = s->meterEnabled.load(std::memory_order_relaxed);
+            next.exposureTexture = exposureTexture;
+            next.exposureState = exposureState;
             s->infoWhite.store(white, std::memory_order_relaxed);
             if (mf.vk)
             {
@@ -5843,30 +5879,49 @@ int32_t CoreRecordInputs(void* context, void* job, void* command_list)
                      if (j.motion)
                          CopyToBuffer(c, j.motion, j.motionState, s->motionBuffer.resource, s->motionFootprint,
                                       j.motionWidth, j.motionHeight);
-                     // The lane's own exposure (MochizukiAutoExposure.h). The measurement goes into this list, which
-                     // carries the tail EndRecordingExecution is handed at the end of the frame, so the value is
-                     // picked up one frame later once that tail has passed - nothing here waits on the GPU.
-                     float metered = 0.f;
-                     if (s->exposure.Poll(s->previousTail.Get(), s->previousTailValue, &metered))
-                         s->meteredExposure.store(metered, std::memory_order_relaxed);
-                     if (s->gameExposure.load(std::memory_order_relaxed) > 0.f)
+                     // Exposure (MochizukiAutoExposure.h). Both probes ride this list, which carries the tail
+                     // EndRecordingExecution is handed at the end of the frame, so a value is picked up one frame
+                     // later once that tail has passed - nothing here waits on the GPU. Everything here runs under
+                     // jobMutex (the lock above), so the probes and meterIdle need no lock of their own.
+                     float value = 0.f;
+                     if (s->gameTexel.Poll(s->previousTail.Get(), s->previousTailValue, &value))
                      {
-                         // The game supplies this frame's level and CorePrepareFrame prefers it, so a measurement would
-                         // be ignored work. Drop the lane's own value with it: the host can stop supplying one, and a
-                         // level measured before the game took over must not come back as if it were this frame's.
+                         float pre = 1.f, scale = 1.f;
+                         {
+                             std::lock_guard controls(s->controlsMutex);
+                             pre = s->exposurePre;
+                             scale = s->exposureScale;
+                         }
+                         const float e = value * scale / pre;
+                         s->textureExposure.store(std::isfinite(e) && e > 0.f ? e : 0.f, std::memory_order_relaxed);
+                     }
+                     if (s->exposure.Poll(s->previousTail.Get(), s->previousTailValue, &value))
+                         s->meteredExposure.store(value, std::memory_order_relaxed);
+                     if (j.exposureTexture)
+                     {
+                         // The game's own level wins; the meter would be ignored work.
+                         s->gameTexel.RecordTexel(c, j.exposureTexture, j.exposureState);
                          s->meterIdle = 0;
                          s->meteredExposure.store(0.f, std::memory_order_relaxed);
                      }
-                     // The meter can stop producing for good (a colour image it cannot read, no free slot, a frame whose
-                     // recording never published a tail). Dividing the white point by an exposure from an arbitrary
-                     // earlier frame is worse than the manual setting: after a second without a measurement the manual
-                     // white point is back in charge, and the log says why.
+                     else if (s->gameExposure.load(std::memory_order_relaxed) > 0.f || !j.meter || !j.linear)
+                     {
+                         // A scalar game exposure, the meter switched off, or a display-encoded frame (white is not
+                         // applied at all): no measurement. Drop the lane's own value so a level measured before
+                         // cannot come back as if it were this frame's.
+                         s->meterIdle = 0;
+                         s->meteredExposure.store(0.f, std::memory_order_relaxed);
+                     }
+                     // The meter can pause (a colour image it cannot read, no free slot, a recording that has not
+                     // published a newer tail yet). After a second without a measurement the manual white point is
+                     // back in charge; it resumes by itself as soon as a measurement lands again.
                      else if (s->exposure.Record(c, j.colour, j.colourState, j.width, j.height))
                          s->meterIdle = 0;
                      else if (++s->meterIdle == Session::kMeterIdleFrames)
                      {
                          s->meteredExposure.store(0.f, std::memory_order_relaxed);
-                         nr::logf("[mochizuki] exposure meter stopped producing: white point back to the manual setting");
+                         nr::logf("[mochizuki] exposure meter paused: white point back to the manual setting until "
+                                  "it measures again");
                      }
                      j.state = LMXXF_NR_JOB_PRODUCER_SUBMITTED;
                      return int32_t(LMXXF_NR_OK);
@@ -6298,6 +6353,53 @@ extern "C" __declspec(dllexport) int32_t MochizukiNrSetExposure(void* context, f
         else
             nr::logf("[mochizuki] the game's exposure is gone: the white point is the setting alone");
     }
+    return LMXXF_NR_OK;
+}
+
+// The host's switch for the lane's own meter (INI MochizukiAutoExposureMeter). Off unless called with nonzero.
+extern "C" __declspec(dllexport) int32_t MochizukiNrSetAutoExposure(void* context, uint32_t enabled)
+{
+    auto* s = static_cast<Session*>(context);
+    if (!s)
+        return Fail(LMXXF_NR_INVALID_ARGUMENT, "SetAutoExposure: no session");
+    const bool on = enabled != 0;
+    if (s->meterEnabled.exchange(on, std::memory_order_relaxed) != on)
+        nr::logf("[mochizuki] auto exposure meter %s", on ? "on" : "off");
+    if (!on)
+        s->meteredExposure.store(0.f, std::memory_order_relaxed);
+    return LMXXF_NR_OK;
+}
+
+// The game's 1x1 exposure texture for the frames that follow (null: none), with the upscaler's exposure scale and
+// pre-exposure. Its texel is read back (one frame late) and white = white_point / (texel * scale / pre). A texture
+// that is not a 1x1 R16/R32 float is refused here (the frame goes on without it), as in the lmxxf runtime.
+extern "C" __declspec(dllexport) int32_t MochizukiNrSetExposureTexture(void* context, void* texture, uint32_t state,
+                                                                      float pre_exposure, float exposure_scale)
+{
+    auto* s = static_cast<Session*>(context);
+    if (!s)
+        return Fail(LMXXF_NR_INVALID_ARGUMENT, "SetExposureTexture: no session");
+    auto* t = static_cast<ID3D12Resource*>(texture);
+    if (t && !MochizukiAutoExposure::Probe::UsableExposureTexture(t))
+        t = nullptr;
+    const float pre = std::isfinite(pre_exposure) && pre_exposure > 0.f && pre_exposure < 1e6f ? pre_exposure : 1.f;
+    const float scale =
+        std::isfinite(exposure_scale) && exposure_scale > 0.f && exposure_scale < 1e6f ? exposure_scale : 1.f;
+    bool changed = false;
+    {
+        std::lock_guard lock(s->controlsMutex);
+        changed = (s->exposureTexture != nullptr) != (t != nullptr);
+        s->exposureTexture = t;
+        s->exposureTextureState = static_cast<D3D12_RESOURCE_STATES>(state);
+        s->exposurePre = pre;
+        s->exposureScale = scale;
+    }
+    if (!t)
+        s->textureExposure.store(0.f, std::memory_order_relaxed);
+    if (changed)
+        nr::logf(t ? "[mochizuki] white point from the game's exposure texture (scale %.4f, pre-exposure %.4f)"
+                   : "[mochizuki] the game's exposure texture is gone (scale %.4f, pre-exposure %.4f ignored)",
+                 double(scale), double(pre));
     return LMXXF_NR_OK;
 }
 

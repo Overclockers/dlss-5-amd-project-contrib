@@ -127,10 +127,19 @@ extern "C"
     /* The game's exposure for the frames that follow: what the frame's linear colour is multiplied by to be shown
      * (the upscaler's exposure texture, times its scale, over the pre-exposure). The white point becomes
      * MochizukiNrControls::white_point divided by it, so the network sees the frame at the brightness the game shows
-     * it. 0, or a value that is not finite and positive, means no game exposure: the runtime then meters the frame's
-     * linear colour itself (one GPU dispatch per frame, no host call) and white_point trims that level. Call it before
-     * PrepareFrame on the thread that calls it; it never fails the session. */
+     * it. 0, or a value that is not finite and positive, means no scalar game exposure. Priority per frame: the
+     * exposure texture (SetExposureTexture), then this value, then the runtime's own meter when SetAutoExposure enabled
+     * it, then white_point alone. Call it before PrepareFrame on the thread that calls it; it never fails the session. */
     typedef int32_t (*PFN_MochizukiNrSetExposure)(void* context, float exposure);
+    /* Optional export. Enables (nonzero) or disables the runtime's own exposure meter for a frame with no game exposure:
+     * one 16x16-thread dispatch over the linear colour, read back one frame late. Off until called. */
+    typedef int32_t (*PFN_MochizukiNrSetAutoExposure)(void* context, uint32_t enabled);
+    /* Optional export. The game's 1x1 R16/R32 float exposure texture (ID3D12Resource*, NULL for none) in `state` at
+     * RecordInputs, with the upscaler's pre-exposure and exposure scale. The texel is read back one frame late and the
+     * white point becomes white_point / (texel * exposure_scale / pre_exposure). Call it before PrepareFrame; the
+     * texture must stay alive until the frame's recording has executed. */
+    typedef int32_t (*PFN_MochizukiNrSetExposureTexture)(void* context, void* texture, uint32_t state,
+                                                         float pre_exposure, float exposure_scale);
 
 #ifdef _WIN32
 #ifdef MOCHIZUKI_NR_RUNTIME_EXPORTS

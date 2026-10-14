@@ -83,6 +83,8 @@ inline constexpr const char *MochizukiLayerMode = "MochizukiLayerMode";
 inline constexpr const char *MochizukiPasses = "MochizukiPasses";
 inline constexpr const char *MochizukiTemporal = "MochizukiTemporal";
 inline constexpr const char *MochizukiProxyFallbackEnabled = "MochizukiProxyFallbackEnabled";
+inline constexpr const char *MochizukiUseGameExposure = "MochizukiUseGameExposure";
+inline constexpr const char *MochizukiAutoExposureMeter = "MochizukiAutoExposureMeter";
 inline constexpr const char *MochizukiHistoryStrength = "MochizukiHistoryStrength";
 inline constexpr const char *MochizukiPreprocess = "MochizukiPreprocess";
 inline constexpr const char *MochizukiPreprocessExposure = "MochizukiPreprocessExposure";
@@ -249,6 +251,8 @@ inline constexpr const char *const kKnown[] = {
     MochizukiPasses,
     MochizukiTemporal,
     MochizukiProxyFallbackEnabled,
+    MochizukiUseGameExposure,
+    MochizukiAutoExposureMeter,
     MochizukiHistoryStrength,
     MochizukiPreprocess,
     MochizukiPreprocessExposure,
