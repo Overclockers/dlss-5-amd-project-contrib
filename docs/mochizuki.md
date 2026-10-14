@@ -118,7 +118,7 @@ lmxxf settings. The complete defaults are in the shipped `OptiScaler.ini`.
 | Resolution / Model passes | ModelScale (WorkingScale, 0.25–1), Passes (1–3). Allow up to 30 layers raises that control to 1–30; it does not select 30 by itself. Each count runs the model that many times in one network, one history image per layer, then one composition. Layers after 3 inherit pass 1 with local tone 0. The selected count rebuilds; the VRAM budget can refuse it |
 | Temporal history | Temporal and HistoryStrength. NR → SR drops jittered motion. Mochizuki SR → NR passes the game vectors through and the runtime scales the render-resolution motion region |
 | Before the model | Preprocess, PreprocessExposure (Off/Auto/Fixed), PreprocessBiasEv, PreprocessCurve (None/Neutral/Reinhard/Filmic/GT/ACES/AgX), PreprocessContrast and PreprocessSaturation. The transform changes the model input and is reversed from its answer |
-| Advanced | WhitePoint for linear input, LinearInput (Auto/Linear/Encoded), MaxPasses (0 grows capacity as needed and retains it on pass reduction), DynamicResolution (Exact/Auto bucket/Always bucket) |
+| Advanced | WhitePoint for linear input (the manual level, which trims the game's exposure when the host supplies one and the runtime's own GPU meter otherwise), LinearInput (Auto/Linear/Encoded), MaxPasses (0 grows capacity as needed and retains it on pass reduction), DynamicResolution (Exact/Auto bucket/Always bucket) |
 | Pass 2/3 | Explicit override plus that pass's style, intensity, tone, structure, skin structure and mask. With override off, inherit pass 1 but use zero LocalTone |
 
 The NR menu uses a clickable pre-SR flow chart. **Prepare NR input** contains model
@@ -239,12 +239,20 @@ admission kept the installed ACO state (`ACO_BUDGET_KEEP_OK effective=1`).
 `ACO_RAPID_REENABLE requested=1 effective=0` when a native candidate installed
 after ACO had been requested again, then `ACO_RAPID_OK`.
 Missing, alias-less and corrupt bundles each completed one native frame
-(`ACO_FALLBACK_OK`). Package and uninstall ownership is the exact 214-path pin
+(`ACO_FALLBACK_OK`). Package and uninstall ownership is the exact 220-path pin
 `tools/install/mochizuki-owned.txt`. No game scene was compared.
 
-The bridge does not sample the game's exposure texture on the CPU. WhitePoint is
-the manual linear-input setting; optional preprocessing has its own histogram
-meter. Daniel/lmxxf exposure controls do not configure this backend.
+The bridge never samples the game's exposure texture on the CPU. `MochizukiNrSetExposure`
+carries it as a number, and the white point is then the trim of it. When no game exposure
+arrives - every Monster Hunter Wilds frame so far, where the DLSS-NR exposure scan adopts no
+candidate - the runtime meters the frame's linear colour on the GPU itself, the way the lmxxf
+lane does: one 16x16 dispatch into a 1-float buffer per frame, read one frame later through
+the recording's own completion fence, blended in the log domain. `WhitePoint` then trims the
+metered level instead of setting an absolute one: at the reference luminance (mean 0.2073) the
+hand-tuned value keeps its meaning, elsewhere it scales with the scene. A frame with nothing
+measurable leaves the last measurement in place, and after a second without one the manual
+white point is back in charge with a line in the log. Daniel/lmxxf exposure controls do not
+configure this backend, and preprocessing keeps its own histogram meter.
 
 ## Build and verification
 

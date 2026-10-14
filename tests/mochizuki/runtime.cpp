@@ -16,6 +16,9 @@ int wmain(int argc,wchar_t**argv) try {
     auto prepare=reinterpret_cast<PFN_MochizukiNrPrepareFrame>(GetProcAddress(dll,"MochizukiNrPrepareFrame"));
     auto getInfo=reinterpret_cast<PFN_MochizukiNrGetInfo>(GetProcAddress(dll,"MochizukiNrGetInfo"));
     auto getProgress=reinterpret_cast<PFN_MochizukiNrGetBuildProgress>(GetProcAddress(dll,"MochizukiNrGetBuildProgress"));
+    // The level the game shows the frame at. The runtime exports it and nothing has ever called it, so the image
+    // mode names it on the command line to see what the network does when the frame is levelled like the other lanes.
+    auto setExposure=reinterpret_cast<PFN_MochizukiNrSetExposure>(GetProcAddress(dll,"MochizukiNrSetExposure"));
     Require(getProgress!=nullptr,"missing build progress export");
     MochizukiNrBuildProgress invalidProgress {sizeof invalidProgress};
     Require(getProgress(nullptr,&invalidProgress)==LMXXF_NR_INVALID_ARGUMENT,"progress accepted null session");
@@ -302,6 +305,9 @@ int wmain(int argc,wchar_t**argv) try {
     MochizukiNrInfo oldInfo {sizeof(MochizukiNrInfo)-16};
     Require(getInfo(context,&oldInfo)==LMXXF_NR_INVALID_ARGUMENT,"old info contract accepted");
     const bool profile=argc>3 && std::wstring(argv[3])==L"--profile";
+    // The frame-side strengths, which the image mode may override: MochizukiDetailStrength / MochizukiColourStrength
+    // reach the model here, while Controls::intensity reaches it through the control block.
+    float g_transferStrength=1.f,g_colorStrength=1.f;
     const bool startup=profile || (argc>3 && std::wstring(argv[3])==L"--startup");
     const float profileScale=profile && argc>7 ? float(_wtof(argv[7])) : 1.f;
     const uint32_t profilePasses=profile && argc>8 ? uint32_t(_wtoi(argv[8])) : 1u;
@@ -322,7 +328,7 @@ int wmain(int argc,wchar_t**argv) try {
     List upload(device.Get());frame.Upload(upload.cmd.Get());Hr(upload.cmd->Close());Submit(q[0].Get(),upload);Hr(q[0]->Signal(tail.Get(),++value));Wait(tail.Get(),value);
     auto make=[&](Frame& f,UINT validWidth=0) {
         MochizukiNrFrameInfo info {};info.struct_size=sizeof info;info.color=f.color.Get();info.color_width=validWidth?validWidth:f.width;info.color_height=f.height;
-        info.color_state=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;info.flags=LMXXF_NR_FRAME_FLAG_STRENGTH;info.transfer_strength=info.color_strength=1;info.model_scale=profileScale;info.passes=profilePasses;
+        info.color_state=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;info.flags=LMXXF_NR_FRAME_FLAG_STRENGTH;info.transfer_strength=g_transferStrength;info.color_strength=g_colorStrength;info.model_scale=profileScale;info.passes=profilePasses;
         LmxxfNrJob job {sizeof job};const auto deadline=GetTickCount64()+300000;
         std::string lastStage;uint32_t lastCompleted=UINT32_MAX;
         for(;;) {
@@ -610,6 +616,107 @@ int wmain(int argc,wchar_t**argv) try {
         }
         Rc(api.Destroy(context));FreeLibrary(dll);
         puts("MOCHIZUKI_COMPOSITION_OK");return 0;
+    }
+    if(argc>3 && std::wstring(argv[3])==L"--image") {
+        // One real frame through the network with the settings named on the command line, then the input and the
+        // output measured against each other: how much NR actually edits a game's own picture, and whether a setting
+        // changes that. The build is the slow part on a cold pipeline cache, so this prints the same progress.
+        Require(argc>=12,"usage: --image <in.f32> <w> <h> <dxgi> <white> <intensity> <preprocess> <linear> [out.f32] [mask] [skin] [style] [structure] [tone] [transfer] [colour] [max_ratio] [curve] [bias_ev] [contrast] [saturation] [frames] [exposure]");
+        const UINT shotW=UINT(_wtoi(argv[5])),shotH=UINT(_wtoi(argv[6]));
+        Require(shotW>0&&shotH>0&&shotW<=3840&&shotH<=2160,"invalid image dimensions");
+        const DXGI_FORMAT shotFormat=DXGI_FORMAT(_wtoi(argv[7]));
+        controls.white_point=float(_wtof(argv[8]));
+        controls.intensity=float(_wtof(argv[9]));
+        controls.preprocess=_wtoi(argv[10])!=0?1u:0u;
+        controls.preprocess_exposure=1;
+        controls.linear_input=uint32_t(_wtoi(argv[11]));
+        controls.apply_model=1;
+        // The model's own conditioning, which is what makes it treat the character differently from the scenery.
+        if(argc>13&&argv[13][0])controls.automatic_mask=uint32_t(_wtoi(argv[13]));
+        if(argc>14&&argv[14][0])controls.skin_structure=float(_wtof(argv[14]));
+        if(argc>15&&argv[15][0])controls.style=uint32_t(_wtoi(argv[15]));
+        if(argc>16&&argv[16][0])controls.local_structure=float(_wtof(argv[16]));
+        if(argc>17&&argv[17][0])controls.local_tone=float(_wtof(argv[17]));
+        if(argc>18&&argv[18][0])g_transferStrength=float(_wtof(argv[18]));
+        if(argc>19&&argv[19][0])g_colorStrength=float(_wtof(argv[19]));
+        if(argc>20&&argv[20][0])controls.max_ratio=float(_wtof(argv[20]));
+        // The preprocess: exposure 1 (auto) is what this mode has always used, so what is left to name is the
+        // curve it puts on top of the frame. Curve 0 is the level change alone - what a frame needs when the game
+        // hands over no exposure and the frame is not the level the network was built for.
+        if(argc>21&&argv[21][0])controls.preprocess_curve=uint32_t(_wtoi(argv[21]));
+        if(argc>22&&argv[22][0])controls.preprocess_bias_ev=float(_wtof(argv[22]));
+        if(argc>23&&argv[23][0])controls.preprocess_contrast=float(_wtof(argv[23]));
+        if(argc>24&&argv[24][0])controls.preprocess_saturation=float(_wtof(argv[24]));
+        int shotFrames=(argc>25&&argv[25][0])?_wtoi(argv[25]):1;if(shotFrames<1)shotFrames=1;
+        Rc(set(context,&controls));
+        // The lane's level reference: an explicit exposure here, or - with no argument, which is what every host frame
+        // passes so far, Monster Hunter Wilds included - the runtime's own GPU meter, which puts the measured mean of
+        // the linear frame on the key luminance (0.2073/mean, so the white point ends up at 4.826*mean, exactly what
+        // the lmxxf and AMD lanes do with their own meters). An explicit exposure wins; the white point argument is the
+        // trim of whichever reference is in force.
+        if(argc>26&&argv[26][0]) {
+            Require(setExposure!=nullptr,"missing exposure export");
+            const float exposure=float(_wtof(argv[26]));
+            Rc(setExposure(context,exposure));
+            printf("IMAGE_EXPOSURE exposure=%.6f white_point=%.6f\n",double(exposure),double(controls.white_point));
+        }
+        Frame shot(device.Get(),shotW,shotH,shotFormat);
+        shot.Load(argv[4]);
+        List shotUpload(device.Get());shot.Upload(shotUpload.cmd.Get());Hr(shotUpload.cmd->Close());
+        Submit(q[0].Get(),shotUpload);Hr(q[0]->Signal(tail.Get(),++value));Wait(tail.Get(),value);
+        for(int shotFrame=0;shotFrame<shotFrames;shotFrame++) {
+            // The game's own shape: one prepare per frame, one recording per frame, both released once it has run.
+            // The meter is session state, so a later frame sees the level an earlier one measured.
+            auto shotJob=make(shot);
+            List shotIn(device.Get()),shotOut(device.Get());
+            Rc(api.RecordInputs(context,shotJob.handle,shotIn.cmd.Get()));
+            Rc(api.RecordOutputs(context,shotJob.handle,shotOut.cmd.Get()));
+            shot.Read(shotOut.cmd.Get(),static_cast<ID3D12Resource*>(shotJob.private_output));
+            Hr(shotIn.cmd->Close());Hr(shotOut.cmd->Close());
+            Rc(api.BeginRecordingExecution(context,shotJob.handle,q[0].Get()));Submit(q[0].Get(),shotIn);
+            Rc(api.EnqueueHip(context,shotJob.handle,q[0].Get()));Submit(q[0].Get(),shotOut);
+            auto shotHr=q[0]->Signal(tail.Get(),++value);
+            Rc(api.EndRecordingExecution(context,shotJob.handle,q[0].Get(),3,tail.Get(),value,shotHr));
+            Wait(tail.Get(),value);
+            MochizukiNrInfo metered {sizeof metered};Rc(getInfo(context,&metered));
+            if(shotFrames>1)
+                printf("IMAGE_METER frame=%d white=%.4f preprocess_ev=%.4f\n",shotFrame,double(metered.white_point),
+                       double(metered.preprocess_ev));
+            Rc(api.InvalidateRecording(context,shotJob.handle));Rc(api.CollectRecording(context,shotJob.handle));
+        }
+        {   // The level the network was actually shown at: white_point is what the encode divided the linear
+            // colour by, preprocess_ev the gain the meter settled on (NaN when it is not metering one).
+            MochizukiNrInfo shown {sizeof shown};Rc(getInfo(context,&shown));
+            printf("IMAGE_INFO white=%.4f preprocess_ev=%.4f frames=%llu history=%u%% passes=%u\n",
+                   double(shown.white_point),double(shown.preprocess_ev),
+                   static_cast<unsigned long long>(shown.frames),shown.history_consumed_pct,shown.max_passes);
+        }
+        shot.Compare();
+        if(argc>12&&argv[12][0]) {
+            FILE* file=nullptr;Require(_wfopen_s(&file,argv[12],L"wb")==0,"output dump open failed");
+            void* pixels=nullptr;Hr(shot.readback->Map(0,nullptr,&pixels));
+            std::vector<float> out(size_t(shotW)*shotH*3,0.f);
+            for(UINT y=0;y<shotH;y++)for(UINT x=0;x<shotW;x++) {
+                auto* row=static_cast<char*>(pixels)+y*shot.footprint.Footprint.RowPitch;float o[3] {};
+                if(shotFormat==DXGI_FORMAT_R9G9B9E5_SHAREDEXP) {
+                    DirectX::XMFLOAT3 v;DirectX::XMStoreFloat3(&v,DirectX::PackedVector::XMLoadFloat3SE(reinterpret_cast<DirectX::PackedVector::XMFLOAT3SE*>(row)+x));
+                    o[0]=v.x;o[1]=v.y;o[2]=v.z;
+                } else if(shotFormat==DXGI_FORMAT_R11G11B10_FLOAT) {
+                    DirectX::XMFLOAT3 v;DirectX::XMStoreFloat3(&v,DirectX::PackedVector::XMLoadFloat3PK(reinterpret_cast<DirectX::PackedVector::XMFLOAT3PK*>(row)+x));
+                    o[0]=v.x;o[1]=v.y;o[2]=v.z;
+                } else if(shotFormat==DXGI_FORMAT_R8G8B8A8_UNORM_SRGB||shotFormat==DXGI_FORMAT_R8G8B8A8_UNORM) {
+                    auto* p=reinterpret_cast<uint8_t*>(row)+x*4;for(int k=0;k<3;k++)o[k]=p[k]/255.f;
+                } else {
+                    auto* p=reinterpret_cast<uint16_t*>(row)+x*4;for(int k=0;k<3;k++)o[k]=DirectX::PackedVector::XMConvertHalfToFloat(p[k]);
+                }
+                memcpy(&out[(size_t(y)*shotW+x)*3],o,sizeof o);
+            }
+            shot.readback->Unmap(0,nullptr);
+            Require(fwrite(out.data(),4,out.size(),file)==out.size(),"output dump write failed");fclose(file);
+        }
+        Rc(api.Destroy(context));FreeLibrary(dll);
+        printf("MOCHIZUKI_IMAGE_OK %ux%u\n",shotW,shotH);
+        return 0;
     }
     if(argc>3 && std::wstring(argv[3])==L"--pass-switch") {
         const std::wstring mode=argc>4?argv[4]:L"normal";
