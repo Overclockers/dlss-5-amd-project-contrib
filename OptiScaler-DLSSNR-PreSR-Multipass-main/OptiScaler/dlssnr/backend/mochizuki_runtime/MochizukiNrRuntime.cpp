@@ -43,7 +43,7 @@
 #if __has_include(<d3dkmthk.h>)
 #include <d3dkmthk.h> // D3DKMTQueryVideoMemoryInfo, for the VRAM check (VideoMemory)
 #else
-#include "compat/d3dkmthk.h" // Same three user-mode entries, for a build without the WDK
+#include "compat/mz_d3dkmthk.h" // Same three user-mode entries, for a build without the WDK
 #endif
 #define VK_USE_PLATFORM_WIN32_KHR
 #include <vulkan/vulkan.h>
