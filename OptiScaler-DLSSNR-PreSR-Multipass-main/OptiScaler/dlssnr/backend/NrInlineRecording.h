@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <memory>
 #include <vector>
+#include <mutex>
 
 namespace DlssNr::Backend::InlineRecording
 {
@@ -22,6 +23,46 @@ inline constexpr UINT kWaitIterations = 32768;
 inline constexpr UINT kCaptureWatchSlices = 4;
 // Post-claim capture wait cap: 4x the game-side wait budget (kWaitSlices x kWaitIterations polls).
 inline constexpr UINT kClaimWaitSlices = 4 * kWaitSlices;
+// Post-claim abort channel: a CPU-mapped word the GPU wait polls every kAbortPollStride iterations.
+// A watchdog thread (never the game thread) writes the wait's generation into it once the wait has
+// run kClaimAbortMs after the game queue reached the frame; the wait then ends unseen (bypass).
+inline constexpr UINT kAbortPollStride = 256;
+inline UINT gClaimAbortMs = 100; // tests may lower it
+struct AbortChannel {
+    Ptr<ID3D12Resource> buffer; // custom heap, CPU write-combine, L0; persistently mapped
+    volatile LONG* word = nullptr;
+    std::atomic<UINT> aborts {0};
+};
+class AbortWatchdog {
+    struct Entry { std::shared_ptr<AbortChannel> ch; Ptr<ID3D12Fence> arm, side; UINT64 armValue, sideDone; UINT gen, ms;
+                   std::chrono::steady_clock::time_point deadline {}; bool started = false; };
+    std::mutex m; std::vector<Entry> entries; bool running = false;
+    void Run() {
+        for (;;) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(4));
+            std::lock_guard lock(m);
+            const auto now = std::chrono::steady_clock::now();
+            for (size_t i = 0; i < entries.size();) {
+                auto& e = entries[i]; bool drop = false;
+                const auto sideDone = e.side->GetCompletedValue();
+                if (sideDone == UINT64_MAX || sideDone >= e.sideDone) drop = true; // arm list retired (or device lost)
+                else if (!e.started) { if (e.arm->GetCompletedValue() >= e.armValue) { e.started = true; e.deadline = now + std::chrono::milliseconds(e.ms); } }
+                else if (now >= e.deadline) {
+                    InterlockedExchange(e.ch->word, LONG(e.gen)); MemoryBarrier(); e.ch->aborts.fetch_add(1); drop = true;
+                }
+                if (drop) { entries[i] = std::move(entries.back()); entries.pop_back(); } else ++i;
+            }
+            if (entries.empty()) { running = false; return; } // exits when idle; restarted on demand
+        }
+    }
+public:
+    static AbortWatchdog& Get() { static AbortWatchdog w; return w; }
+    void Watch(std::shared_ptr<AbortChannel> ch, ID3D12Fence* arm, UINT64 armValue, ID3D12Fence* side, UINT64 sideDone, UINT gen, UINT ms) {
+        std::lock_guard lock(m);
+        entries.push_back({std::move(ch), arm, side, armValue, sideDone, gen, ms});
+        if (!running) { running = true; std::thread([this] { Run(); }).detach(); }
+    }
+};
 // NrGpuHandoff: after closing the input gate, a game that already claimed it is finishing its
 // input copy. The side queue then waits on the GPU for that capture (op 14) before the network
 // starts: no budget can release the network while the copy is still in flight. Termination needs
@@ -122,6 +163,10 @@ class Resources
     // NrGpuHandoff: the game queue signals armFence just before this list runs (BeforeExecute); the side
     // queue waits on it (no spin while the game is still on earlier work), then watches the capture flag.
     Ptr<ID3D12Fence> armFence; UINT64 armValue = 0;
+    // Post-claim abort channel (null if the device refuses a CPU-mapped UAV buffer: cap only).
+    // claimGen identifies each armed wait; abort writes are generation-tagged, so a late abort for an
+    // earlier generation can never cancel a later wait (replay/reuse included).
+    std::shared_ptr<AbortChannel> abortChannel; UINT claimGen = 0;
     Ptr<ID3D12CommandAllocator> armAlloc; Ptr<ID3D12GraphicsCommandList> armList;
     struct KernelHandle {
         HANDLE value = nullptr;
@@ -170,7 +215,10 @@ class Resources
         list->SetPipelineState(controlPso.Get()); list->SetComputeRootSignature(controlRoot.Get());
         list->SetComputeRootUnorderedAccessView(0, (op == 1 || op == 3 || op == 6 || op == 7 || op == 8 || op >= 11 ? capture : control)->GetGPUVirtualAddress());
         list->SetComputeRootUnorderedAccessView(1, target->GetGPUVirtualAddress());
-        const UINT args[] {op, iterations, op == 4 || op == 7 || op == 13 || op == 14 ? spinPollDelay : 0u}; list->SetComputeRoot32BitConstants(2, 3, args, 0);
+        const bool abortable = op == 14 && abortChannel;
+        list->SetComputeRootUnorderedAccessView(3, (abortable ? abortChannel->buffer : sample)->GetGPUVirtualAddress());
+        const UINT args[] {op, iterations, op == 4 || op == 7 || op == 13 || op == 14 ? spinPollDelay : 0u, abortable ? claimGen : 0u};
+        list->SetComputeRoot32BitConstants(2, 4, args, 0);
         list->Dispatch(1, 1, 1);
     }
     void CreateOutput(Output& out, ID3D12Resource* original, ID3D12Resource* neural, UINT w, UINT h) {
@@ -248,6 +296,19 @@ public:
         sample = Buffer(D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
         decision = Buffer(D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
         inputGate = Buffer(D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true); inputGate->SetName(L"NR inline input gate");
+        {
+            D3D12_HEAP_PROPERTIES hp {}; hp.Type = D3D12_HEAP_TYPE_CUSTOM;
+            hp.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_COMBINE; hp.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;
+            D3D12_RESOURCE_DESC desc {}; desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; desc.Width = 256;
+            desc.Height = desc.DepthOrArraySize = desc.MipLevels = 1; desc.SampleDesc.Count = 1;
+            desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR; desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+            auto ch = std::make_shared<AbortChannel>(); void* p = nullptr;
+            if (SUCCEEDED(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&ch->buffer)))
+                && SUCCEEDED(ch->buffer->Map(0, nullptr, &p)) && p) {
+                ch->word = static_cast<volatile LONG*>(p); *ch->word = 0; ch->buffer->SetName(L"NR inline claim abort");
+                abortChannel = std::move(ch);
+            }
+        }
         control->SetName(L"NR inline atomic control"); capture->SetName(L"NR inline atomic capture");
         sample->SetName(L"NR inline sample"); decision->SetName(L"NR inline decision");
         readback = Buffer(D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST, false);
@@ -257,21 +318,22 @@ public:
             controlRoot = pipelines->controlRoot; composeRoot = pipelines->composeRoot;
             controlPso = pipelines->controlPso; composePso = pipelines->composePso;
         } else {
-        D3D12_ROOT_PARAMETER cp[3] {}; cp[0].ParameterType = cp[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
-        cp[0].Descriptor.ShaderRegister = 0; cp[1].Descriptor.ShaderRegister = 1;
-        cp[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS; cp[2].Constants.Num32BitValues = 3;
-        D3D12_ROOT_SIGNATURE_DESC cr {}; cr.NumParameters = 3; cr.pParameters = cp;
+        D3D12_ROOT_PARAMETER cp[4] {}; cp[0].ParameterType = cp[1].ParameterType = cp[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
+        cp[0].Descriptor.ShaderRegister = 0; cp[1].Descriptor.ShaderRegister = 1; cp[3].Descriptor.ShaderRegister = 2;
+        cp[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS; cp[2].Constants.Num32BitValues = 4;
+        D3D12_ROOT_SIGNATURE_DESC cr {}; cr.NumParameters = 4; cr.pParameters = cp;
         controlRoot = Root(cr);
         controlPso = Pipeline(controlRoot.Get(), R"(
 globallycoherent RWByteAddressBuffer flag : register(u0);
 RWByteAddressBuffer target : register(u1);
-cbuffer Args : register(b0) { uint operation; uint iterations; uint pollDelay; }
+globallycoherent RWByteAddressBuffer abortWord : register(u2);
+cbuffer Args : register(b0) { uint operation; uint iterations; uint pollDelay; uint generation; }
 [numthreads(1,1,1)] void main() {
  uint value = 0;
  // Control: 0 pending, 1 network ready, 2 bypass. Capture always starts at 0.
  // Capture +4 is the armed input gate: 0 open, 1 claimed by the game (copy runs), 2 closed by the side queue (copy skipped).
  if (operation == 0) { flag.Store(0, iterations); }
- else if (operation == 6) { flag.Store2(0, uint2(0, 0)); }
+ else if (operation == 6) { flag.Store2(0, uint2(0, 0)); target.Store2(24, uint2(0, 0)); }
  else if (operation == 11) {
   // Game list, before the input copies: claim the gate; the predicate skips the copies once it is closed.
   flag.InterlockedCompareExchange(4, 0, 1, value); DeviceMemoryBarrier(); target.Store2(0, uint2(value == 2 ? 0 : 1, 0));
@@ -284,16 +346,22 @@ cbuffer Args : register(b0) { uint operation; uint iterations; uint pollDelay; }
   // it, so the game's input copies are running or about to. Poll for its capture store (issued after
   // those copies). Capped: if every slice expires, op 8 records unseen and op 9 publishes bypass
   // (original frame, history reset); an open/closed gate means nothing is waited for.
+  // Abort: every kAbortPollStride iterations, abortWord >= generation (nonzero) ends the wait; target+24
+  // records the aborted generation, target+28 accumulates wait iterations (diagnostics).
   uint gate = 0; flag.InterlockedCompareExchange(4, 0, 0, gate);
   flag.InterlockedCompareExchange(0, 0, 0, value);
-  if (gate == 1 && value == 0) {
+  if (gate == 1 && value == 0 && target.Load(24) == 0) {
+   uint spun = 0;
    [loop] [allow_uav_condition] for (uint i = 0; i < iterations; ++i) {
+    ++spun;
     DeviceMemoryBarrier();
     flag.InterlockedCompareExchange(0, 0, 0, value); if (value != 0) break;
+    if (generation != 0 && (i % 256u) == 255u && abortWord.Load(0) >= generation) { target.Store(24, generation); break; }
     uint acc = i;
     [loop] for (uint d = 0; d < pollDelay; ++d) acc = acc * 1664525u + 1013904223u;
     if (acc == 0x7fffffffu && pollDelay == 0xffffffffu) target.Store(16, acc);
    }
+   uint total; target.InterlockedAdd(28, spun, total);
   }
  }
  else if (operation == 4 || operation == 7 || operation == 13) {
@@ -592,8 +660,19 @@ cbuffer Size : register(b0) { uint width; uint height; }
         seen = static_cast<const UINT*>(p)[3]; gate = static_cast<const UINT*>(p)[5];
         D3D12_RANGE none {0, 0}; readback->Unmap(0, &none); return true;
     }
+    // After completion of an armed frame: aborted generation (0 = not aborted) and post-claim wait iterations.
+    bool ClaimWaitStats(UINT& aborted, UINT& iterations) const {
+        if (!Complete() || !armedOutcomeReadable) return false;
+        void* p = nullptr; D3D12_RANGE range {0, 32};
+        if (FAILED(readback->Map(0, &range, &p)) || !p) return false;
+        aborted = static_cast<const UINT*>(p)[6]; iterations = static_cast<const UINT*>(p)[7];
+        D3D12_RANGE none {0, 0}; readback->Unmap(0, &none); return true;
+    }
+    UINT ClaimGeneration() const { return claimGen; }
+    bool AbortAvailable() const { return abortChannel != nullptr; }
     bool ArmCapture() {
         if (!armValue || !armFence) return false;
+        if (++claimGen == 0) ++claimGen; // 0 means "no abort"
         if (diag.active) { diag.capturePolls = 0; diag.captureBackoffUsFinal = 0; diag.captureBackoffMode = "gpu"; diag.handoff = "gpu"; }
         if (!armAlloc) {
             Check(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COMPUTE, IID_PPV_ARGS(&armAlloc)), "inline arm allocator");
@@ -621,6 +700,11 @@ cbuffer Size : register(b0) { uint width; uint height; }
         sideUncertain = true;
         Check(side->Wait(armFence.Get(), armValue), "inline arm wait");
         Execute(side.Get(), armList.Get());
+        if (abortChannel) {
+            // Retirement marker for the watchdog only; it certifies the arm list, never the game's copies.
+            const auto armDone = ++serial; Check(side->Signal(sideFence.Get(), armDone), "inline arm done signal");
+            AbortWatchdog::Get().Watch(abortChannel, armFence.Get(), armValue, sideFence.Get(), armDone, claimGen, gClaimAbortMs);
+        }
         sideUncertain = false;
         if (diag.active) diag.qpcCaptureSeen = FrameDiag::Qpc(); // armed (not seen): handoff is GPU-side
         return true;

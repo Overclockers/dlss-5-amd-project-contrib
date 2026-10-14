@@ -30,7 +30,7 @@ static UINT gLateCopy = 0;
 // --stuck-copy=N (needs --gpu-handoff): like --late-copy but N far exceeds the post-claim wait cap, i.e. the
 // capture never lands within it. Expect: the capped side wait ends, seen=0 gate=1, original frame, history
 // reset (timeout reclaim), resources released, no hang/TDR.
-static UINT gStuckCopy = 0;
+static UINT gStuckCopy = 0, gAbortMs = 0;
 struct BackoffResources : In::Resources {
     template<class... A> explicit BackoffResources(A&&... a) : In::Resources(std::forward<A>(a)...) { captureBackoff = gCaptureBackoff; gpuArmed = gGpuHandoff; spinPollDelay = gPollDelay; spinSlices = gSpinSlices; watchSlices = gWatchSlices; watchStartDelay = gWatchStart; testInputDelay = gLateCapture; testCopyDelay = gLateCopy + gStuckCopy; }
 };
@@ -75,6 +75,8 @@ int main(int argc, char** argv) {
     for (int i = 3; i < argc; ++i) if (std::strncmp(argv[i], "--late-capture=", 15) == 0) gLateCapture = UINT(std::atoi(argv[i] + 15));
     for (int i = 3; i < argc; ++i) if (std::strncmp(argv[i], "--late-copy=", 12) == 0) gLateCopy = UINT(std::atoi(argv[i] + 12));
     for (int i = 3; i < argc; ++i) if (std::strncmp(argv[i], "--stuck-copy=", 13) == 0) gStuckCopy = UINT(std::atoi(argv[i] + 13));
+    // --abort-ms=N: post-claim watchdog abort delay (with --stuck-copy: the abort must end the wait, not the cap).
+    for (int i = 3; i < argc; ++i) if (std::strncmp(argv[i], "--abort-ms=", 11) == 0) { gAbortMs = UINT(std::atoi(argv[i] + 11)); In::gClaimAbortMs = gAbortMs; }
     Require(!gStuckCopy || (gGpuHandoff && !timeoutMode && !gLateCapture && !gLateCopy), "--stuck-copy needs --gpu-handoff alone");
     Require(!gLateCapture || (gGpuHandoff && !timeoutMode), "--late-capture needs --gpu-handoff without --timeout");
     Require(!gLateCopy || (gGpuHandoff && !timeoutMode && !gLateCapture), "--late-copy needs --gpu-handoff without --timeout/--late-capture");
@@ -256,6 +258,13 @@ int main(int argc, char** argv) {
             UINT seen = 9, gate = 9; Require(resources->ArmedOutcome(seen, gate), "stuck copy: armed outcome readable");
             std::printf("stuck copy replay=%u seen=%u gate=%u applied=%u\n", replay, seen, gate, unsigned(resources->Succeeded()));
             Require(seen == 0 && gate == 1, "stuck copy: capped claimed wait expired unseen");
+            UINT aborted = 9, iters = 0; Require(resources->ClaimWaitStats(aborted, iters), "stuck copy: wait stats readable");
+            std::printf("stuck copy abort_channel=%u gen=%u aborted=%u wait_iters=%u\n", unsigned(resources->AbortAvailable()), resources->ClaimGeneration(), aborted, iters);
+            if (gAbortMs) {
+                Require(resources->AbortAvailable(), "stuck copy: CPU-mapped abort word available on this device");
+                Require(aborted == resources->ClaimGeneration(), "stuck copy: watchdog abort (current generation) ended the wait, visible to the GPU");
+                Require(iters < In::kClaimWaitSlices * In::kWaitIterations, "stuck copy: abort ended before the iteration cap");
+            }
             Require(!resources->Succeeded(), "stuck copy: bypass (network result not applied)");
             Require(Hash(device.Get(), queue, resources->OutputTexture()) == originalHash, "stuck copy: output is the original frame");
             std::lock_guard lock(Sub::RecordingMutex());
