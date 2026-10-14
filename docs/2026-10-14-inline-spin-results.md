@@ -31,6 +31,19 @@
 - 推测：游戏线程等 GPU fence 被自旋带抖，未证实。
 
 ## 5. 当前状态
-- 分支 work/nr-spin-gpu-cost @5f5b61a7，包 dist\OptScaler-NR-1.12.0-alpha2-local-20261014-183446-263.zip。
+- 分支 work/nr-spin-gpu-cost（代码 @5f5b61a7，之后仅文档提交），包 dist\OptScaler-NR-1.12.0-alpha2-local-20261014-183446-263.zip。
 - 菜单：inline 开才显示；armed 默认开；Spin poll delay 默认 16；armed 关则 spin 选项变灰；armed 开则 backoff/reuse 变灰。spin 选项只在 armed 开时生效。
-- 新诊断 NrGameWaitDiag（菜单 Game thread wait timing，需 NrFrameDiag），字段 gw_*。待测：split vs armed+poll16，两段都开诊断。
+- 新诊断 NrGameWaitDiag（菜单 Game thread wait timing，需 NrFrameDiag），字段 gw_*。已测 16（split）/17（armed+poll16），结果见第 6 节。
+
+## 6. 剩余 inline 慢帧：游戏线程等待（gw_*，16/17 段）
+- 注意：16/17 都在 HDR 下录（IsHdr true，DXGI 10），绝对值不能直接与 08–15 比，同局 split/inline 相对差有效。
+- inline 慢帧（显示间隔 >18.5 ms，约 16%）to_ecl 多 ~3.0 ms = fence 等待 +1.6 ms（5.08 vs 3.50）+ 等待后游戏 CPU +1.65 ms。
+- present_cpu：inline 每帧 1.72 vs split 0.85 ms（+0.9 ms CPU，每帧都有）。
+- 慢帧与正常帧的 NR GPU 各段相同；显示 p95 16.56 vs split ~16.6 ms，画面看不出；下一帧补回。
+- 结论：影响小，暂搁置。后续可做：(a) 记录游戏等待的 fence 值/放行时间，与 qpc_game_wait_exit 对齐；(b) 拆分 Present +0.9 ms。先在 SDR 下复核。
+
+## 7. HDR 发现（16/17 段 split 变慢）
+- 16/17 为 HDR：NR 输入 16 位浮点 + linear 输入编码；split GPUBusy 比 SDR 段慢 ~0.5 ms。
+- 不是回归，也不是 FF7 Plan A（日志无 'plan A: colour format changed'，'conversion passes ready' 只是启动准备信息）。
+- Input encoding=Encoded 更快，但把 HDR 当 SDR 喂给网络，不建议。
+- NrFrameDiag 对比（NR 1920x1080，split 中位）：SDR capture 0.033 / core 6.004 / handoff 0.362 / writeback 0.013 / cap→resume 6.370 / cpu_record 1.236；HDR 0.052 / 6.219 / 0.372 / 0.023 / 6.592 / 1.286。NR 计时窗内只多 ~0.22 ms（基本在 core），其余 ~0.3 ms 在 NR 时间戳之外（可能是游戏自身 HDR 输出）。
