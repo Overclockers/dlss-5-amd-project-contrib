@@ -463,6 +463,7 @@ bool MochizukiBackend::Shutdown()
 {
     ReleaseSession();
     if (p->module) { FreeLibrary(p->module); p->module = nullptr; p->api = {}; }
+    InlineRecording::StopAbortWatchdog(); // owned thread joined here, not at static destruction
     return true;
 }
 void MochizukiBackend::InvalidateHistory()

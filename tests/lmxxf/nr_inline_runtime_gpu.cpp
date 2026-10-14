@@ -701,5 +701,23 @@ int main(int argc, char** argv) {
     }
     owner.reset();
     if (gReuse) std::printf("inline reuse hits=%u\n", gReuseHits);
+    {   // Abort watchdog lifecycle: owned thread, idempotent Stop joins it, Watch restarts it after a Stop.
+        auto& wd = In::AbortWatchdog::Get();
+        In::StopAbortWatchdog(); In::StopAbortWatchdog();
+        Require(!wd.Running() && wd.Pending() == 0, "watchdog stopped");
+        Ptr<ID3D12Fence> armF, sideF;
+        Require(SUCCEEDED(device->CreateFence(1, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&armF))) &&
+                SUCCEEDED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&sideF))), "watchdog fences");
+        auto ch = std::make_shared<In::AbortChannel>(); volatile LONG word = 0; ch->word = &word;
+        wd.Watch(ch, armF.Get(), 1, sideF.Get(), 1, 7, 60000); // armed, never retires, deadline far away
+        Require(wd.Running() && wd.Pending() == 1, "watchdog running");
+        In::StopAbortWatchdog();
+        Require(!wd.Running() && wd.Pending() == 0 && word == 0 && ch.use_count() == 1, "watchdog joined and released");
+        wd.Watch(ch, armF.Get(), 1, sideF.Get(), 1, 8, 1); // restart; abort fires after 1 ms
+        for (int i = 0; i < 500 && word != 8; ++i) Sleep(2);
+        Require(word == 8 && ch->aborts.load() == 1, "watchdog restarted and aborted");
+        In::StopAbortWatchdog();
+        std::puts("abort watchdog stop/join/restart PASS");
+    }
     gPool.clear(); FreeLibrary(dll); std::puts("actual inline runtime PASS"); return 0;
 }

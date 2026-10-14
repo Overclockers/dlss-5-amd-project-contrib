@@ -1204,6 +1204,7 @@ bool LmxxfBackend::Shutdown()
     LmxxfRecording::Collect();
     if (runtimeDll) { FreeLibrary(reinterpret_cast<HMODULE>(runtimeDll)); runtimeDll = nullptr; }
     if (api) api->table = {};
+    InlineRecording::StopAbortWatchdog(); // owned thread joined here, not at static destruction
     SetStatus("lmxxf: shutdown");
     return true;
 }

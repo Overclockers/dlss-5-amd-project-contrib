@@ -14,6 +14,7 @@
 #include <memory>
 #include <vector>
 #include <mutex>
+#include <condition_variable>
 
 namespace DlssNr::Backend::InlineRecording
 {
@@ -74,14 +75,20 @@ struct AbortChannel {
     volatile LONG* word = nullptr;
     std::atomic<UINT> aborts {0};
 };
+// Owned thread, started on the first Watch and parked on a condition variable while idle. Stop() joins it
+// from the explicit backend Shutdown / process-exit path (never from DllMain: during loader shutdown it only
+// signals, since the thread cannot exit while the loader lock is held). The instance is intentionally leaked,
+// so no static destructor races a running thread or a join at unload. Watch never waits on the GPU.
 class AbortWatchdog {
     struct Entry { std::shared_ptr<AbortChannel> ch; Ptr<ID3D12Fence> arm, side; UINT64 armValue, sideDone; UINT gen, ms;
                    std::chrono::steady_clock::time_point deadline {}; bool started = false; };
-    std::mutex m; std::vector<Entry> entries; bool running = false;
+    std::mutex m; std::condition_variable cv; std::vector<Entry> entries; std::thread worker; bool stopping = false;
     void Run() {
-        for (;;) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(4));
-            std::lock_guard lock(m);
+        std::unique_lock lock(m);
+        while (!stopping) {
+            if (entries.empty()) { cv.wait(lock, [this] { return stopping || !entries.empty(); }); continue; }
+            cv.wait_for(lock, std::chrono::milliseconds(4), [this] { return stopping; });
+            if (stopping) break;
             const auto now = std::chrono::steady_clock::now();
             for (size_t i = 0; i < entries.size();) {
                 auto& e = entries[i]; bool drop = false;
@@ -93,17 +100,40 @@ class AbortWatchdog {
                 }
                 if (drop) { entries[i] = std::move(entries.back()); entries.pop_back(); } else ++i;
             }
-            if (entries.empty()) { running = false; return; } // exits when idle; restarted on demand
         }
+        entries.clear(); // release fences/channels on the worker; a pending wait still ends at its cap
+    }
+    static bool LoaderShutdown() {
+        using Fn = BOOLEAN(NTAPI*)();
+        static const auto fn = reinterpret_cast<Fn>(reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlDllShutdownInProgress")));
+        return fn && fn();
     }
 public:
-    static AbortWatchdog& Get() { static AbortWatchdog w; return w; }
+    static AbortWatchdog& Get() { static AbortWatchdog* w = new AbortWatchdog; return *w; } // leaked on purpose
     void Watch(std::shared_ptr<AbortChannel> ch, ID3D12Fence* arm, UINT64 armValue, ID3D12Fence* side, UINT64 sideDone, UINT gen, UINT ms) {
-        std::lock_guard lock(m);
-        entries.push_back({std::move(ch), arm, side, armValue, sideDone, gen, ms});
-        if (!running) { running = true; std::thread([this] { Run(); }).detach(); }
+        {
+            std::lock_guard lock(m);
+            if (stopping) return; // shut down: the wait keeps its cap
+            entries.push_back({std::move(ch), arm, side, armValue, sideDone, gen, ms});
+            if (!worker.joinable()) worker = std::thread([this] { Run(); });
+        }
+        cv.notify_one();
+    }
+    bool Running() { std::lock_guard lock(m); return worker.joinable() && !stopping; }
+    size_t Pending() { std::lock_guard lock(m); return entries.size(); }
+    // Idempotent. Joins unless called on the worker or during loader shutdown (then it only signals and
+    // detaches, and stays stopped; the process is ending). After a join, Watch restarts a fresh worker.
+    void Stop() {
+        std::thread t;
+        { std::lock_guard lock(m); if (!worker.joinable()) return; stopping = true; t = std::move(worker); }
+        cv.notify_all();
+        if (t.get_id() == std::this_thread::get_id() || LoaderShutdown()) { t.detach(); return; } // stays stopped
+        t.join();
+        std::lock_guard lock(m); stopping = false; entries.clear();
     }
 };
+// Explicit shutdown hook (backend Shutdown / process exit). Safe to call repeatedly.
+inline void StopAbortWatchdog() { AbortWatchdog::Get().Stop(); }
 // NrGpuHandoff: after closing the input gate, a game that already claimed it is finishing its
 // input copy. The side queue then waits on the GPU for that capture (op 14) before the network
 // starts: no budget can release the network while the copy is still in flight. Termination needs
