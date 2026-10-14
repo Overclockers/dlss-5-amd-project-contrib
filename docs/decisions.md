@@ -3,7 +3,7 @@
 - **决定**：游戏不提供曝光时，mochizuki runtime 自己测线性帧的平均亮度（每帧一次 16x16 的 GPU dispatch，写入 1 个 float，下一帧经录制自己的完成 fence 读回，log 域 0.25 平滑），把均值放到关键亮度 0.2073 上：曝光 `0.2073/mean` 让白点等效于 `4.826*mean`，与 lmxxf 和 AMD 两条 lane 各自的测光一致。宿主仍可用 `MochizukiNrSetExposure` 给曝光，给了就以它为准；`MochizukiWhitePoint` 在两种情况下都是对基准的裁切（参考亮度 0.2073 处等于原值）。
 - **理由**：`MochizukiNrFrameInfo` 没有曝光字段，宿主也从不调用 `PFN_MochizukiNrSetExposure`，这条 lane 因而完全没有层级基准。白点被当成绝对值时，网络看到的总量与场景亮度差约 4.8 倍，模型答案崩塌；宿主再按 `NrOverallIntensity` 把残差加回去，皮肤就变红。测光把基准交还给图像本身，手动值只做裁切。
 - **边界**：没有可测内容的帧（全黑、非有限样本）不算测量；连续 60 帧没有测量就把 `meteredExposure` 清零并记一行日志，手动白点重新接管。测光自己的绑定不进入游戏录制的绑定快照：宿主用 `ILogicalCommandList::BeginPrivateBindings` 只包住 `RecordInputs`，不覆盖切分点。
-- **接管修订（PR #9 整合）**：测光与游戏曝光都改为默认关闭的开关（`MochizukiAutoExposureMeter`、`MochizukiUseGameExposure`），原本正常的游戏画面不变。游戏曝光贴图经同一套 fence 读回接入（texel × scale / pre，与 lmxxf 编码器一致），无贴图时 `1/pre`；优先级：曝光贴图 > 标量曝光 > 测光 > 手动白点。测光改为 64x64 采样、高光截断均值（min(luma, 16×对数均值) 的算术均值，保留与其他 lane 相同的标定）、1/16 EV 死区、±6 EV 钳位，非线性帧不测。去掉了 PR 中的 ABI N-1 放宽与 SysUtils.h 改动。
+- **接管修订（PR #9 整合）**：测光与游戏曝光都改为默认关闭的开关（现合并为单一枚举 `MochizukiWhitePointSource`：0 关闭/1 跟随游戏/2 自行测光/3 自动，默认 0），原本正常的游戏画面不变。游戏曝光贴图经同一套 fence 读回接入（texel × scale / pre，与 lmxxf 编码器一致），无贴图时 `1/pre`；优先级：曝光贴图 > 标量曝光 > 测光 > 手动白点。测光改为 64x64 采样、高光截断均值（min(luma, 16×对数均值) 的算术均值，保留与其他 lane 相同的标定）、1/16 EV 死区、±6 EV 钳位，非线性帧不测。去掉了 PR 中的 ABI N-1 放宽与 SysUtils.h 改动。
 - **未验证**：本机只有离线夹具（`tests/mochizuki/runtime.cpp --image`，`run.cmd meter` 断言层级）与 RX 9070 XT 上的运行；游戏内验收与远端 Actions 单独记录。
 
 ## 2026-10-13：lmxxf inline 使用私有捕获，槽位即时可选
