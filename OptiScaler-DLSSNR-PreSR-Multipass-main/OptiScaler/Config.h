@@ -437,6 +437,11 @@ class Config
     CustomOptional<uint32_t> MochizukiLayerMode { 0u };
     CustomOptional<uint32_t> MochizukiPasses { 1u };
     CustomOptional<bool> MochizukiTemporal { true };
+    // Stop NR for the rest of the session when too many command lists arrive without
+    // a recording proxy. Unwrapped lists run the original colour, so a high miss rate
+    // makes NR and the original alternate frame by frame (visible flicker); holding NR
+    // off trades a uniform non-NR image for a stable one. Default false.
+    CustomOptional<bool> MochizukiProxyFallbackEnabled { false };
     CustomOptional<float> MochizukiHistoryStrength { 1.f };
     CustomOptional<bool> MochizukiPreprocess { false };
     CustomOptional<uint32_t> MochizukiPreprocessExposure { 1u };

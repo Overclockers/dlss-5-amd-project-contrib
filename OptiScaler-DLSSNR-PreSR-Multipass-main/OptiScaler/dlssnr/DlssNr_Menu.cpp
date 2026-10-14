@@ -703,7 +703,10 @@ void RenderMenu(Config* config, float menuResScale)
                 bool inlineMode = config->NrInline.value_or_default();
                 if (MenuUi::Checkbox("Experimental inline execution", &inlineMode)) config->NrInline = inlineMode;
                 HelpMarker("Keeps the game command list intact. Bounded wait selects the original frame on timeout."
-                           "\nShared by lmxxf and Mochizuki. INI: NrInline. Off uses command-list splitting.");
+                           "\nShared by lmxxf and Mochizuki. INI: NrInline. Off uses command-list splitting."
+                           "\nInline does NOT remove the recording proxy or the enhanced-barrier requirement,"
+                           "\nand it does not fix a game that hands us unwrapped command lists (NR would still"
+                           "\nalternate with the original frame). It only skips the split-ineligible rejection.");
                 if (inlineMode) {
                     int backoff = std::clamp(config->NrCaptureBackoff.value_or_default(), 0, 2);
                     const char* backoffChoices[] = {"Exponential 50-5000 us (default)", "Fixed 100 us", "Event (side-queue watch)"};
@@ -735,7 +738,10 @@ void RenderMenu(Config* config, float menuResScale)
                 if (MenuUi::Checkbox("Allow enhanced barriers", &enhanced)) {
                     config->LmxxfAllowEnhancedBarriers = enhanced; SetAllowEnhancedBarriers(enhanced);
                 }
-                HelpMarker("Experimental. Inline execution restores known whole-resource layouts; partial or pending layouts are rejected.");
+                HelpMarker("Experimental. Inline execution restores known whole-resource layouts; partial or pending layouts are rejected."
+                           "\nInline still needs this on: the input layout is read (and reset to COMMON) even"
+                           "\nwhen the network runs inline, so turning it off rejects list input that uses"
+                           "\nenhanced barriers. See \"NR inline\" for details.");
             }
             if (page == PipelineUi::Section::Output) RenderSharedOutputEffects(config);
             if (kind == Backend::Kind::Mochizuki) {
@@ -1440,7 +1446,10 @@ void RenderMenu(Config* config, float menuResScale)
                             SetAllowEnhancedBarriers(eb);
                         }
                         HelpMarker("Leave off unless a game needs NR on lists that use"
-                                   "\nenhanced barriers (may corrupt state / TDR). Restart.");
+                                   "\nenhanced barriers (may corrupt state / TDR). Restart."
+                                   "\nInline does not replace this: NR still reads and resets the"
+                                   "\ninput layout on an inline list, so an enhanced-barrier game"
+                                   "\nneeds this on with Inline as well.");
                     }
                     RenderEarlyCommandListWrap(config);
                 }
