@@ -143,9 +143,10 @@ int main(){
  wchar_t executable[32768]{};GetModuleFileNameW(nullptr,executable,32768);
  auto fixture=std::filesystem::path(executable).parent_path()/L"person-capture-worker";
  Person::Worker().Configure(true,fixture);
- auto until=[&](auto ready){auto start=GetTickCount64();while(!ready()){
-  Require(GetTickCount64()-start<30000,"capture worker timeout");Sleep(1);}};
- until([&]{return Person::Worker().Ready();});
+ auto until=[&](const char* what,auto ready){auto start=GetTickCount64();while(!ready()){
+  if(GetTickCount64()-start>=30000){std::string message=std::string("capture worker timeout waiting for ")+what+": "+Person::Worker().Status();Require(false,message.c_str());}
+  Sleep(1);}};
+ until("ready",[&]{return Person::Worker().Ready();});
  Ptr<ID3D12Fence>gate;Check(d->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&gate)),"capture gate");
  struct Unblock{ID3D12Fence* fence;~Unblock(){fence->Signal(1);}} unblock{gate.Get()};
  Check(q->Wait(gate.Get(),1),"hold capture GPU");
@@ -160,7 +161,7 @@ int main(){
  auto pendingCount=std::count_if(Person::Global().leases.begin(),Person::Global().leases.end(),[](auto& l){return !l->sent&&l->storage->readback;});
  Require(pendingCount==4,"four pending GPU captures, fifth bounded");
  Check(gate->Signal(1),"release captures");WaitQueue(d.Get(),q.Get());Person::Poll();
- until([&]{return Person::Worker().Latest()!=nullptr;});
+ until("first result",[&]{return Person::Worker().Latest()!=nullptr;});
  Require(Person::Worker().Latest()->frame==newestCapture,"latest completed GPU capture wins");
  pending.clear();Person::Worker().Configure(false,fixture);Person::Reset();
  Require(Person::Global().leases.empty(),"pipeline captures released after fence");
