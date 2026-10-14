@@ -85,6 +85,8 @@ rem R8G8B8A8_UNORM: the whole chain is one compute phase; its submit fails.
 set "MZ_TEST_PHASE_SUBMIT_FAIL_AT=1"
 set "MZ_TEST_INLINE_CHAIN=1"
 exports\mochizuki-tests\queue_segments.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" unorm8 || exit /b 1
+rem R11G11B10_FLOAT + compute convert: input unpack and runtime_pack_r11 write-back keep the chain in one compute phase.
+exports\mochizuki-tests\queue_segments.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" r11 || exit /b 1
 set "MZ_TEST_PHASE_SUBMIT_FAIL_AT="
 set "MZ_TEST_INLINE_CHAIN="
 rem A refused whole-chain compute recording fails the frame without a passthrough.

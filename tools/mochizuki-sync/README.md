@@ -35,6 +35,7 @@ Those tests also run in `run.cmd abi`.
 | 13 inline-fp16-conversions | Equal-extent FP16 input and writeback on compute, retaining FLOAT/HDR and the original linear/temporal processing | Enabled only for optional second-family/compute hosts with both conversion shaders; default graphics recordings retain blits. Reduced scale, motion requiring a blit and first-pass export keep segments |
 | 14 core-stage-timing | Optional diagnostic timestamp pairs around the linear-input encode and transfer pass | Off unless the host sets it per frame; reuses the timing ring, never waits |
 | 15 inline-r11g11b10-compute-convert | Optional B10G11R11 input conversion on compute (copy + runtime_unpack_f16), so such inline frames can keep the whole chain on compute | Off unless RuntimeConfig::compute_convert_r11g11b10; only when the write-back already needs no blit (direct_out / store_native) and model scale is 1; otherwise the blit and its refusal remain |
+| 16 inline-r11g11b10-compute-writeback | When write-back is not direct/store_native, pack the answer through runtime_pack_r11 (r11f_g11f_b10f storage image + copy) so B10G11R11 inline frames keep the whole chain on compute | Same toggle as 15; requires B10G11R11 storage-image support and runtime_pack_r11.spv |
 
 The patches replay sequentially against `manifest.json`'s commit. Patches 02-05
 share header/implementation context, so do not assume their patch files apply

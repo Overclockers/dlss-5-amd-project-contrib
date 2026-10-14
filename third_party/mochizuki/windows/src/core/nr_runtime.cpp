@@ -1498,12 +1498,21 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
     const bool f16_colour = config.colour_format == VK_FORMAT_R16G16B16A16_SFLOAT;
     const bool r11_colour = config.compute_convert_r11g11b10 &&
         config.colour_format == VK_FORMAT_B10G11R11_UFLOAT_PACK32;
-    if (r11_colour && (impl_->scaled || !(impl_->direct_out || impl_->store_native)))
+    // Without direct_out/store_native, B10G11R11 is written back by runtime_pack_r11: an imageStore
+    // through an r11f_g11f_b10f storage image (the format conversion of the blit), then a copy.
+    bool r11_pack = false;
+    if (r11_colour && !impl_->scaled && !(impl_->direct_out || impl_->store_native)) {
+        VkFormatProperties rp{}; vkGetPhysicalDeviceFormatProperties(host.physical, VK_FORMAT_B10G11R11_UFLOAT_PACK32, &rp);
+        const VkFormatFeatureFlags need = VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT | VK_FORMAT_FEATURE_TRANSFER_SRC_BIT;
+        r11_pack = (rp.optimalTilingFeatures & need) == need && std::filesystem::exists(adapters / "runtime_pack_r11.spv");
+    }
+    const bool r11_store = impl_->direct_out || impl_->store_native || r11_pack;
+    if (r11_colour && (impl_->scaled || !r11_store))
         nr::logf("[nr] B10G11R11 compute input conversion not used: %s",
                  impl_->scaled ? "model scale below 1 needs a downscale blit"
-                               : "the write-back has no compute store for this format");
+                               : "the write-back has no compute store for this format (no B10G11R11 storage image)");
     if ((host.secondary_family != VK_QUEUE_FAMILY_IGNORED || !impl_->graphics_family) &&
-        !impl_->scaled && (f16_colour || (r11_colour && (impl_->direct_out || impl_->store_native))) &&
+        !impl_->scaled && (f16_colour || (r11_colour && r11_store)) &&
         std::filesystem::exists(adapters / "runtime_unpack_f16.spv") &&
         (!f16_colour || std::filesystem::exists(adapters / "runtime_pack_f16.spv"))) {
         if (!impl_->direct_in) {
@@ -1515,15 +1524,15 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
             impl_->unpack_f16.create(s.ctx, (adapters / "runtime_unpack_f16.spv").string(), {}, 8,
                                     {&sampled, &input});
         }
-        if (!impl_->direct_out && f16_colour) {
+        if (!impl_->direct_out && (f16_colour || r11_pack)) {
             impl_->output_f16 = s.ctx.image(config.width, config.height, config.colour_format, false);
-            impl_->pack_f16.create(s.ctx, (adapters / "runtime_pack_f16.spv").string(), {}, 8,
+            impl_->pack_f16.create(s.ctx, (adapters / (r11_pack ? "runtime_pack_r11.spv" : "runtime_pack_f16.spv")).string(), {}, 8,
                                   {answer, &impl_->output_f16});
         }
         impl_->f16_built = true;
         if (r11_colour)
             nr::logf("[nr] B10G11R11 input converted on compute (runtime_unpack_f16), write-back %s",
-                     impl_->direct_out ? "direct" : "stored in its own format");
+                     impl_->direct_out ? "direct" : r11_pack ? "packed on compute (runtime_pack_r11)" : "stored in its own format");
     }
     if (!impl_->graphics_family && compute_refusal(false, VK_FORMAT_UNDEFINED, 0, 1))
         throw std::invalid_argument("NR colour format conversion requires a graphics-capable queue");

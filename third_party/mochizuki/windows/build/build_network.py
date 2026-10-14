@@ -38,6 +38,7 @@ RUNTIME = ['runtime_alpha', 'runtime_encode', 'runtime_transfer', 'runtime_upsca
 RUNTIME_VARIANTS = {'runtime_transfer_store': ('runtime_transfer', ['NR_STORE_NATIVE']),
                     'runtime_pack_u8': ('runtime_alpha', ['NR_PACK_U8']),
                     'runtime_pack_f16': ('runtime_alpha', ['NR_PACK_F16']),
+                    'runtime_pack_r11': ('runtime_alpha', ['NR_PACK_R11']),
                     'runtime_unpack_f16': ('runtime_alpha', ['NR_UNPACK_F16']),
                     'runtime_planA_convert_r11g11b10': ('runtime_planA_convert', ['PLAN_A_DST_FORMAT=r11f_g11f_b10f', 'PLAN_A_DST_MAX=65024.0']),
                     'runtime_planA_convert_rgba16f': ('runtime_planA_convert', ['PLAN_A_DST_FORMAT=rgba16f', 'PLAN_A_DST_MAX=65504.0']),

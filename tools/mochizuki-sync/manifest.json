@@ -322,6 +322,18 @@
         "windows/src/core/nr_runtime.cpp",
         "windows/src/core/nr_runtime.hpp"
       ]
+    },
+    {
+      "feature": "inline-r11g11b10-compute-writeback",
+      "path": "patches/16-inline-r11g11b10-compute-writeback.patch",
+      "files": [
+        "linux/build/build_network.py",
+        "linux/shaders/passes/runtime_alpha.comp",
+        "windows/build/build_network.py",
+        "windows/shaders/passes/runtime_alpha.comp",
+        "windows/src/core/nr_runtime.cpp",
+        "windows/src/core/nr_runtime.hpp"
+      ]
     }
   ],
   "source_comment_policy": "omit-sample-address-annotations-v1"

@@ -121,3 +121,8 @@
 
 The armed side-queue wait after a claimed input gate (op 14) is now bounded: kClaimWaitSlices = 4 x kWaitSlices dispatches of kWaitIterations polls, each exiting at once after the capture lands. If the capture never lands, the frame records unseen, publishes bypass (original frame, timeout reclaim = history reset). The network still executes behind it but its output is discarded. Test: run.cmd inline-armed adds --stuck-copy=1024 (seen=0 gate=1, original, reclaimed, PASS); --late-copy=64 still applies with network == split baseline.
 
+
+## B10G11R11 compute write-back (runtime_pack_r11)
+
+Without direct_out/store_native, NrInlineComputeConvert now packs the answer through an `r11f_g11f_b10f` storage image (`runtime_pack_r11.spv`: NaN->0, clamp to 65024, then copy). Offline: hdr_shader pack == blit bit-for-bit (codes, ties, random, negative, above max). Offline: queue_segments `r11` reports `phase 1/1` (whole chain on compute).
+

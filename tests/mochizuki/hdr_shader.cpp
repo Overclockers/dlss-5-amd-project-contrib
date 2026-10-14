@@ -315,6 +315,54 @@ static void R11G11B10Unpack(nrvk::Context& ctx, const std::filesystem::path& sha
     std::cout<<"PASS B10G11R11 compute input: blit bit equality, zero, subnormals, max finite, alpha 1\n";
 }
 
+// B10G11R11 compute write-back: runtime_pack_r11 (imageStore through r11f_g11f_b10f) must equal the
+// driver's reference blit RGBA32F -> B10G11R11, bit for bit: every finite code, the midpoints between
+// neighbouring codes (rounding ties), values above the largest finite, negatives, and random floats.
+static void R11G11B10Pack(nrvk::Context& ctx, const std::filesystem::path& shaders)
+{
+    VkFormatProperties fp{}; vkGetPhysicalDeviceFormatProperties(ctx.physical, VK_FORMAT_B10G11R11_UFLOAT_PACK32, &fp);
+    if (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)) { std::cout<<"SKIP B10G11R11 pack: no storage image support\n"; return; }
+    constexpr uint32_t w=256,h=256;
+    Resources r(ctx); r.images.reserve(3);
+    r.images.push_back(ctx.image(w,h,VK_FORMAT_R32G32B32A32_SFLOAT,false));
+    r.images.push_back(ctx.image(w,h,VK_FORMAT_B10G11R11_UFLOAT_PACK32,false));
+    r.images.push_back(ctx.image(w,h,VK_FORMAT_B10G11R11_UFLOAT_PACK32,false));
+    auto& source=r.images[0]; auto& packed=r.images[1]; auto& reference=r.images[2];
+    auto decode=[](uint32_t c,uint32_t mbits){ const uint32_t m=c&((1u<<mbits)-1), e=c>>mbits;
+        return e==0 ? std::ldexp(float(m),-14-int(mbits)) : std::ldexp(1.f+float(m)/float(1u<<mbits),int(e)-15); };
+    std::vector<Pixel> in(w*h); uint32_t rng=12345u; auto next=[&]{ rng=rng*1664525u+1013904223u; return rng; };
+    for(uint32_t i=0;i<in.size();++i) {
+        const uint32_t kind=i%4, n=i/4;
+        auto val=[&](uint32_t mbits,uint32_t salt)->float {
+            const uint32_t codes=31u<<mbits, c=(n*salt+salt)%codes;
+            if(kind==0) return decode(c,mbits);                                     // exact codes
+            if(kind==1) return c+1<codes ? 0.5f*(decode(c,mbits)+decode(c+1,mbits)) : 70000.f; // ties
+            if(kind==2) { const float f=std::ldexp(float(next()%1000000)/1000000.f,int(next()%34)-20); return f; } // random
+            const uint32_t k=n%3; return k==0 ? -decode(c,mbits) : k==1 ? 65024.f+float(n%2000) : 0.f; // negative / above max
+        };
+        in[i]={val(6,1),val(6,7),val(5,13),1.f};
+    }
+    ctx.upload(source,in.data(),in.size()*sizeof(Pixel));
+    ctx.transition(source,VK_IMAGE_LAYOUT_GENERAL); ctx.transition(packed,VK_IMAGE_LAYOUT_GENERAL);
+    r.kernel.create(ctx,(shaders/"runtime_pack_r11.spv").string(),{},8,{&source,&packed});
+    const std::array<uint32_t,2> push{w,h};r.Run(push,w,h);
+    ctx.transition(source,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    ctx.transition(reference,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    ctx.one_shot([&](VkCommandBuffer cmd) {
+        VkImageBlit area{};area.srcSubresource=area.dstSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};
+        area.srcOffsets[1]=area.dstOffsets[1]={int(w),int(h),1};
+        vkCmdBlitImage(cmd,source.handle,source.layout,reference.handle,reference.layout,1,&area,VK_FILTER_NEAREST);
+    });
+    ctx.transition(packed,VK_IMAGE_LAYOUT_GENERAL); ctx.transition(reference,VK_IMAGE_LAYOUT_GENERAL);
+    std::vector<uint32_t> actual(w*h), expected(w*h);
+    ctx.download(packed,actual.data(),actual.size()*4); ctx.download(reference,expected.data(),expected.size()*4);
+    uint32_t diff[4]{};
+    for(uint32_t i=0;i<actual.size();++i) if(actual[i]!=expected[i]) ++diff[i%4];
+    std::cout<<"B10G11R11 pack vs blit differing texels: exact="<<diff[0]<<" ties="<<diff[1]<<" random="<<diff[2]<<" neg/over="<<diff[3]<<'\n';
+    Require(diff[0]+diff[1]+diff[2]+diff[3]==0, "B10G11R11 compute write-back differs from blit");
+    std::cout<<"PASS B10G11R11 compute write-back: blit bit equality, codes, ties, random, negative, above max\n";
+}
+
 int main(int argc, char** argv)
 {
     nrvk::Context ctx;
@@ -327,6 +375,7 @@ int main(int argc, char** argv)
         std::cout << "GPU: " << ctx.gpu_name << '\n';
         FloatConversions(ctx, argv[1]);
         R11G11B10Unpack(ctx, argv[1]);
+        R11G11B10Pack(ctx, argv[1]);
         if (argc == 2) {
             Encode(ctx, argv[1]);
             Transfer(ctx, argv[1]);
