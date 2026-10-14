@@ -122,6 +122,19 @@ fallback test initially inspected the old serving network while the replacement
 built; it now waits for build completion before asserting reset-image equality.
 Neither fix suppresses a product error or weakens comparison criteria.
 
+The first remote Release run on `f5086a38`
+([38608015656](https://github.com/Overclockers/dlss-5-amd-project/actions/runs/38608015656))
+passed host compilation, Mochizuki ABI and host CI, then failed the WARP capture
+test with `person worker exited (0)`. The IPC fixture incorrectly exited after
+five idle seconds, unlike the production worker's indefinite request/stop wait.
+The fixture now follows the production lifetime, with a regression that waits
+longer than five seconds before submitting frames. The capture subtest also uses
+a controlled age/schedule clock so software execution speed cannot determine
+freshness; IPC deadlines retain wall time. It still checks four bounded in-flight
+captures, selection of the newest completed frame and explicit rejection after
+251 ms. Production code and the 250 ms threshold are unchanged. The PR records
+the subsequent Release result and commit SHA.
+
 The fixture reports INT4 image difference from the default network, network query
 samples and execution/readback wall time. These are synthetic comparisons without
 a quality ground truth, not game FPS or steady-state throughput claims. RenoDX's
