@@ -512,6 +512,10 @@ static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const 
             MenuUi::TextWrapped("Vulkan core GPU: %.3f ms | Network: %.3f ms | Other: %.3f ms",
                 timing.gpu_ms_mean, timing.gpu_ms_network_mean, timing.gpu_ms_other_mean);
         }
+        if (timing.inline_path == 1)
+            MenuUi::TextWrapped("Inline path: whole chain on compute");
+        else if (timing.inline_path == 2)
+            MenuUi::TextWrapped("Inline path: segmented (%s)", timing.inline_path_why[0] ? timing.inline_path_why : "?");
         if (timing.aco_requested)
             MenuUi::TextWrapped("ACO requested, effective %u. %s", timing.aco_effective, timing.aco_fallback);
         MenuUi::TextWrapped("Completed-sample means. Network includes fused temporal shaders; Other covers core input, history copies and composition. Bridge copies, shared effects and whole-frame latency are excluded.");

@@ -118,6 +118,10 @@ extern "C"
         /* Last accepted sample's core stages, only on frames with MOCHIZUKI_NR_FRAME_FLAG_STAGE_TIMING; -1 when
          * the stage did not run in it (encode: linear input only) or stage timing was off. */
         float gpu_ms_encode_last, gpu_ms_transfer_last;
+        /* The last inline frame's path: 0 none (split frames), 1 whole chain on compute, 2 segments
+         * (graphics conversions + compute network); inline_path_why gives the segment reason. */
+        uint32_t inline_path;
+        char inline_path_why[124];
         /* struct_size includes the current definition's tail padding. */
     } MochizukiNrInfo;
 

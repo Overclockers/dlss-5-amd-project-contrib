@@ -2470,6 +2470,10 @@ struct Session
     std::atomic<uint64_t> historyBits { 0 };
     std::atomic<uint32_t> historyCount { 0 };
     std::mutex errorMutex;
+    // Menu status: the inline path of the last inline frame (0 none/split, 1 whole compute, 2 segments) and why.
+    std::atomic<uint32_t> infoInlinePath { 0 };
+    std::mutex inlinePathMutex;
+    char infoInlineWhy[124] {};
     char lastError[256] {};
 
     Geometry geometry;
@@ -4944,6 +4948,16 @@ struct Session
             fullCompute = !chainWhy;
             // Logged when the path or reason changes; a game that flips every frame
             // (first-pass export, DRS) is bounded like the error lines.
+            const uint32_t pathNow = fullCompute ? 1u : 2u;
+            if (infoInlinePath.load(std::memory_order_relaxed) != pathNow ||
+                fullCompute != loggedFullCompute || (chainWhy && loggedChainWhy != chainWhy))
+            {
+                {
+                    std::lock_guard lock(inlinePathMutex);
+                    std::snprintf(infoInlineWhy, sizeof infoInlineWhy, "%s", chainWhy ? chainWhy : "");
+                }
+                infoInlinePath.store(pathNow, std::memory_order_relaxed);
+            }
             if (fullCompute != loggedFullCompute || (chainWhy && loggedChainWhy != chainWhy))
             {
                 loggedFullCompute = fullCompute;
@@ -4957,6 +4971,8 @@ struct Session
                              "family %u (%s)", vk.family, vk.computeFamily, chainWhy);
             }
         }
+        if (!job.inlineExecution && infoInlinePath.load(std::memory_order_relaxed))
+            infoInlinePath.store(0, std::memory_order_relaxed);
         if (job.inlineExecution && vk.computeQueue && (hooks.inlineChain == 1 || hooks.inlineChain == 2) &&
             (hooks.inlineChain == 1) != fullCompute)
             throw NrError(NrError::Other, fullCompute ? "MZ_TEST_INLINE_CHAIN=2: the frame took the whole compute chain"
@@ -6128,6 +6144,11 @@ int32_t GetInfo(void* context, MochizukiNrInfo* out)
             info.aco_requested = s->controls.acoRequested ? 1u : 0u;
             info.aco_effective = s->acoEffective ? 1u : 0u;
             std::memcpy(info.aco_fallback, s->acoFallback, sizeof info.aco_fallback);
+        }
+        info.inline_path = s->infoInlinePath.load(std::memory_order_relaxed);
+        {
+            std::lock_guard lock(s->inlinePathMutex);
+            std::memcpy(info.inline_path_why, s->infoInlineWhy, sizeof info.inline_path_why);
         }
         {
             std::lock_guard lock(s->errorMutex);
