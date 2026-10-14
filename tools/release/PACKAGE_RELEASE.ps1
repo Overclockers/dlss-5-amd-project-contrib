@@ -464,10 +464,11 @@ LmxxfAutoExposure=true
 ; Manual white scale only when Auto exposure is false and there is no game exposure. Default 8.
 LmxxfAutoExposureScale=8
 
-; Allow NR when the command list uses D3D12 enhanced barriers (default false).
+; Allow NR when the command list uses D3D12 enhanced barriers. Leave unset for auto:
+; on when the EXE name contains "forza" (Forza Horizon 6 needs it for Mochizuki), off otherwise.
 ; Enhanced-barrier layout/access is not fully tracked and a split can cut a SYNC_SPLIT
-; group across two submits. true opts in; false rejects those lists. Restart after changing.
-LmxxfAllowEnhancedBarriers=false
+; group across two submits. true opts in; false rejects those lists. Menu changes apply immediately.
+; LmxxfAllowEnhancedBarriers=
 
 ; Early command-list wrap: shared by lmxxf and Mochizuki. Leave unset for auto.
 ; Auto: EXE calls in Unreal/Forza; UnityPlayer.dll calls in Aniimo.exe only.
@@ -476,6 +477,10 @@ LmxxfAllowEnhancedBarriers=false
 ; Ins > Compatibility & Scheduling > Early command-list wrap. Save and restart.
 ; Other games are unvalidated; forced early wrap can crash (e.g. Yan Yun).
 ; LmxxfEarlyExeWrap=
+; Early wrap of command lists created by ANY module (Streamline, dxgi proxies, overlays), before the
+; swapchain only. Leave unset for auto: on only when the EXE name contains "forza". Independent of
+; LmxxfEarlyExeWrap. May crash other games; try true only if the log shows many 'missing recording proxy'.
+; LmxxfEarlyAnyModuleWrap=
 
 ; Resolution scale factor for neural rendering model input
 ; 1.0 = native render resolution (e.g. 720p for 4K Super Performance)
