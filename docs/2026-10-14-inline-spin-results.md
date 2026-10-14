@@ -126,3 +126,18 @@ The armed side-queue wait after a claimed input gate (op 14) is now bounded: kCl
 
 Without direct_out/store_native, NrInlineComputeConvert now packs the answer through an `r11f_g11f_b10f` storage image (`runtime_pack_r11.spv`: NaN->0, clamp to 65024, then copy). Offline: hdr_shader pack == blit bit-for-bit (codes, ties, random, negative, above max). Offline: queue_segments `r11` reports `phase 1/1` (whole chain on compute).
 
+
+## 2026-10-15 follow-ups (branch work/nr-spin-gpu-cost)
+
+All options default off; each has an ini key, a menu checkbox and is cleared by the menu resets.
+
+| Item | Ini key | Menu label | Effect |
+|---|---|---|---|
+| 7 | (status only) | Diagnostics "Inline path: ..." | Shows whole-chain-on-compute vs segmented and why |
+| 3 | NrInlineComputeMotion | Compute-queue motion rescale | Motion vectors rescaled by a compute shader instead of a blit |
+| 4 | NrInlineComputeDownscale | Compute-queue model downscale | Model scale < 1 stays on the compute chain |
+| 5 | NrInlineComputeExport | Compute-queue first-pass export | Multi-layer first-pass export packed on compute |
+| 6 | - | - | `run.cmd inline-lifecycle` fixture |
+| C | NrAdaptiveWaitBudget | Adaptive wait budget | Post-claim wait slices follow a GPU-timed iterations/ms EMA (target ~4 ms, 8..256 slices); halve on cap/abort, grow after 64 clean waits |
+
+Known gaps: multi-layer with motion is still segmented (core motion blit). Adaptive budget data is read on retirement only (no CPU wait). The timed span includes early-out dispatches after the capture arrives, so the rate is a slight underestimate (conservative cap).
