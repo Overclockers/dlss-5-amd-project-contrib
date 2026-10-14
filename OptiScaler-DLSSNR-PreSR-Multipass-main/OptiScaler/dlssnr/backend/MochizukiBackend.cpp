@@ -364,6 +364,9 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
             p->owner->inlinePipelines = inlineResources->PipelineCache();
             inlineResources->captureBackoff = Config::Instance()->NrCaptureBackoff.value_or_default();
             inlineResources->gpuArmed = Config::Instance()->NrGpuHandoff.value_or_default();
+            inlineResources->spinPollDelay = UINT(std::clamp(Config::Instance()->NrSpinPollDelay.value_or_default(), 0, 4096));
+            {   const int sl = Config::Instance()->NrSpinSlices.value_or_default();
+                inlineResources->spinSlices = sl == 1 || sl == 4 || sl == 8 || sl == 16 || sl == 256 ? UINT(sl) : 0u; }
             FrameDiag::Begin(inlineResources->diag, "mochizuki", frameId, frame.color_width, frame.color_height, OPTI_VERSION);
             inlineResources->diag.inlineReuse = inlineResources->reused;
             const auto id0 = logical->Identity();

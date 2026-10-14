@@ -160,7 +160,7 @@ class Resources
         list->SetPipelineState(controlPso.Get()); list->SetComputeRootSignature(controlRoot.Get());
         list->SetComputeRootUnorderedAccessView(0, (op == 1 || op == 3 || op == 6 || op == 7 || op == 8 ? capture : control)->GetGPUVirtualAddress());
         list->SetComputeRootUnorderedAccessView(1, target->GetGPUVirtualAddress());
-        const UINT args[] {op, iterations}; list->SetComputeRoot32BitConstants(2, 2, args, 0);
+        const UINT args[] {op, iterations, op == 4 || op == 7 ? spinPollDelay : 0u}; list->SetComputeRoot32BitConstants(2, 3, args, 0);
         list->Dispatch(1, 1, 1);
     }
     void CreateOutput(Output& out, ID3D12Resource* original, ID3D12Resource* neural, UINT w, UINT h) {
@@ -248,13 +248,13 @@ public:
         } else {
         D3D12_ROOT_PARAMETER cp[3] {}; cp[0].ParameterType = cp[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
         cp[0].Descriptor.ShaderRegister = 0; cp[1].Descriptor.ShaderRegister = 1;
-        cp[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS; cp[2].Constants.Num32BitValues = 2;
+        cp[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS; cp[2].Constants.Num32BitValues = 3;
         D3D12_ROOT_SIGNATURE_DESC cr {}; cr.NumParameters = 3; cr.pParameters = cp;
         controlRoot = Root(cr);
         controlPso = Pipeline(controlRoot.Get(), R"(
 globallycoherent RWByteAddressBuffer flag : register(u0);
 RWByteAddressBuffer target : register(u1);
-cbuffer Args : register(b0) { uint operation; uint iterations; }
+cbuffer Args : register(b0) { uint operation; uint iterations; uint pollDelay; }
 [numthreads(1,1,1)] void main() {
  uint value = 0;
  // Control: 0 pending, 1 network ready, 2 bypass. Capture always starts at 0.
@@ -268,6 +268,11 @@ cbuffer Args : register(b0) { uint operation; uint iterations; }
    ++spun;
    DeviceMemoryBarrier();
    flag.InterlockedCompareExchange(0, 0, 0, value); if (value != 0) break;
+   // NrSpinPollDelay: dependent ALU between polls, so the spinning wave issues far fewer
+   // coherent atomics (L2/fabric traffic) while staying resident; no memory access here.
+   uint acc = i;
+   [loop] for (uint d = 0; d < pollDelay; ++d) acc = acc * 1664525u + 1013904223u;
+   if (acc == 0x7fffffffu && pollDelay == 0xffffffffu) target.Store(16, acc);
   }
   if (operation == 4) target.Store(8, spun);
  } else if (operation == 8) {
@@ -329,6 +334,10 @@ cbuffer Size : register(b0) { uint width; uint height; }
     }
     void RecordCapture(ID3D12GraphicsCommandList* list) { Op(list, 1, decision.Get()); UavBarrier(list, capture.Get()); DiagStamp(list, FrameDiag::kGpuCapEnd); }
     void RecordWait(ID3D12GraphicsCommandList* list, UINT slices = kWaitSlices, UINT iterations = kWaitIterations) {
+        // NrSpinSlices: same total budget (slices x iterations) cut into fewer/more dispatches.
+        if (spinSlices && slices == kWaitSlices && iterations == kWaitIterations) {
+            slices = spinSlices; iterations = UINT(UINT64(kWaitSlices) * kWaitIterations / spinSlices);
+        }
         // Keep the predicate immutable after this point: late completion cannot select unrecorded output.
         for (UINT i = 0; i < slices; ++i) {
             Op(list, 4, decision.Get(), iterations);
@@ -361,7 +370,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
     }
     void PrepareReuse() {
         captureEvents.clear(); started = false; decisionReadable = false; uncertain = noNetwork = false;
-        diag = {}; captureBackoff = 0; gpuArmed = false; activityToken = 0; reused = true;
+        diag = {}; captureBackoff = 0; gpuArmed = false; spinPollDelay = spinSlices = 0; activityToken = 0; reused = true;
     }
     bool RetirementUncertain() const { return uncertain || sideUncertain; }
     // Set under RecordingMutex from the lease that admitted this recording.
@@ -373,6 +382,9 @@ cbuffer Size : register(b0) { uint width; uint height; }
     int captureBackoff = 0;
     // NrGpuHandoff snapshot for this frame: release the network from the side queue when the capture lands.
     bool gpuArmed = false;
+    // Spin-cost experiments (default 0 = unchanged): ALU iterations between flag polls (game wait +
+    // side watch) and game-wait dispatch count (budget preserved). Snapshotted before recording.
+    UINT spinPollDelay = 0, spinSlices = 0;
     bool reused = false; // came from NrInlineReuse pool
     bool Complete() const {
         if (!started) return true;

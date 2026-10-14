@@ -400,6 +400,8 @@ class Config
     // Reuse retired inline recordings (same inputs) instead of creating D3D12 objects every frame. Default off.
     CustomOptional<bool> NrInlineReuse { false };
     CustomOptional<bool> NrGpuHandoff { false };
+    CustomOptional<int> NrSpinPollDelay { 0 };
+    CustomOptional<int> NrSpinSlices { 0 };
     CustomOptional<bool> NrInline { false }; // Experimental same-list execution for lmxxf/Mochizuki.
     // Wrap host CreateCommandList results before the swapchain exists.
     // Missing = engine whitelist (Unreal + Forza). false = never. true = force for any engine.

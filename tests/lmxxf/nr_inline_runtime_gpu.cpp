@@ -16,8 +16,10 @@ static void STDMETHODCALLTYPE TraceBatch(ID3D12CommandQueue* q, UINT n, ID3D12Co
 static int gCaptureBackoff = 0;
 // --gpu-handoff runs every inline frame with NrGpuHandoff=true (side-queue capture watch gates the network).
 static bool gGpuHandoff = false;
+// --poll-delay=N / --spin-slices=N set NrSpinPollDelay / NrSpinSlices on every inline frame.
+static UINT gPollDelay = 0, gSpinSlices = 0;
 struct BackoffResources : In::Resources {
-    template<class... A> explicit BackoffResources(A&&... a) : In::Resources(std::forward<A>(a)...) { captureBackoff = gCaptureBackoff; gpuArmed = gGpuHandoff; }
+    template<class... A> explicit BackoffResources(A&&... a) : In::Resources(std::forward<A>(a)...) { captureBackoff = gCaptureBackoff; gpuArmed = gGpuHandoff; spinPollDelay = gPollDelay; spinSlices = gSpinSlices; }
 };
 // --reuse routes every recording through the NrInlineReuse pool (AcquireResources).
 static bool gReuse = false;
@@ -29,7 +31,7 @@ static std::shared_ptr<In::Resources> MakeResources(ID3D12Device* d, ID3D12Resou
     std::lock_guard lock(Sub::RecordingMutex());
     auto r = In::AcquireResources(&gPool, d, s, n, f, w, h, std::move(cached));
     if (r->reused) ++gReuseHits;
-    r->captureBackoff = gCaptureBackoff; r->gpuArmed = gGpuHandoff; return r;
+    r->captureBackoff = gCaptureBackoff; r->gpuArmed = gGpuHandoff; r->spinPollDelay = gPollDelay; r->spinSlices = gSpinSlices; return r;
 }
 
 int main(int argc, char** argv) {
@@ -53,6 +55,8 @@ int main(int argc, char** argv) {
     for (int i = 3; i < argc; ++i) if (std::strcmp(argv[i], "--event-backoff") == 0) gCaptureBackoff = 2;
     for (int i = 3; i < argc; ++i) if (std::strcmp(argv[i], "--reuse") == 0) gReuse = true;
     for (int i = 3; i < argc; ++i) if (std::strcmp(argv[i], "--gpu-handoff") == 0) gGpuHandoff = true;
+    for (int i = 3; i < argc; ++i) if (std::strncmp(argv[i], "--poll-delay=", 13) == 0) gPollDelay = UINT(std::atoi(argv[i] + 13));
+    for (int i = 3; i < argc; ++i) if (std::strncmp(argv[i], "--spin-slices=", 14) == 0) gSpinSlices = UINT(std::atoi(argv[i] + 14));
     Require(!aco || mochi, "ACO fixture requires Mochizuki");
     const UINT waitSlices = mochi ? In::kWaitSlices : In::kLmxxfWaitSlices;
     const UINT waitIterations = mochi ? In::kWaitIterations : In::kLmxxfWaitIterations;

@@ -186,6 +186,8 @@ int main() {
                 "NrCaptureBackoff",  # Host-owned inline capture polling policy.
                 "NrInlineReuse",  # Host-owned inline recording reuse.
                 "NrGpuHandoff",  # Host-owned GPU-armed inline handoff.
+                "NrSpinPollDelay",  # Host-owned inline spin experiment.
+                "NrSpinSlices",  # Host-owned inline spin experiment.
                 "EarlyExeWrap",
                 "EarlyAnyModuleWrap",
                 "Diagnostic",

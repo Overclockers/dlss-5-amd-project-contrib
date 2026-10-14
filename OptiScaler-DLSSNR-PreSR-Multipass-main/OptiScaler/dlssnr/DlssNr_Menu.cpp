@@ -62,6 +62,8 @@ static void ResetSharedNrDefaults(Config* config)
     config->NrCaptureBackoff.reset();
     config->NrInlineReuse.reset();
     config->NrGpuHandoff.reset();
+    config->NrSpinPollDelay.reset();
+    config->NrSpinSlices.reset();
 }
 
 // The "(?)" marker every control carries, matching the rest of the menu.
@@ -741,6 +743,20 @@ void RenderMenu(Config* config, float menuResScale)
                     if (MenuUi::Checkbox("GPU-armed handoff", &gpuHandoff)) config->NrGpuHandoff = gpuHandoff;
                     HelpMarker("Default off. Mochizuki inline: the GPU side queue watches for this frame's capture and starts NR"
                                "\nwithout a CPU round trip. Missed capture shows the original frame. Applies to the next frame. INI: NrGpuHandoff.");
+                    {
+                        const int delays[] = {0, 16, 64, 256, 1024};
+                        const char* delayChoices[] = {"Off (default)", "16", "64", "256", "1024"};
+                        int di = 0; for (int i = 0; i < 5; ++i) if (delays[i] == config->NrSpinPollDelay.value_or_default()) di = i;
+                        if (MenuUi::Combo("Spin poll delay##nr", &di, delayChoices, IM_ARRAYSIZE(delayChoices))) config->NrSpinPollDelay = delays[di];
+                        HelpMarker("Experimental. ALU work between GPU flag polls while inline waits, so the spin issues fewer"
+                                   "\nmemory atomics. Applies to the next frame. INI: NrSpinPollDelay.");
+                        const int slices[] = {0, 1, 4, 8, 16, 256};
+                        const char* sliceChoices[] = {"64 (default)", "1", "4", "8", "16", "256"};
+                        int si = 0; for (int i = 0; i < 6; ++i) if (slices[i] == config->NrSpinSlices.value_or_default()) si = i;
+                        if (MenuUi::Combo("Spin dispatches##nr", &si, sliceChoices, IM_ARRAYSIZE(sliceChoices))) config->NrSpinSlices = slices[si];
+                        HelpMarker("Experimental. Number of GPU wait dispatches (same total timeout). Applies to the next frame."
+                                   "\nINI: NrSpinSlices.");
+                    }
                 }
                 if (isLmxxf && inlineMode) {
                     int slots = std::clamp(config->LmxxfInlineSlots.value_or_default(), 1, 5) - 1;
@@ -826,6 +842,8 @@ void RenderMenu(Config* config, float menuResScale)
                     resetOption(config->NrCaptureBackoff);
                     resetOption(config->NrInlineReuse);
                     resetOption(config->NrGpuHandoff);
+                    resetOption(config->NrSpinPollDelay);
+                    resetOption(config->NrSpinSlices);
                     SetAllowEnhancedBarriers(config->LmxxfAllowEnhancedBarriers.value_or_default());
                     resetOption(config->LmxxfEarlyExeWrap);
                     resetOption(config->LmxxfEarlyAnyModuleWrap);
