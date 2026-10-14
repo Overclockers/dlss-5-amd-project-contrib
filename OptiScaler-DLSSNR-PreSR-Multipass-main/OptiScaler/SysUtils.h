@@ -12,7 +12,14 @@
 #include <ranges>
 
 #include <winternl.h>
+// d3dkmthk.h ships with the WDK, not with the Windows SDK: a machine with only the MSVC build tools and the SDK
+// cannot compile this header. No translation unit here uses D3DKMT directly, so builds without the WDK fall back
+// to the same minimal compat header the mochizuki runtime uses (three gdi32 query thunks and their structs).
+#if __has_include(<d3dkmthk.h>)
 #include <d3dkmthk.h>
+#else
+#include "dlssnr/backend/mochizuki_runtime/compat/d3dkmthk.h"
+#endif
 
 #define NV_WINDOWS
 #define NVSDK_NGX
