@@ -145,6 +145,18 @@ minutes, with a 60-minute job limit for subsequent replay, signing and ZIP check
 No suite, assertion or package gate was removed; that interrupted run is not
 reported as full CI success.
 
+The third run on `06a1fcf2`
+([38616564438](https://github.com/Overclockers/dlss-5-amd-project/actions/runs/38616564438))
+reached the final installation receipt tests and found five setup errors: their
+isolated source fixture omitted `mochizuki-renodx.py`. That fixture now copies the
+real manifest's complete source inventory, including Windows-consumed Linux INT4
+inputs, instead of maintaining a second dependency list. All five receipt tests
+pass locally, retaining the real source/artifact gate and checks for successful
+hash binding, suite failure, runtime replacement and skipped-sync refusal. Other
+manifest consumers were reviewed for the same omission; package and cache
+fixtures already contain the new dependencies. The third run is still a failure,
+not a completed release certification.
+
 The fixture reports INT4 image difference from the default network, network query
 samples and execution/readback wall time. These are synthetic comparisons without
 a quality ground truth, not game FPS or steady-state throughput claims. RenoDX's
