@@ -18,8 +18,12 @@ static int gCaptureBackoff = 0;
 static bool gGpuHandoff = false;
 // --poll-delay=N / --spin-slices=N set NrSpinPollDelay / NrSpinSlices on every inline frame.
 static UINT gPollDelay = 0, gSpinSlices = 0, gWatchSlices = 0, gWatchStart = 0; // + --watch-slices=N / --watch-start=N
+// --late-capture=N (needs --gpu-handoff): N long ALU dispatches on the game queue before the input gate,
+// so the side watch expires before the capture. Expect: gate closed, input copies skipped, original
+// frame, history reset, no hang. Only the first inline test runs in this mode.
+static UINT gLateCapture = 0;
 struct BackoffResources : In::Resources {
-    template<class... A> explicit BackoffResources(A&&... a) : In::Resources(std::forward<A>(a)...) { captureBackoff = gCaptureBackoff; gpuArmed = gGpuHandoff; spinPollDelay = gPollDelay; spinSlices = gSpinSlices; watchSlices = gWatchSlices; watchStartDelay = gWatchStart; }
+    template<class... A> explicit BackoffResources(A&&... a) : In::Resources(std::forward<A>(a)...) { captureBackoff = gCaptureBackoff; gpuArmed = gGpuHandoff; spinPollDelay = gPollDelay; spinSlices = gSpinSlices; watchSlices = gWatchSlices; watchStartDelay = gWatchStart; testInputDelay = gLateCapture; }
 };
 // --reuse routes every recording through the NrInlineReuse pool (AcquireResources).
 static bool gReuse = false;
@@ -31,7 +35,7 @@ static std::shared_ptr<In::Resources> MakeResources(ID3D12Device* d, ID3D12Resou
     std::lock_guard lock(Sub::RecordingMutex());
     auto r = In::AcquireResources(&gPool, d, s, n, f, w, h, std::move(cached));
     if (r->reused) ++gReuseHits;
-    r->captureBackoff = gCaptureBackoff; r->gpuArmed = gGpuHandoff; r->spinPollDelay = gPollDelay; r->spinSlices = gSpinSlices; r->watchSlices = gWatchSlices; r->watchStartDelay = gWatchStart; return r;
+    r->captureBackoff = gCaptureBackoff; r->gpuArmed = gGpuHandoff; r->spinPollDelay = gPollDelay; r->spinSlices = gSpinSlices; r->watchSlices = gWatchSlices; r->watchStartDelay = gWatchStart; r->testInputDelay = gLateCapture; return r;
 }
 
 int main(int argc, char** argv) {
@@ -59,6 +63,8 @@ int main(int argc, char** argv) {
     for (int i = 3; i < argc; ++i) if (std::strncmp(argv[i], "--spin-slices=", 14) == 0) gSpinSlices = UINT(std::atoi(argv[i] + 14));
     for (int i = 3; i < argc; ++i) if (std::strncmp(argv[i], "--watch-slices=", 15) == 0) gWatchSlices = UINT(std::atoi(argv[i] + 15));
     for (int i = 3; i < argc; ++i) if (std::strncmp(argv[i], "--watch-start=", 14) == 0) gWatchStart = UINT(std::atoi(argv[i] + 14));
+    for (int i = 3; i < argc; ++i) if (std::strncmp(argv[i], "--late-capture=", 15) == 0) gLateCapture = UINT(std::atoi(argv[i] + 15));
+    Require(!gLateCapture || (gGpuHandoff && !timeoutMode), "--late-capture needs --gpu-handoff without --timeout");
     Require(!aco || mochi, "ACO fixture requires Mochizuki");
     const UINT waitSlices = mochi ? In::kWaitSlices : In::kLmxxfWaitSlices;
     const UINT waitIterations = mochi ? In::kWaitIterations : In::kLmxxfWaitIterations;
@@ -205,7 +211,7 @@ int main(int argc, char** argv) {
         ID3D12Resource* sources[] {colour.Get()}; D3D12_RESOURCE_STATES states[] {D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE};
         Check(proxy->BeginInlineState(1, sources, states), "state scope");
         lease = Own::Attach(owner, job.handle, proxy.Get(), resources); Require(bool(lease), "inline ownership");
-        ok(api.RecordInputs(context, job.handle, proxy.Get()), "inline inputs");
+        resources->BeginInputs(proxy.Get()); ok(api.RecordInputs(context, job.handle, proxy.Get()), "inline inputs");
         resources->RecordCapture(proxy.Get()); resources->RecordWait(proxy.Get(), timeoutMode ? 0 : waitSlices, waitIterations);
         ok(api.RecordOutputs(context, job.handle, proxy.Get()), "inline outputs");
         resources->RecordSelect(proxy.Get(), states[0]); proxy->EndInlineState(); lease->ready = true;
@@ -231,14 +237,31 @@ int main(int argc, char** argv) {
             if (complete) break;
             Require(GetTickCount64() < deadline, "inline actual network/worker timeout"); Sleep(1);
         }
-        Require(!owner->failed && resources->Succeeded() != timeoutMode, "actual network/frozen timeout decision");
+        const bool late = gLateCapture != 0;
+        Require(!owner->failed && resources->Succeeded() != (timeoutMode || late), "actual network/frozen timeout decision");
+        if (gGpuHandoff && !timeoutMode) {
+            UINT seen = 9, gate = 9; Require(resources->ArmedOutcome(seen, gate), "armed outcome readable");
+            std::printf("armed outcome replay=%u seen=%u gate=%u late=%u\n", replay, seen, gate, gLateCapture);
+            if (late) Require(seen == 0 && gate == 2, "late capture: gate closed before the game claimed it, copies skipped");
+            else Require(seen == 1 && gate == 1, "armed capture seen after the game claimed the gate");
+        }
+        if (late) {
+            std::lock_guard lock(Sub::RecordingMutex());
+            const auto timeouts = owner->inlineTimeouts; owner->ReclaimInlineLocked();
+            Require(owner->inlineTimeouts == timeouts + 1, "late capture reclaimed as timeout (history reset)");
+        }
         if (!mochi) {
             LmxxfNrTimings physical {sizeof physical}; ok(api.GetTimings(context, &physical), "physical HIP completion");
             Require(physical.valid && physical.frame_id == 2, "side completion cannot precede actual HIP event completion");
         }
-        const auto selected = timeoutMode ? originalHash : expected;
+        const auto selected = timeoutMode || late ? originalHash : expected;
         Require(Hash(device.Get(), queue, resources->OutputTexture()) == selected, "inline output equals selected current-frame source");
         std::printf("%s actual inline replay=%u timeout=%u hash=%016llx PASS\n", mochi ? "Vulkan" : "HIP", replay, timeoutMode, selected);
+    }
+    if (gLateCapture) {
+        std::puts("late capture: gate closed, input copies skipped, original frame, history reset, no hang PASS");
+        lease.reset(); resources.reset(); gPool.clear(); std::puts("actual inline runtime PASS"); std::fflush(stdout);
+        TerminateProcess(GetCurrentProcess(), 0); // skip the remaining scenarios (they assume the capture lands)
     }
     // Saturated admission on a completed retained recording must preserve the
     // real mixed game batch, select original, then recover when a slot is free.
@@ -334,7 +357,7 @@ int main(int argc, char** argv) {
             ID3D12Resource* sources[] {colour.Get()}; D3D12_RESOURCE_STATES states[] {D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE};
             Check(list->BeginInlineState(1, sources, states), "continuous state");
             auto nextLease = Own::Attach(owner, next.handle, list.Get(), in); Require(bool(nextLease), "continuous lease");
-            ok(api.RecordInputs(context, next.handle, list.Get()), "continuous inputs");
+            in->BeginInputs(list.Get()); ok(api.RecordInputs(context, next.handle, list.Get()), "continuous inputs");
             in->RecordCapture(list.Get()); in->RecordWait(list.Get(), timeoutMode ? 0 : waitSlices, waitIterations);
             ok(api.RecordOutputs(context, next.handle, list.Get()), "continuous outputs");
             in->RecordSelect(list.Get(), states[0]); nextLease->ready = true;
@@ -425,7 +448,7 @@ int main(int argc, char** argv) {
                     Check(list->BeginInlineState(1, sources, states), "ahead baseline state");
                     recorded = Own::Attach(owner, job.handle, list.Get(), resources);
                     Require(bool(recorded), "ahead baseline lease");
-                    ok(api.RecordInputs(context, job.handle, list.Get()), "ahead baseline inputs");
+                    resources->BeginInputs(list.Get()); ok(api.RecordInputs(context, job.handle, list.Get()), "ahead baseline inputs");
                     resources->RecordCapture(list.Get()); resources->RecordWait(list.Get(), waitSlices, waitIterations);
                     ok(api.RecordOutputs(context, job.handle, list.Get()), "ahead baseline outputs");
                     resources->RecordSelect(list.Get(), states[0]); recorded->ready = true;
@@ -462,7 +485,7 @@ int main(int argc, char** argv) {
                     Check(frames[i].list->BeginInlineState(1, sources, states), "ahead state");
                     frames[i].lease = Own::Attach(owner, job.handle, frames[i].list.Get(), frames[i].resources);
                     Require(bool(frames[i].lease), "ahead lease");
-                    ok(api.RecordInputs(context, job.handle, frames[i].list.Get()), "ahead inputs");
+                    frames[i].resources->BeginInputs(frames[i].list.Get()); ok(api.RecordInputs(context, job.handle, frames[i].list.Get()), "ahead inputs");
                     frames[i].resources->RecordCapture(frames[i].list.Get());
                     frames[i].resources->RecordWait(frames[i].list.Get(), timeoutMode ? 0 : waitSlices, waitIterations);
                     ok(api.RecordOutputs(context, job.handle, frames[i].list.Get()), "ahead outputs");
@@ -563,7 +586,7 @@ int main(int argc, char** argv) {
                 Check(frames[i].list->BeginInlineState(1, sources, states), "stagger state");
                 frames[i].lease = Own::Attach(owner, job.handle, frames[i].list.Get(), frames[i].resources);
                 Require(bool(frames[i].lease), "stagger lease");
-                ok(api.RecordInputs(context, job.handle, frames[i].list.Get()), "stagger inputs");
+                frames[i].resources->BeginInputs(frames[i].list.Get()); ok(api.RecordInputs(context, job.handle, frames[i].list.Get()), "stagger inputs");
                 frames[i].resources->RecordCapture(frames[i].list.Get());
                 frames[i].resources->RecordWait(frames[i].list.Get(), timeoutMode ? 0 : waitSlices, waitIterations);
                 ok(api.RecordOutputs(context, job.handle, frames[i].list.Get()), "stagger outputs");

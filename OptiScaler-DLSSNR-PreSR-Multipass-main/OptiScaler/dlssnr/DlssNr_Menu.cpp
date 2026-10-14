@@ -735,10 +735,14 @@ void RenderMenu(Config* config, float menuResScale)
                            "\nand it does not fix a game that hands us unwrapped command lists (NR would still"
                            "\nalternate with the original frame). It only skips the split-ineligible rejection.");
                 if (inlineMode) {
+                    // GPU-armed handoff and the spin options are Mochizuki-only; lmxxf ignores them.
+                    const bool armedApplies = kind == Backend::Kind::Mochizuki;
                     bool gpuHandoff = config->NrGpuHandoff.value_or_default();
+                    if (armedApplies) {
                     if (MenuUi::Checkbox("GPU-armed handoff", &gpuHandoff)) config->NrGpuHandoff = gpuHandoff;
                     HelpMarker("Default on. Mochizuki inline: the GPU side queue watches for this frame's capture and starts NR"
-                               "\nwithout a CPU round trip. Missed capture shows the original frame. Applies to the next frame. INI: NrGpuHandoff.");
+                               "\nwithout a CPU round trip. A capture that comes after the watch skips that frame's input copy,"
+                               "\nshows the original frame and resets history. Applies to the next frame. INI: NrGpuHandoff.");
                     ImGui::Indent();
                     ImGui::BeginDisabled(!gpuHandoff);
                     if (MenuUi::TreeNode("Inline spin experiments##nr")) {
@@ -759,14 +763,16 @@ void RenderMenu(Config* config, float menuResScale)
                                    "\nApplies to the next frame. INI: NrWatchSlices.");
                         const int starts[] = {0, 1, 2, 4, 8}; const char* startNames[] = {"Off (default)", "1", "2", "4", "8"};
                         pick("Side watch start delay##nr", config->NrWatchStartDelay, starts, startNames, 5);
-                        HelpMarker("Experimental. ALU-only dispatches before the watch starts polling."
+                        HelpMarker("Experimental. ALU-only dispatches (followed by a barrier) before the watch starts polling."
                                    "\nCan delay NR start if the capture comes early. Applies to the next frame. INI: NrWatchStartDelay.");
                         ImGui::TreePop();
                     }
                     ImGui::EndDisabled();
                     ImGui::Unindent();
                     if (!gpuHandoff) MenuUi::TextDisabled("Spin options need GPU-armed handoff.");
-                    ImGui::BeginDisabled(gpuHandoff);
+                    }
+                    const bool armedActive = armedApplies && gpuHandoff;
+                    ImGui::BeginDisabled(armedActive);
                     int backoff = std::clamp(config->NrCaptureBackoff.value_or_default(), 0, 2);
                     const char* backoffChoices[] = {"Exponential 50-5000 us (default)", "Fixed 100 us", "Event (side-queue watch)"};
                     if (MenuUi::Combo("Capture poll backoff##nr", &backoff, backoffChoices, IM_ARRAYSIZE(backoffChoices)))
@@ -775,12 +781,13 @@ void RenderMenu(Config* config, float menuResScale)
                                "\nFixed 100 us finds ready inputs sooner at a small CPU/poll cost. Applies to the next frame."
                                "\nEvent: side queue watches the capture flag and a fence event wakes the worker."
                                "\nINI: NrCaptureBackoff (0 exponential, 1 fixed 100 us, 2 event).");
+                    ImGui::EndDisabled();
+                    if (armedActive) MenuUi::TextDisabled("Capture poll backoff is bypassed by GPU-armed handoff.");
                     bool reuse = config->NrInlineReuse.value_or_default();
                     if (MenuUi::Checkbox("Reuse inline recordings", &reuse)) config->NrInlineReuse = reuse;
                     HelpMarker("Default off. Reuses finished per-frame inline objects with identical inputs instead of"
-                               "\ncreating them every frame, so NR can start sooner. Applies to the next frame. INI: NrInlineReuse.");
-                    ImGui::EndDisabled();
-                    if (gpuHandoff) MenuUi::TextDisabled("Bypassed by GPU-armed handoff.");
+                               "\ncreating them every frame, so NR can start sooner. Also applies with GPU-armed handoff."
+                               "\nApplies to the next frame. INI: NrInlineReuse.");
                 }
                 if (isLmxxf && inlineMode) {
                     int slots = std::clamp(config->LmxxfInlineSlots.value_or_default(), 1, 5) - 1;

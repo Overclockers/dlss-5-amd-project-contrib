@@ -20,6 +20,9 @@ template<class T> using Ptr = Microsoft::WRL::ComPtr<T>;
 inline constexpr UINT kWaitSlices = 64;
 inline constexpr UINT kWaitIterations = 32768;
 inline constexpr UINT kCaptureWatchSlices = 4;
+// NrGpuHandoff: after closing the input gate, a game that already claimed it is finishing its
+// input copy; the side queue keeps watching (bounded) for that capture before the network starts.
+inline constexpr UINT kGateSettleSlices = 16;
 // lmxxf benefits from fewer dispatch/barrier pairs with the same total work.
 // Neither schedule is a portable wall-clock timeout or concurrent-progress guarantee.
 inline constexpr UINT kLmxxfWaitSlices = 32;
@@ -108,6 +111,9 @@ class Resources
     Ptr<ID3D12RootSignature> controlRoot, composeRoot;
     Ptr<ID3D12PipelineState> controlPso, composePso;
     Ptr<ID3D12Resource> control, capture, sample, readback, decision, decisionReadback;
+    // NrGpuHandoff input gate predicate (game list): nonzero = the game claimed the gate, run the input copies.
+    Ptr<ID3D12Resource> inputGate;
+    bool inputGated = false;
     Ptr<ID3D12Fence> sideFence, gameFence;
     // NrGpuHandoff: the game queue signals armFence just before this list runs (BeforeExecute); the side
     // queue waits on it (no spin while the game is still on earlier work), then watches the capture flag.
@@ -158,9 +164,9 @@ class Resources
     }
     void Op(ID3D12GraphicsCommandList* list, UINT op, ID3D12Resource* target, UINT iterations = 0) {
         list->SetPipelineState(controlPso.Get()); list->SetComputeRootSignature(controlRoot.Get());
-        list->SetComputeRootUnorderedAccessView(0, (op == 1 || op == 3 || op == 6 || op == 7 || op == 8 ? capture : control)->GetGPUVirtualAddress());
+        list->SetComputeRootUnorderedAccessView(0, (op == 1 || op == 3 || op == 6 || op == 7 || op == 8 || op >= 11 ? capture : control)->GetGPUVirtualAddress());
         list->SetComputeRootUnorderedAccessView(1, target->GetGPUVirtualAddress());
-        const UINT args[] {op, iterations, op == 4 || op == 7 ? spinPollDelay : 0u}; list->SetComputeRoot32BitConstants(2, 3, args, 0);
+        const UINT args[] {op, iterations, op == 4 || op == 7 || op == 13 ? spinPollDelay : 0u}; list->SetComputeRoot32BitConstants(2, 3, args, 0);
         list->Dispatch(1, 1, 1);
     }
     void CreateOutput(Output& out, ID3D12Resource* original, ID3D12Resource* neural, UINT w, UINT h) {
@@ -237,6 +243,7 @@ public:
         capture = Buffer(D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
         sample = Buffer(D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
         decision = Buffer(D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
+        inputGate = Buffer(D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true); inputGate->SetName(L"NR inline input gate");
         control->SetName(L"NR inline atomic control"); capture->SetName(L"NR inline atomic capture");
         sample->SetName(L"NR inline sample"); decision->SetName(L"NR inline decision");
         readback = Buffer(D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST, false);
@@ -258,13 +265,22 @@ cbuffer Args : register(b0) { uint operation; uint iterations; uint pollDelay; }
 [numthreads(1,1,1)] void main() {
  uint value = 0;
  // Control: 0 pending, 1 network ready, 2 bypass. Capture always starts at 0.
- if (operation == 0 || operation == 6) { flag.Store(0, operation == 0 ? iterations : 0); }
+ // Capture +4 is the armed input gate: 0 open, 1 claimed by the game (copy runs), 2 closed by the side queue (copy skipped).
+ if (operation == 0) { flag.Store(0, iterations); }
+ else if (operation == 6) { flag.Store2(0, uint2(0, 0)); }
+ else if (operation == 11) {
+  // Game list, before the input copies: claim the gate; the predicate skips the copies once it is closed.
+  flag.InterlockedCompareExchange(4, 0, 1, value); DeviceMemoryBarrier(); target.Store2(0, uint2(value == 2 ? 0 : 1, 0));
+ }
+ else if (operation == 12) { flag.InterlockedCompareExchange(4, 0, 2, value); DeviceMemoryBarrier(); }
  else if (operation == 1 || operation == 2) { flag.InterlockedExchange(0, 1, value); DeviceMemoryBarrier(); }
  else if (operation == 3) { flag.InterlockedCompareExchange(0, 0, 0, value); target.Store(0, value); }
- else if (operation == 4 || operation == 7) {
+ else if (operation == 4 || operation == 7 || operation == 13) {
   // 7: side-queue capture watch (NrCaptureBackoff=2); same bounded spin on the capture flag.
-  uint spun = 0;
-  [loop] [allow_uav_condition] for (uint i = 0; i < iterations; ++i) {
+  // 13: settle watch, only while the game holds the gate (claimed but not yet captured).
+  uint spun = 0, run = iterations;
+  if (operation == 13) { flag.InterlockedCompareExchange(4, 0, 0, value); if (value != 1) run = 0; }
+  [loop] [allow_uav_condition] for (uint i = 0; i < run; ++i) {
    ++spun;
    DeviceMemoryBarrier();
    flag.InterlockedCompareExchange(0, 0, 0, value); if (value != 0) break;
@@ -282,7 +298,9 @@ cbuffer Args : register(b0) { uint operation; uint iterations; uint pollDelay; }
   if (acc == 0x7fffffffu && iterations == 0xffffffffu) target.Store(16, acc);
  } else if (operation == 8) {
   // GPU-armed handoff: record whether the watch saw the capture before the network was released.
-  flag.InterlockedCompareExchange(0, 0, 0, value); target.Store(12, value != 0 ? 1 : 0); DeviceMemoryBarrier();
+  // Seen only if the game claimed the gate (its copies ran) and then published the capture.
+  uint gate = 0; flag.InterlockedCompareExchange(4, 0, 0, gate);
+  flag.InterlockedCompareExchange(0, 0, 0, value); target.Store(12, value != 0 && gate == 1 ? 1 : 0); target.Store(20, gate); DeviceMemoryBarrier();
  } else if (operation == 9) {
   // GPU-armed handoff done: network output is valid only if the capture was seen first; else bypass (original).
   uint seen = target.Load(12); flag.InterlockedExchange(0, seen != 0 ? 1 : 2, value); DeviceMemoryBarrier();
@@ -337,7 +355,27 @@ cbuffer Size : register(b0) { uint width; uint height; }
                              noNetwork ? nullptr : std::move(sideStamps), side.Get());
         gameStamps.reset(); sideStamps.reset();
     }
-    void RecordCapture(ID3D12GraphicsCommandList* list) { Op(list, 1, decision.Get()); UavBarrier(list, capture.Get()); DiagStamp(list, FrameDiag::kGpuCapEnd); }
+    // Fault-injection (tests only): ALU-only game-queue delay dispatches before the input gate.
+    UINT testInputDelay = 0;
+    // NrGpuHandoff only: claim the input gate, then predicate the input copies on the claim. If the side
+    // watch expired first it closed the gate, so the copies are skipped and the network (whose output
+    // is then discarded) never races the game writing its input. Call before RecordInputs.
+    void BeginInputs(ID3D12GraphicsCommandList* list) {
+        inputGated = false;
+        if (!gpuArmed) return;
+        for (UINT i = 0; i < testInputDelay; ++i) { Op(list, 10, sample.Get(), 1u << 22); UavBarrier(list, nullptr); }
+        Op(list, 11, inputGate.Get()); UavBarrier(list, inputGate.Get());
+        Barrier(list, inputGate.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_PREDICATION);
+        list->SetPredication(inputGate.Get(), 0, D3D12_PREDICATION_OP_EQUAL_ZERO);
+        inputGated = true;
+    }
+    void RecordCapture(ID3D12GraphicsCommandList* list) {
+        if (inputGated) {
+            list->SetPredication(nullptr, 0, D3D12_PREDICATION_OP_EQUAL_ZERO);
+            Barrier(list, inputGate.Get(), D3D12_RESOURCE_STATE_PREDICATION, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            inputGated = false;
+        }
+        Op(list, 1, decision.Get()); UavBarrier(list, capture.Get()); DiagStamp(list, FrameDiag::kGpuCapEnd); }
     void RecordWait(ID3D12GraphicsCommandList* list, UINT slices = kWaitSlices, UINT iterations = kWaitIterations) {
         // NrSpinSlices: same total budget (slices x iterations) cut into fewer/more dispatches.
         if (spinSlices && slices == kWaitSlices && iterations == kWaitIterations) {
@@ -376,6 +414,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
     void PrepareReuse() {
         captureEvents.clear(); started = false; decisionReadable = false; uncertain = noNetwork = false;
         diag = {}; captureBackoff = 0; gpuArmed = false; spinPollDelay = spinSlices = watchSlices = watchStartDelay = 0; activityToken = 0; reused = true;
+        inputGated = armedOutcomeReadable = false;
     }
     bool RetirementUncertain() const { return uncertain || sideUncertain; }
     // Set under RecordingMutex from the lease that admitted this recording.
@@ -417,7 +456,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
         captureEvents.clear();
         gameQueue = game;
         started = true; uncertain = noNetwork = false; sideUncertain = true;
-        finalValue = gameValue = 0; gameFence.Reset();
+        finalValue = gameValue = 0; gameFence.Reset(); armedOutcomeReadable = false;
         scheduled.store(false, std::memory_order_release);
         Check(sampleAlloc->Reset(), "inline reset allocator"); Check(sampleList->Reset(sampleAlloc.Get(), nullptr), "inline reset list");
         Op(sampleList.Get(), 0, sample.Get(), bypass ? 2 : 0); UavBarrier(sampleList.Get(), control.Get());
@@ -519,6 +558,15 @@ cbuffer Size : register(b0) { uint width; uint height; }
     // capture flag -> record seen/unseen. The caller then enqueues the network behind it on the same queue;
     // NetworkQueued's done op publishes 1 (apply) only if the watch saw the capture, else 2 (original frame).
     bool GpuArmed() const { return armValue != 0; }
+    bool armedOutcomeReadable = false;
+    // After completion of an armed frame: seen (network output valid) and gate (1 claimed, 2 closed).
+    bool ArmedOutcome(UINT& seen, UINT& gate) const {
+        if (!Complete() || !armedOutcomeReadable) return false;
+        void* p = nullptr; D3D12_RANGE range {0, 32};
+        if (FAILED(readback->Map(0, &range, &p)) || !p) return false;
+        seen = static_cast<const UINT*>(p)[3]; gate = static_cast<const UINT*>(p)[5];
+        D3D12_RANGE none {0, 0}; readback->Unmap(0, &none); return true;
+    }
     bool ArmCapture() {
         if (!armValue || !armFence) return false;
         if (diag.active) { diag.capturePolls = 0; diag.captureBackoffUsFinal = 0; diag.captureBackoffMode = "gpu"; diag.handoff = "gpu"; }
@@ -530,10 +578,16 @@ cbuffer Size : register(b0) { uint width; uint height; }
             Check(armAlloc->Reset(), "inline arm allocator reset"); Check(armList->Reset(armAlloc.Get(), nullptr), "inline arm list reset");
         }
         // NrWatchStartDelay: ALU-only dispatches (no memory traffic) before the watch starts polling.
+        // The UAV barrier makes the watch start only after the delay dispatches complete.
         for (UINT i = 0; i < watchStartDelay; ++i) Op(armList.Get(), 10, sample.Get(), kWaitIterations);
+        if (watchStartDelay) UavBarrier(armList.Get(), nullptr);
         // NrWatchSlices: same watch budget in shorter dispatches (shorter-resident waves).
         const UINT ws = watchSlices ? watchSlices : kWaitSlices, wi = UINT(UINT64(kWaitSlices) * kWaitIterations / ws);
         for (UINT i = 0; i < ws; ++i) { Op(armList.Get(), 7, sample.Get(), wi); UavBarrier(armList.Get(), capture.Get()); }
+        // Close the input gate. A game that claimed it is copying; watch (bounded) for its capture.
+        // A game that has not claimed it will skip its input copies, so a missed capture cannot race.
+        Op(armList.Get(), 12, sample.Get()); UavBarrier(armList.Get(), capture.Get());
+        for (UINT i = 0; i < kGateSettleSlices; ++i) { Op(armList.Get(), 13, sample.Get(), kWaitIterations); UavBarrier(armList.Get(), capture.Get()); }
         Op(armList.Get(), 8, sample.Get()); UavBarrier(armList.Get(), sample.Get());
         Check(armList->Close(), "inline arm close");
         sideUncertain = true;
@@ -557,7 +611,14 @@ cbuffer Size : register(b0) { uint width; uint height; }
             if (diag.active && !sideStamps) sideStamps = FrameDiag::GpuStamps::Acquire(device.Get(), 1);
             const bool stamp = diag.active && sideStamps;
             if (stamp) sideStamps->Stamp(doneList.Get(), 0);
-            if (armValue) { UavBarrier(doneList.Get(), sample.Get()); Op(doneList.Get(), 9, sample.Get()); }
+            if (armValue) {
+                UavBarrier(doneList.Get(), sample.Get()); Op(doneList.Get(), 9, sample.Get()); UavBarrier(doneList.Get(), sample.Get());
+                // {seen, gate} for ArmedOutcome (readback is unused by armed frames).
+                Barrier(doneList.Get(), sample.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+                doneList->CopyBufferRegion(readback.Get(), 0, sample.Get(), 0, 32);
+                Barrier(doneList.Get(), sample.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                armedOutcomeReadable = true;
+            }
             else Op(doneList.Get(), 2, sample.Get());
             UavBarrier(doneList.Get(), control.Get());
             if (stamp) sideStamps->Resolve(doneList.Get());

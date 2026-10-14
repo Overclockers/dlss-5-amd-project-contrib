@@ -55,7 +55,7 @@ inline void Begin(Counters& c, const char* backend, uint64_t frameId, unsigned w
     GameWait::Snapshot gw;
     if (GameWait::Last(gw)) {
         c.gw = true; c.gwPresent = gw.present; c.gwWaits = gw.waits; c.gwEcls = gw.ecls;
-        c.gwPresentMs = gw.presentMs; c.gwPresentCpuMs = gw.presentCpuMs; c.gwToEclMs = gw.toEclMs;
+        c.gwPresentMs = gw.presentMs; c.gwPresentWallMs = gw.presentWallMs; c.gwBeginQpc = gw.beginQpc; c.gwEndQpc = gw.endQpc; c.gwToEclMs = gw.toEclMs;
         c.gwToWaitMs = gw.toWaitMs; c.gwWaitMs = gw.waitMs;
     }
 }

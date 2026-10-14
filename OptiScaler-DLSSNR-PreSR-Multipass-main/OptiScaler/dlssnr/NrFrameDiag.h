@@ -196,7 +196,8 @@ struct Counters
     // NrGameWaitDiag: last closed game-thread Present interval (gw = 0 when off).
     bool gw = false;
     unsigned long long gwPresent = 0; unsigned gwWaits = 0, gwEcls = 0;
-    double gwPresentMs = 0, gwPresentCpuMs = 0, gwToEclMs = -1, gwToWaitMs = -1, gwWaitMs = 0;
+    long long gwBeginQpc = 0, gwEndQpc = 0;
+    double gwPresentMs = 0, gwPresentWallMs = 0, gwToEclMs = -1, gwToWaitMs = -1, gwWaitMs = 0;
 };
 
 inline void Emit(const Counters& c) noexcept
@@ -255,8 +256,8 @@ inline void Emit(const Counters& c) noexcept
         int len = n;
         if (c.gw) {
             const int m = std::snprintf(line + len, sizeof line - size_t(len),
-                " gw_present=%llu gw_present_ms=%.3f gw_present_cpu_ms=%.3f gw_to_ecl_ms=%.3f gw_to_wait_ms=%.3f gw_wait_ms=%.3f gw_waits=%u gw_ecls=%u",
-                c.gwPresent, c.gwPresentMs, c.gwPresentCpuMs, c.gwToEclMs, c.gwToWaitMs, c.gwWaitMs, c.gwWaits, c.gwEcls);
+                " gw_present=%llu gw_begin_qpc=%lld gw_end_qpc=%lld gw_present_ms=%.3f gw_present_wall_ms=%.3f gw_to_ecl_ms=%.3f gw_to_wait_ms=%.3f gw_wait_ms=%.3f gw_waits=%u gw_ecls=%u",
+                c.gwPresent, c.gwBeginQpc, c.gwEndQpc, c.gwPresentMs, c.gwPresentWallMs, c.gwToEclMs, c.gwToWaitMs, c.gwWaitMs, c.gwWaits, c.gwEcls);
             if (m > 0 && len + m < int(sizeof line)) len += m;
         }
         const auto path = ModuleDirectory() / L"NrFrameDiag.log";

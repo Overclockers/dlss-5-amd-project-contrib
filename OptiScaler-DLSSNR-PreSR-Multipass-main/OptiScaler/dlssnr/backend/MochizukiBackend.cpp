@@ -415,6 +415,8 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
         if (auto stamps = FrameDiag::GpuStamps::Acquire(p->device.Get(), FrameDiag::kGpuStampCount))
         { lease->splitStamps = stamps; stamps->Stamp(cmd, FrameDiag::kGpuCapBegin); }
     }
+    // NrGpuHandoff: the input copies run only if the game claims the gate before the side watch closes it.
+    if (inlineResources) inlineResources->BeginInputs(cmd);
     if (p->api.RecordInputs(p->owner->context, job.handle, cmd) != LMXXF_NR_OK)
     { p->failed = true; p->Error("input recording failed"); return nullptr; }
     if (inlineResources) { inlineResources->RecordCapture(cmd); inlineResources->RecordWait(cmd); }
