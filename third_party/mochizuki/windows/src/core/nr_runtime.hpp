@@ -189,6 +189,10 @@ struct RuntimeConfig {
     // compute pack (runtime_pack_*) when it is not stored in the frame's format. Off: the scaled path
     // refuses compute recording as before.
     bool compute_downscale = false;
+    // With first_pass_output: also build a compute pack of pass 0 into the frame's own format
+    // (first_pass_packed / record_first_pack), so the host can export it without a blit. Formats
+    // without a pack keep first_pass_packed null.
+    bool compute_export = false;
     // Optional full-frame RGBA32F of pass 0, recorded before later passes
     // overwrite it. Requires ordinary multi-pass transfer (no native compose,
     // no mask, max_passes >= 2). The image lives as long as the runtime.
@@ -488,6 +492,12 @@ public:
     // Owned by the runtime. Valid until the runtime is destroyed, including while
     // a recording that writes it is still executing.
     VkImage first_pass_output() const;
+    // RuntimeConfig::compute_export: pass 0 in the frame's format (or its 32-bit copy class, R32_UINT),
+    // GENERAL, for a copy out after record_first_pack; null when not built.
+    VkImage first_pass_packed() const;
+    // Packs the valid w x h of first_pass_output into first_pass_packed on the compute family and leaves
+    // it visible to a transfer read. Does nothing when first_pass_packed is null.
+    void record_first_pack(VkCommandBuffer cmd, uint32_t w, uint32_t h);
     // The preprocess meter as the GPU last left it: {smoothed EV, this frame's
     // target EV}, bias not included. For the log; NaN until it has metered.
     std::pair<float, float> preprocess_meter() const;

@@ -24,6 +24,10 @@
 // with runtime_downscale (the blit's own taps), and packs the full-size answer on compute when it is not stored in
 // the frame's format, so such inline frames can keep the whole chain on compute. Rebuilds the network when scaled.
 #define MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_DOWNSCALE (1u << 13)
+// NrInlineComputeExport (default off): the first-pass export (multi-layer NR) packs pass 0 into the frame's format on
+// compute (runtime_pack_*) instead of a blit, so such inline frames can keep the whole chain on compute. RGBA16F,
+// R11G11B10, RGBA8/BGRA8 UNORM and RGB10A2; other formats keep the blit. Rebuilds the network when exporting.
+#define MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_EXPORT (1u << 14)
 typedef struct MochizukiNrFrameInfo
 {
     uint32_t struct_size;

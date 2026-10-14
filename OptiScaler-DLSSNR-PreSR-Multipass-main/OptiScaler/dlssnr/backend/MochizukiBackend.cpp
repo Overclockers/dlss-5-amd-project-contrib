@@ -326,7 +326,8 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
         (FrameDiag::Enabled() ? MOCHIZUKI_NR_FRAME_FLAG_STAGE_TIMING : 0) |
         (inlineMode && Config::Instance()->NrInlineComputeConvert.value_or_default() ? MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_CONVERT : 0) |
         (Config::Instance()->NrInlineComputeMotion.value_or_default() ? MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_MOTION : 0) |
-        (Config::Instance()->NrInlineComputeDownscale.value_or_default() ? MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_DOWNSCALE : 0);
+        (Config::Instance()->NrInlineComputeDownscale.value_or_default() ? MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_DOWNSCALE : 0) |
+        (Config::Instance()->NrInlineComputeExport.value_or_default() ? MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_EXPORT : 0);
     const auto desc = input.colour->GetDesc();
     frame.color = input.colour;
     frame.color_width = input.width && input.width <= desc.Width ? input.width : UINT(desc.Width);

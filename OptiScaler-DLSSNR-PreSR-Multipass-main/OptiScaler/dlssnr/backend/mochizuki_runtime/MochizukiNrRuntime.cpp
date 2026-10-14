@@ -2035,13 +2035,15 @@ struct NetworkKey
     bool aco = false; // this build imports the ACO network; the device must already expose pipeline binaries
     bool computeConvert = false; // NrInlineComputeConvert on a listed-format key (RuntimeConfig::compute_convert_colour)
     bool computeDownscale = false; // NrInlineComputeDownscale on a key with scale < 1 (RuntimeConfig::compute_downscale)
+    bool computeExport = false; // NrInlineComputeExport on a first-pass key (RuntimeConfig::compute_export)
     bool operator==(const NetworkKey&) const = default;
     bool SameModel(const NetworkKey& other) const
     {
         return width == other.width && height == other.height && format == other.format &&
                scale == other.scale && linear == other.linear && prep == other.prep &&
                compactTransfer == other.compactTransfer && firstPass == other.firstPass && aco == other.aco &&
-               computeConvert == other.computeConvert && computeDownscale == other.computeDownscale;
+               computeConvert == other.computeConvert && computeDownscale == other.computeDownscale &&
+               computeExport == other.computeExport;
     }
 };
 
@@ -4215,6 +4217,7 @@ struct Session
             config.first_pass_output = key.firstPass;
             config.compute_convert_colour = key.computeConvert;
             config.compute_downscale = key.computeDownscale;
+            config.compute_export = key.computeExport;
             // The linear path's frame is a proxy made with the soft knee, which the preprocess undoes first.
             config.preprocess_unknee = key.linear;
             nr::TemporalConfig temporal;
@@ -5041,7 +5044,7 @@ struct Session
         {
             if (computeChainOff) chainWhy = computeChainOff;
             else if (hooks.inlineChain == 3) chainWhy = "MZ_TEST_INLINE_CHAIN=3 (test hook)";
-            else if (job.firstPass) chainWhy = "the first-pass export needs a blit";
+            else if (job.firstPass && !runtime->first_pass_packed()) chainWhy = "the first-pass export needs a blit";
             else if (motion && job.motionPath == Job::Rescaled && !geometry.computeMotion)
                 chainWhy = "the motion vectors are rescaled by a blit";
             // mask: the host binds no explicit ControlMaskFrame (record/record_engine pass none);
@@ -5304,7 +5307,15 @@ struct Session
                 throw;
             }
         }
-        if (job.firstPass)
+        if (job.firstPass && runtime->first_pass_packed())
+        {
+            // NrInlineComputeExport: pass 0 packed into the frame's format on compute, then copied out.
+            runtime->record_first_pack(c, w, h);
+            VkBufferImageCopy copy = colourFootprint.vk;
+            copy.imageExtent = { w, h, 1 };
+            vkCmdCopyImageToBuffer(c, runtime->first_pass_packed(), VK_IMAGE_LAYOUT_GENERAL, firstOutput.buffer, 1, &copy);
+        }
+        else if (job.firstPass)
         {
             const VkImage first = runtime->first_pass_output();
             if (!first) throw std::runtime_error("first pass output missing");
@@ -5803,7 +5814,8 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
             const bool computeConvert = (info->flags & MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_CONVERT) && convertListed;
             const NetworkKey key { g.width, g.height, keyFormat, scale, maxPasses, linear, s->prepWanted,
                                     compactTransfer, g.firstPass, aco, computeConvert,
-                                    (info->flags & MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_DOWNSCALE) && scale < 1.f };
+                                    (info->flags & MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_DOWNSCALE) && scale < 1.f,
+                                    (info->flags & MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_EXPORT) && g.firstPass };
             std::string why;
             s->infoRequestedPasses = passes;
             if (!s->EnsureNetwork(key, g, colour, why, maxPassesSetting == 0, drsMode != 0 && !g.bucketed))

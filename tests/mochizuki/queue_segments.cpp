@@ -30,6 +30,10 @@ int wmain(int argc,wchar_t**argv) try {
     // scaled / scaledr11: model scale 0.5 with NrInlineComputeDownscale (RGBA16F packs on compute; R11G11B10 likewise).
     const bool scaledR11=argc>3&&wcscmp(argv[3],L"scaledr11")==0;
     const bool scaled=scaledR11||(argc>3&&wcscmp(argv[3],L"scaled")==0);
+    // multi: two layers, no motion. export: two layers with the first-layer export and NrInlineComputeExport, after
+    // three split frames (the export is offered from the second served frame on).
+    const bool exportMode=argc>3&&wcscmp(argv[3],L"export")==0;
+    const bool multi=exportMode||(argc>3&&wcscmp(argv[3],L"multi")==0);
     if(motionMode){
         auto defaults=reinterpret_cast<PFN_MochizukiNrGetControlDefaults>(GetProcAddress(dll,"MochizukiNrGetControlDefaults"));
         auto set=reinterpret_cast<PFN_MochizukiNrSetControls>(GetProcAddress(dll,"MochizukiNrSetControls"));
@@ -43,14 +47,29 @@ int wmain(int argc,wchar_t**argv) try {
     MochizukiNrFrameInfo f{};f.struct_size=sizeof f;f.frame_id=1;f.color=frame.color.Get();f.color_width=f.color_height=256;
     f.color_state=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;f.flags=LMXXF_NR_FRAME_FLAG_STRENGTH|MOCHIZUKI_NR_FRAME_FLAG_INLINE_EXECUTION|(convert?MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_CONVERT:0u);
     f.transfer_strength=f.color_strength=f.model_scale=1;f.passes=1;
+    if(multi)f.passes=2;
+    if(exportMode)f.flags|=LMXXF_NR_FRAME_FLAG_FIRST_PASS|MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_EXPORT;
     if(scaled){f.model_scale=.5f;f.flags|=MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_DOWNSCALE;}
     if(motionMode){
         f.color_width=240;f.motion=mv.color.Get();f.motion_state=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
         f.motion_width=f.motion_height=128;f.motion_scale_x=f.motion_scale_y=1;
         f.flags|=MOCHIZUKI_NR_FRAME_FLAG_TEMPORAL|MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_MOTION;
     }
+    uint64_t fence=2;
+    for(int i=0;exportMode&&i<3;i++){
+        // Split frames (no inline flag, so the phase-failure hook does not apply): complete, certified, collected.
+        MochizukiNrFrameInfo sf=f;sf.frame_id=100+i;sf.flags&=~MOCHIZUKI_NR_FRAME_FLAG_INLINE_EXECUTION;
+        LmxxfNrJob sj{sizeof sj};const auto until=GetTickCount64()+120000;
+        for(;;){auto rc=prepare(context,&sf,&sj);if(!rc)break;Require(rc==LMXXF_NR_UNAVAILABLE&&GetTickCount64()<until,"prepare (split)");Sleep(20);}
+        List si(device.Get()),so(device.Get());Rc(api.RecordInputs(context,sj.handle,si.cmd.Get()));Rc(api.RecordOutputs(context,sj.handle,so.cmd.Get()));
+        Hr(si.cmd->Close());Hr(so.cmd->Close());Rc(api.BeginRecordingExecution(context,sj.handle,queue.Get()));Submit(queue.Get(),si);
+        Rc(api.EnqueueHip(context,sj.handle,queue.Get()));Submit(queue.Get(),so);auto signal=queue->Signal(tail.Get(),++fence);
+        Rc(api.EndRecordingExecution(context,sj.handle,queue.Get(),3,tail.Get(),fence,signal));Wait(tail.Get(),fence);
+        Rc(api.InvalidateRecording(context,sj.handle));Rc(api.CollectRecording(context,sj.handle));
+    }
     LmxxfNrJob job{sizeof job};const auto deadline=GetTickCount64()+120000;
     for(;;){auto rc=prepare(context,&f,&job);if(!rc)break;Require(rc==LMXXF_NR_UNAVAILABLE&&GetTickCount64()<deadline,"prepare");Sleep(20);}
+    Require(!exportMode || job.first_pass_output!=nullptr,"the first-layer export was not offered");
     List in(device.Get()),out(device.Get());Rc(api.RecordInputs(context,job.handle,in.cmd.Get()));Rc(api.RecordOutputs(context,job.handle,out.cmd.Get()));Hr(in.cmd->Close());Hr(out.cmd->Close());
     Rc(api.BeginRecordingExecution(context,job.handle,queue.Get()));Submit(queue.Get(),in);
     auto rc=api.EnqueueHip(context,job.handle,queue.Get());
@@ -68,11 +87,12 @@ int wmain(int argc,wchar_t**argv) try {
     Require(rc!=LMXXF_NR_OK && strstr(error,"inline network phase")!=nullptr,"injected partial submission was not reported");
     Require(!unorm8 || strstr(error,"phase 1/1")!=nullptr,"UNORM8 inline frame did not run as one compute phase");
     Require(!r11 || strstr(error,"phase 1/1")!=nullptr,"B10G11R11 inline frame (compute convert) did not run as one compute phase");
+    Require(!multi || strstr(error,"phase 1/1")!=nullptr,"two-layer inline frame (with or without compute export) did not run as one compute phase");
     Require(!scaled || strstr(error,"phase 1/1")!=nullptr,"model-scale 0.5 inline frame (compute downscale) did not run as one compute phase");
     Require(!motionMode || strstr(error,"phase 1/1")!=nullptr,"rescaled-motion inline frame (compute motion) did not run as one compute phase");
     Require(convertMode<0 || strstr(error,"phase 1/1")!=nullptr,"compute-convert inline frame did not run as one compute phase");
-    Hr(queue->Signal(tail.Get(),2));Wait(tail.Get(),2);
-    api.EndRecordingExecution(context,job.handle,queue.Get(),LMXXF_NR_SUBMITTED_PRODUCER,tail.Get(),2,S_OK);
+    ++fence;Hr(queue->Signal(tail.Get(),fence));Wait(tail.Get(),fence);
+    api.EndRecordingExecution(context,job.handle,queue.Get(),LMXXF_NR_SUBMITTED_PRODUCER,tail.Get(),fence,S_OK);
     Rc(api.InvalidateRecording(context,job.handle));
     Require(api.CollectRecording(context,job.handle)==LMXXF_NR_UNAVAILABLE,"D3D12 tail alone certified partial Vulkan chain");
     Require(api.Destroy(context)==LMXXF_NR_UNAVAILABLE,"partial chain released resources without Vulkan proof");
