@@ -36,14 +36,21 @@
 - 新诊断 NrGameWaitDiag（菜单 Game thread wait timing，需 NrFrameDiag），字段 gw_*。已测 16（split）/17（armed+poll16），结果见第 6 节。
 
 ## 6. 剩余 inline 慢帧：游戏线程等待（gw_*，16/17 段）
-- 注意：16/17 都在 HDR 下录（IsHdr true，DXGI 10），绝对值不能直接与 08–15 比，同局 split/inline 相对差有效。
+- 注意：gw_* 数字来自 HDR 下的 16/17 段（IsHdr true，DXGI 10），保留不改；绝对值不能直接与 08–15 比，同局 split/inline 相对差有效。
 - inline 慢帧（显示间隔 >18.5 ms，约 16%）to_ecl 多 ~3.0 ms = fence 等待 +1.6 ms（5.08 vs 3.50）+ 等待后游戏 CPU +1.65 ms。
 - present_cpu：inline 每帧 1.72 vs split 0.85 ms（+0.9 ms CPU，每帧都有）。
 - 慢帧与正常帧的 NR GPU 各段相同；显示 p95 16.56 vs split ~16.6 ms，画面看不出；下一帧补回。
 - 结论：影响小，暂搁置。后续可做：(a) 记录游戏等待的 fence 值/放行时间，与 qpc_game_wait_exit 对齐；(b) 拆分 Present +0.9 ms。先在 SDR 下复核。
 
-## 7. HDR 发现（16/17 段 split 变慢）
-- 16/17 为 HDR：NR 输入 16 位浮点 + linear 输入编码；split GPUBusy 比 SDR 段慢 ~0.5 ms。
-- 不是回归，也不是 FF7 Plan A（日志无 'plan A: colour format changed'，'conversion passes ready' 只是启动准备信息）。
-- Input encoding=Encoded 更快，但把 HDR 当 SDR 喂给网络，不建议。
-- NrFrameDiag 对比（NR 1920x1080，split 中位）：SDR capture 0.033 / core 6.004 / handoff 0.362 / writeback 0.013 / cap→resume 6.370 / cpu_record 1.236；HDR 0.052 / 6.219 / 0.372 / 0.023 / 6.592 / 1.286。NR 计时窗内只多 ~0.22 ms（基本在 core），其余 ~0.3 ms 在 NR 时间戳之外（可能是游戏自身 HDR 输出）。
+## 7. HDR vs SDR（18–22，纠正此前「HDR 让 split 慢 ~0.5 ms」）
+- 包 2c10ad5e 在 NrFrameDiag 增加 `gpu_input_encode_ms`（未跑记 -1）和 `gpu_transfer_ms`（两者都在 `gpu_core_ms` 内；可能落后几帧，只看中位）。
+- PresentMon：
+  - 18 HDR NR 关：p50 10.45 / GPUBusy 10.18
+  - 19 HDR split：16.58 / 16.55
+  - 20 SDR NR 关：10.33 / 10.22（同局先录 21 再录 20）
+  - 21 SDR split：16.64 / 16.59
+  - 22 SDR split 重录：16.17 / 16.13（61.8 FPS）
+- 游戏自身 HDR 成本 ≈ 0（GPUBusy 10.18 vs 10.22）；帧级 NR HDR 成本 ≈ 0.00（两边都 +6.37 ms）。
+- NrFrameDiag split 中位 HDR vs SDR：gpu_core 6.214 vs 6.030（+0.184）= input encode 0.049 + transfer +0.081（0.151 vs 0.070）+ 余约 0.054（16 位网络本身）；capture 0.051 vs 0.032；handoff 0.336 vs 0.287；writeback 0.023 vs 0.014；capture_to_resume 6.549 vs 6.321。Kenny overlay NR 时间 SDR 下约 6.0x ms，与此一致。
+- 结论：HDR 在 NR 内多约 0.18 ms，是预期工作（编码、transfer 混回、16 位流量），不是 bug；可优化空间约 0.05–0.1 ms，现阶段不值得。同包 split GPUBusy 各次在 16.13–16.59（对照段 14 的 15.93），此前「新包拖慢 split」是 NR 以外的局间波动，不是代码。HDR 下 Input encoding=Encoded 更快，但把 HDR 当 SDR 喂网络，不建议。
+- 日志归档：`Desktop\nr-pm\hdr-18-19`、`sdr-20-21`。
