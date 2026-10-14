@@ -465,8 +465,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             }
             MochizukiTemporal.set_from_config(readBool(CfgKey::kSection, CfgKey::MochizukiTemporal));
             MochizukiProxyFallbackEnabled.set_from_config(readBool(CfgKey::kSection, CfgKey::MochizukiProxyFallbackEnabled));
-            MochizukiUseGameExposure.set_from_config(readBool(CfgKey::kSection, CfgKey::MochizukiUseGameExposure));
-            MochizukiAutoExposureMeter.set_from_config(readBool(CfgKey::kSection, CfgKey::MochizukiAutoExposureMeter));
+            MochizukiWhitePointSource.set_from_config(readUInt(CfgKey::kSection, CfgKey::MochizukiWhitePointSource));
             LmxxfModelHistory.set_from_config(readBool(CfgKey::kSection, CfgKey::LmxxfModelHistory));
             MochizukiHistoryStrength.set_from_config(readFloat(CfgKey::kSection, CfgKey::MochizukiHistoryStrength));
             MochizukiPreprocess.set_from_config(readBool(CfgKey::kSection, CfgKey::MochizukiPreprocess));
@@ -1756,8 +1755,7 @@ bool Config::SaveIni()
     ini.SetValue(CfgKey::kSection, CfgKey::MochizukiPasses, GetIntValue(Instance()->MochizukiPasses.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::MochizukiTemporal, GetBoolValue(Instance()->MochizukiTemporal.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::MochizukiProxyFallbackEnabled, GetBoolValue(Instance()->MochizukiProxyFallbackEnabled.value_for_config()).c_str());
-    ini.SetValue(CfgKey::kSection, CfgKey::MochizukiUseGameExposure, GetBoolValue(Instance()->MochizukiUseGameExposure.value_for_config()).c_str());
-    ini.SetValue(CfgKey::kSection, CfgKey::MochizukiAutoExposureMeter, GetBoolValue(Instance()->MochizukiAutoExposureMeter.value_for_config()).c_str());
+    ini.SetValue(CfgKey::kSection, CfgKey::MochizukiWhitePointSource, GetIntValue(Instance()->MochizukiWhitePointSource.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::LmxxfModelHistory, GetBoolValue(Instance()->LmxxfModelHistory.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::MochizukiHistoryStrength, GetFloatValue(Instance()->MochizukiHistoryStrength.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::MochizukiPreprocess, GetBoolValue(Instance()->MochizukiPreprocess.value_for_config()).c_str());

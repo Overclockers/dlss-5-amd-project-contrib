@@ -14,7 +14,7 @@
 //
 // The value feeds the existing "white = controls.white / gameExposure" path in MochizukiNrRuntime.cpp, so no ABI
 // field and no third_party change is needed: MochizukiWhitePoint stays the paper-white trim. The meter only runs
-// when the host turns it on (MochizukiNrSetAutoExposure, INI MochizukiAutoExposureMeter, default off), so a game
+// when the host turns it on (MochizukiNrSetAutoExposure, INI MochizukiWhitePointSource 2/3, default off), so a game
 // that already looks right keeps exactly the level it had.
 //
 // Robustness (integration of PR #9): 64x64 samples (4x4 per thread), a two-stage reduction that first takes the

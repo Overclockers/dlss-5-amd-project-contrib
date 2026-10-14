@@ -242,14 +242,14 @@ Missing, alias-less and corrupt bundles each completed one native frame
 (`ACO_FALLBACK_OK`). Package and uninstall ownership is the exact 220-path pin
 `tools/install/mochizuki-owned.txt`. No game scene was compared.
 
-Both exposure sources are opt-in and default off, so with neither set the white point is the
-manual setting exactly as before. `MochizukiUseGameExposure=true` hands the runtime the game's
+`MochizukiWhitePointSource` (0 off, default; 1 game; 2 meter; 3 auto) picks the exposure sources.
+With 0 the white point is the manual setting exactly as before. Modes 1 and 3 hand the runtime the game's
 1x1 exposure texture (`MochizukiNrSetExposureTexture`): its texel is copied to a readback in the
 game's own list and picked up one frame later behind the recording's completion fence, and the
 level is `texel * DLSS_Exposure_Scale / DLSS_Pre_Exposure` - the expression the lmxxf codec
 evaluates on the GPU. Without a texture, a pre-exposure other than 1 gives `1 / pre-exposure`
-(`MochizukiNrSetExposure`). `MochizukiAutoExposureMeter=true` lets the runtime meter a linear
-frame for which the game supplies neither - every Monster Hunter Wilds frame so far, where the
+(`MochizukiNrSetExposure`). Modes 2 and 3 let the runtime meter a linear frame (mode 2 ignores the
+game's exposure; mode 3 only when the game supplies neither) - every Monster Hunter Wilds frame so far, where the
 DLSS-NR exposure scan adopts no candidate: one 16x16-thread dispatch over a 64x64 grid, a
 highlight-clipped mean (arithmetic mean of min(luma, 16x log-average)), read one frame later
 through the same fence, blended in the log domain with a 1/16 EV deadband and clamped to +-6 EV.

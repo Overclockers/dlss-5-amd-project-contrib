@@ -346,10 +346,14 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     // Exposure for the linear encode, same semantics as the lmxxf lane (native_codec_encode.hlsl EffectivePaperWhite):
     // a usable game exposure texture gives exposure = texel * DLSS_Exposure_Scale / DLSS_Pre_Exposure (read back by
     // the runtime one frame late); without one, a host pre-exposure != 1 gives exposure = 1 / pre-exposure. The
-    // runtime divides the white point by it. Both are opt-in (MochizukiUseGameExposure), as is the runtime's own meter
-    // for a frame with neither (MochizukiAutoExposureMeter); with both off the white point is the manual setting.
+    // runtime divides the white point by it. MochizukiWhitePointSource picks the sources: 0 none (manual white point),
+    // 1 game only, 2 the runtime's own meter only (the game's exposure is not handed over, so no texel readback),
+    // 3 both (the runtime prefers the game's and runs the meter only for a frame with neither). Modes 0 and 1 keep
+    // the meter off, so it records nothing.
     {
-        const bool useGame = cfg->MochizukiUseGameExposure.value_or_default();
+        const uint32_t source = cfg->MochizukiWhitePointSource.value_or_default();
+        const bool useGame = source == 1u || source == 3u;
+        const bool useMeter = source == 2u || source == 3u;
         void* texture = useGame ? static_cast<void*>(input.exposure) : nullptr;
         const float pre = std::isfinite(input.preExposure) && input.preExposure > 0.f ? input.preExposure : 1.f;
         const float scale = std::isfinite(input.exposureScale) && input.exposureScale > 0.f ? input.exposureScale : 1.f;
@@ -361,7 +365,7 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
             p->setExposure(p->owner->context,
                            useGame && !texture && std::fabs(pre - 1.f) > 1e-3f ? 1.f / pre : 0.f);
         if (p->setAutoExposure)
-            p->setAutoExposure(p->owner->context, cfg->MochizukiAutoExposureMeter.value_or_default() ? 1u : 0u);
+            p->setAutoExposure(p->owner->context, useMeter ? 1u : 0u);
     }
     LmxxfNrJob job {sizeof job};
     if (p->prepare(p->owner->context, &frame, &job) != LMXXF_NR_OK)

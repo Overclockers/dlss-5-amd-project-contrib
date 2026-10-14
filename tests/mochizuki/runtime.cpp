@@ -19,7 +19,7 @@ int wmain(int argc,wchar_t**argv) try {
     // The level the game shows the frame at. The runtime exports it and nothing has ever called it, so the image
     // mode names it on the command line to see what the network does when the frame is levelled like the other lanes.
     auto setExposure=reinterpret_cast<PFN_MochizukiNrSetExposure>(GetProcAddress(dll,"MochizukiNrSetExposure"));
-    // The meter is opt-in (host INI MochizukiAutoExposureMeter); the image mode turns it on when no exposure is named.
+    // The meter is opt-in (host INI MochizukiWhitePointSource 2/3); the image mode turns it on when no exposure is named.
     auto setAutoExposure=reinterpret_cast<PFN_MochizukiNrSetAutoExposure>(GetProcAddress(dll,"MochizukiNrSetAutoExposure"));
     Require(getProgress!=nullptr,"missing build progress export");
     MochizukiNrBuildProgress invalidProgress {sizeof invalidProgress};

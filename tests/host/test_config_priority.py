@@ -38,8 +38,7 @@ class ConfigPriorityTests(unittest.TestCase):
         source += '\nstruct Config {\n' + '\n'.join(fields) + '''
 CustomOptional<bool> MochizukiUnlockPasses{false};
 CustomOptional<uint32_t> MochizukiLayerMode{0};
-CustomOptional<bool> MochizukiUseGameExposure{false};
-CustomOptional<bool> MochizukiAutoExposureMeter{false};
+CustomOptional<uint32_t> MochizukiWhitePointSource{0};
 };
 namespace PipelineUi { enum class Section {Input, Model, Output}; }
 namespace AmdBridge {void InvalidateHistory(){}}

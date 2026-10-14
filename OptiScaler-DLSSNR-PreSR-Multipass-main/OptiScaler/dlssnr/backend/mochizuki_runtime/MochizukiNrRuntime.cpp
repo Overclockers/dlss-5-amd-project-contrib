@@ -2477,7 +2477,7 @@ struct Session
     // point of the frame below is put through. 0 until the first measurement lands, and it stays the game's exposure
     // that wins while the host supplies one.
     std::atomic<float> meteredExposure { 0.f };
-    // MochizukiNrSetAutoExposure: the host's switch for the meter above (INI MochizukiAutoExposureMeter). Off by
+    // MochizukiNrSetAutoExposure: the host's switch for the meter above (INI MochizukiWhitePointSource 2/3). Off by
     // default, so a session whose host never calls it keeps the manual white point exactly as before PR #9.
     std::atomic<bool> meterEnabled { false };
     // MochizukiNrSetExposureTexture: the game's 1x1 exposure texture with its scale and pre-exposure. Its texel is
@@ -6356,7 +6356,7 @@ extern "C" __declspec(dllexport) int32_t MochizukiNrSetExposure(void* context, f
     return LMXXF_NR_OK;
 }
 
-// The host's switch for the lane's own meter (INI MochizukiAutoExposureMeter). Off unless called with nonzero.
+// The host's switch for the lane's own meter (INI MochizukiWhitePointSource 2/3). Off unless called with nonzero.
 extern "C" __declspec(dllexport) int32_t MochizukiNrSetAutoExposure(void* context, uint32_t enabled)
 {
     auto* s = static_cast<Session*>(context);
