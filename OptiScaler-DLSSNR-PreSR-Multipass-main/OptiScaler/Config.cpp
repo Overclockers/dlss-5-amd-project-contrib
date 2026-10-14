@@ -341,6 +341,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             NrInlineReuse.set_from_config(readBool(CfgKey::kSection, CfgKey::NrInlineReuse));
             NrGpuHandoff.set_from_config(readBool(CfgKey::kSection, CfgKey::NrGpuHandoff));
             LmxxfEarlyExeWrap.set_from_config(readBool("DlssNr", "LmxxfEarlyExeWrap"));
+            LmxxfEarlyAnyModuleWrap.set_from_config(readBool("DlssNr", "LmxxfEarlyAnyModuleWrap"));
             DlssNrMaxRatio.set_from_config(readFloat("DlssNr", "MaxRatio"));
             DlssNrTransfer.set_from_config(readUInt("DlssNr", "Transfer"));
 
@@ -1805,6 +1806,8 @@ bool Config::SaveIni()
                  GetBoolValue(Instance()->NrInline.value_for_config()).c_str());
     if (auto earlyWrap = Instance()->LmxxfEarlyExeWrap.value_for_config(); earlyWrap.has_value())
         ini.SetValue("DlssNr", "LmxxfEarlyExeWrap", GetBoolValue(earlyWrap).c_str());
+    if (auto anyWrap = Instance()->LmxxfEarlyAnyModuleWrap.value_for_config(); anyWrap.has_value())
+        ini.SetValue("DlssNr", "LmxxfEarlyAnyModuleWrap", GetBoolValue(anyWrap).c_str());
     ini.SetValue("DlssNr", "AmdGraphicsUnsafe", GetIntValue(Instance()->AmdGraphicsUnsafe.value_for_config()).c_str());
     ini.SetValue("AmdRtgi", "Enabled", GetBoolValue(Instance()->AmdRtgiEnabled.value_for_config()).c_str());
     ini.SetValue("AmdRtgi", "Quality", GetIntValue(Instance()->AmdRtgiQuality.value_for_config()).c_str());

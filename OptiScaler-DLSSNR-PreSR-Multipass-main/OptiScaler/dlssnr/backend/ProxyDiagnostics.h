@@ -53,7 +53,7 @@ inline HMODULE ModuleFromPeb(const void* address, char* nameOut, size_t nameByte
     const auto* node = *reinterpret_cast<const unsigned char* const*>(head);
     const auto* tail = *reinterpret_cast<const unsigned char* const*>(reinterpret_cast<const unsigned char*>(head) + 8);
     // Walk the doubly linked list; LDR_DATA_TABLE_ENTRY.DllBase is at +0x30 and
-    // its FullDllName UNICODE_STRING at +0x48 (x64, both Win10 and Win11).
+    // its BaseDllName UNICODE_STRING at +0x58 (x64, both Win10 and Win11).
     for (int guard = 0; node && node != head && guard < 4096; ++guard)
     {
         const auto base = *reinterpret_cast<const unsigned long long*>(node + 0x30);
