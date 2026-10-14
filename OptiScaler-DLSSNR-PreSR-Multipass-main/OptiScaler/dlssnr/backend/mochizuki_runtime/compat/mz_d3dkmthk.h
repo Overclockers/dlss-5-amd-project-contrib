@@ -19,14 +19,10 @@
 #ifndef _D3DKMT_H_
 #define _D3DKMT_H_
 
-// D3DKMT_HANDLE and the segment group enum's home. The Windows SDK supplies it; the guard keeps a build that
-// includes the real header first (WDK present, this file still reached) consistent.
-#if __has_include(<d3dukmdt.h>)
-#include <d3dukmdt.h>
-#endif
-
+// Named mz_d3dkmthk.h, not d3dkmthk.h: this compat/ directory is on the runtime's include path (dirent.h), and a
+// file of the real name there would shadow the SDK's own d3dkmthk.h for the __has_include test above it.
+// d3dukmdt.h is not included: it refuses direct inclusion (#error unless d3dkmthk.h/d3dkmdt.h is the includer).
 #ifndef _D3DUKMDT_H_
-// Fallback for the same SDK-without-WDK case: d3dukmdt.h is itself a WDK header.
 typedef UINT32 D3DKMT_HANDLE;
 
 typedef enum _D3DKMT_MEMORY_SEGMENT_GROUP
