@@ -395,6 +395,23 @@ static void RenderEarlyCommandListWrap(Config* config)
                "\nForce off: disable both early paths; normal post-swapchain wrapping stays enabled."
                "\nOther games are unvalidated; forcing early wrap can cause startup problems."
                "\nSave and restart to apply. INI: LmxxfEarlyExeWrap.");
+    // Independent sub-item: any-module early wrap (LmxxfEarlyAnyModuleWrap).
+    std::string exeLower = State::Instance().gameExe;
+    for (char& c : exeLower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    const bool autoAny = exeLower.find("forza") != std::string::npos;
+    const char* anyNames[] = {autoAny ? "auto (current: on)" : "auto (current: off)", "force on", "force off"};
+    int anyIndex = config->LmxxfEarlyAnyModuleWrap.has_value() ? (*config->LmxxfEarlyAnyModuleWrap ? 1 : 2) : 0;
+    ImGui::Indent();
+    if (MenuUi::Combo("Early wrap all modules (Streamline/overlays)", &anyIndex, anyNames, IM_ARRAYSIZE(anyNames)))
+    {
+        if (anyIndex == 0) config->LmxxfEarlyAnyModuleWrap.reset();
+        else config->LmxxfEarlyAnyModuleWrap = (anyIndex == 1);
+    }
+    HelpMarker("Also wrap command lists created by any module (Streamline, dxgi proxies, overlays)."
+               "\nOnly effective before the swapchain is created. Auto: on for Forza only."
+               "\nMay crash other games; try only if the log shows many 'missing recording proxy'."
+               "\nSave and restart to apply. INI: LmxxfEarlyAnyModuleWrap.");
+    ImGui::Unindent();
 }
 
 static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const std::string& status)
@@ -811,6 +828,7 @@ void RenderMenu(Config* config, float menuResScale)
                     resetOption(config->NrGpuHandoff);
                     SetAllowEnhancedBarriers(config->LmxxfAllowEnhancedBarriers.value_or_default());
                     resetOption(config->LmxxfEarlyExeWrap);
+                    resetOption(config->LmxxfEarlyAnyModuleWrap);
                 }
                 else {
                     resetOption(config->AmdEveryFrame);

@@ -405,6 +405,10 @@ class Config
     // Missing = engine whitelist (Unreal + Forza). false = never. true = force for any engine.
     // Other engines (e.g. Yan Yun) can crash with early ArmCreate + wrap. Restart after change.
     CustomOptional<bool, NoDefault> LmxxfEarlyExeWrap;
+    // Unset = auto (on for exe names containing "forza"). Widens the pre-swapchain
+    // wrap to DIRECT lists created by any module (Streamline / overlays). Independent
+    // of LmxxfEarlyExeWrap, which stays exe-only.
+    CustomOptional<bool, NoDefault> LmxxfEarlyAnyModuleWrap;
     // Network tier: auto | 720 | 900 | 1080 (DLSS5_NETWORK_HEIGHT).
     CustomOptional<std::string> LmxxfNetworkHeight { "auto" };
     CustomOptional<bool> LmxxfNetworkFreeRes { true };
