@@ -334,7 +334,11 @@ bool Config::Reload(std::filesystem::path iniPath)
             LmxxfAutoExposure.set_from_config(readBool("DlssNr", "LmxxfAutoExposure"));
             LmxxfAutoExposureScale.set_from_config(readFloat("DlssNr", "LmxxfAutoExposureScale"));
             LmxxfAllowEnhancedBarriers.set_from_config(readBool("DlssNr", "LmxxfAllowEnhancedBarriers"));
-            SetAllowEnhancedBarriers(LmxxfAllowEnhancedBarriers.value_or_default());
+            SetAllowEnhancedBarriers(AllowEnhancedBarriersEffective());
+            LOG_INFO("NR enhanced barriers allowed={} (LmxxfAllowEnhancedBarriers={}, forza={})",
+                     AllowEnhancedBarriersEffective(),
+                     LmxxfAllowEnhancedBarriers.has_value() ? (*LmxxfAllowEnhancedBarriers ? "true" : "false") : "auto",
+                     ExeIsForza());
             NrInline.set_from_config(readBool(CfgKey::kSection, CfgKey::NrInline));
             LmxxfInlineSlots.set_from_config(readInt(CfgKey::kSection, CfgKey::LmxxfInlineSlots));
             NrCaptureBackoff.set_from_config(readInt(CfgKey::kSection, CfgKey::NrCaptureBackoff));
@@ -1307,6 +1311,28 @@ std::string GetFloatValue(std::optional<float> value)
     return std::to_string(value.value());
 }
 
+bool Config::ExeIsForza()
+{
+    static const bool forza = [] {
+        wchar_t path[MAX_PATH] {};
+        const DWORD n = GetModuleFileNameW(nullptr, path, MAX_PATH);
+        std::wstring name(path, n);
+        if (const auto slash = name.find_last_of(L"\\/"); slash != std::wstring::npos)
+            name.erase(0, slash + 1);
+        for (wchar_t& c : name)
+            c = static_cast<wchar_t>(::towlower(c));
+        return name.find(L"forza") != std::wstring::npos;
+    }();
+    return forza;
+}
+
+bool Config::AllowEnhancedBarriersEffective()
+{
+    if (LmxxfAllowEnhancedBarriers.has_value())
+        return *LmxxfAllowEnhancedBarriers;
+    return ExeIsForza();
+}
+
 bool Config::SaveIni()
 {
     // Upscalers
@@ -1796,8 +1822,10 @@ bool Config::SaveIni()
                  GetBoolValue(Instance()->LmxxfAutoExposure.value_for_config()).c_str());
     ini.SetValue("DlssNr", "LmxxfAutoExposureScale",
                  GetFloatValue(Instance()->LmxxfAutoExposureScale.value_for_config()).c_str());
-    ini.SetValue("DlssNr", "LmxxfAllowEnhancedBarriers",
-                 GetBoolValue(Instance()->LmxxfAllowEnhancedBarriers.value_for_config()).c_str());
+    if (auto eb = Instance()->LmxxfAllowEnhancedBarriers.value_for_config(); eb.has_value())
+        ini.SetValue("DlssNr", "LmxxfAllowEnhancedBarriers", GetBoolValue(eb).c_str());
+    else
+        ini.Delete("DlssNr", "LmxxfAllowEnhancedBarriers");
     ini.SetValue(CfgKey::kSection, CfgKey::LmxxfInlineSlots, GetIntValue(Instance()->LmxxfInlineSlots.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::NrCaptureBackoff, GetIntValue(Instance()->NrCaptureBackoff.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::NrInlineReuse, GetBoolValue(Instance()->NrInlineReuse.value_for_config()).c_str());

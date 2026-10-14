@@ -380,6 +380,19 @@ static void RenderSharedOutputEffects(Config* config)
 
 }
 
+// LmxxfAllowEnhancedBarriers: auto (on for Forza) / force on / force off. Takes effect live.
+static void RenderAllowEnhancedBarriers(Config* config)
+{
+    const char* names[] = {Config::ExeIsForza() ? "auto (current: on)" : "auto (current: off)", "force on", "force off"};
+    int index = config->LmxxfAllowEnhancedBarriers.has_value() ? (*config->LmxxfAllowEnhancedBarriers ? 1 : 2) : 0;
+    if (MenuUi::Combo("Allow enhanced barriers", &index, names, IM_ARRAYSIZE(names)))
+    {
+        if (index == 0) config->LmxxfAllowEnhancedBarriers.reset();
+        else config->LmxxfAllowEnhancedBarriers = (index == 1);
+        SetAllowEnhancedBarriers(config->AllowEnhancedBarriersEffective());
+    }
+}
+
 static void RenderEarlyCommandListWrap(Config* config)
 {
     static const char* names[] = {"auto (Unreal/Forza/Aniimo)", "force on", "force off"};
@@ -751,14 +764,13 @@ void RenderMenu(Config* config, float menuResScale)
                                "\nEach frame keeps private inputs and results; the model is shared."
                                "\nLowering the limit lets existing work finish before buffers are released.");
                 }
-                bool enhanced = config->LmxxfAllowEnhancedBarriers.value_or_default();
-                if (MenuUi::Checkbox("Allow enhanced barriers", &enhanced)) {
-                    config->LmxxfAllowEnhancedBarriers = enhanced; SetAllowEnhancedBarriers(enhanced);
-                }
+                RenderAllowEnhancedBarriers(config);
                 HelpMarker("Experimental. Inline execution restores known whole-resource layouts; partial or pending layouts are rejected."
                            "\nInline still needs this on: the input layout is read (and reset to COMMON) even"
                            "\nwhen the network runs inline, so turning it off rejects list input that uses"
-                           "\nenhanced barriers. See \"NR inline\" for details.");
+                           "\nenhanced barriers. See \"NR inline\" for details."
+                           "\nAuto: on for Forza (exe name contains \"forza\"), off otherwise. Applies immediately."
+                           "\nINI: LmxxfAllowEnhancedBarriers.");
             }
             if (page == PipelineUi::Section::Output) RenderSharedOutputEffects(config);
             if (kind == Backend::Kind::Mochizuki) {
@@ -826,7 +838,7 @@ void RenderMenu(Config* config, float menuResScale)
                     resetOption(config->NrCaptureBackoff);
                     resetOption(config->NrInlineReuse);
                     resetOption(config->NrGpuHandoff);
-                    SetAllowEnhancedBarriers(config->LmxxfAllowEnhancedBarriers.value_or_default());
+                    SetAllowEnhancedBarriers(config->AllowEnhancedBarriersEffective());
                     resetOption(config->LmxxfEarlyExeWrap);
                     resetOption(config->LmxxfEarlyAnyModuleWrap);
                 }
@@ -1457,17 +1469,14 @@ void RenderMenu(Config* config, float menuResScale)
                                            "Save Settings and restart to apply the changes");
                     }
                     {
-                        bool eb = config->LmxxfAllowEnhancedBarriers.value_or_default();
-                        if (MenuUi::Checkbox("Allow enhanced barriers", &eb))
-                        {
-                            config->LmxxfAllowEnhancedBarriers = eb;
-                            SetAllowEnhancedBarriers(eb);
-                        }
+                        RenderAllowEnhancedBarriers(config);
                         HelpMarker("Leave off unless a game needs NR on lists that use"
                                    "\nenhanced barriers (may corrupt state / TDR). Restart."
                                    "\nInline does not replace this: NR still reads and resets the"
                                    "\ninput layout on an inline list, so an enhanced-barrier game"
-                                   "\nneeds this on with Inline as well.");
+                                   "\nneeds this on with Inline as well."
+                                   "\nAuto: on for Forza (exe name contains \"forza\"), off otherwise. Applies immediately."
+                                   "\nINI: LmxxfAllowEnhancedBarriers.");
                     }
                     RenderEarlyCommandListWrap(config);
                 }

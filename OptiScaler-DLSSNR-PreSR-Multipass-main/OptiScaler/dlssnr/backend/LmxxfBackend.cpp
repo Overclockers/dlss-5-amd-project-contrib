@@ -267,9 +267,12 @@ LmxxfBackend::LmxxfBackend(ID3D12Device *dev, ID3D12CommandQueue *q, const std::
         LOG_INFO("lmxxf FitLarge={} ({}; NativeFitLargeInput re-reads env each call)", fit, CfgKey::EnvAlias(CfgKey::FitLarge));
     }
     {
-        const bool allowEb = Config::Instance()->LmxxfAllowEnhancedBarriers.value_or_default();
+        const bool allowEb = Config::Instance()->AllowEnhancedBarriersEffective();
         SetAllowEnhancedBarriers(allowEb);
-        LOG_INFO("lmxxf enhanced barriers allowed={} (LmxxfAllowEnhancedBarriers)", allowEb);
+        LOG_INFO("lmxxf enhanced barriers allowed={} (LmxxfAllowEnhancedBarriers={}, forza={})", allowEb,
+                 Config::Instance()->LmxxfAllowEnhancedBarriers.has_value()
+                     ? (*Config::Instance()->LmxxfAllowEnhancedBarriers ? "true" : "false") : "auto",
+                 Config::ExeIsForza());
     }
     {
         wchar_t srgb[8] {};
