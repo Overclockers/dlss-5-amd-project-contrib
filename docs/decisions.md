@@ -843,3 +843,11 @@ lmxxf 额外多槽吞吐回落；更少的 16/8 段没有进一步收益，因�
 验证、两种 Mochizuki 路径及剩余 split 差距见 [离线槽位对比](lmxxf-inline-slots.md)。
 共用路径须覆盖取消、重放、满槽旁路、超时冻结、失败回收与真实 GPU；不能以限制为
 2–3 槽代替调度修复。inline 继续默认关闭，游戏和其它驱动验收另行进行。
+
+## 2026-10-15: Mochizuki 0.0.5 review decisions
+
+- Ctrl+F11 changes only the Mochizuki default/INT4 request; holds and input capture do not repeat it, and the chord owns F11 through release. ACO remains independent.
+- Upstream NR Control is excluded from compilation/installation: End continues to toggle host NR; Ins is the only menu.
+- RenoDX disables host person protection while retaining its saved settings. Native white-point controls are hidden; preprocessing remains functional inside the RenoDX stage.
+- Patch 09 is upstream-equivalent, including arena lifetime and barrier emission; keep the official implementation after GPU oracle comparison.
+- Detailed scope, rebase SHAs, evidence and maintainer game matrix: [Mochizuki 0.0.5 review](architecture/mochizuki-005-review.md).

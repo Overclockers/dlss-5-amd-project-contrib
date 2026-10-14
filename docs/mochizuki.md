@@ -19,19 +19,44 @@ completion-based resource release. Its build-progress display and execution-hist
 handling are described below. Exact reused components, source pins, licenses and
 local changes are in [the source record](../third_party/mochizuki/UPSTREAM.md).
 
-The vendored core follows official Windows source `a9b13dd4cdb5f4bf43db358492d72e6e5e2acd67`
-(2026-10-11): native D3D12 with a Vulkan device of NR's own, the 0.0.4 feature set,
-the 26.9.2 shader fixes, and ACO left off. The older statement that Windows stays on
-v0.0.3 is historical. INT4 mixed, the official DX9/DX10/DX11 hosts, ReShade and the
-official OptiScaler hooks are not included. Product recording, menus and packaging
-stay in this host. See [the source record](../third_party/mochizuki/UPSTREAM.md).
+The vendored core follows official Windows source `8a70f7f418294ff1e306b66893456e5319ff8205`
+(0.0.5-win-preview, 2026-10-14). INT4 mixed and RenoDX processing are integrated
+through this host's existing Ins menu and `[DlssNr]` settings. ACO defaults on;
+INT4 mixed and RenoDX default off. The official DX9/DX10/DX11 hosts, ReShade,
+Present hooks, End menu and screenshot capture are outside this Windows D3D12
+integration. See [the integration review](architecture/mochizuki-005-integration.md).
+
+## INT4 mixed and RenoDX
+
+Ctrl+F11 switches the default/INT4 request without changing ACO. Save Settings
+persists it. The upstream End overlay is not installed; End keeps the host NR toggle.
+
+Under Ins → Mochizuki → Model, enable **INT4 mixed** (`MochizukiInt4Mixed`) or
+**RenoDX processing** (`MochizukiRenoDX`). Mode changes rebuild the network in the
+background; effective status is shown in the menu. INT4 requires ACO and matching
+generated weights. If ACO import is unavailable, the complete default network is
+used and INT4 is shown as inactive. Native INT4 is not implemented upstream.
+
+RenoDX has separate network response, pass stack, composition, resolution, look,
+encoding and guide controls (`MochizukiReno*`). Native picture settings are retained
+while their replacement controls are shown. RenoDX runs 1–4 passes normally, up to
+30 when unlocked; passes 5 onward use pass 4's controls. Game exposure uses the
+host's validated readback (one frame late), with the upstream content meter when
+unavailable. Motion uses the existing host bridge. Depth and Present-only inputs
+are not available on this route. RenoDX timing currently reports the network's
+last pass, not total stage cost. Person protection is disabled in RenoDX mode because the native first-pass
+contract is unavailable; the original settings are preserved.
+
+`MochizukiNoiseEveryFrame` advances the upstream noise seed when enabled (default
+false). Ins and `OptiScaler.ini` own all these settings; upstream INI/environment
+variables cannot replace the selected model or picture options.
 
 ## Installation
 
 1. Install a current AMD display driver with Vulkan support. HIP is not used by this backend.
 2. Extract the complete OptiScaler package. It contains `MochizukiNrRuntime.dll`,
    `dlssnr-amd/shaders/` and `dlssnr-amd/aco/` (records, shell aliases, and the ACO
-   network, runtime and temporal shaders). The runtime and those assets must match the host in that package.
+   network, runtime and temporal shaders), `dlssnr-amd/int4/`, RenoDX shaders and the INT4 model tools. The runtime and those assets must match the host in that package.
    ACO is on by default (`MochizukiAcoMode=true`); a change applies on the next game start.
    A missing or rejected bundle, or a device/driver without ACO, keeps the driver's compiler.
 3. Supply your own `nvngx_dlssnr.dll` **310.8.0**. Its SHA-256 is
@@ -42,7 +67,10 @@ stay in this host. See [the source record](../third_party/mochizuki/UPSTREAM.md)
    `Mochizuki-Model.bat` remains available separately; you can drag a DLL/ZIP onto it.
    Extraction only reads data and validates every model entry; it does not load the DLL.
    The result is `dlssnr-amd/dlssnr.bin`. A model extracted with the official tools is
-   also usable at this path.
+   also usable at this path. Setup and the standalone model tool derive
+   `dlssnr-int4.bin` from it, verify the upstream SHA-256, and only then replace
+   an outdated INT4 model. Valid existing INT4 weights are reused. Neither model
+   is shipped in the package; uninstall preserves both.
    If no working Python 3.10+ is found, Setup and the standalone model tool explain
    how to open Microsoft Store (Windows Store), search for **Python**, and install
    version 3.10 or newer. Close and reopen the installer afterward. They also try
@@ -239,7 +267,7 @@ admission kept the installed ACO state (`ACO_BUDGET_KEEP_OK effective=1`).
 `ACO_RAPID_REENABLE requested=1 effective=0` when a native candidate installed
 after ACO had been requested again, then `ACO_RAPID_OK`.
 Missing, alias-less and corrupt bundles each completed one native frame
-(`ACO_FALLBACK_OK`). Package and uninstall ownership is the exact 220-path pin
+(`ACO_FALLBACK_OK`). Package and uninstall ownership now uses the exact 794-path pin
 `tools/install/mochizuki-owned.txt`. No game scene was compared.
 
 `MochizukiWhitePointSource` (0 off, default; 1 game; 2 meter; 3 auto) picks the exposure sources.
