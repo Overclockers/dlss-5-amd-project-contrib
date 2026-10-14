@@ -349,6 +349,16 @@ static void RenderSharedOutputEffects(Config* config)
         if (MenuUi::Checkbox("Show person mask overlay", &debugMask)) config->NrPersonDebugMask = debugMask;
         HelpMarker("Displays a green overlay on detected person areas for alignment and stability diagnostics.");
         ImGui::EndDisabled();
+        // Mirrors nr::Preprocess::active(): an active preprocess stops the Mochizuki runtime exporting pass 1,
+        // so multi-pass person protection is bypassed (MochizukiNrRuntime.cpp g.firstPass).
+        const uint32_t prepExposure = config->MochizukiPreprocessExposure.value_or_default();
+        const bool prepActive = config->MochizukiPreprocess.value_or_default() &&
+            (prepExposure > 2 || prepExposure == 1 || (prepExposure == 2 && config->MochizukiPreprocessBiasEv.value_or_default() != 0.f) ||
+             config->MochizukiPreprocessCurve.value_or_default() != 0u || config->MochizukiPreprocessContrast.value_or_default() != 1.f ||
+             config->MochizukiPreprocessSaturation.value_or_default() != 1.f);
+        if (personKind == Backend::Kind::Mochizuki && personPasses > 1 && prepActive)
+            MenuUi::TextColored(ImVec4(0.95f, 0.70f, 0.20f, 1.0f),
+                               "Preprocessing is on: person protection does not work in multi-pass. Turn off preprocessing.");
         if (personSupported && personPasses == 1 && strength == 1.f && detail == 1.f && !debugMask)
             MenuUi::TextWrapped("Single pass: lower person strength or detail to apply protection.");
     }
@@ -514,6 +524,7 @@ static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const 
                 "The pass control applies when editing finishes. Allow up to 30 layers raises it from 1-3 to 1-30. The selected count can rebuild; 30 runs the model thirty times.");
             if (g == 2) MenuUi::TextWrapped("NR -> SR uses unjittered motion. Mochizuki SR -> NR passes the game vectors through, including jittered ones, and the runtime scales render-resolution motion. The separate Residual Stabilizer filters the final correction.");
             if (g == 3) MenuUi::TextWrapped("Runs before the network. Preprocessing changes what the model sees and reverses that transform from its answer.");
+            if (g == 3) MenuUi::TextColored(ImVec4(0.95f, 0.70f, 0.20f, 1.0f), "In multi-pass, active preprocessing disables person protection.");
             if (g == 4) MenuUi::TextWrapped(page == PipelineUi::Section::Input ?
                 "DRS buckets reduce rebuilds when the render size changes. White point controls linear-input brightness." :
                 "Automatic prebuild capacity grows as needed and is retained on pass reduction. Capacity is not the active pass count. 0 is automatic. An explicit count is at least the active passes.");
