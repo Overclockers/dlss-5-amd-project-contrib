@@ -3,6 +3,7 @@
 #include "LmxxfRecordingOwner.h"
 #include "../NrFrameDiagHost.h"
 #include <resource.h>
+#include "ProxyDiagnostics.h"
 #include "mochizuki_runtime/MochizukiNrApi.h"
 #include "../amd/GraphicsInvocation.h"
 #include <State.h>
@@ -21,6 +22,12 @@ namespace DlssNr::Backend
 {
 namespace
 {
+// Recording-proxy fallback thresholds (see MochizukiProxyFallbackEnabled).
+// ~120 evaluations is about two seconds at 60 fps, long enough that a slow start
+// cannot trip it; a 20% miss rate is already visible as flicker.
+constexpr uint32_t kProxyFallbackMinEvaluations = 120;
+constexpr uint32_t kProxyFallbackMissPercent = 20;
+
 void SubmissionFailure(const LmxxfRecording::SessionOwner::Failure& failure) noexcept
 {
     try {
@@ -52,6 +59,15 @@ struct MochizukiBackend::Impl
     bool failed = false;
     unsigned errors = 0;
     unsigned tracedRecordings = 0;
+    // Recording-proxy coverage. A large share of the game's command lists is never
+    // wrapped by SubmissionHooks, so those frames go through as the original colour
+    // while the wrapped ones run NR. Alternating between the two is the Forza
+    // flicker. Track the ratio and, once it is proven too high, hold NR off for the
+    // rest of the session rather than alternate (see MochizukiProxyFallbackEnabled).
+    uint32_t proxyEvaluations = 0;   // lists offered this session
+    uint32_t proxyMissing = 0;       // of those, without a recording proxy
+    bool proxyFallback = false;      // latched: too many misses, NR held off
+    const void* lastProxiedList = nullptr; // last list that did carry a proxy
     mutable std::mutex mutex;
     std::string status = "mochizuki: idle";
     NrTimingSnapshot timing {};
@@ -211,23 +227,49 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     // Callback failures and background progress must remain visible even when
     // this frame is rejected before PrepareFrame/Record.
     p->Info();
-    // Include frames rejected before PrepareFrame (for example an active render
-    // pass), so the next accepted frame cannot consume history across that gap.
-    const auto frameId = ++p->frameId;
+    // Latched proxy fallback: the miss rate proved the lists are unevenly wrapped, so
+    // NR would alternate with the original colour. Stay off rather than flicker.
+    if (p->proxyFallback) return nullptr;
     if (!cmd || !input.colour) return nullptr;
     Microsoft::WRL::ComPtr<Submission::ILogicalCommandList> logical;
     Microsoft::WRL::ComPtr<Submission::IRecordingResources> resources;
+    // Count every offered list, so coverage={success}/{offered} is the real ratio and
+    // not an artefact of counting only the failures (which always reads as 100%).
+    const uint32_t offered = ++p->proxyEvaluations;
     const HRESULT proxyHr = cmd->QueryInterface(IID_PPV_ARGS(&logical));
     const HRESULT resourcesHr = cmd->QueryInterface(IID_PPV_ARGS(&resources));
     if (FAILED(proxyHr) || FAILED(resourcesHr))
     {
+        const uint32_t missing = ++p->proxyMissing;
         p->Status("mochizuki: recording proxy unavailable; original frame");
-        static unsigned missingProxy = 0;
-        if (++missingProxy <= 5 || missingProxy % 1000 == 0)
-            LOG_WARN("mochizuki missing recording proxy: frame={} list={:p} type={} logicalQi={:08X} resourcesQi={:08X} sample={}",
-                     frameId, static_cast<void*>(cmd), unsigned(cmd->GetType()), unsigned(proxyHr), unsigned(resourcesHr), missingProxy);
+        if (missing <= 5 || missing % 1000 == 0)
+        {
+            char origin[MAX_PATH * 2] {};
+            ProxyDiagnostics::DescribeList(cmd, origin, sizeof origin);
+            LOG_WARN("mochizuki missing recording proxy: frame={} list={:p} type={} logicalQi={:08X} resourcesQi={:08X} sample={} coverage={}/{} ({}% miss) lastProxy={:p} device={:p} {}",
+                     p->frameId, static_cast<void*>(cmd), unsigned(cmd->GetType()), unsigned(proxyHr), unsigned(resourcesHr),
+                     missing, offered - missing, offered, missing * 100 / (offered ? offered : 1),
+                     p->lastProxiedList, static_cast<void*>(p->device.Get()), origin);
+        }
+        // Half the lists unwrapped means NR and the original colour alternate frame by
+        // frame, which is exactly the flicker. Rather than keep flipping, stop NR for
+        // this session once the miss rate is clearly too high. Opt-in only.
+        if (!p->proxyFallback && Config::Instance()->MochizukiProxyFallbackEnabled.value_or_default() &&
+            offered >= kProxyFallbackMinEvaluations &&
+            missing * 100 >= offered * kProxyFallbackMissPercent)
+        {
+            p->proxyFallback = true;
+            p->Status("mochizuki: recording proxy coverage too low; NR held off to stop flicker (restart to try again)");
+            LOG_WARN("mochizuki recording proxy coverage {}/{} ({}%) below {}%; holding NR off for the rest of the session to avoid flicker",
+                     missing, offered, missing * 100 / (offered ? offered : 1), kProxyFallbackMissPercent);
+        }
         return nullptr;
     }
+    p->lastProxiedList = cmd;
+    // The frame id advances only for frames we can actually record: a rejected frame
+    // must not consume a number, or the next accepted frame looks like a gap and the
+    // runtime resets its temporal history for nothing.
+    const auto frameId = ++p->frameId;
     const bool inlineMode = Config::Instance()->NrInline.value_or_default();
     if (logical->IsSplitIneligible()) logical->TraceOpenQueries();
     InlineRecording::StateScope inlineState;

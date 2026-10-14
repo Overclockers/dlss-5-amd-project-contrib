@@ -81,6 +81,7 @@ inline constexpr const char *MochizukiUnlockPasses = "MochizukiUnlockPasses";
 inline constexpr const char *MochizukiLayerMode = "MochizukiLayerMode";
 inline constexpr const char *MochizukiPasses = "MochizukiPasses";
 inline constexpr const char *MochizukiTemporal = "MochizukiTemporal";
+inline constexpr const char *MochizukiProxyFallbackEnabled = "MochizukiProxyFallbackEnabled";
 inline constexpr const char *MochizukiHistoryStrength = "MochizukiHistoryStrength";
 inline constexpr const char *MochizukiPreprocess = "MochizukiPreprocess";
 inline constexpr const char *MochizukiPreprocessExposure = "MochizukiPreprocessExposure";
@@ -246,6 +247,7 @@ inline constexpr const char *const kKnown[] = {
     MochizukiLayerMode,
     MochizukiPasses,
     MochizukiTemporal,
+    MochizukiProxyFallbackEnabled,
     MochizukiHistoryStrength,
     MochizukiPreprocess,
     MochizukiPreprocessExposure,

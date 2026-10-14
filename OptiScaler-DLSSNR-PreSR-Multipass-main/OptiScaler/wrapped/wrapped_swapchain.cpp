@@ -473,8 +473,10 @@ WrappedIDXGISwapChain4::WrappedIDXGISwapChain4(IDXGISwapChain* real, IUnknown* p
         // Sticky on: a failed first attempt must not clear a later enable.
         if (ready)
             DlssNr::Submission::Hooks::SetProxyWrap(true);
-        LOG_INFO("lmxxf ProxyWrap after swapchain {}: {} (early game lists wrapped: {})", _id, ready,
-                 DlssNr::Submission::Hooks::g_earlyWrappedLists.load(std::memory_order_relaxed));
+        LOG_INFO("lmxxf ProxyWrap after swapchain {}: {} (early game lists wrapped: {}; earlyExe={} earlyAny={})", _id, ready,
+                 DlssNr::Submission::Hooks::g_earlyWrappedLists.load(std::memory_order_relaxed),
+                 DlssNr::Submission::Hooks::g_earlyExeWrap.load(std::memory_order_relaxed),
+                 DlssNr::Submission::Hooks::g_earlyAnyModuleWrap.load(std::memory_order_relaxed));
     }
 }
 

@@ -29,6 +29,14 @@ class LmxxfBackend final : public Host
     std::atomic<std::shared_ptr<LmxxfRecording::SessionOwner>> activityOwner;
     bool sessionReady = false;
     uint64_t frameId = 0;
+    // Recording-proxy coverage (see ProxyDiagnostics.h). Unwrapped lists fall back to
+    // the original colour, so a high miss rate alternates NR and original frame by
+    // frame; latch NR off instead of flickering when the rate proves too high.
+    uint32_t proxyEvaluations = 0;
+    uint32_t proxyMissing = 0;
+    bool proxyFallback = false;
+    const void* lastProxiedList = nullptr;
+    ID3D12Device* recordDevice = nullptr;
     std::string status { "lmxxf: idle" };
     // Function table copied from LmxxfNrGetApi (opaque here to keep header free of C ABI).
     struct Api;

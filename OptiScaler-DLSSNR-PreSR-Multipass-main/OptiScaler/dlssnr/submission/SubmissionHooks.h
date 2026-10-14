@@ -33,6 +33,13 @@ inline std::atomic<bool> g_proxyWrap { false };
 // UE can retain lists created before the first swapchain. Wrap only calls from
 // the host executable during boot; Streamline and vendor modules stay native.
 inline std::atomic<bool> g_earlyExeWrap { false };
+// Forza Horizon 6 creates its boot-time DIRECT lists from sl.interposer.dll
+// (Streamline) and from this dxgi proxy itself, not from the game exe, so the
+// exe-only whitelist above leaves them naked forever (a raw list stays raw even
+// after Reset). This flag widens the early wrap to *every* module while boot
+// lists are still being created. Only set for games known not to crash (Forza);
+// yysls-style engines must stay on the exe whitelist.
+inline std::atomic<bool> g_earlyAnyModuleWrap { false };
 // Aniimo retains boot lists created by UnityPlayer.dll before the swapchain.
 // Other Unity games require explicit opt-in; the submission hook must be ready.
 inline std::atomic<bool> g_earlyUnityPlayerWrap { false };
@@ -56,6 +63,7 @@ inline bool ExpandEnabled() { return g_expandEnabled.load(std::memory_order_acqu
 inline bool ProxyWrapEnabled() { return g_proxyWrap.load(std::memory_order_acquire); }
 inline void SetProxyWrap(bool on) { g_proxyWrap.store(on, std::memory_order_release); }
 inline void SetEarlyExeWrap(bool on) { g_earlyExeWrap.store(on, std::memory_order_release); }
+inline void SetEarlyAnyModuleWrap(bool on) { g_earlyAnyModuleWrap.store(on, std::memory_order_release); }
 inline void SetEarlyUnityPlayerWrap(bool on) { g_earlyUnityPlayerWrap.store(on, std::memory_order_release); }
 inline void SetWrapOpenLists(bool on) { g_wrapOpenLists.store(on, std::memory_order_release); }
 
@@ -73,10 +81,42 @@ inline bool IsHostExecutableCaller(void *address)
            caller == GetModuleHandleW(nullptr);
 }
 
+// Diagnostic: a DIRECT list was created but not wrapped. Records the caller's
+// module so the "missing recording proxy" lists can be traced to their creator.
+// Throttled hard; no behaviour change.
+inline void NoteUnwrappedDirect(const void *caller, bool armed, bool shouldWrap, bool wrapOpen,
+                                const char *tag)
+{
+    static std::atomic<uint32_t> seen { 0 };
+    const uint32_t n = seen.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (n > 8 && n % 128 != 0)
+        return;
+    HMODULE owner = nullptr;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       reinterpret_cast<LPCWSTR>(caller), &owner);
+    char path[MAX_PATH] {};
+    if (owner) GetModuleFileNameA(owner, path, MAX_PATH);
+    const char *base = path;
+    for (const char *p = path; *p; ++p)
+        if (*p == '\\' || *p == '/') base = p + 1;
+    LOG_WARN("lmxxf unwrapped DIRECT {} #{}: callerModule={} armed={} shouldWrap={} wrapOpen={} earlyExe={} earlyAny={} proxyWrap={}",
+             tag, n, *base ? base : "?", armed, shouldWrap, wrapOpen,
+             g_earlyExeWrap.load(std::memory_order_relaxed),
+             g_earlyAnyModuleWrap.load(std::memory_order_relaxed),
+             g_proxyWrap.load(std::memory_order_relaxed));
+}
+
 inline bool ShouldWrapCreate(void *caller)
 {
-    if (ProxyWrapEnabled() ||
-        (g_earlyExeWrap.load(std::memory_order_acquire) && IsHostExecutableCaller(caller)))
+    // Once the swapchain exists every DIRECT list is wrapped, whoever creates it.
+    if (ProxyWrapEnabled())
+        return true;
+    // Boot-time widening for games whose first lists come from Streamline / a
+    // vendor proxy rather than the exe (Forza Horizon 6).
+    if (g_earlyAnyModuleWrap.load(std::memory_order_acquire))
+        return true;
+    if (g_earlyExeWrap.load(std::memory_order_acquire) && IsHostExecutableCaller(caller))
         return true;
     if (!g_earlyUnityPlayerWrap.load(std::memory_order_acquire))
         return false;
@@ -158,7 +198,12 @@ inline HRESULT WINAPI hkCreateCommandList(ID3D12Device *device, UINT nodeMask, D
     // Opt-in only for proxy-original/split-original until real-game boundary validation.
     if (!IsArmed() || !ShouldWrapCreate(_ReturnAddress()) || !g_wrapOpenLists.load(std::memory_order_acquire) ||
         g_suppressProxyWrap || type != D3D12_COMMAND_LIST_TYPE_DIRECT || !out)
+    {
+        if (type == D3D12_COMMAND_LIST_TYPE_DIRECT && IsArmed())
+            NoteUnwrappedDirect(_ReturnAddress(), IsArmed(), ShouldWrapCreate(_ReturnAddress()),
+                                g_wrapOpenLists.load(std::memory_order_acquire), "CreateCommandList");
         return o_CreateCommandList(device, nodeMask, type, alloc, initial, riid, out);
+    }
     ID3D12GraphicsCommandList *real = nullptr;
     const HRESULT hr = o_CreateCommandList(device, nodeMask, type, alloc, initial, IID_PPV_ARGS(&real));
     if (FAILED(hr))
@@ -177,8 +222,13 @@ inline HRESULT WINAPI hkCreateCommandList1(ID3D12Device *device, UINT nodeMask, 
 {
     if (!IsArmed() || !ShouldWrapCreate(_ReturnAddress()) || g_suppressProxyWrap ||
         type != D3D12_COMMAND_LIST_TYPE_DIRECT || !o_CreateCommandList1)
+    {
+        if (type == D3D12_COMMAND_LIST_TYPE_DIRECT && IsArmed())
+            NoteUnwrappedDirect(_ReturnAddress(), IsArmed(), ShouldWrapCreate(_ReturnAddress()),
+                                g_wrapOpenLists.load(std::memory_order_acquire), "CreateCommandList1");
         return o_CreateCommandList1 ? o_CreateCommandList1(device, nodeMask, type, flags, riid, out)
                                     : E_NOINTERFACE;
+    }
 
     // Create closed real list, wrap as proxy; allocator binds on first Reset.
     ID3D12GraphicsCommandList *real = nullptr;
