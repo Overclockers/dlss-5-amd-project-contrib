@@ -1,7 +1,7 @@
 # Mochizuki source pin and interface patches
 
 The runtime uses official core/shaders at the full SHA in `manifest.json`, plus
-thirteen explicit feature patches. There are no whole-file preservation overlays.
+fourteen explicit feature patches. There are no whole-file preservation overlays.
 The host loads our `MochizukiNrRuntime.dll`, which wraps that core; this does not
 claim binary compatibility with an official distributed runtime.
 
@@ -11,7 +11,7 @@ tests\mochizuki\run.cmd source-pin
 ```
 
 The first command reads **Git objects at the pin**, replays the patch series in
-a temporary directory under `exports/`, and compares all 173 closure files with
+a temporary directory under `exports/`, and compares 563 upstream files and four patch-created Plan A shaders with
 vendor. It rejects missing/extra source paths, patch conflicts and unrecorded
 vendor edits. It normalizes text CRLF only; machine-code records remain opaque.
 It does not fetch, change vendor, advance the pin, build, package or publish.
@@ -28,11 +28,13 @@ Those tests also run in `run.cmd abi`.
 | 06 ACO-builder-state | Current temporary product adaptation | Request optional configuration/result interfaces; do not transplant this implementation upstream |
 | 07 drop-unused-up-shown | Below full model scale, do not allocate the unread full-frame `up_shown` image | Official binds it and never reads or writes it; drop the binding with the image |
 | 08 thirty-layer-mode | Raise one network's pass cap from 16 to 30 and size the timing readback for that | The host slider stays 1..3. 30 is a separate layer mode, default off |
-| 09 decoder-tail-barrier | Preserve the Windows ACO C64-to-fused-C32 dependency | Independent correctness proposal with its original attribution |
 | 10 inline-compute-segments | Optional second-family resource access and a recording callback around network dispatches | Default stays one command buffer; device/queues, submissions, failure policy and D3D12 integration stay in the adapter |
 | 11 inline-compute-writeback | Allow compatible inline frames to keep the entire Vulkan chain on compute | Unsupported conversions keep the segmented path; host queue and failure policy remain in the adapter |
 | 12 weights-only-extraction | Reuse the PE/weight parser with `--extract-weights`; installation skips CUDA scanning and DLL/cubin copies | Analysis defaults and `--extract` remain unchanged; both extraction entry points keep source and model hashes |
 | 13 inline-fp16-conversions | Equal-extent FP16 input and writeback on compute, retaining FLOAT/HDR and the original linear/temporal processing | Enabled only for optional second-family/compute hosts with both conversion shaders; default graphics recordings retain blits. Reduced scale, motion requiring a blit and first-pass export keep segments |
+
+| 14 Plan A format conversions | Record the pre-existing local format conversion shaders and recipe additions | Host canonical-format compatibility; explicit patch-created file inventory |
+| 15 Windows 0.0.5 product policy | Ignore external INT4 weight overrides in owned mode; preserve separate-answer output policy | Product configuration and resource ownership |
 
 The patches replay sequentially against `manifest.json`'s commit. Patches 02-05
 share header/implementation context, so do not assume their patch files apply
@@ -41,13 +43,11 @@ apply its preceding series in a disposable checkout and reduce the proposal to
 its own API requirements; do not send all local policy changes as one PR.
 
 Subsequent patches in the manifest include the unused `up_shown` removal (07),
-the local 30-layer mode (08), and the decoder-tail correctness fix (09).
-Patch 09 is adapted from Overclockers' `60f9202f` in project PR #5. It excludes
-the C64 persistent decoder to fused C32 pair from tile chaining, preserving the
-existing barrier and associated arena lifetime boundary; other chains remain.
-Its attribution and validation are in the backend guide and source record.
+the local 30-layer mode (08). Former patch 09, adapted from Overclockers'
+`60f9202f` in project PR #5, is now covered by the official decoder-tail fix.
+It is dropped from the replay series; its attribution remains in the source history.
 
-This thirteen-patch series records the product snapshot; it is not the upstream PR
+This fourteen-patch series records the product snapshot; it is not the upstream PR
 series. The upstream preparation branch has reverted the ACO, buffer-optimization
 and timing-calculation snapshots and retains only optional interface proposals.
 

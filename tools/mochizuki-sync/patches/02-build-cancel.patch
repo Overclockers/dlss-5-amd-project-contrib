@@ -1,6 +1,6 @@
 --- a/windows/src/core/nr_graph.cpp
 +++ b/windows/src/core/nr_graph.cpp
-@@ -4244,6 +4244,14 @@
+@@ -4912,6 +4912,14 @@
      }
      for (const Disp& d : disp) {
          if (kern.count(d.kern)) continue;
@@ -23,7 +23,7 @@
  #include <utility>
  #include <vector>
  #include <vulkan/vulkan.h>
-@@ -169,6 +170,20 @@
+@@ -178,6 +179,20 @@
      bool preprocess_unknee = false;
  };
  

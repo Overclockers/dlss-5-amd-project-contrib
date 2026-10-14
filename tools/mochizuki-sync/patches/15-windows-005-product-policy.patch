@@ -1,0 +1,22 @@
+--- a/windows/src/core/nr_pipeline_binary.hpp
++++ b/windows/src/core/nr_pipeline_binary.hpp
+@@ -60,7 +60,7 @@
+     if(dir.empty() && s.configured) dir=s.dir;
+ #if NR_INT4
+     // Each build selects its own records; changing the network never changes the process mode.
+-    if(!dir.empty() && nr::build_cfg("NR_I4_WEIGHTS")) dir+="/int4";
++    if(!dir.empty() && (!s.owned || nr::g_build_cfg) && nr::build_cfg("NR_I4_WEIGHTS")) dir+="/int4";
+ #endif
+     return dir;
+ }
+--- a/windows/src/core/nr_runtime.cpp
++++ b/windows/src/core/nr_runtime.cpp
+@@ -1502,7 +1502,7 @@
+     // alpha pass's rounding (store_native, as below 100%), so there is no alpha pass and the write-back
+     // is a copy. The formats whose store is the write-back blit's own conversion (direct_out's).
+     // NR_UNSCALED_STORE=0: the RGBA32F answer, the alpha pass and the blit, as before.
+-    if (!impl_->scaled && impl_->direct_in && !config.native_compose && config.max_passes == 1 &&
++    if (!config.separate_answer && !impl_->scaled && impl_->direct_in && !config.native_compose && config.max_passes == 1 &&
+         !config.linear_input && !config.preprocess && !mask_config.width) {
+         const char* env = std::getenv("NR_UNSCALED_STORE");
+         const VkFormat cf = config.colour_format;

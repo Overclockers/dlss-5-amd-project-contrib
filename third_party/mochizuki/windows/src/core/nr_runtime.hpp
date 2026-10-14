@@ -94,6 +94,10 @@ struct Controls {
     // tone zeroed. Empty is exactly the behaviour that shipped before.
     std::vector<PassControls> per_pass{};
     Preprocess preprocess{};
+    // A frame without motion vectors (Runtime::record): the pre block's noise seed moves every frame, as the DLL's
+    // counter does whatever the motion vectors. Off (the default): the seed stays 0 - without a history to average
+    // the noise, a moving seed shimmers on a still picture.
+    bool noise_every_frame = false;
 };
 
 struct HostDevice {
@@ -143,6 +147,11 @@ struct RuntimeConfig {
     // the cost tracks scale^2 while the game's own resolution is untouched.
     // The "Model Resolution" of the NVIDIA-side mods.
     float model_scale = 1.0f;
+#if NR_INT4
+    // The int4 mixed network: -1 = as DLSSNR_INT4 / dlssnr-amd.ini [Int4Mixed] Enabled say (start), 0 = the original
+    // network, 1 = int4 mixed when installed and the device has VK_KHR_pipeline_binary ([Int4Mixed] Hotkey switches).
+    int int4_mixed = -1;
+#endif
     // The most passes Controls::passes may ask for; each one above the first
     // costs a history image at the model extent.
     uint32_t max_passes = 1;
@@ -378,6 +387,9 @@ public:
     // caller resources; neither overload acquires game guides or supplies temporal
     // history, depth/motion integration or a Present hook by itself.
     RecordResult record(VkCommandBuffer, const ColourFrame&, const Controls&);
+    // The same, for a frame the caller has a Reset flag for (DLSSNR.Reset): with Controls::noise_every_frame the
+    // seed starts again from 0 on it, as the DLL's counter does.
+    RecordResult record(VkCommandBuffer, const ColourFrame&, const Controls&, bool reset);
     ControlMaskResult record(VkCommandBuffer, const ColourFrame&, const Controls&, const ControlMaskFrame*);
     // Named rather than overloaded: `record(cmd, frame, controls, nullptr)` must
     // keep meaning what it already means to every existing caller.
@@ -401,6 +413,10 @@ public:
     // state can be trusted. Each feature's next frame runs as its first (no history, seed 0). Call
     // between recordings.
     void drop_history();
+
+    // Every feature's next frame runs as a new feature's (no history read, the noise seed from 0), as after a
+    // Reset. For a network that served nothing for a while and is taken up again (Session::select_runtime).
+    void forget_history();
     // How many features currently hold temporal state, for the log.
     uint32_t live_features() const;
 
@@ -417,6 +433,10 @@ public:
     // The extent the network actually runs at (RuntimeConfig::model_scale applied).
     uint32_t model_width() const;
     uint32_t model_height() const;
+#if NR_INT4
+    // Whether this runtime runs the int4 mixed network (asked for and everything it needs present).
+    bool int4_mixed() const;
+#endif
     // Change the post block's history strength (TemporalConfig::history_strength)
     // between frames. Takes effect on the next recording; no-op without a
     // temporal path.

@@ -107,6 +107,46 @@ float filter_channel(const float v[4], const uint w[4]) {
     return negative ? -r : r;
 }
 
+// filter_channel for a quad in which no texel that carries weight is negative, in 32-bit words: the
+// same value bit for bit. Each texel in units of 2^(E-25) is below 2^25 and the weights sum to 2^16, so
+// the sum S is below 2^41; it is formed as A * 2^9 + B (A from the texels' top 16 bits, below 2^32; B
+// from their low 9 bits, below 2^25). S is positive, so the floor to 35 significant bits clears the
+// bits under the rounding at 29, which then looks at no more than six bits below its last one; the
+// rounding at 24 is on a value of at most 30 bits.
+float filter_channel_pos(const float v[4], const uint w[4], int emax) {
+    uint A = 0u, B = 0u;
+    for (int i = 0; i < 4; ++i) {
+        if (w[i] == 0u || v[i] == 0.0) continue;
+        int e; frexp(v[i], e);
+        const int sh = emax - e - 1;
+        const uint m = uint(ldexp(v[i], 24 - e));
+        const uint t = sh < 0 ? m << 1u : (sh >= 32 ? 0u : m >> uint(sh));
+        A += (t >> 9u) * w[i];
+        B += (t & 511u) * w[i];
+    }
+    const uvec2 s = add64(uvec2(A >> 23u, A << 9u), uvec2(0u, B));
+    if (s == uvec2(0u)) return 0.0;
+    const int n = bits64(s);
+    uint r = s.y;   // the value r * 2^k
+    int k = 0;
+    if (n > 29) {
+        const int k1 = max(n - 35, 0), k2 = n - 29, d = k2 - k1;
+        r = shr64(s, k2).y;
+        const uint rem = (k1 > 0 ? shr64(s, k1).y : s.y) & ((1u << uint(d)) - 1u), half_ = 1u << uint(d - 1);
+        if (rem > half_ || (rem == half_ && (r & 1u) != 0u)) ++r;
+        k = k2;
+    }
+    const int n2 = findMSB(r) + 1;
+    if (n2 > 24) {
+        const int k3 = n2 - 24;
+        const uint rem = r & ((1u << uint(k3)) - 1u), half_ = 1u << uint(k3 - 1);
+        r >>= uint(k3);
+        if (rem > half_ || (rem == half_ && (r & 1u) != 0u)) ++r;
+        k += k3;
+    }
+    return ldexp(float(r), emax - 41 + k);
+}
+
 void main() {
     const ivec2 xy = ivec2(gl_GlobalInvocationID.xy);
     if (xy.x >= int(pc.mw) || xy.y >= int(pc.mh)) return;
@@ -130,7 +170,11 @@ void main() {
     } else {
         for (int ch = 0; ch < 4; ++ch) {
             const float v[4] = float[4](a[ch], b[ch], c[ch], d[ch]);
-            r[ch] = filter_channel(v, w);
+            int emax = -1000;
+            bool negative = false;
+            for (int i = 0; i < 4; ++i)
+                if (w[i] != 0u && v[i] != 0.0) { int e; frexp(v[i], e); emax = max(emax, e); negative = negative || v[i] < 0.0; }
+            r[ch] = negative ? filter_channel(v, w) : emax == -1000 ? 0.0 : filter_channel_pos(v, w, emax);
         }
     }
     imageStore(model_in, xy, r);
