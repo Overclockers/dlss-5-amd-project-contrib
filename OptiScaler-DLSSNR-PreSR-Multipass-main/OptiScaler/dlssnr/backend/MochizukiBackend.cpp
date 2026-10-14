@@ -8,6 +8,15 @@
 #include <State.h>
 #include <wrl/client.h>
 
+// NrFrameDiag: last Vulkan core GPU ms from the runtime (cheap stats copy; no GPU access).
+static PFN_MochizukiNrGetInfo gDiagGetInfo = nullptr;
+static float DiagCoreGpuMs(void* context)
+{
+    if (!gDiagGetInfo || !context) return 0;
+    MochizukiNrInfo info {sizeof info};
+    return gDiagGetInfo(context, &info) == LMXXF_NR_OK ? info.gpu_ms_last : 0.f;
+}
+
 namespace DlssNr::Backend
 {
 namespace
@@ -109,6 +118,8 @@ struct MochizukiBackend::Impl
             return false;
         }
         owner = LmxxfRecording::SessionOwner::Create(api, session, LmxxfRecording::SessionOwner::kInlineAhead);
+        gDiagGetInfo = getInfo;
+        if (owner) owner->diagCoreGpuMs = &DiagCoreGpuMs;
         if (!owner) { api.Destroy(session); Status("mochizuki: session ownership allocation failed"); return false; }
         owner->onFailure = SubmissionFailure;
         // ACO is chosen when the Vulkan device is created. Push the current ini before PrepareSession.
@@ -338,12 +349,24 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     }
     auto* invocation = AmdPreSr::GraphicsSnap::GraphicsInvocationFor(reinterpret_cast<uint64_t>(cmd));
     if (invocation) { invocation->commandsRecorded = true; invocation->outcome = "recording_attempted"; }
+    // NrFrameDiag GPU stamps (default off): capture begin/end, resume, done on the game queue.
+    if (inlineResources) inlineResources->DiagStamp(cmd, FrameDiag::kGpuCapBegin);
+    else if (lease->diag.active) {
+        if (auto stamps = FrameDiag::GpuStamps::Acquire(p->device.Get(), FrameDiag::kGpuStampCount))
+        { lease->splitStamps = stamps; stamps->Stamp(cmd, FrameDiag::kGpuCapBegin); }
+    }
     if (p->api.RecordInputs(p->owner->context, job.handle, cmd) != LMXXF_NR_OK)
     { p->failed = true; p->Error("input recording failed"); return nullptr; }
     if (inlineResources) { inlineResources->RecordCapture(cmd); inlineResources->RecordWait(cmd); }
-    if ((!inlineResources && LmxxfCut::TrySplitAtEvaluate(cmd) != S_OK) ||
-        p->api.RecordOutputs(p->owner->context, job.handle, cmd) != LMXXF_NR_OK)
+    else if (lease->splitStamps) lease->splitStamps->Stamp(cmd, FrameDiag::kGpuCapEnd);
+    if (!inlineResources && LmxxfCut::TrySplitAtEvaluate(cmd) != S_OK)
     { p->failed = true; p->Error("recording failed"); return nullptr; }
+    if (!inlineResources && lease->splitStamps) lease->splitStamps->Stamp(cmd, FrameDiag::kGpuResume);
+    if (p->api.RecordOutputs(p->owner->context, job.handle, cmd) != LMXXF_NR_OK)
+    { p->failed = true; p->Error("recording failed"); return nullptr; }
+    if (!inlineResources && lease->splitStamps) {
+        lease->splitStamps->Stamp(cmd, FrameDiag::kGpuDone); lease->splitStamps->Resolve(cmd);
+    }
     if (inlineResources) inlineResources->RecordSelect(cmd, input.colourState);
     lease->ready = true;
     if (lease->trace) {

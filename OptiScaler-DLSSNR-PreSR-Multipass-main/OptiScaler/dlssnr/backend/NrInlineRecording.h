@@ -300,7 +300,24 @@ cbuffer Size : register(b0) { uint width; uint height; }
     bool WasAborted() const { return noNetwork; }
     ID3D12Resource* OutputTexture() const { return output.texture.Get(); }
     ID3D12Resource* FirstTexture() const { return first.texture.Get(); }
-    void RecordCapture(ID3D12GraphicsCommandList* list) { Op(list, 1, decision.Get()); UavBarrier(list, capture.Get()); }
+    // NrFrameDiag GPU stamps (game queue + side queue). Created lazily, only when diag is on.
+    std::shared_ptr<FrameDiag::GpuStamps> gameStamps, sideStamps;
+    Ptr<ID3D12CommandQueue> gameQueue;
+    void DiagStamp(ID3D12GraphicsCommandList* list, UINT point) {
+        if (!diag.active) return;
+        if (!gameStamps) gameStamps = FrameDiag::GpuStamps::Acquire(device.Get(), FrameDiag::kGpuStampCount);
+        if (!gameStamps) return;
+        gameStamps->Stamp(list, point);
+    }
+    // At reclaim (Complete): both queues' resolves have retired. Hands the stamp sets to the async emitter
+    // (this recording takes fresh pooled ones if it is reused).
+    void DiagEmitAsync() {
+        if (!diag.active) return;
+        FrameDiag::AsyncEmit(diag, std::move(gameStamps), gameQueue.Get(),
+                             noNetwork ? nullptr : std::move(sideStamps), side.Get());
+        gameStamps.reset(); sideStamps.reset();
+    }
+    void RecordCapture(ID3D12GraphicsCommandList* list) { Op(list, 1, decision.Get()); UavBarrier(list, capture.Get()); DiagStamp(list, FrameDiag::kGpuCapEnd); }
     void RecordWait(ID3D12GraphicsCommandList* list, UINT slices = kWaitSlices, UINT iterations = kWaitIterations) {
         // Keep the predicate immutable after this point: late completion cannot select unrecorded output.
         for (UINT i = 0; i < slices; ++i) {
@@ -312,6 +329,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
         Op(list, 5, decision.Get()); UavBarrier(list, decision.Get());
         Barrier(list, decision.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_PREDICATION);
         list->SetPredication(decision.Get(), 0, D3D12_PREDICATION_OP_EQUAL_ZERO);
+        DiagStamp(list, FrameDiag::kGpuResume); // spin exit (EndQuery is not predicated)
     }
     void RecordSelect(ID3D12GraphicsCommandList* list, D3D12_RESOURCE_STATES colourState) {
         list->SetPredication(nullptr, 0, D3D12_PREDICATION_OP_EQUAL_ZERO);
@@ -321,6 +339,8 @@ cbuffer Size : register(b0) { uint width; uint height; }
         list->CopyBufferRegion(decisionReadback.Get(), 0, decision.Get(), 0, 16);
         Barrier(list, decision.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         decisionReadable = true;
+        DiagStamp(list, FrameDiag::kGpuDone);
+        if (diag.active && gameStamps) gameStamps->Resolve(list); // predication already cleared
     }
     bool Started() const { return started; }
     // NrInlineReuse: a retired recording may serve a later frame with identical inputs.
@@ -364,6 +384,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
     void BeforeExecute(ID3D12CommandQueue* game, bool bypass = false) {
         if (!Complete()) throw std::runtime_error("inline recording still executing");
         captureEvents.clear();
+        gameQueue = game;
         started = true; uncertain = noNetwork = false; sideUncertain = true;
         finalValue = gameValue = 0; gameFence.Reset();
         scheduled.store(false, std::memory_order_release);
@@ -465,7 +486,11 @@ cbuffer Size : register(b0) { uint width; uint height; }
         if (ok) {
             Check(doneAlloc->Reset(), "inline done allocator"); Check(doneList->Reset(doneAlloc.Get(), nullptr), "inline done list");
             // Runtime Enqueue inserted its network completion Wait on this same side queue.
+            if (diag.active && !sideStamps) sideStamps = FrameDiag::GpuStamps::Acquire(device.Get(), 1);
+            const bool stamp = diag.active && sideStamps;
+            if (stamp) sideStamps->Stamp(doneList.Get(), 0);
             Op(doneList.Get(), 2, sample.Get()); UavBarrier(doneList.Get(), control.Get());
+            if (stamp) sideStamps->Resolve(doneList.Get());
             Check(doneList->Close(), "inline done close"); Execute(side.Get(), doneList.Get());
         }
         finalValue = ++serial; Check(side->Signal(sideFence.Get(), finalValue), "inline tail signal");
