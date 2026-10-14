@@ -720,8 +720,7 @@ void RenderMenu(Config* config, float menuResScale)
                     bool gpuHandoff = config->NrGpuHandoff.value_or_default();
                     if (MenuUi::Checkbox("GPU-armed handoff", &gpuHandoff)) config->NrGpuHandoff = gpuHandoff;
                     HelpMarker("Default off. Mochizuki inline: the GPU side queue watches for this frame's capture and starts NR"
-                               "
-without a CPU round trip. Missed capture shows the original frame. Applies to the next frame. INI: NrGpuHandoff.");
+                               "\nwithout a CPU round trip. Missed capture shows the original frame. Applies to the next frame. INI: NrGpuHandoff.");
                 }
                 if (isLmxxf && inlineMode) {
                     int slots = std::clamp(config->LmxxfInlineSlots.value_or_default(), 1, 5) - 1;
