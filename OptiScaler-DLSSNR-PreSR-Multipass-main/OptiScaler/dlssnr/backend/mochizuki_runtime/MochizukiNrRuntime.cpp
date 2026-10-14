@@ -1738,6 +1738,60 @@ struct Session
     // The watchdog (Watch), from the first Enqueue until ~Session, and the frames it watches.
     std::thread watchdog;
     bool watchdogStarted = false; // under submitMutex
+    // MZ_DIAG_NET_TRACE=1 (default off): a sampler thread timestamps (QPC) when each frame's produced value lands in
+    // toVk (game side -> Vulkan), its finished value in the Vulkan view of fromVk (network done) and in the D3D12 view
+    // (interop back). Read-only CPU reads, no waits added; logs only frames slower than 50 ms (plus the two before).
+    struct NetTrace { UINT64 produced = 0, finished = 0; int64_t enq = 0, sub = 0, toVk = 0, vkDone = 0, d3dDone = 0;
+                      uint32_t phases = 0, slotWaitUs = 0; };
+    std::mutex traceMutex; std::deque<NetTrace> tracePending; std::thread tracer; std::atomic<bool> traceStop {false};
+    bool traceOn = [] { const char* v = std::getenv("MZ_DIAG_NET_TRACE"); return v && !std::strcmp(v, "1"); }();
+    int64_t traceEnq = 0; uint32_t traceSlotWaitUs = 0, tracePhases = 0; // under submitMutex
+    static int64_t TraceQpc() { LARGE_INTEGER q; QueryPerformanceCounter(&q); return q.QuadPart; }
+    void TraceLoop()
+    {
+        LARGE_INTEGER f; QueryPerformanceFrequency(&f); const double ms = 1000.0 / double(f.QuadPart);
+        HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+        std::deque<NetTrace> done; uint64_t logged = 0;
+        while (!traceStop.load(std::memory_order_acquire))
+        {
+            if (timer) { LARGE_INTEGER due {}; due.QuadPart = -5000; SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE);
+                         WaitForSingleObject(timer, 5); } else Sleep(1);
+            const UINT64 tv = toVk.fence ? toVk.fence->GetCompletedValue() : 0;
+            UINT64 vv = 0; if (vkGetSemaphoreCounterValue(vk.device, fromVk.semaphore, &vv) != VK_SUCCESS) vv = 0;
+            const UINT64 dv = fromVk.fence ? fromVk.fence->GetCompletedValue() : 0;
+            const int64_t now = TraceQpc();
+            std::lock_guard lock(traceMutex);
+            for (auto& t : tracePending) {
+                if (!t.toVk && tv != UINT64_MAX && tv >= t.produced) t.toVk = now;
+                if (!t.vkDone && vv != UINT64_MAX && vv >= t.finished) t.vkDone = now;
+                if (!t.d3dDone && dv != UINT64_MAX && dv >= t.finished) t.d3dDone = now;
+            }
+            while (!tracePending.empty() && tracePending.front().toVk && tracePending.front().vkDone && tracePending.front().d3dDone) {
+                const NetTrace t = tracePending.front(); tracePending.pop_front();
+                done.push_back(t); if (done.size() > 3) done.pop_front();
+                if ((t.d3dDone - t.enq) * ms > 50.0 && logged < 64) {
+                    ++logged;
+                    // Own file so MZ_DIAG_NET_TRACE works without MochizukiNrSetLogging.
+                    const std::wstring path = DataDirectory() + L"\\mochizuki_net_trace.log";
+                    FILE* f = _wfopen(path.c_str(), L"ab");
+                    for (const auto& d : done) {
+                        char line[384];
+                        std::snprintf(line, sizeof line,
+                            "[mochizuki] net_trace finished=%llu phases=%u slot_wait_us=%u enq_to_submit=%.3f submit_to_tovk=%.3f "
+                            "tovk_to_vkdone=%.3f vkdone_to_d3d=%.3f total=%.3f ms",
+                            (unsigned long long)d.finished, d.phases, d.slotWaitUs, (d.sub - d.enq) * ms,
+                            (d.toVk - d.sub) * ms, (d.vkDone - d.toVk) * ms, (d.d3dDone - d.vkDone) * ms, (d.d3dDone - d.enq) * ms);
+                        nr::logf("%s", line);
+                        if (f) { SYSTEMTIME st {}; GetLocalTime(&st);
+                            std::fprintf(f, "%02u:%02u:%02u.%03u %s\r\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, line); }
+                    }
+                    if (f) std::fclose(f);
+                    done.clear();
+                }
+            }
+        }
+        if (timer) CloseHandle(timer);
+    }
     std::mutex watchMutex;
     std::condition_variable watchWake;
     bool watchStop = false;
@@ -2399,6 +2453,12 @@ struct Session
     // goes through. The watchdog, Drain and Follow learn of it. Under submitMutex.
     void Submitted(UINT64 produced, UINT64 finished)
     {
+        if (traceOn) {
+            if (!tracer.joinable()) { try { tracer = std::thread([this] { TraceLoop(); }); } catch (...) { traceOn = false; } }
+            NetTrace t; t.produced = produced; t.finished = finished; t.enq = traceEnq ? traceEnq : TraceQpc(); t.sub = TraceQpc();
+            t.phases = tracePhases; t.slotWaitUs = traceSlotWaitUs;
+            std::lock_guard lock(traceMutex); if (tracePending.size() < 64) tracePending.push_back(t);
+        }
         awaited.Add(produced, finished);
         lastProduced.store(produced, std::memory_order_relaxed);
         lastFinished.store(finished, std::memory_order_release);
@@ -2450,6 +2510,8 @@ struct Session
 
     void StopWatchdog()
     {
+        traceStop.store(true, std::memory_order_release);
+        if (tracer.joinable()) tracer.join();
         if (!watchdog.joinable())
             return;
         {
@@ -3965,6 +4027,7 @@ struct Session
     {
         std::lock_guard lock(submitMutex);
         const uint64_t call = ++enqueueCalls;
+        if (traceOn) { traceEnq = TraceQpc(); traceSlotWaitUs = 0; tracePhases = 0; }
         StartWatchdog();
         Submission sub;
         try
@@ -4115,9 +4178,11 @@ struct Session
         const uint32_t slot = nextSlot;
         if (inFlight[slot] || call == hooks.slotTimeoutAt)
         {
+            const int64_t slotWait0 = traceOn ? TraceQpc() : 0;
             const VkResult waited = call == hooks.slotTimeoutAt
                                         ? VK_TIMEOUT
                                         : vkWaitForFences(vk.device, 1, &done[slot], VK_TRUE, kSlotWaitNs);
+            if (traceOn) { LARGE_INTEGER f; QueryPerformanceFrequency(&f); traceSlotWaitUs = uint32_t((TraceQpc() - slotWait0) * 1000000 / f.QuadPart); }
             if (waited == VK_TIMEOUT)
             {
                 if (++slotTimeouts >= kSlotTimeoutsLost)
@@ -4425,6 +4490,7 @@ struct Session
         }
         else
         {
+            if (traceOn) tracePhases = uint32_t(phases.size());
             if (fullCompute) SubmitPhases(phases, sub.produced, sub.finished, done[slot]);
             else if (phases.size() > 1) {
                 if (loggedPhaseCount != phases.size()) {
