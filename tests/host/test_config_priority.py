@@ -187,6 +187,7 @@ int main() {
                 "NrInlineReuse",  # Host-owned inline recording reuse.
                 "NrGpuHandoff",  # Host-owned GPU-armed inline handoff.
                 "EarlyExeWrap",
+                "EarlyAnyModuleWrap",
                 "Diagnostic",
                 "NrTimingEnabled",  # Product telemetry, not an upstream kernel option.
                 "NrTimingLog",
