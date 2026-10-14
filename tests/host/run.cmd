@@ -32,6 +32,8 @@ echo usage: tests\host\run.cmd [ci^|device^|all] [out-dir]
 exit /b 2
 
 :ci
+%CXX% /utf-8 tests\host\mochizuki_network_shortcut.cpp /Fe"%OUT%\mochizuki_network_shortcut.exe" /Fo"%OUT%\mochizuki_network_shortcut.obj" || goto fail
+"%OUT%\mochizuki_network_shortcut.exe" || goto fail
 %CXX% /utf-8 tests\host\nr_recording_admission.cpp /Fe"%OUT%\nr_recording_admission.exe" /Fo"%OUT%\nr_recording_admission.obj" || goto fail
 "%OUT%\nr_recording_admission.exe" || goto fail
 %CXX% /utf-8 tests\host\recording_device_identity.cpp /Fe"%OUT%\recording_device_identity.exe" /Fo"%OUT%\recording_device_identity.obj" /link dxguid.lib || goto fail

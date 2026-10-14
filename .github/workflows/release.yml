@@ -214,6 +214,11 @@ jobs:
             exports/mochizuki-runtime/build-manifest.json
             exports/mochizuki-runtime/dlssnr-amd/shaders
             exports/mochizuki-runtime/dlssnr-amd/aco
+            exports/mochizuki-runtime/dlssnr-amd/int4/settings.txt
+            exports/mochizuki-runtime/dlssnr-amd/int4/shaders
+            exports/mochizuki-runtime/dlssnr-amd/int4/vit
+            exports/mochizuki-runtime/dlssnr-amd/int4/swin
+            exports/mochizuki-runtime/model-tools
           key: mochi-${{ runner.os }}-${{ steps.cache_keys.outputs.mochi }}
 
       - name: Restore tooling test receipt
@@ -233,6 +238,19 @@ jobs:
         shell: pwsh
         run: |
           ./tools/build/build-ci.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Replay Mochizuki upstream pin
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pin = (Get-Content tools/mochizuki-sync/manifest.json -Raw | ConvertFrom-Json).commit
+          $upstream = Join-Path $env:RUNNER_TEMP 'mochizuki-source-check'
+          git init $upstream
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git -C $upstream fetch --depth=1 https://github.com/mochizuki0323/DLSSNR-AMD.git $pin
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B tools/mochizuki-sync/check.py --upstream $upstream
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Create ephemeral package signing certificate
@@ -281,7 +299,7 @@ jobs:
           # Independent CI tripwire: inspect the exact archive that Release uploads.
           $ver = '${{ steps.ver.outputs.version }}'
           $zipPath = "dist\OptScaler-NR-$ver.zip"
-          $forbidden = '(?i)^(nvngx.*\.dll|dlssnr_amd_pass.*\.dll|dlssnr_on_amd_weights\.bin|dlssnr\.bin|version\.dll|dlssnr_on_amd_setup\.exe)$'
+          $forbidden = '(?i)^(nvngx.*\.dll|dlssnr_amd_pass.*\.dll|dlssnr_on_amd_weights\.bin|dlssnr(?:-int4)?\.bin|pipeline\.cache|version\.dll|dlssnr_on_amd_setup\.exe)$'
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           $archive = [IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $zipPath))
           try {
@@ -304,7 +322,12 @@ jobs:
             }
           }
 
-          foreach ($license in @('OptiScaler_LICENSE.txt', 'Lmxxf_MIT.txt', 'Mochizuki_MIT.txt', 'ONNXRuntime_MIT.txt', 'YOLO11_AGPL-3.0.txt', 'PPHumanSeg_Apache-2.0.txt', 'YuNet_MIT.txt', 'XeSS_LICENSE.txt', 'FidelityFX_v1_LICENSE.md', 'FidelityFX_v2_LICENSE.md', 'DirectX_LICENSE.txt')) {
+          foreach ($path in @('model-tools/dlssnr-int4-weights.exe', 'model-tools/dlssnr-int4.sha256', 'mochizuki-int4.ps1') +
+              @(Get-Content tools/install/mochizuki-owned.txt | Where-Object { $_ -and !($_.StartsWith('#')) } | ForEach-Object { "dlssnr-amd/$_" })) {
+            if ($entryPaths -notcontains $path) { throw "REQUIRED MOCHIZUKI COMPONENT MISSING: $path" }
+          }
+          if ($entryPaths -match '(?i)/(aco-cache|pipeline-binaries)/') { throw 'Driver cache included in package.' }
+          foreach ($license in @('OptiScaler_LICENSE.txt', 'Lmxxf_MIT.txt', 'Mochizuki_MIT.txt', 'RenoDX_MIT.txt', 'ONNXRuntime_MIT.txt', 'YOLO11_AGPL-3.0.txt', 'PPHumanSeg_Apache-2.0.txt', 'YuNet_MIT.txt', 'XeSS_LICENSE.txt', 'FidelityFX_v1_LICENSE.md', 'FidelityFX_v2_LICENSE.md', 'DirectX_LICENSE.txt')) {
             if ($entryPaths -notcontains "Licenses/$license") {
               throw "REQUIRED LICENSE MISSING IN ZIP: $license"
             }
@@ -318,6 +341,16 @@ jobs:
             dist/OptScaler-NR-${{ steps.ver.outputs.version }}.zip
             dist/OptScaler-NR-${{ steps.ver.outputs.version }}/SHA256SUMS.txt
           if-no-files-found: error
+
+      - name: Upload validation logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: validation-logs
+          path: |
+            exports/release-ci/*.log
+            exports/release-ci/tests/summary.txt
+          if-no-files-found: ignore
 
       - name: Create GitHub Release metadata
         if: startsWith(github.ref, 'refs/tags/')

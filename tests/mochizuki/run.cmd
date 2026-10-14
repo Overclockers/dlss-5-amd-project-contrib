@@ -23,6 +23,7 @@ call tests\_lib\msvc-env.cmd || exit /b 1
 if not exist exports\mochizuki-tests mkdir exports\mochizuki-tests
 if /i "%~1"=="abi" call :acounit || exit /b 1
 if /i "%~1"=="aco-unit" goto acounit
+if /i "%~1"=="windows005" goto windows005
 if /i "%~1"=="inline" goto inline
 if /i "%~1"=="aco-inline" goto inline
 if /i "%~1"=="aco-temporal" goto acotemporal
@@ -210,11 +211,17 @@ exit /b %errorlevel%
 cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS /I exports/mochizuki-toolchain/Vulkan-Headers-e3b1eec08173d6b825cd3ac88c885a63b621504a/include /I third_party/mochizuki/windows/src/core tests/mochizuki/aco.cpp /Foexports/mochizuki-tests/aco.obj /Feexports/mochizuki-tests/aco.exe || exit /b 1
 exports\mochizuki-tests\aco.exe third_party\mochizuki\windows\data\aco\records exports\mochizuki-tests\aco-test.nrb || exit /b 1
 python -X utf8 tools\build\mochizuki-aco.py --verify --out exports\mochizuki-runtime\dlssnr-amd\aco || exit /b 1
+python -X utf8 tools\build\mochizuki-aco.py --verify --out exports\mochizuki-runtime\dlssnr-amd\aco\int4 || exit /b 1
 python -X utf8 tools\install\mochizuki-owned.py --check || exit /b 1
 exit /b 0
 
 :composition
 exports\mochizuki-tests\runtime.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" --composition
+exit /b %errorlevel%
+
+:windows005
+cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /I OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler tests/mochizuki/windows005.cpp /Foexports/mochizuki-tests/windows005.obj /Feexports/mochizuki-tests/windows005.exe /link d3d12.lib dxgi.lib || exit /b 1
+exports\mochizuki-tests\windows005.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" %2
 exit /b %errorlevel%
 
 :acotemporal
