@@ -1,8 +1,6 @@
-diff --git a/linux/build/build_network.py b/linux/build/build_network.py
-index f2d4dc52..514e3069 100644
 --- a/linux/build/build_network.py
 +++ b/linux/build/build_network.py
-@@ -28,7 +28,9 @@ RUNTIME = ['runtime_alpha', 'runtime_encode', 'runtime_transfer', 'runtime_upsca
+@@ -28,7 +28,9 @@
             'runtime_downscale', 'runtime_taps']
  # runtime passes built from another pass's source with defines: name -> (source, defines)
  RUNTIME_VARIANTS = {'runtime_transfer_store': ('runtime_transfer', ['NR_STORE_NATIVE']),
@@ -13,8 +11,6 @@ index f2d4dc52..514e3069 100644
  MOTION = ['motion_luma', 'motion_estimate']
  
  
-diff --git a/linux/shaders/passes/runtime_alpha.comp b/linux/shaders/passes/runtime_alpha.comp
-index c7df0f43..d3f90d8f 100644
 --- a/linux/shaders/passes/runtime_alpha.comp
 +++ b/linux/shaders/passes/runtime_alpha.comp
 @@ -1,5 +1,25 @@
@@ -44,11 +40,9 @@ index c7df0f43..d3f90d8f 100644
  // Inline compute-family write-back for an R8G8B8A8_UNORM frame (runtime_pack_u8.spv).
  // The format-converting blit is graphics-only. The answer already holds k/255 values
  // (alpha pass, encode_u8), so this rounding equals the blit's float -> UNORM conversion.
-diff --git a/windows/build/build_network.py b/windows/build/build_network.py
-index ea1fd0b9..e48ba980 100644
 --- a/windows/build/build_network.py
 +++ b/windows/build/build_network.py
-@@ -32,7 +32,9 @@ RUNTIME = ['runtime_alpha', 'runtime_encode', 'runtime_transfer', 'runtime_upsca
+@@ -32,7 +32,9 @@
             'runtime_downscale', 'runtime_taps']
  # runtime passes built from another pass's source with defines: name -> (source, defines)
  RUNTIME_VARIANTS = {'runtime_transfer_store': ('runtime_transfer', ['NR_STORE_NATIVE']),
@@ -59,8 +53,6 @@ index ea1fd0b9..e48ba980 100644
  MOTION = ['motion_luma', 'motion_estimate']
  
  
-diff --git a/windows/shaders/passes/runtime_alpha.comp b/windows/shaders/passes/runtime_alpha.comp
-index c7df0f43..d3f90d8f 100644
 --- a/windows/shaders/passes/runtime_alpha.comp
 +++ b/windows/shaders/passes/runtime_alpha.comp
 @@ -1,5 +1,25 @@
@@ -90,11 +82,9 @@ index c7df0f43..d3f90d8f 100644
  // Inline compute-family write-back for an R8G8B8A8_UNORM frame (runtime_pack_u8.spv).
  // The format-converting blit is graphics-only. The answer already holds k/255 values
  // (alpha pass, encode_u8), so this rounding equals the blit's float -> UNORM conversion.
-diff --git a/windows/src/core/nr_runtime.cpp b/windows/src/core/nr_runtime.cpp
-index 5f5fc4d4..60f5893c 100644
 --- a/windows/src/core/nr_runtime.cpp
 +++ b/windows/src/core/nr_runtime.cpp
-@@ -332,6 +332,9 @@ struct Runtime::Impl {
+@@ -338,6 +338,9 @@
      // Compute write-back for an R8G8B8A8_UNORM frame (runtime_pack_u8.spv), used
      // only while compute_recording; graphics recordings keep the blit.
      nrvk::Kernel pack_u8; nrvk::Context::Image pack_img{}; bool pack_built{};
@@ -104,7 +94,7 @@ index 5f5fc4d4..60f5893c 100644
      bool compute_recording{}, graphics_family{true};
      void graphics_only(const char* what) const {
          if (compute_recording)
-@@ -990,6 +993,10 @@ struct Runtime::Impl {
+@@ -1009,6 +1012,10 @@
          }
          if (depth_copy.device) depth_copy.destroy();
          if (alpha.device) alpha.destroy();
@@ -115,7 +105,7 @@ index 5f5fc4d4..60f5893c 100644
          if (pack_u8.device) pack_u8.destroy();
          if (pack_img.handle) session.ctx.destroy(pack_img);
          if (encode.device) encode.destroy();
-@@ -1461,6 +1468,27 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
+@@ -1563,6 +1570,27 @@
              nr::logf("[nr] runtime_pack_u8.spv missing; compute-family UNORM8 write-back unavailable");
          }
      }
@@ -143,7 +133,7 @@ index 5f5fc4d4..60f5893c 100644
      if (!impl_->graphics_family && compute_refusal(false, VK_FORMAT_UNDEFINED, 0, 1))
          throw std::invalid_argument("NR colour format conversion requires a graphics-capable queue");
      impl_->compute_recording = !impl_->graphics_family;
-@@ -1795,8 +1823,8 @@ const char* Runtime::compute_refusal(bool motion, VkFormat motion_format, VkImag
+@@ -1907,8 +1935,8 @@
                                       int passes, bool mask) const {
      auto& m = *impl_;
      if (m.scaled) return "model scale below 1 needs a downscale blit";
@@ -154,7 +144,7 @@ index 5f5fc4d4..60f5893c 100644
          return "colour write-back conversion needs a blit";
      if (motion && !(NR_DIRECT_MOTION && !m.motion_src_failed && !mask && passes == 1 && m.temporal.pingpong &&
                      (motion_usage & VK_IMAGE_USAGE_SAMPLED_BIT) && m.filters_linearly(motion_format)))
-@@ -2071,9 +2099,11 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
+@@ -2193,9 +2221,11 @@
      // Where tex_in stands once the frame is in it: a copy or blit leaves it a transfer
      // destination, runtime_downscale.comp (keep_native) a storage image.
      const bool down_native = impl_->scaled && impl_->keep_native;
@@ -169,7 +159,7 @@ index 5f5fc4d4..60f5893c 100644
      if (!ds)
      barrier(cmd, s.tex_in.handle, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, tin_layout,
              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT, tin_stage, tin_access);
-@@ -2126,9 +2156,26 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
+@@ -2248,9 +2278,26 @@
      } else if (impl_->transfer == Transfer::DirectBlit) {
          // FP16 / 16-bit UNORM / 10-bit packed: no sRGB transfer function to route
          // around, so the blit's own format conversion is the whole of it.
@@ -199,7 +189,7 @@ index 5f5fc4d4..60f5893c 100644
      } else {
          vkCmdCopyImage(cmd, frame.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                         colour_dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-@@ -2715,21 +2762,22 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
+@@ -2842,21 +2889,22 @@
              barrier(cmd,encoded.handle,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,
                      VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT,
                      VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT|VK_ACCESS_TRANSFER_WRITE_BIT);
@@ -229,11 +219,9 @@ index 5f5fc4d4..60f5893c 100644
                             wb, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
              barrier(cmd, out, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,
-diff --git a/windows/src/core/nr_runtime.hpp b/windows/src/core/nr_runtime.hpp
-index 7ea3757a..1d60ecf4 100644
 --- a/windows/src/core/nr_runtime.hpp
 +++ b/windows/src/core/nr_runtime.hpp
-@@ -439,7 +439,8 @@ public:
+@@ -459,7 +459,8 @@
      const char* compute_refusal(bool motion, VkFormat motion_format, VkImageUsageFlags motion_usage, int passes,
                                  bool mask = false) const;
      // While on, recordings go to a compute-only family: an R8G8B8A8_UNORM

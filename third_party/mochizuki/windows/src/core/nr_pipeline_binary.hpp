@@ -1,6 +1,8 @@
 #pragma once
 #include "nr_pal_binary.hpp"
+#include "nr_driver_identity.hpp"
 #include "nr_log.hpp"
+#include "nr_build_cfg.hpp"
 #include <vulkan/vulkan.h>
 #include <cstdio>
 #include <cstdlib>
@@ -53,8 +55,14 @@ inline uint64_t identity() { std::lock_guard<std::mutex> l(identity_mutex); retu
 inline std::string directory() {
     auto& s=mode();std::lock_guard<std::mutex> l(s.m);
     if(s.disabled)return "";
-    if(!s.owned) if(const char* p=std::getenv("NR_ACO_DIR")) if(*p) return p;
-    return s.configured?s.dir:"";
+    std::string dir;
+    if(!s.owned) if(const char* p=std::getenv("NR_ACO_DIR")) if(*p) dir=p;
+    if(dir.empty() && s.configured) dir=s.dir;
+#if NR_INT4
+    // Each build selects its own records; changing the network never changes the process mode.
+    if(!dir.empty() && (!s.owned || nr::g_build_cfg) && nr::build_cfg("NR_I4_WEIGHTS")) dir+="/int4";
+#endif
+    return dir;
 }
 inline void disable(const std::string& why) {
     auto& s=mode();std::lock_guard<std::mutex> l(s.m);
@@ -90,6 +98,14 @@ struct Features {
         VkPhysicalDeviceDriverProperties drv{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
         VkPhysicalDeviceProperties2 props{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,&drv};
         vkGetPhysicalDeviceProperties2(physical,&props);
+        if(props.properties.vendorID!=0x1002 || drv.driverID!=VK_DRIVER_ID_AMD_PROPRIETARY) {
+            // A hook in front of the loader (OptiScaler's GPU spoofing) may say so: AMD's driver is asked itself.
+            const std::string said=props.properties.deviceName;
+            if(nr::driver::amd_reported(physical,&props.properties,&drv))
+                nr::logf("[nr] ACO network: the loader reports %s, AMD's driver %s",said.c_str(),props.properties.deviceName);
+            else
+                nr::logf("[nr] ACO network: the loader reports %s, and no AMD driver in the process lists this GPU",said.c_str());
+        }
         if(props.properties.vendorID!=0x1002 || drv.driverID!=VK_DRIVER_ID_AMD_PROPRIETARY)
             return disable("the ACO network needs AMD's own Windows Vulkan driver");
         uint32_t n=0;

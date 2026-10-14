@@ -1,8 +1,6 @@
-diff --git a/windows/src/core/nr_runtime.cpp b/windows/src/core/nr_runtime.cpp
-index 834cfa2c..cfbb56a3 100644
 --- a/windows/src/core/nr_runtime.cpp
 +++ b/windows/src/core/nr_runtime.cpp
-@@ -579,6 +579,7 @@ struct Runtime::Impl {
+@@ -589,6 +589,7 @@
      // format-converting blit (alpha pass or the post block's store).
      bool round_u8{};
      Transfer transfer{Transfer::Identical};
@@ -10,7 +8,7 @@ index 834cfa2c..cfbb56a3 100644
      // The network's input image is in the frame's own format (its UNORM twin
      // for *_SRGB) and a plain copy fills it; see the graph's --tex-in-format.
      bool direct_in{};
-@@ -1211,6 +1212,10 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
+@@ -1230,6 +1231,10 @@
      if (!s.ctx.adopt(host.instance, host.physical, host.device, host.queue, host.queue_family, &why))
          throw std::runtime_error("NR device unsupported: " + why);
      s.ctx.queue_lock = host.queue_lock; s.ctx.queue_unlock = host.queue_unlock;
@@ -20,10 +18,10 @@ index 834cfa2c..cfbb56a3 100644
 +    s.ctx.secondary_family = host.secondary_family;
      s.ctx.buffer_device_address = host.buffer_device_address;
      s.ctx.require_matrix_config();
-     // Where the pass's own cost is measured. Two queries per ring slot. A queue
-@@ -1756,6 +1761,9 @@ Runtime::~Runtime() = default;
- uint32_t Runtime::model_width() const { return impl_->mw; }
- uint32_t Runtime::model_height() const { return impl_->mh; }
+ #if NR_INT4
+@@ -1868,6 +1873,9 @@
+ bool Runtime::int4_mixed() const { return impl_->int4_mixed; }
+ #endif
  
 +void Runtime::set_network_segments(std::function<VkCommandBuffer(VkCommandBuffer, bool)> callback) {
 +    impl_->network_segments = std::move(callback);
@@ -31,7 +29,7 @@ index 834cfa2c..cfbb56a3 100644
  void Runtime::set_white_point(float v) {
      if (impl_->linear) impl_->white_point = v > 1e-4f ? v : 1e-4f;
  }
-@@ -2454,6 +2462,7 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
+@@ -2581,6 +2589,7 @@
                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
              if (temporal) copy_general(impl_->history_store[pass], t.history);
          }
@@ -39,7 +37,7 @@ index 834cfa2c..cfbb56a3 100644
          const bool time_net = impl_->timing_ok && impl_->split_timing;
          const uint32_t net_query = timing_slot * impl_->timing_stride + 2 + 2 * pass;
          if (time_net) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, impl_->timing, net_query);
-@@ -2503,6 +2512,7 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
+@@ -2630,6 +2639,7 @@
                              s.runner.inv_barrier && !last);
          }
          if (time_net) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, impl_->timing, net_query + 1);
@@ -47,11 +45,9 @@ index 834cfa2c..cfbb56a3 100644
          if (temporal && !t.pingpong) {
              // History is a copy of what the MODEL wrote - the temporal post variant
              // puts that on the second surface, before the application strength -
-diff --git a/windows/src/core/nr_runtime.hpp b/windows/src/core/nr_runtime.hpp
-index 841610c5..f7a26055 100644
 --- a/windows/src/core/nr_runtime.hpp
 +++ b/windows/src/core/nr_runtime.hpp
-@@ -114,6 +114,10 @@ struct HostDevice {
+@@ -118,6 +118,10 @@
      // then reads the activation arena through a buffer_reference where that is faster (Windows
      // network only).
      bool buffer_device_address = false;
@@ -62,7 +58,7 @@ index 841610c5..f7a26055 100644
  };
  
  struct RuntimeConfig {
-@@ -420,6 +424,11 @@ public:
+@@ -440,6 +444,11 @@
      // Change the white point (RuntimeConfig::white_point) between frames. No-op
      // unless the runtime was built with linear_input.
      void set_white_point(float);
@@ -74,11 +70,9 @@ index 841610c5..f7a26055 100644
  
      // **What the pass costs on the GPU**, from a timestamp pair around the work
      // this runtime records - everything between the first barrier and the last,
-diff --git a/windows/src/core/nrvk.hpp b/windows/src/core/nrvk.hpp
-index d0203e0f..fe273bad 100644
 --- a/windows/src/core/nrvk.hpp
 +++ b/windows/src/core/nrvk.hpp
-@@ -64,6 +64,7 @@ struct Context {
+@@ -64,6 +64,7 @@
      VkDevice device{};
      VkQueue queue{};
      uint32_t family{};
@@ -86,7 +80,7 @@ index d0203e0f..fe273bad 100644
      VkPhysicalDeviceMemoryProperties mem{};
      float timestamp_period{};
      // bufferDeviceAddress is enabled on the device: kernels may read the activation arena through
-@@ -479,6 +480,10 @@ struct Context {
+@@ -479,6 +480,10 @@
          device_address = device_address && buffer_device_address;
          VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
          info.size = bytes;
@@ -97,7 +91,7 @@ index d0203e0f..fe273bad 100644
          info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                       VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
          if (device_address) info.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-@@ -634,6 +639,10 @@ struct Context {
+@@ -634,6 +639,10 @@
          // which need not be storage-capable - *_SRGB's UNORM twin, 11/11/10).
          if (!storage) ii.usage &= ~VkImageUsageFlags(VK_IMAGE_USAGE_STORAGE_BIT);
          ii.sharingMode = VK_SHARING_MODE_EXCLUSIVE;

@@ -1,6 +1,6 @@
 --- a/windows/src/core/nr_runtime.cpp
 +++ b/windows/src/core/nr_runtime.cpp
-@@ -372,7 +372,7 @@
+@@ -382,7 +382,7 @@
      // build). `store_native`: the transfer pass (runtime_transfer_store.spv) also writes the answer
      // back into keep_full, each pixel after reading it, with the alpha pass's rounding; then there
      // is no full_out and no alpha pass, and the write-back is a copy.
@@ -9,7 +9,7 @@
      nrvk::Kernel downscale;
      nrvk::Buffer taps{};
      // store_native with the caller's frame itself (usage SAMPLED and STORAGE, keep_full's format):
-@@ -1337,11 +1337,14 @@
+@@ -1415,11 +1415,14 @@
              (kf & VK_FORMAT_FEATURE_2_TRANSFER_SRC_BIT) && (kf & VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT);
          impl_->store_native = impl_->keep_native && store_listed && (kf & VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT) &&
              (kf & VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT);
@@ -25,7 +25,7 @@
              impl_->full_out = s.ctx.image(config.width, config.height, VK_FORMAT_R32G32B32A32_SFLOAT, false);
              s.ctx.transition(impl_->full_out, VK_IMAGE_LAYOUT_GENERAL);
          }
-@@ -1393,7 +1396,8 @@
+@@ -1471,7 +1474,8 @@
          }
          nr::logf("[nr] Model resolution %ux%u: frame kept %s, answer %s", mw, mh,
                   impl_->keep_native ? "in its own format" : "as RGBA32F",
@@ -33,9 +33,9 @@
 +                 impl_->store_native ? "stored in its own format"
 +                 : impl_->compact_rgba ? "reused RGBA32F keep" : "RGBA32F, converted on the way back");
      }
-     if (config.max_passes > 1) {
-         if (mask_config.width) throw std::invalid_argument("the control mask path does not support more than one pass");
-@@ -1425,10 +1429,11 @@
+     // At the frame's extent, one pass, the input copied in the frame's own format (direct_in), no
+     // native compose: the transfer pass stores the answer in that format too, into keep_full, with the
+@@ -1527,10 +1531,11 @@
      // store_native: the answer is written into keep_full (a storage alias of it).
      nrvk::Context::Image keep_full_storage = impl_->keep_full;
      keep_full_storage.sampler = VK_NULL_HANDLE;
@@ -49,7 +49,7 @@
          impl_->alpha.create(s.ctx, (adapters / "runtime_alpha.spv").string(), {}, 12, {answer, frame_alpha});
      if (config.linear_input) {
          impl_->linear = true;
-@@ -1501,7 +1506,7 @@
+@@ -1604,7 +1609,7 @@
              // tex_in was also the frame as handed over, as `keep`.
              nrvk::Context::Image* keep = impl_->scaled ? &impl_->keep_full
                                           : impl_->linear ? &impl_->keep : &impl_->prep_keep;
@@ -58,7 +58,7 @@
                                             : impl_->scaled ? &impl_->full_out : &s.surf0;
              nrvk::Context::Image* up_r = impl_->scaled ? &impl_->up_result : answer;
              nrvk::Context::Image* up_s = impl_->scaled ? &impl_->up_shown : answer;
-@@ -2619,10 +2624,10 @@
+@@ -2746,10 +2751,10 @@
                       fr ? (prep_variant ? fr->transfer_prep : fr->transfer) : VK_NULL_HANDLE);
              compute_barrier(cmd);
          }
@@ -73,7 +73,7 @@
              // The post block's store was the write-back.
 --- a/windows/src/core/nr_runtime.hpp
 +++ b/windows/src/core/nr_runtime.hpp
-@@ -168,6 +168,14 @@
+@@ -177,6 +177,14 @@
      // (its linear-HDR encode, or linear_input's own): the preprocess undoes the
      // knee first, so its curve is the only one. False for an SDR frame.
      bool preprocess_unknee = false;

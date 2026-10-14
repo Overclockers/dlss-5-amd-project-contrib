@@ -49,6 +49,17 @@ class SourcePinTests(unittest.TestCase):
         (self.upstream / 'core.cpp').write_bytes(b'not the pin\n')
         checker.verify(self.repo, self.upstream, self.manifest)
 
+    def test_local_source_requires_declared_creation_patch(self):
+        manifest = json.loads(self.manifest.read_text())
+        manifest['added_files'] = ['adapter.cpp']
+        self.manifest.write_text(json.dumps(manifest), encoding='utf8')
+        (self.repo / 'third_party/mochizuki/adapter.cpp').write_text('local\n', encoding='utf8')
+        with self.assertRaises(ValueError):
+            checker.verify(self.repo, self.upstream, self.manifest)
+        with self.patch.open('a', encoding='utf8', newline='\n') as f:
+            f.write('--- /dev/null\n+++ b/adapter.cpp\n@@ -0,0 +1 @@\n+local\n')
+        checker.verify(self.repo, self.upstream, self.manifest)
+
     def test_unrecorded_vendor_edit_is_rejected(self):
         (self.repo / 'third_party/mochizuki/core.cpp').write_bytes(b'uncaptured edit\n')
         with self.assertRaisesRegex(ValueError, 'Unrecorded vendor'):

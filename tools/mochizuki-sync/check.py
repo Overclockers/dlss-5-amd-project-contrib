@@ -28,6 +28,10 @@ def verify(repo, upstream, manifest_path=MANIFEST):
     if len(pin) != 40 or any(c not in '0123456789abcdef' for c in pin):
         raise ValueError('The pin must be a full commit SHA')
     files = [relative(p) for p in manifest['files']]
+    added = [relative(p) for p in manifest.get('added_files', [])]
+    if len(set(added)) != len(added) or set(added) & set(files):
+        raise ValueError('Added source inventory duplicates upstream or local paths')
+    closure = set(files) | set(added)
     if not files or len(set(files)) != len(files):
         raise ValueError('Source closure is empty or has duplicate paths')
     vendor = (repo / relative(manifest['vendor'])).resolve()
@@ -81,10 +85,11 @@ def verify(repo, upstream, manifest_path=MANIFEST):
                   if p.is_file() and '.git' not in p.relative_to(stage).parts}
         actual = {p.relative_to(vendor).as_posix() for p in vendor.rglob('*')
                   if p.is_file() and '__pycache__' not in p.parts and p.relative_to(vendor).as_posix() != 'UPSTREAM.md'}
-        if staged != set(files) or actual != set(files):
-            raise ValueError('Closure inventory differs: extra=' + repr(sorted(actual - set(files))) +
-                             ' missing=' + repr(sorted(set(files) - actual)))
-        different = [path for path in files
+        if staged != closure or actual != closure:
+            raise ValueError('Closure inventory differs: extra=' + repr(sorted(actual - closure)) +
+                             ' missing=' + repr(sorted(closure - actual)) +
+                             ' replay_delta=' + repr(sorted(staged ^ closure)))
+        different = [path for path in closure
                      if normalize(path, (stage / path).read_bytes()) != normalize(path, (vendor / path).read_bytes())]
         if different:
             raise ValueError('Unrecorded vendor changes or stale patches: ' + ', '.join(different))
