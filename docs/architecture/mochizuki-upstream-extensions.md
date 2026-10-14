@@ -1,6 +1,6 @@
 # Mochizuki: upstream ownership and remaining interfaces
 
-The product follows official `a9b13dd4cdb5f4bf43db358492d72e6e5e2acd67` core,
+The product follows official `8a70f7f418294ff1e306b66893456e5319ff8205` core,
 graph, shaders and recipes. The residual feature patches are explicit in
 [the pin manifest](../../tools/mochizuki-sync/manifest.json), with a non-mutating
 [replay check](../../tools/mochizuki-sync/README.md). They reproduce the existing
@@ -10,7 +10,7 @@ claim that either backend directly loads the author's distributed binary.
 
 ## What belongs to the host
 
-Upstream proposal scope is **optional interfaces only**. The local eight-patch
+Upstream proposal scope is **optional interfaces only**. The local fourteen-patch
 inventory records the current product integration, not implementations to
 transplant upstream. The upstream preparation branch has reverted the ACO,
 buffer-optimization and timing-calculation snapshots. Keep official ACO and timing
