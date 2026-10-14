@@ -368,6 +368,14 @@
         "linux/shaders/passes/runtime_mv_rescale.comp",
         "windows/shaders/passes/runtime_mv_rescale.comp"
       ]
+    },
+    {
+      "feature": "compute-downscale",
+      "path": "patches/19-compute-downscale.patch",
+      "files": [
+        "windows/src/core/nr_runtime.cpp",
+        "windows/src/core/nr_runtime.hpp"
+      ]
     }
   ],
   "added": [

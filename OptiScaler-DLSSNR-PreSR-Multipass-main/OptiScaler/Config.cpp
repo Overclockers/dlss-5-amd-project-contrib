@@ -346,6 +346,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             NrWatchStartDelay.set_from_config(readInt(CfgKey::kSection, CfgKey::NrWatchStartDelay));
             NrInlineComputeConvert.set_from_config(readBool(CfgKey::kSection, CfgKey::NrInlineComputeConvert));
             NrInlineComputeMotion.set_from_config(readBool(CfgKey::kSection, CfgKey::NrInlineComputeMotion));
+            NrInlineComputeDownscale.set_from_config(readBool(CfgKey::kSection, CfgKey::NrInlineComputeDownscale));
             LmxxfEarlyExeWrap.set_from_config(readBool("DlssNr", "LmxxfEarlyExeWrap"));
             LmxxfEarlyAnyModuleWrap.set_from_config(readBool("DlssNr", "LmxxfEarlyAnyModuleWrap"));
             DlssNrMaxRatio.set_from_config(readFloat("DlssNr", "MaxRatio"));
@@ -1816,6 +1817,7 @@ bool Config::SaveIni()
     ini.SetValue(CfgKey::kSection, CfgKey::NrWatchStartDelay, GetIntValue(Instance()->NrWatchStartDelay.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::NrInlineComputeConvert, GetBoolValue(Instance()->NrInlineComputeConvert.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::NrInlineComputeMotion, GetBoolValue(Instance()->NrInlineComputeMotion.value_for_config()).c_str());
+    ini.SetValue(CfgKey::kSection, CfgKey::NrInlineComputeDownscale, GetBoolValue(Instance()->NrInlineComputeDownscale.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::NrInline,
                  GetBoolValue(Instance()->NrInline.value_for_config()).c_str());
     if (auto earlyWrap = Instance()->LmxxfEarlyExeWrap.value_for_config(); earlyWrap.has_value())

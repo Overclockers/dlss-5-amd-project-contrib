@@ -184,6 +184,11 @@ struct RuntimeConfig {
     // A2R10G10B10 UNORM) take the compute input conversion and a compute write-back pack instead
     // of the graphics blits; otherwise the blit path and its refusal remain.
     bool compute_convert_colour = false;
+    // Model scale below 1 on the compute family: the frame kept in its own format and filtered down by
+    // runtime_downscale (the blit's own taps and arithmetic), and the full-size answer written back by a
+    // compute pack (runtime_pack_*) when it is not stored in the frame's format. Off: the scaled path
+    // refuses compute recording as before.
+    bool compute_downscale = false;
     // Optional full-frame RGBA32F of pass 0, recorded before later passes
     // overwrite it. Requires ordinary multi-pass transfer (no native compose,
     // no mask, max_passes >= 2). The image lives as long as the runtime.

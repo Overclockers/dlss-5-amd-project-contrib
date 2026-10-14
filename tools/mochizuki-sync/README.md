@@ -1,7 +1,7 @@
 # Mochizuki source pin and interface patches
 
 The runtime uses official core/shaders at the full SHA in `manifest.json`, plus
-nineteen explicit feature patches. There are no whole-file preservation overlays.
+twenty explicit feature patches. There are no whole-file preservation overlays.
 The host loads our `MochizukiNrRuntime.dll`, which wraps that core; this does not
 claim binary compatibility with an official distributed runtime.
 
@@ -39,6 +39,7 @@ Those tests also run in `run.cmd abi`.
 | 15a plan-a-colour-conversion | Plan A input/output conversion passes (`runtime_planA_convert.comp`, `runtime_planA_unconvert.comp`, new files) and their R11G11B10/RGBA16F variants in both `build_network.py` tables. Applied after 15; 16 and 17 build on its table lines | Product-only; new files are listed under `added` in the manifest, which the checker requires to be declared by a patch |
 | 17 inline-compute-convert-formats | Extends 15/16 to RGBA8/BGRA8 (UNORM and sRGB via the UNORM twin) and A2B10G10R10/A2R10G10B10: compute input via runtime_unpack_f16 and write-back via runtime_pack_u8, runtime_pack_u8_bgra, runtime_pack_u10, runtime_pack_u10_bgra into an R32_UINT image + copy; RuntimeConfig::compute_convert_r11g11b10 becomes compute_convert_colour | Off unless RuntimeConfig::compute_convert_colour; a format whose sampled/storage/transfer support or shader is missing keeps its blit and logs the reason once |
 | 18 compute-motion-rescale | New `runtime_mv_rescale.comp` (bilinear, clamp-to-edge; the compute form of the adapter's LINEAR motion blit) and its rg16f/rg32f/rgba16f/rgba32f variants in both `build_network.py` tables | Product-only; used only when the host sets NrInlineComputeMotion on a dynamic-resolution geometry |
+| 19 compute-downscale | `RuntimeConfig::compute_downscale`: model scale below 1 on the compute family when the frame is kept in its own format (runtime_downscale, the blit's own taps) and the full-size answer is stored natively, copied (RGBA32F) or packed on compute (runtime_pack_f16 / the per-format packs) | Off unless the host sets it (NrInlineComputeDownscale); otherwise the downscale blit and its refusal remain |
 
 The patches replay sequentially against `manifest.json`'s commit. Patches 02-05
 share header/implementation context, so do not assume their patch files apply
@@ -53,7 +54,7 @@ the C64 persistent decoder to fused C32 pair from tile chaining, preserving the
 existing barrier and associated arena lifetime boundary; other chains remain.
 Its attribution and validation are in the backend guide and source record.
 
-This nineteen-patch series records the product snapshot; it is not the upstream PR
+This twenty-patch series records the product snapshot; it is not the upstream PR
 series. The upstream preparation branch has reverted the ACO, buffer-optimization
 and timing-calculation snapshots and retains only optional interface proposals.
 

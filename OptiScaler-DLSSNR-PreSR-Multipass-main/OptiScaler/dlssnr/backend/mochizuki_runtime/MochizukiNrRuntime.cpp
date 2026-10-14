@@ -2034,13 +2034,14 @@ struct NetworkKey
     bool firstPass = false;
     bool aco = false; // this build imports the ACO network; the device must already expose pipeline binaries
     bool computeConvert = false; // NrInlineComputeConvert on a listed-format key (RuntimeConfig::compute_convert_colour)
+    bool computeDownscale = false; // NrInlineComputeDownscale on a key with scale < 1 (RuntimeConfig::compute_downscale)
     bool operator==(const NetworkKey&) const = default;
     bool SameModel(const NetworkKey& other) const
     {
         return width == other.width && height == other.height && format == other.format &&
                scale == other.scale && linear == other.linear && prep == other.prep &&
                compactTransfer == other.compactTransfer && firstPass == other.firstPass && aco == other.aco &&
-               computeConvert == other.computeConvert;
+               computeConvert == other.computeConvert && computeDownscale == other.computeDownscale;
     }
 };
 
@@ -4213,6 +4214,7 @@ struct Session
             config.separate_answer = !key.compactTransfer;
             config.first_pass_output = key.firstPass;
             config.compute_convert_colour = key.computeConvert;
+            config.compute_downscale = key.computeDownscale;
             // The linear path's frame is a proxy made with the soft knee, which the preprocess undoes first.
             config.preprocess_unknee = key.linear;
             nr::TemporalConfig temporal;
@@ -5800,7 +5802,8 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
                 keyFormat == VK_FORMAT_A2B10G10R10_UNORM_PACK32 || keyFormat == VK_FORMAT_A2R10G10B10_UNORM_PACK32;
             const bool computeConvert = (info->flags & MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_CONVERT) && convertListed;
             const NetworkKey key { g.width, g.height, keyFormat, scale, maxPasses, linear, s->prepWanted,
-                                    compactTransfer, g.firstPass, aco, computeConvert };
+                                    compactTransfer, g.firstPass, aco, computeConvert,
+                                    (info->flags & MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_DOWNSCALE) && scale < 1.f };
             std::string why;
             s->infoRequestedPasses = passes;
             if (!s->EnsureNetwork(key, g, colour, why, maxPassesSetting == 0, drsMode != 0 && !g.bucketed))

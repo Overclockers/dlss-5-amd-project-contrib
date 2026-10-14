@@ -20,6 +20,10 @@
 // subrect by a compute pass (runtime_mv_rescale_*, bilinear like the blit) instead of a LINEAR blit, so such inline
 // frames can keep the whole chain on compute. Changing it remakes the frame buffers (not the network).
 #define MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_MOTION (1u << 12)
+// NrInlineComputeDownscale (default off): model scale below 1 keeps the frame in its own format and filters it down
+// with runtime_downscale (the blit's own taps), and packs the full-size answer on compute when it is not stored in
+// the frame's format, so such inline frames can keep the whole chain on compute. Rebuilds the network when scaled.
+#define MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_DOWNSCALE (1u << 13)
 typedef struct MochizukiNrFrameInfo
 {
     uint32_t struct_size;

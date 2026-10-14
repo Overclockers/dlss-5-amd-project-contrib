@@ -93,6 +93,9 @@ exports\mochizuki-tests\queue_segments.exe "%CD%\exports\mochizuki-runtime\Mochi
 exports\mochizuki-tests\queue_segments.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" rgb10a2 || exit /b 1
 rem Dynamic resolution with motion vectors of another size: NrInlineComputeMotion keeps one compute phase.
 exports\mochizuki-tests\queue_segments.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" motion || exit /b 1
+rem Model scale 0.5: NrInlineComputeDownscale keeps one compute phase (RGBA16F and R11G11B10).
+exports\mochizuki-tests\queue_segments.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" scaled || exit /b 1
+exports\mochizuki-tests\queue_segments.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" scaledr11 || exit /b 1
 set "MZ_TEST_PHASE_SUBMIT_FAIL_AT="
 set "MZ_TEST_INLINE_CHAIN="
 rem A refused whole-chain compute recording fails the frame without a passthrough.

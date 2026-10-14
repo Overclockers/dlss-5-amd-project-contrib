@@ -69,6 +69,7 @@ static void ResetSharedNrDefaults(Config* config)
     config->NrWatchStartDelay.reset();
     config->NrInlineComputeConvert.reset();
     config->NrInlineComputeMotion.reset();
+    config->NrInlineComputeDownscale.reset();
 }
 
 // The "(?)" marker every control carries, matching the rest of the menu.
@@ -790,6 +791,12 @@ void RenderMenu(Config* config, float menuResScale)
                     HelpMarker("Default off. Experimental. With dynamic resolution, motion vectors of another size are"
                                "\nrescaled by a compute pass (bilinear, like the blit) instead of a graphics blit,"
                                "\nso the inline chain is not split by them. Remakes the frame buffers.\nINI: NrInlineComputeMotion.");
+                    bool nrInlineComputeDownscale = config->NrInlineComputeDownscale.value_or_default();
+                    if (MenuUi::Checkbox("Compute-queue model downscale", &nrInlineComputeDownscale))
+                        config->NrInlineComputeDownscale = nrInlineComputeDownscale;
+                    HelpMarker("Default off. Experimental. Model scale below 100%: the frame is filtered down by a compute pass"
+                               "\n(the same taps as the blit) and the answer written back on compute, so the inline chain"
+                               "\nis not split by the downscale. Rebuilds the network when scaled.\nINI: NrInlineComputeDownscale.");
                     }
                     const bool armedActive = armedApplies && gpuHandoff;
                     ImGui::BeginDisabled(armedActive);
@@ -899,6 +906,7 @@ void RenderMenu(Config* config, float menuResScale)
                     resetOption(config->NrWatchStartDelay);
                     resetOption(config->NrInlineComputeConvert);
                     resetOption(config->NrInlineComputeMotion);
+                    resetOption(config->NrInlineComputeDownscale);
                     SetAllowEnhancedBarriers(config->LmxxfAllowEnhancedBarriers.value_or_default());
                     resetOption(config->LmxxfEarlyExeWrap);
                     resetOption(config->LmxxfEarlyAnyModuleWrap);

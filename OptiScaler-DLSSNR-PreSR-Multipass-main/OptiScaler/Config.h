@@ -410,6 +410,8 @@ class Config
     CustomOptional<bool> NrInlineComputeConvert { false };
     // Compute-queue motion rescale. Default off.
     CustomOptional<bool> NrInlineComputeMotion { false };
+    // Compute-queue model downscale. Default off.
+    CustomOptional<bool> NrInlineComputeDownscale { false };
     CustomOptional<bool> NrInline { false }; // Experimental same-list execution for lmxxf/Mochizuki.
     // Wrap host CreateCommandList results before the swapchain exists.
     // Missing = engine whitelist (Unreal + Forza). false = never. true = force for any engine.

@@ -335,6 +335,9 @@ struct Runtime::Impl {
     nrvk::Kernel unpack_f16, pack_f16;
     nrvk::Context::Image input_f16{}, output_f16{};
     bool f16_built{};
+    // compute_downscale: the scaled frame needs no blit (keep_native input, and store_native, an RGBA32F
+    // frame, or scaled_pack's compute write-back of the full-size answer).
+    bool compute_downscale{}; bool scaled_pack{};
     const char* convert_refusal{}; // compute_convert_colour: why a listed format kept the blits (menu status)
     bool compute_recording{}, graphics_family{true};
     void graphics_only(const char* what) const {
@@ -1555,6 +1558,27 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
             nr::logf("[nr] colour format %u input converted on compute (runtime_unpack_f16), write-back %s",
                      unsigned(cfmt), impl_->direct_out ? "direct" : colour_pack ? pack_name : "stored in its own format");
     }
+    if (config.compute_downscale && impl_->scaled) {
+        const char* why = nullptr;
+        if (!impl_->keep_native) why = "the frame is not kept in its own format";
+        else if (!impl_->store_native && transfer != Transfer::Identical) {
+            const char* name = f16_colour ? "runtime_pack_f16.spv" : pack_name;
+            const VkFormat fmt = f16_colour ? cfmt : pack_format;
+            VkFormatProperties pp{}; vkGetPhysicalDeviceFormatProperties(host.physical, fmt, &pp);
+            const VkFormatFeatureFlags need = VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT | VK_FORMAT_FEATURE_TRANSFER_SRC_BIT;
+            if (!name || (pp.optimalTilingFeatures & need) != need || !std::filesystem::exists(adapters / name))
+                why = "the write-back has no compute store for this format";
+            else {
+                impl_->output_f16 = s.ctx.image(config.width, config.height, fmt, false);
+                impl_->pack_f16.create(s.ctx, (adapters / name).string(), {}, 8, {answer, &impl_->output_f16});
+                impl_->scaled_pack = true;
+            }
+        }
+        impl_->compute_downscale = !why;
+        if (why) nr::logf("[nr] model scale %ux%u compute downscale not used: %s", mw, mh, why);
+        else nr::logf("[nr] model scale %ux%u downscaled on compute (runtime_downscale), write-back %s", mw, mh,
+                      impl_->store_native ? "stored in its own format" : impl_->scaled_pack ? "packed on compute" : "copied");
+    }
     if (!impl_->graphics_family && compute_refusal(false, VK_FORMAT_UNDEFINED, 0, 1))
         throw std::invalid_argument("NR colour format conversion requires a graphics-capable queue");
     impl_->compute_recording = !impl_->graphics_family;
@@ -1888,9 +1912,11 @@ void Runtime::set_network_segments(std::function<VkCommandBuffer(VkCommandBuffer
 const char* Runtime::compute_refusal(bool motion, VkFormat motion_format, VkImageUsageFlags motion_usage,
                                      int passes, bool mask) const {
     auto& m = *impl_;
-    if (m.scaled) return "model scale below 1 needs a downscale blit";
-    if (m.transfer != Transfer::Identical && !m.direct_in && !m.f16_built) return "colour input conversion needs a blit";
-    if (m.transfer != Transfer::Identical && !m.direct_out && !m.store_native && !m.pack_built && !m.f16_built)
+    if (m.scaled && !m.compute_downscale) return "model scale below 1 needs a downscale blit";
+    if (!m.compute_downscale && m.transfer != Transfer::Identical && !m.direct_in && !m.f16_built)
+        return "colour input conversion needs a blit";
+    if (!m.compute_downscale && m.transfer != Transfer::Identical && !m.direct_out && !m.store_native && !m.pack_built &&
+        !m.f16_built)
         return "colour write-back conversion needs a blit";
     if (motion && !(NR_DIRECT_MOTION && !m.motion_src_failed && !mask && passes == 1 && m.temporal.pingpong &&
                     (motion_usage & VK_IMAGE_USAGE_SAMPLED_BIT) && m.filters_linearly(motion_format)))
@@ -2826,7 +2852,7 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
             // Already the frame's bits (an *_SRGB frame takes its UNORM twin's).
             vkCmdCopyImage(cmd, out, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                            wb, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-        } else if(encoded.handle && !((impl_->pack_built || impl_->f16_built) && impl_->compute_recording)) {
+        } else if(encoded.handle && !((impl_->pack_built || impl_->f16_built || impl_->scaled_pack) && impl_->compute_recording)) {
             barrier(cmd,encoded.handle,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                     VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT,
                     VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT);
@@ -2841,10 +2867,11 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
             barrier(cmd,encoded.handle,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,
                     VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT,
                     VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT|VK_ACCESS_TRANSFER_WRITE_BIT);
-        } else if ((impl_->pack_built || impl_->f16_built) && impl_->compute_recording) {
+        } else if ((impl_->pack_built || impl_->f16_built || impl_->scaled_pack) && impl_->compute_recording) {
             // Convert to the original format on compute, then copy into the frame.
-            const auto packed = impl_->f16_built ? impl_->output_f16.handle : impl_->pack_img.handle;
-            const auto& pack = impl_->f16_built ? impl_->pack_f16 : impl_->pack_u8;
+            const bool own = impl_->f16_built || impl_->scaled_pack;
+            const auto packed = own ? impl_->output_f16.handle : impl_->pack_img.handle;
+            const auto& pack = own ? impl_->pack_f16 : impl_->pack_u8;
             barrier(cmd, out, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT,
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
