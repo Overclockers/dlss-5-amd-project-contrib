@@ -19,6 +19,8 @@ int wmain(int argc,wchar_t**argv) try {
     // The level the game shows the frame at. The runtime exports it and nothing has ever called it, so the image
     // mode names it on the command line to see what the network does when the frame is levelled like the other lanes.
     auto setExposure=reinterpret_cast<PFN_MochizukiNrSetExposure>(GetProcAddress(dll,"MochizukiNrSetExposure"));
+    // The meter is opt-in (host INI MochizukiAutoExposureMeter); the image mode turns it on when no exposure is named.
+    auto setAutoExposure=reinterpret_cast<PFN_MochizukiNrSetAutoExposure>(GetProcAddress(dll,"MochizukiNrSetAutoExposure"));
     Require(getProgress!=nullptr,"missing build progress export");
     MochizukiNrBuildProgress invalidProgress {sizeof invalidProgress};
     Require(getProgress(nullptr,&invalidProgress)==LMXXF_NR_INVALID_ARGUMENT,"progress accepted null session");
@@ -659,6 +661,9 @@ int wmain(int argc,wchar_t**argv) try {
             const float exposure=float(_wtof(argv[26]));
             Rc(setExposure(context,exposure));
             printf("IMAGE_EXPOSURE exposure=%.6f white_point=%.6f\n",double(exposure),double(controls.white_point));
+        } else {
+            Require(setAutoExposure!=nullptr,"missing auto exposure export");
+            Rc(setAutoExposure(context,1u));
         }
         Frame shot(device.Get(),shotW,shotH,shotFormat);
         shot.Load(argv[4]);

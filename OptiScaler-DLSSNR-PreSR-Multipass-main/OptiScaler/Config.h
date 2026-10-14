@@ -448,6 +448,12 @@ class Config
     // makes NR and the original alternate frame by frame (visible flicker); holding NR
     // off trades a uniform non-NR image for a stable one. Default false.
     CustomOptional<bool> MochizukiProxyFallbackEnabled { false };
+    // Linear-input level for the mochizuki lane. Both default off: the white point stays the manual
+    // MochizukiWhitePoint exactly as before. UseGameExposure takes the game's exposure texture (times
+    // DLSS_Exposure_Scale over DLSS_Pre_Exposure) or, without one, 1/DLSS_Pre_Exposure; AutoExposureMeter
+    // meters the frame when the game supplies neither. Game exposure wins over the meter.
+    CustomOptional<bool> MochizukiUseGameExposure { false };
+    CustomOptional<bool> MochizukiAutoExposureMeter { false };
     CustomOptional<float> MochizukiHistoryStrength { 1.f };
     CustomOptional<bool> MochizukiPreprocess { false };
     CustomOptional<uint32_t> MochizukiPreprocessExposure { 1u };

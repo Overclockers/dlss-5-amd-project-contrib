@@ -8,6 +8,7 @@
 #include "../amd/GraphicsInvocation.h"
 #include <State.h>
 #include <wrl/client.h>
+#include <cmath>
 
 // NrFrameDiag: last Vulkan core GPU ms from the runtime (cheap stats copy; no GPU access).
 static PFN_MochizukiNrGetInfo gDiagGetInfo = nullptr;
@@ -54,6 +55,10 @@ struct MochizukiBackend::Impl
     PFN_MochizukiNrGetInfo getInfo = nullptr;
     PFN_MochizukiNrGetBuildProgress getBuildProgress = nullptr;
     void (*setLogging)(uint32_t) = nullptr;
+    // Optional exposure exports (absent in an older runtime: the lane keeps its manual white point).
+    PFN_MochizukiNrSetExposure setExposure = nullptr;
+    PFN_MochizukiNrSetAutoExposure setAutoExposure = nullptr;
+    PFN_MochizukiNrSetExposureTexture setExposureTexture = nullptr;
     std::shared_ptr<LmxxfRecording::SessionOwner> owner;
     uint64_t frameId = 0, retryAt = 0, infoAt = 0, logAt = 0;
     bool failed = false;
@@ -101,6 +106,9 @@ struct MochizukiBackend::Impl
             getInfo = reinterpret_cast<PFN_MochizukiNrGetInfo>(GetProcAddress(module, "MochizukiNrGetInfo"));
             getBuildProgress = reinterpret_cast<PFN_MochizukiNrGetBuildProgress>(GetProcAddress(module, "MochizukiNrGetBuildProgress"));
             setLogging = reinterpret_cast<void (*)(uint32_t)>(GetProcAddress(module, "MochizukiNrSetLogging"));
+            setExposure = reinterpret_cast<PFN_MochizukiNrSetExposure>(GetProcAddress(module, "MochizukiNrSetExposure"));
+            setAutoExposure = reinterpret_cast<PFN_MochizukiNrSetAutoExposure>(GetProcAddress(module, "MochizukiNrSetAutoExposure"));
+            setExposureTexture = reinterpret_cast<PFN_MochizukiNrSetExposureTexture>(GetProcAddress(module, "MochizukiNrSetExposureTexture"));
             api.struct_size = sizeof api;
             if (!getApi || !prepare || !setControls || !getInfo || !getBuildProgress || !setLogging ||
                 getApi(LMXXF_NR_ABI_VERSION, &api) != LMXXF_NR_OK || !api.Create || !api.Destroy ||
@@ -335,6 +343,26 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     frame.motion_scale_y = input.motionScaleY;
     frame.reset = input.reset;
     if (p->setControls(p->owner->context, &controls) != LMXXF_NR_OK) { p->Error("controls rejected"); return nullptr; }
+    // Exposure for the linear encode, same semantics as the lmxxf lane (native_codec_encode.hlsl EffectivePaperWhite):
+    // a usable game exposure texture gives exposure = texel * DLSS_Exposure_Scale / DLSS_Pre_Exposure (read back by
+    // the runtime one frame late); without one, a host pre-exposure != 1 gives exposure = 1 / pre-exposure. The
+    // runtime divides the white point by it. Both are opt-in (MochizukiUseGameExposure), as is the runtime's own meter
+    // for a frame with neither (MochizukiAutoExposureMeter); with both off the white point is the manual setting.
+    {
+        const bool useGame = cfg->MochizukiUseGameExposure.value_or_default();
+        void* texture = useGame ? static_cast<void*>(input.exposure) : nullptr;
+        const float pre = std::isfinite(input.preExposure) && input.preExposure > 0.f ? input.preExposure : 1.f;
+        const float scale = std::isfinite(input.exposureScale) && input.exposureScale > 0.f ? input.exposureScale : 1.f;
+        if (p->setExposureTexture)
+            p->setExposureTexture(p->owner->context, texture, uint32_t(input.exposureState), pre, scale);
+        else
+            texture = nullptr;
+        if (p->setExposure)
+            p->setExposure(p->owner->context,
+                           useGame && !texture && std::fabs(pre - 1.f) > 1e-3f ? 1.f / pre : 0.f);
+        if (p->setAutoExposure)
+            p->setAutoExposure(p->owner->context, cfg->MochizukiAutoExposureMeter.value_or_default() ? 1u : 0u);
+    }
     LmxxfNrJob job {sizeof job};
     if (p->prepare(p->owner->context, &frame, &job) != LMXXF_NR_OK)
     {

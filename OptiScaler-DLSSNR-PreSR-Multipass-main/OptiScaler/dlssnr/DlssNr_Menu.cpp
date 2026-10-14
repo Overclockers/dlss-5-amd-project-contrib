@@ -201,6 +201,12 @@ static void ResetMochizuki(Config* config, int selectedGroup = -1,
 #undef MZ_F
 #undef MZ_U
 #undef MZ_B
+    if ((selectedGroup < 0 || selectedGroup == 4) &&
+        (!page || *page == PipelineUi::Section::Input))
+    {
+        config->MochizukiUseGameExposure = std::optional<bool> {};
+        config->MochizukiAutoExposureMeter = std::optional<bool> {};
+    }
     if ((selectedGroup < 0 || selectedGroup == 1) &&
         (!page || *page == PipelineUi::Section::Model))
     {
@@ -477,6 +483,18 @@ static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const 
 #undef MZ_F
 #undef MZ_U
 #undef MZ_B
+            if (g == 4 && page == PipelineUi::Section::Input)
+            {
+                const char* onOff[] = {"Off", "On"};
+                int useGame = config->MochizukiUseGameExposure.value_or_default() ? 1 : 0;
+                if (MenuUi::Combo("Use game exposure", &useGame, onOff, IM_ARRAYSIZE(onOff)))
+                    config->MochizukiUseGameExposure = useGame == 1;
+                HelpMarker("Default off. Linear/HDR input only.\nOn: the white point follows the game's exposure (DLSS exposure texture x scale / pre-exposure, or 1/pre-exposure).\nCan change the look of games that already look right; White point stays the trim.\nINI: MochizukiUseGameExposure.");
+                int meter = config->MochizukiAutoExposureMeter.value_or_default() ? 1 : 0;
+                if (MenuUi::Combo("Auto exposure meter", &meter, onOff, IM_ARRAYSIZE(onOff)))
+                    config->MochizukiAutoExposureMeter = meter == 1;
+                HelpMarker("Default off. Linear/HDR input only.\nOn: when the game gives no exposure, meter the frame and level it (one tiny GPU pass, one frame late).\nTry it when skin turns red at overall intensity above 1 (e.g. Monster Hunter Wilds). Game exposure wins.\nINI: MochizukiAutoExposureMeter.");
+            }
             if (g == 4 && page == PipelineUi::Section::Model)
             {
                 const int cap = config->MochizukiUnlockPasses.value_or_default() ? static_cast<int>(Config::kMochizukiLayerPasses) : 3;

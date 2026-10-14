@@ -242,16 +242,23 @@ Missing, alias-less and corrupt bundles each completed one native frame
 (`ACO_FALLBACK_OK`). Package and uninstall ownership is the exact 220-path pin
 `tools/install/mochizuki-owned.txt`. No game scene was compared.
 
-The bridge never samples the game's exposure texture on the CPU. `MochizukiNrSetExposure`
-carries it as a number, and the white point is then the trim of it. When no game exposure
-arrives - every Monster Hunter Wilds frame so far, where the DLSS-NR exposure scan adopts no
-candidate - the runtime meters the frame's linear colour on the GPU itself, the way the lmxxf
-lane does: one 16x16 dispatch into a 1-float buffer per frame, read one frame later through
-the recording's own completion fence, blended in the log domain. `WhitePoint` then trims the
+Both exposure sources are opt-in and default off, so with neither set the white point is the
+manual setting exactly as before. `MochizukiUseGameExposure=true` hands the runtime the game's
+1x1 exposure texture (`MochizukiNrSetExposureTexture`): its texel is copied to a readback in the
+game's own list and picked up one frame later behind the recording's completion fence, and the
+level is `texel * DLSS_Exposure_Scale / DLSS_Pre_Exposure` - the expression the lmxxf codec
+evaluates on the GPU. Without a texture, a pre-exposure other than 1 gives `1 / pre-exposure`
+(`MochizukiNrSetExposure`). `MochizukiAutoExposureMeter=true` lets the runtime meter a linear
+frame for which the game supplies neither - every Monster Hunter Wilds frame so far, where the
+DLSS-NR exposure scan adopts no candidate: one 16x16-thread dispatch over a 64x64 grid, a
+highlight-clipped mean (arithmetic mean of min(luma, 16x log-average)), read one frame later
+through the same fence, blended in the log domain with a 1/16 EV deadband and clamped to +-6 EV.
+The meter is skipped for display-encoded frames, where the white point is not applied. `WhitePoint` then trims the
 metered level instead of setting an absolute one: at the reference luminance (mean 0.2073) the
 hand-tuned value keeps its meaning, elsewhere it scales with the scene. A frame with nothing
 measurable leaves the last measurement in place, and after a second without one the manual
-white point is back in charge with a line in the log. Daniel/lmxxf exposure controls do not
+white point is back in charge with a line in the log; it resumes on its own once it measures
+again. Daniel/lmxxf exposure controls do not
 configure this backend, and preprocessing keeps its own histogram meter.
 
 ## Build and verification
