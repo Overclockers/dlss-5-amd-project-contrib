@@ -33,16 +33,10 @@ class RuntimeProofTests(unittest.TestCase):
         self.env['LMXXF_TEST_RUNTIME'] = str(self.runtime)
         # Exercise the real source/artifact gate. Only suite execution is stubbed;
         # this fixture tests the entrypoint's proof orchestration, not GPU code.
-        for directory in ('third_party/mochizuki/windows',
-                          'OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/dlssnr/backend/mochizuki_runtime'):
-            shutil.copytree(ROOT / directory, self.root / directory,
-                            ignore=shutil.ignore_patterns('__pycache__'))
-        for name in ('OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/library/vulkan/vulkan-1.lib',
-                     'tools/build/mochizuki-manifest.py', 'tools/build/build-mochizuki-runtime.py',
-                     'tools/build/build-mochizuki-runtime.cmd', 'tools/build/mochizuki-deps.py',
-                     'tools/build/mochizuki-aco.py',
-                     'OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/dlssnr/backend/lmxxf_runtime/LmxxfNrApi.h',
-                     'OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/dlssnr/NrPerformance.h'):
+        # Copy the real closure, including RenoDX tools and Linux INT4 inputs
+        # consumed on Windows, rather than maintaining a second dependency list.
+        manifest = runpy.run_path(str(ROOT / 'tools/build/mochizuki-manifest.py'))
+        for name in manifest['sources']():
             target = self.root / name
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / name, target)
