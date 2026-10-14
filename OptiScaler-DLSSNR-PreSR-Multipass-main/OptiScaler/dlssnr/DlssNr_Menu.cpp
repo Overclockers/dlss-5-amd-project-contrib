@@ -67,6 +67,7 @@ static void ResetSharedNrDefaults(Config* config)
     config->NrSpinSlices.reset();
     config->NrWatchSlices.reset();
     config->NrWatchStartDelay.reset();
+    config->NrInlineComputeConvert.reset();
 }
 
 // The "(?)" marker every control carries, matching the rest of the menu.
@@ -770,6 +771,13 @@ void RenderMenu(Config* config, float menuResScale)
                     ImGui::EndDisabled();
                     ImGui::Unindent();
                     if (!gpuHandoff) MenuUi::TextDisabled("Spin options need GPU-armed handoff.");
+                    bool computeConvert = config->NrInlineComputeConvert.value_or_default();
+                    if (MenuUi::Checkbox("Compute-queue colour conversion (R11G11B10)", &computeConvert))
+                        config->NrInlineComputeConvert = computeConvert;
+                    HelpMarker("Default off. Experimental. An R11G11B10_FLOAT colour frame (e.g. Clair Obscur) converts its input"
+                               "\non the compute queue instead of a graphics blit, so the inline chain is not split across queues."
+                               "\nNeeds model scale 1; motion vectors that need rescaling still split it (see the log)."
+                               "\nRebuilds the network for R11G11B10 frames. INI: NrInlineComputeConvert.");
                     }
                     const bool armedActive = armedApplies && gpuHandoff;
                     ImGui::BeginDisabled(armedActive);
@@ -877,6 +885,7 @@ void RenderMenu(Config* config, float menuResScale)
                     resetOption(config->NrSpinSlices);
                     resetOption(config->NrWatchSlices);
                     resetOption(config->NrWatchStartDelay);
+                    resetOption(config->NrInlineComputeConvert);
                     SetAllowEnhancedBarriers(config->LmxxfAllowEnhancedBarriers.value_or_default());
                     resetOption(config->LmxxfEarlyExeWrap);
                     resetOption(config->LmxxfEarlyAnyModuleWrap);

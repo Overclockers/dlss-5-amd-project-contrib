@@ -87,3 +87,32 @@
 4. **菜单**：见第 5 节。
 5. **Side watch start delay**：ALU 延迟之后加 UAV barrier，watch 确实在延迟完成后才开始。
 6. 诊断关闭时的开销：没有新增同步等待、不写新增的阶段时间戳；但配置/原子检查一直在，开过一次后钩子保持安装（直通），query pool 也已扩大。所以准确说法是「无新增同步等待」，不是「零开销」。
+## 9. 复核后的第二轮修复（复核笔记 work\notes\2026-10-14-inline-spin-review-followup.md）
+1. **已认领但拷贝未完成（P1）**：去掉第 8 节「认领后有界等 16 段再放行」。现在侧队列关闸门后跑一个 claimed-wait（op 14）：闸门为 1（游戏已认领）就在 GPU 上一直等到游戏的 capture 标志（它在全部输入拷贝之后写入）才放行网络；闸门为 0/2 则不等（拷贝已被 predication 跳过）。没有预算能在拷贝进行中放行网络，所以「认领了但没拷完」时网络不可能读到半成品。
+   - 为什么能结束：认领之后，游戏队列上只剩输入拷贝和 capture 写入，二者都不依赖侧队列，所以这是一个只依赖游戏队列前进的 GPU→GPU 依赖；不是 CPU 等待，也不退回 split。
+   - 与原方案的差别：这种帧不再走「bypass + history reset」，而是网络读完整输入后正常出结果（游戏自己的有界等待也是在拷贝之后才开始，通常照常应用；若游戏侧超时，仍按超时回收、reset history）。
+   - 剩余风险：等待没有迭代上限。若游戏队列在认领后、capture 前本身卡死（设备挂起），侧队列这个 dispatch 会一起挂到 TDR；跨队列并发前进 D3D12 不保证，但游戏的有界等待已经依赖同样的并发假设。
+   - 夹具：新增 `--late-copy=64`（认领后、拷贝前插入长 ALU 延迟），要求闸门=1、seen=1、网络私有输出与 split 基线哈希一致（读到完整输入）、输出为网络结果或（游戏超时时）原画面且按超时回收、不挂起。`--late-capture=64`（认领前延迟：闸门=2、跳过拷贝、原画面、reset）保留。均在 `tests\mochizuki\run.cmd inline-armed` 中。
+2. **钩子安装线程登记（P2）**：OpenThread 失败时区分：ERROR_INVALID_PARAMETER（线程已退出）跳过；其他错误（如拒绝访问，线程仍存活）中止安装。DetourUpdateThread 返回错误则 DetourTransactionAbort。两种失败都不标记已安装，按原有上限最多重试 3 次。快照之后新建的线程仍无法登记（Detours 固有限制）。
+
+## 10. 光与影：33 号远征队（E33）观察（同机 RX 9070 XT，开 NrFrameDiag，未录 PresentMon）
+| 设置 | 帧间隔中位 ms | handoff ms | 网络核心 ms |
+|---|---|---|---|
+| split | 13.5 | 0.40 | 6.2 |
+| armed + poll16（当前默认） | 29.3 | 9.3 | 10.4 |
+| armed，spin 全关 | 22.3 | 4.4 | 10.2 |
+| armed + Game wait dispatches 256 | 17.0–17.7 | 3.1 | 7.3 |
+| armed + Game wait dispatches 1024 | 17.1 | 3.5 | 6.8 |
+| armed 关（各种 backoff） | 22.6–24.4 | 4.5 | 10.5 |
+
+- E33 里 inline 最好也只有 17.0–17.4 ms（dispatches 256/1024），追不上 split 的 13.5 ms；燕云上最好的默认组合 armed＋poll16 在 E33 反而最差（29.3 ms）。**默认值不是通用的**，只代表燕云本轮结果。E33 目前建议用 split；要用 inline 就开 Game wait dispatches 256/1024。
+- 推断原因（来自日志，未单独验证）：E33 颜色是 R11G11B10_FLOAT（DXGI 26 / VkFormat 122），输入转换走图形队列 blit，inline 被拆成「图形队列转换 → 计算队列网络 → 跨队列等待」三段；游戏队列自旋又会饿住网络，所以拆短自旋有用、poll16 让自旋驻留更久反而更差。拆短后仍剩约 3.5 ms handoff，spin 开关调不到。
+- 新输入保护在 E33 每帧正常应用，无超时、无绕过。
+
+## 11. 新选项 NrInlineComputeConvert（默认关）
+- INI：`NrInlineComputeConvert`（`[DlssNr]` 节，默认 false/auto）。菜单：Input → 开 inline 后的 Mochizuki 组里「Compute-queue colour conversion (R11G11B10)」。宿主在 inline 帧上传 `MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_CONVERT`（1<<11）；运行时只在 B10G11R11 网络 key 上记录它（会为 R11G11B10 帧重建一次网络；切 inline/split 不重建）。
+- 作用：B10G11R11 输入像 RGBA16F 一样走已有的 inline 全计算路径：把帧拷到私有同格式图像（仅 sampled，不要求 storage），再用 `runtime_unpack_f16`（texelFetch）转成 RGBA32F，代替图形 blit。写回只接受已有的 direct_out / store_native（游戏格式原样写回，不经 rgba16f 的 pack_f16）；两者都不可用时不启用，并记日志 `B10G11R11 compute input conversion not used: ...`，原 blit 和拒绝原因保留。启用时日志 `B10G11R11 input converted on compute (runtime_unpack_f16)`，帧走全计算时 `inline network: the whole chain on compute family 1`；仍被拒时日志写出剩余原因（模型缩放 <1 的 downscale blit、需要缩放的运动矢量等）。
+- 供应商改动记为 mochizuki-sync 补丁 15（`inline-r11g11b10-compute-convert`）。新增 `hdr_shader` 用例：B10G11R11 的 unpack 结果与驱动 blit 到 RGBA32F 逐位一致（覆盖全部有限码值）。
+- 画质：输入从 R11G11B10 扩到 FP32，无损；写回仍是游戏自己的 R11G11B10 量化。**尚未在 E33 实测**，需要 Model scale = 1。
+
+- 包：`OptScaler-NR-1.12.0-alpha2-local-20261014-214810-264.zip`（第 9–11 节的代码）。游戏内未验证。

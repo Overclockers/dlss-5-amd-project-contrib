@@ -1,7 +1,7 @@
 # Mochizuki source pin and interface patches
 
 The runtime uses official core/shaders at the full SHA in `manifest.json`, plus
-fourteen explicit feature patches. There are no whole-file preservation overlays.
+fifteen explicit feature patches. There are no whole-file preservation overlays.
 The host loads our `MochizukiNrRuntime.dll`, which wraps that core; this does not
 claim binary compatibility with an official distributed runtime.
 
@@ -34,6 +34,7 @@ Those tests also run in `run.cmd abi`.
 | 12 weights-only-extraction | Reuse the PE/weight parser with `--extract-weights`; installation skips CUDA scanning and DLL/cubin copies | Analysis defaults and `--extract` remain unchanged; both extraction entry points keep source and model hashes |
 | 13 inline-fp16-conversions | Equal-extent FP16 input and writeback on compute, retaining FLOAT/HDR and the original linear/temporal processing | Enabled only for optional second-family/compute hosts with both conversion shaders; default graphics recordings retain blits. Reduced scale, motion requiring a blit and first-pass export keep segments |
 | 14 core-stage-timing | Optional diagnostic timestamp pairs around the linear-input encode and transfer pass | Off unless the host sets it per frame; reuses the timing ring, never waits |
+| 15 inline-r11g11b10-compute-convert | Optional B10G11R11 input conversion on compute (copy + runtime_unpack_f16), so such inline frames can keep the whole chain on compute | Off unless RuntimeConfig::compute_convert_r11g11b10; only when the write-back already needs no blit (direct_out / store_native) and model scale is 1; otherwise the blit and its refusal remain |
 
 The patches replay sequentially against `manifest.json`'s commit. Patches 02-05
 share header/implementation context, so do not assume their patch files apply
@@ -48,7 +49,7 @@ the C64 persistent decoder to fused C32 pair from tile chaining, preserving the
 existing barrier and associated arena lifetime boundary; other chains remain.
 Its attribution and validation are in the backend guide and source record.
 
-This fourteen-patch series records the product snapshot; it is not the upstream PR
+This fifteen-patch series records the product snapshot; it is not the upstream PR
 series. The upstream preparation branch has reverted the ACO, buffer-optimization
 and timing-calculation snapshots and retains only optional interface proposals.
 

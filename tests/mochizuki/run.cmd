@@ -129,6 +129,9 @@ for %%M in ("" "--timeout" "--ahead" "--large --temporal") do (
 )
 exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --gpu-handoff --poll-delay=16 --late-capture=64 %MOCHI_ACO_ARG%
 if errorlevel 1 exit /b 1
+rem Claimed gate, copy still pending when the side watch ends: the network must wait for the copy on the GPU.
+exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --gpu-handoff --poll-delay=16 --late-copy=64 %MOCHI_ACO_ARG%
+if errorlevel 1 exit /b 1
 if /i "%~1"=="inline-armed" exit /b 0
 exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki %MOCHI_ACO_ARG%
 if errorlevel 1 exit /b 1

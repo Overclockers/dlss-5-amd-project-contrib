@@ -146,13 +146,24 @@ inline bool Install(ID3D12CommandQueue* q)
         const DWORD pid = GetCurrentProcessId(), self = GetCurrentThreadId();
         for (BOOL more = Thread32First(snap, &te); more; more = Thread32Next(snap, &te)) {
             if (te.th32OwnerProcessID != pid || te.th32ThreadID == self) continue;
-            if (HANDLE t = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_SET_CONTEXT, FALSE, te.th32ThreadID))
-                threads.push_back(t); // a thread that exits meanwhile is harmless
+            HANDLE t = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_SET_CONTEXT, FALSE, te.th32ThreadID);
+            if (t) { threads.push_back(t); continue; }
+            // ERROR_INVALID_PARAMETER: the id no longer names a thread (it exited after the snapshot) and
+            // cannot be inside a patched prologue. Anything else (e.g. access denied) is a live thread we
+            // could not register: do not patch.
+            const DWORD err = GetLastError();
+            if (err != ERROR_INVALID_PARAMETER) { failure = "OpenThread"; code = LONG(err); break; }
         }
         CloseHandle(snap);
+        if (failure) break;
         o_SetEvent = setEvent; o_Wait = wait; o_WaitEx = waitEx; // originals until commit swaps in trampolines
         if ((code = DetourTransactionBegin()) != NO_ERROR) { failure = "DetourTransactionBegin"; break; }
-        for (HANDLE t : threads) DetourUpdateThread(t); // suspends; resumed by commit/abort
+        for (HANDLE t : threads) {
+            // Suspends; resumed by commit/abort. A thread that exited after OpenThread holds a valid handle
+            // and suspends harmlessly; a registration error leaves that live thread unprotected, so abort.
+            if ((code = DetourUpdateThread(t)) != NO_ERROR) { failure = "DetourUpdateThread"; break; }
+        }
+        if (failure) { DetourTransactionAbort(); break; }
         if ((code = DetourAttach(reinterpret_cast<PVOID*>(&o_SetEvent), hkSetEvent)) != NO_ERROR ||
             (code = DetourAttach(reinterpret_cast<PVOID*>(&o_Wait), hkWait)) != NO_ERROR ||
             (code = DetourAttach(reinterpret_cast<PVOID*>(&o_WaitEx), hkWaitEx)) != NO_ERROR) {

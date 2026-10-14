@@ -275,6 +275,46 @@ static void FloatConversions(nrvk::Context& ctx, const std::filesystem::path& sh
     std::cout<<"PASS FP16 conversions: blit byte equality, HDR, negatives, alpha, subnormals, ties\n";
 }
 
+// NrInlineComputeConvert: a B10G11R11 frame copy unpacked by runtime_unpack_f16 (texelFetch)
+// must equal the driver's reference blit into RGBA32F, bit for bit, over every finite 11/10-bit
+// channel code (all mantissas and exponents 0..30, so zero, subnormals and the largest finite).
+static void R11G11B10Unpack(nrvk::Context& ctx, const std::filesystem::path& shaders)
+{
+    constexpr uint32_t w=257,h=257;
+    Resources r(ctx); r.images.reserve(3);
+    r.images.push_back(ctx.image(w,h,VK_FORMAT_B10G11R11_UFLOAT_PACK32,true,true,false));
+    r.images.push_back(ctx.image(w,h,VK_FORMAT_R32G32B32A32_SFLOAT,false));
+    r.images.push_back(ctx.image(w,h,VK_FORMAT_R32G32B32A32_SFLOAT,false));
+    auto& packed=r.images[0]; auto& unpacked=r.images[1]; auto& reference=r.images[2];
+    std::vector<uint32_t> bits(w*h);
+    for(uint32_t i=0;i<bits.size();++i) {
+        // R/G: 11-bit (5e6m), B: 10-bit (5e5m). Walk the codes, skipping exponent 31 (Inf/NaN).
+        auto code=[](uint32_t n,uint32_t mbits){ const uint32_t m=n&((1u<<mbits)-1), e=(n>>mbits)%31; return (e<<mbits)|m; };
+        const uint32_t rr=code(i,6), gg=code(i*7+3,6), bb=code(i*13+5,5);
+        bits[i]=rr|(gg<<11)|(bb<<22);
+    }
+    ctx.upload(packed,bits.data(),bits.size()*sizeof(uint32_t));
+    ctx.transition(packed,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    r.kernel.create(ctx,(shaders/"runtime_unpack_f16.spv").string(),{},8,{&packed,&unpacked});
+    const std::array<uint32_t,2> push{w,h};r.Run(push,w,h);
+    ctx.transition(packed,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    ctx.transition(reference,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    ctx.one_shot([&](VkCommandBuffer cmd) {
+        VkImageBlit area{};area.srcSubresource=area.dstSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};
+        area.srcOffsets[1]=area.dstOffsets[1]={int(w),int(h),1};
+        vkCmdBlitImage(cmd,packed.handle,packed.layout,reference.handle,reference.layout,1,&area,VK_FILTER_NEAREST);
+    });
+    ctx.transition(reference,VK_IMAGE_LAYOUT_GENERAL);
+    std::vector<Pixel> actual(w*h), expected(w*h);
+    ctx.download(unpacked,actual.data(),actual.size()*sizeof(Pixel));
+    ctx.download(reference,expected.data(),expected.size()*sizeof(Pixel));
+    Require(std::memcmp(actual.data(),expected.data(),actual.size()*sizeof(Pixel))==0,
+            "B10G11R11 compute input differs from blit");
+    for(const Pixel& p:actual) Require(p[3]==1.f && p[0]>=0.f && p[1]>=0.f && p[2]>=0.f && std::isfinite(p[0]+p[1]+p[2]),
+                                       "B10G11R11 unpack produced invalid pixel");
+    std::cout<<"PASS B10G11R11 compute input: blit bit equality, zero, subnormals, max finite, alpha 1\n";
+}
+
 int main(int argc, char** argv)
 {
     nrvk::Context ctx;
@@ -286,6 +326,7 @@ int main(int argc, char** argv)
         ctx.create();
         std::cout << "GPU: " << ctx.gpu_name << '\n';
         FloatConversions(ctx, argv[1]);
+        R11G11B10Unpack(ctx, argv[1]);
         if (argc == 2) {
             Encode(ctx, argv[1]);
             Transfer(ctx, argv[1]);

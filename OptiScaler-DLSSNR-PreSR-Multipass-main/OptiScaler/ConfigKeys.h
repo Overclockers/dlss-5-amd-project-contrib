@@ -47,6 +47,7 @@ inline constexpr const char *NrSpinPollDelay = "NrSpinPollDelay";
 inline constexpr const char *NrSpinSlices = "NrSpinSlices";
 inline constexpr const char *NrWatchSlices = "NrWatchSlices";
 inline constexpr const char *NrWatchStartDelay = "NrWatchStartDelay";
+inline constexpr const char *NrInlineComputeConvert = "NrInlineComputeConvert";
 inline constexpr const char *EarlyExeWrap = "LmxxfEarlyExeWrap";
 inline constexpr const char *EarlyAnyModuleWrap = "LmxxfEarlyAnyModuleWrap";
 inline constexpr const char *Diagnostic = "LmxxfDiagnostic";
@@ -319,6 +320,7 @@ inline constexpr const char *const kKnown[] = {
     NrSpinSlices,
     NrWatchSlices,
     NrWatchStartDelay,
+    NrInlineComputeConvert,
     EarlyExeWrap,
     EarlyAnyModuleWrap,
     Diagnostic,

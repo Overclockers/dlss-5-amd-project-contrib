@@ -21,8 +21,10 @@ inline constexpr UINT kWaitSlices = 64;
 inline constexpr UINT kWaitIterations = 32768;
 inline constexpr UINT kCaptureWatchSlices = 4;
 // NrGpuHandoff: after closing the input gate, a game that already claimed it is finishing its
-// input copy; the side queue keeps watching (bounded) for that capture before the network starts.
-inline constexpr UINT kGateSettleSlices = 16;
+// input copy. The side queue then waits on the GPU for that capture (op 14) before the network
+// starts: no budget can release the network while the copy is still in flight. Termination needs
+// only game-queue progress: after its claim the game list runs just the input copies and the
+// capture store, none of which depend on the side queue.
 // lmxxf benefits from fewer dispatch/barrier pairs with the same total work.
 // Neither schedule is a portable wall-clock timeout or concurrent-progress guarantee.
 inline constexpr UINT kLmxxfWaitSlices = 32;
@@ -166,7 +168,7 @@ class Resources
         list->SetPipelineState(controlPso.Get()); list->SetComputeRootSignature(controlRoot.Get());
         list->SetComputeRootUnorderedAccessView(0, (op == 1 || op == 3 || op == 6 || op == 7 || op == 8 || op >= 11 ? capture : control)->GetGPUVirtualAddress());
         list->SetComputeRootUnorderedAccessView(1, target->GetGPUVirtualAddress());
-        const UINT args[] {op, iterations, op == 4 || op == 7 || op == 13 ? spinPollDelay : 0u}; list->SetComputeRoot32BitConstants(2, 3, args, 0);
+        const UINT args[] {op, iterations, op == 4 || op == 7 || op == 13 || op == 14 ? spinPollDelay : 0u}; list->SetComputeRoot32BitConstants(2, 3, args, 0);
         list->Dispatch(1, 1, 1);
     }
     void CreateOutput(Output& out, ID3D12Resource* original, ID3D12Resource* neural, UINT w, UINT h) {
@@ -275,6 +277,22 @@ cbuffer Args : register(b0) { uint operation; uint iterations; uint pollDelay; }
  else if (operation == 12) { flag.InterlockedCompareExchange(4, 0, 2, value); DeviceMemoryBarrier(); }
  else if (operation == 1 || operation == 2) { flag.InterlockedExchange(0, 1, value); DeviceMemoryBarrier(); }
  else if (operation == 3) { flag.InterlockedCompareExchange(0, 0, 0, value); target.Store(0, value); }
+ else if (operation == 14) {
+  // Claimed wait: the gate was claimed before op 12 could close it, so the game's input copies are
+  // running or about to. Wait for its capture store (issued after those copies) with no iteration
+  // cap; an open/closed gate means the copies are skipped and nothing is waited for.
+  uint gate = 0; flag.InterlockedCompareExchange(4, 0, 0, gate);
+  if (gate == 1) {
+   uint i = 0;
+   [loop] [allow_uav_condition] while (true) {
+    DeviceMemoryBarrier();
+    flag.InterlockedCompareExchange(0, 0, 0, value); if (value != 0) break;
+    uint acc = i++;
+    [loop] for (uint d = 0; d < pollDelay; ++d) acc = acc * 1664525u + 1013904223u;
+    if (acc == 0x7fffffffu && pollDelay == 0xffffffffu) target.Store(16, acc);
+   }
+  }
+ }
  else if (operation == 4 || operation == 7 || operation == 13) {
   // 7: side-queue capture watch (NrCaptureBackoff=2); same bounded spin on the capture flag.
   // 13: settle watch, only while the game holds the gate (claimed but not yet captured).
@@ -357,6 +375,8 @@ cbuffer Size : register(b0) { uint width; uint height; }
     }
     // Fault-injection (tests only): ALU-only game-queue delay dispatches before the input gate.
     UINT testInputDelay = 0;
+    // Fault-injection (tests only): ALU-only game-queue delay dispatches after the claim, before the copies.
+    UINT testCopyDelay = 0;
     // NrGpuHandoff only: claim the input gate, then predicate the input copies on the claim. If the side
     // watch expired first it closed the gate, so the copies are skipped and the network (whose output
     // is then discarded) never races the game writing its input. Call before RecordInputs.
@@ -365,6 +385,8 @@ cbuffer Size : register(b0) { uint width; uint height; }
         if (!gpuArmed) return;
         for (UINT i = 0; i < testInputDelay; ++i) { Op(list, 10, sample.Get(), 1u << 22); UavBarrier(list, nullptr); }
         Op(list, 11, inputGate.Get()); UavBarrier(list, inputGate.Get());
+        // Fault-injection (tests only): delay after the claim, before the input copies.
+        for (UINT i = 0; i < testCopyDelay; ++i) { Op(list, 10, sample.Get(), 1u << 22); UavBarrier(list, nullptr); }
         Barrier(list, inputGate.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_PREDICATION);
         list->SetPredication(inputGate.Get(), 0, D3D12_PREDICATION_OP_EQUAL_ZERO);
         inputGated = true;
@@ -584,10 +606,11 @@ cbuffer Size : register(b0) { uint width; uint height; }
         // NrWatchSlices: same watch budget in shorter dispatches (shorter-resident waves).
         const UINT ws = watchSlices ? watchSlices : kWaitSlices, wi = UINT(UINT64(kWaitSlices) * kWaitIterations / ws);
         for (UINT i = 0; i < ws; ++i) { Op(armList.Get(), 7, sample.Get(), wi); UavBarrier(armList.Get(), capture.Get()); }
-        // Close the input gate. A game that claimed it is copying; watch (bounded) for its capture.
-        // A game that has not claimed it will skip its input copies, so a missed capture cannot race.
+        // Close the input gate. A game that has not claimed it skips its input copies, so the network
+        // never reads input the game is still writing (its output is discarded: bypass + history reset).
+        // A game that claimed it is copying: wait on the GPU until its capture proves the copies done.
         Op(armList.Get(), 12, sample.Get()); UavBarrier(armList.Get(), capture.Get());
-        for (UINT i = 0; i < kGateSettleSlices; ++i) { Op(armList.Get(), 13, sample.Get(), kWaitIterations); UavBarrier(armList.Get(), capture.Get()); }
+        Op(armList.Get(), 14, sample.Get()); UavBarrier(armList.Get(), capture.Get());
         Op(armList.Get(), 8, sample.Get()); UavBarrier(armList.Get(), sample.Get());
         Check(armList->Close(), "inline arm close");
         sideUncertain = true;

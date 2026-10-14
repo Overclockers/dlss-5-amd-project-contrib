@@ -190,6 +190,7 @@ int main() {
                 "NrSpinSlices",  # Host-owned inline spin experiment.
                 "NrWatchSlices",  # Host-owned inline spin experiment.
                 "NrWatchStartDelay",  # Host-owned inline spin experiment.
+                "NrInlineComputeConvert",  # Host-owned inline experiment (frame flag to the runtime).
                 "EarlyExeWrap",
                 "EarlyAnyModuleWrap",
                 "Diagnostic",
