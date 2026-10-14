@@ -29,6 +29,7 @@ if /i "%~1"=="aco-inline" goto inline
 if /i "%~1"=="aco-temporal" goto acotemporal
 if /i "%~1"=="hdr-shader" goto hdrshader
 if /i "%~1"=="phase-failure" goto phasefailure
+if /i "%~1"=="inline-lifecycle" goto lifecycle
 if /i "%~1"=="wait-profile" goto waitprofile
 if /i "%~1"=="aco-wait-profile" goto waitprofile
 if /i "%~1"=="inline-profile" goto waitprofile
@@ -109,6 +110,15 @@ set "RC=%errorlevel%"
 set "MZ_TEST_COMPUTE_REFUSE_AT="
 set "MZ_TEST_INLINE_CHAIN="
 exit /b %RC%
+
+:lifecycle
+cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /I OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler tests/mochizuki/queue_segments.cpp /Foexports/mochizuki-tests/queue_segments.obj /Feexports/mochizuki-tests/queue_segments.exe /link d3d12.lib dxgi.lib dxguid.lib || exit /b 1
+rem All compute toggles on: geometry, format, motion extent, model scale, layers and queue change mid-run;
+rem two inline frames in flight; ResetHistory; Destroy/Create. Every frame completes and collects.
+set "MZ_TEST_PHASE_SUBMIT_FAIL_AT="
+set "MZ_TEST_INLINE_CHAIN="
+exports\mochizuki-tests\queue_segments.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" lifecycle
+exit /b %errorlevel%
 
 :waitprofile
 set "MOCHI_ACO_ARG="

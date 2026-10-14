@@ -56,6 +56,62 @@ int wmain(int argc,wchar_t**argv) try {
         f.flags|=MOCHIZUKI_NR_FRAME_FLAG_TEMPORAL|MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_MOTION;
     }
     uint64_t fence=2;
+    if(argc>3&&wcscmp(argv[3],L"lifecycle")==0){
+        // All compute toggles on, no fault hooks. Every frame must complete, certify and collect while the geometry,
+        // the colour format, the motion extent, the model scale, the layer count and the queue (split <-> inline)
+        // change under it; two inline frames are prepared and recorded before either executes; ResetHistory and a
+        // Destroy/Create (Release) happen mid-run.
+        auto defaults=reinterpret_cast<PFN_MochizukiNrGetControlDefaults>(GetProcAddress(dll,"MochizukiNrGetControlDefaults"));
+        auto set=reinterpret_cast<PFN_MochizukiNrSetControls>(GetProcAddress(dll,"MochizukiNrSetControls"));
+        MochizukiNrControls controls{sizeof controls};Rc(defaults(&controls));controls.drs_mode=1;Rc(set(context,&controls));
+        Frame r11(device.Get(),256,256,DXGI_FORMAT_R11G11B10_FLOAT);
+        {List up(device.Get());r11.Upload(up.cmd.Get());mv.Upload(up.cmd.Get());Hr(up.cmd->Close());Submit(queue.Get(),up);
+         Hr(queue->Signal(tail.Get(),++fence));Wait(tail.Get(),fence);}
+        const uint32_t all=MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_CONVERT|MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_MOTION|
+            MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_DOWNSCALE|MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_EXPORT;
+        struct Step{bool r11;UINT width;bool motion;float scale;uint32_t passes;bool inl;};
+        const Step steps[]={{false,256,false,1,1,false},{false,256,false,1,1,true},{false,224,true,1,1,true},
+            {false,224,true,.5f,1,true},{true,256,false,1,1,true},{true,240,true,1,2,false},{true,240,true,1,2,true},
+            {false,256,false,1,2,true},{false,256,false,.5f,1,false},{false,192,true,1,1,true}};
+        uint64_t id=1000;
+        auto prepareOne=[&](const Step& st,LmxxfNrJob& j,List& in,List& out){
+            MochizukiNrFrameInfo fi{};fi.struct_size=sizeof fi;fi.frame_id=++id;
+            fi.color=(st.r11?r11:frame).color.Get();fi.color_width=st.width;fi.color_height=256;
+            fi.color_state=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            fi.flags=LMXXF_NR_FRAME_FLAG_STRENGTH|all|(st.inl?MOCHIZUKI_NR_FRAME_FLAG_INLINE_EXECUTION:0u)|
+                (st.passes>1?LMXXF_NR_FRAME_FLAG_FIRST_PASS:0u)|(st.motion?MOCHIZUKI_NR_FRAME_FLAG_TEMPORAL:0u);
+            fi.transfer_strength=fi.color_strength=1;fi.model_scale=st.scale;fi.passes=st.passes;
+            if(st.motion){fi.motion=mv.color.Get();fi.motion_state=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+                fi.motion_width=fi.motion_height=128;fi.motion_scale_x=fi.motion_scale_y=1;}
+            const auto until=GetTickCount64()+180000;
+            for(;;){auto rc=prepare(context,&fi,&j);if(!rc)break;Require(rc==LMXXF_NR_UNAVAILABLE&&GetTickCount64()<until,"prepare (lifecycle)");Sleep(20);}
+            Rc(api.RecordInputs(context,j.handle,in.cmd.Get()));Rc(api.RecordOutputs(context,j.handle,out.cmd.Get()));
+            Hr(in.cmd->Close());Hr(out.cmd->Close());
+        };
+        auto execute=[&](LmxxfNrJob& j,List& in,List& out){
+            Rc(api.BeginRecordingExecution(context,j.handle,queue.Get()));Submit(queue.Get(),in);
+            Rc(api.EnqueueHip(context,j.handle,queue.Get()));Submit(queue.Get(),out);auto signal=queue->Signal(tail.Get(),++fence);
+            Rc(api.EndRecordingExecution(context,j.handle,queue.Get(),3,tail.Get(),fence,signal));Wait(tail.Get(),fence);
+            Rc(api.InvalidateRecording(context,j.handle));Rc(api.CollectRecording(context,j.handle));
+        };
+        for(size_t i=0;i<sizeof steps/sizeof*steps;i++){
+            const Step& st=steps[i];
+            if(i==4)Rc(api.ResetHistory(context));
+            if(i==7){Rc(api.Destroy(context));context=nullptr;Rc(api.Create(&ci,&context));Rc(api.PrepareSession(context));Rc(set(context,&controls));}
+            if(st.inl&&i%3==1){
+                // Two in flight: both prepared and recorded before the first executes.
+                LmxxfNrJob a{sizeof a},b{sizeof b};List ai(device.Get()),ao(device.Get()),bi(device.Get()),bo(device.Get());
+                prepareOne(st,a,ai,ao);prepareOne(st,b,bi,bo);execute(a,ai,ao);execute(b,bi,bo);
+            } else {
+                LmxxfNrJob j{sizeof j};List in(device.Get()),out(device.Get());prepareOne(st,j,in,out);execute(j,in,out);
+            }
+            MochizukiNrInfo state{sizeof state};Rc(info(context,&state));Require(!state.failed,"lifecycle step failed the session");
+            std::printf("LIFECYCLE step %zu ok inline_path=%u %s\n",i,state.inline_path,state.inline_path_why);
+        }
+        Rc(api.Destroy(context));
+        std::printf("INLINE_LIFECYCLE_OK\n");
+        return 0;
+    }
     for(int i=0;exportMode&&i<3;i++){
         // Split frames (no inline flag, so the phase-failure hook does not apply): complete, certified, collected.
         MochizukiNrFrameInfo sf=f;sf.frame_id=100+i;sf.flags&=~MOCHIZUKI_NR_FRAME_FLAG_INLINE_EXECUTION;
