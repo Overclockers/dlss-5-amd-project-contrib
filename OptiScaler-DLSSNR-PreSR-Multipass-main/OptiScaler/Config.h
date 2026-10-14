@@ -408,6 +408,8 @@ class Config
     CustomOptional<int> NrWatchStartDelay { 0 };
     // Mochizuki inline: R11G11B10_FLOAT colour converted on the compute queue (whole chain on compute). Default off.
     CustomOptional<bool> NrInlineComputeConvert { false };
+    // Compute-queue motion rescale. Default off.
+    CustomOptional<bool> NrInlineComputeMotion { false };
     CustomOptional<bool> NrInline { false }; // Experimental same-list execution for lmxxf/Mochizuki.
     // Wrap host CreateCommandList results before the swapchain exists.
     // Missing = engine whitelist (Unreal + Forza). false = never. true = force for any engine.

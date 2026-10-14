@@ -41,7 +41,12 @@ RUNTIME_VARIANTS = {'runtime_transfer_store': ('runtime_transfer', ['NR_STORE_NA
                     'runtime_planA_convert_r11g11b10': ('runtime_planA_convert', ['PLAN_A_DST_FORMAT=r11f_g11f_b10f', 'PLAN_A_DST_MAX=65024.0']),
                     'runtime_planA_convert_rgba16f': ('runtime_planA_convert', ['PLAN_A_DST_FORMAT=rgba16f', 'PLAN_A_DST_MAX=65504.0']),
                     'runtime_planA_unconvert_r11g11b10': ('runtime_planA_unconvert', ['PLAN_A_DST_FORMAT=r11f_g11f_b10f', 'PLAN_A_DST_MAX=65024.0']),
-                    'runtime_planA_unconvert_rgba16f': ('runtime_planA_unconvert', ['PLAN_A_DST_FORMAT=rgba16f', 'PLAN_A_DST_MAX=65504.0'])}
+                    'runtime_planA_unconvert_rgba16f': ('runtime_planA_unconvert', ['PLAN_A_DST_FORMAT=rgba16f', 'PLAN_A_DST_MAX=65504.0']),
+                    # motion-vector rescale on compute (NrInlineComputeMotion), one module per motion format
+                    'runtime_mv_rescale_rg16f': ('runtime_mv_rescale', ['MV_DST_FORMAT=rg16f']),
+                    'runtime_mv_rescale_rg32f': ('runtime_mv_rescale', ['MV_DST_FORMAT=rg32f']),
+                    'runtime_mv_rescale_rgba16f': ('runtime_mv_rescale', ['MV_DST_FORMAT=rgba16f']),
+                    'runtime_mv_rescale_rgba32f': ('runtime_mv_rescale', ['MV_DST_FORMAT=rgba32f'])}
 MOTION = ['motion_luma', 'motion_estimate']
 
 

@@ -68,6 +68,7 @@ static void ResetSharedNrDefaults(Config* config)
     config->NrWatchSlices.reset();
     config->NrWatchStartDelay.reset();
     config->NrInlineComputeConvert.reset();
+    config->NrInlineComputeMotion.reset();
 }
 
 // The "(?)" marker every control carries, matching the rest of the menu.
@@ -781,8 +782,14 @@ void RenderMenu(Config* config, float menuResScale)
                     HelpMarker("Default off. Experimental. R11G11B10_FLOAT, RGBA8/BGRA8 (UNORM and sRGB) and RGB10A2 colour"
                                "\nframes convert input and write-back on the compute queue instead of graphics blits,"
                                "\nso the inline chain is not split across queues."
-                               "\nNeeds model scale 1; motion vectors that need rescaling still split it (see the log)."
+                               "\nNeeds model scale 1; rescaled motion vectors split it unless compute motion rescale is on."
                                "\nRebuilds the network for those formats. INI: NrInlineComputeConvert.");
+                    bool nrInlineComputeMotion = config->NrInlineComputeMotion.value_or_default();
+                    if (MenuUi::Checkbox("Compute-queue motion rescale", &nrInlineComputeMotion))
+                        config->NrInlineComputeMotion = nrInlineComputeMotion;
+                    HelpMarker("Default off. Experimental. With dynamic resolution, motion vectors of another size are"
+                               "\nrescaled by a compute pass (bilinear, like the blit) instead of a graphics blit,"
+                               "\nso the inline chain is not split by them. Remakes the frame buffers.\nINI: NrInlineComputeMotion.");
                     }
                     const bool armedActive = armedApplies && gpuHandoff;
                     ImGui::BeginDisabled(armedActive);
@@ -891,6 +898,7 @@ void RenderMenu(Config* config, float menuResScale)
                     resetOption(config->NrWatchSlices);
                     resetOption(config->NrWatchStartDelay);
                     resetOption(config->NrInlineComputeConvert);
+                    resetOption(config->NrInlineComputeMotion);
                     SetAllowEnhancedBarriers(config->LmxxfAllowEnhancedBarriers.value_or_default());
                     resetOption(config->LmxxfEarlyExeWrap);
                     resetOption(config->LmxxfEarlyAnyModuleWrap);

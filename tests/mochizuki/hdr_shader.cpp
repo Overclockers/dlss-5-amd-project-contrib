@@ -1,5 +1,7 @@
 // Exercise the shipped SPIR-V, without model weights: hue, unchanged SDR, alpha and dispatch bounds.
+#include <algorithm>
 #include <array>
+#include <cstring>
 #include <cmath>
 #include <filesystem>
 #include <iostream>
@@ -431,6 +433,81 @@ static void PackedUnorm(nrvk::Context& ctx, const std::filesystem::path& shaders
     }
 }
 
+// NrInlineComputeMotion: runtime_mv_rescale_* (LINEAR, clamp-to-edge sampler) against the LINEAR blit it replaces, for
+// a smaller, a larger and a padded source (valid extent inside a larger image whose edge repeats).
+static uint16_t HalfBits(float f)
+{
+    uint32_t x; std::memcpy(&x, &f, 4);
+    const uint32_t sign = (x >> 16) & 0x8000u; int e = int((x >> 23) & 0xff) - 127 + 15; uint32_t m = x & 0x7fffffu;
+    if ((x & 0x7fffffffu) == 0) return uint16_t(sign);
+    Require(e > 0 && e < 31 && (m & 0x1fffu) == 0, "fixture value not exact in half");
+    return uint16_t(sign | (uint32_t(e) << 10) | (m >> 13));
+}
+static float HalfFloat(uint16_t h)
+{
+    const uint32_t sign = uint32_t(h & 0x8000u) << 16, e = (h >> 10) & 0x1f, m = h & 0x3ffu;
+    uint32_t x = e == 0 ? sign : sign | ((e - 15 + 127) << 23) | (m << 13);
+    if (e == 0 && m) { float v = std::ldexp(float(m), -24); return (h & 0x8000u) ? -v : v; }
+    float f; std::memcpy(&f, &x, 4); return f;
+}
+static void MotionRescale(nrvk::Context& ctx, const std::filesystem::path& shaders)
+{
+    struct Case { uint32_t sw, sh, vw, vh, dw, dh; const char* name; };
+    const Case cases[] = { {256,160,256,160,192,120,"smaller"}, {160,100,160,100,240,150,"larger"},
+                           {160,100,150,90,232,145,"padded"} };
+    struct Fmt { VkFormat format; bool half; uint32_t ch; const char* module; const char* name; };
+    const Fmt fmts[] = { {VK_FORMAT_R16G16_SFLOAT,true,2,"runtime_mv_rescale_rg16f.spv","RG16F"},
+                         {VK_FORMAT_R32G32_SFLOAT,false,2,"runtime_mv_rescale_rg32f.spv","RG32F"},
+                         {VK_FORMAT_R16G16B16A16_SFLOAT,true,4,"runtime_mv_rescale_rgba16f.spv","RGBA16F"},
+                         {VK_FORMAT_R32G32B32A32_SFLOAT,false,4,"runtime_mv_rescale_rgba32f.spv","RGBA32F"} };
+    for (const Fmt& fm : fmts) {
+        const VkFormat format = fm.format; const bool half = fm.half; const uint32_t ch = fm.ch; const char* module = fm.module;
+        for (const Case& c : cases) {
+            Resources r(ctx); r.images.reserve(3);
+            r.images.push_back(ctx.image(c.sw,c.sh,format,true,true,false));   // source (sampled + blit src)
+            r.images.push_back(ctx.image(256,160,format,false));               // blit reference
+            r.images.push_back(ctx.image(256,160,format,false));               // compute result
+            auto& src=r.images[0]; auto& ref=r.images[1]; auto& got=r.images[2];
+            vkDestroySampler(ctx.device, src.sampler, nullptr);
+            VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+            si.magFilter = si.minFilter = VK_FILTER_LINEAR; si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+            si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            Require(vkCreateSampler(ctx.device, &si, nullptr, &src.sampler) == VK_SUCCESS, "linear sampler");
+            // Values k/16 in [-64, 64): exact in both formats. Past the valid extent the edge repeats (Pad).
+            std::vector<float> v(size_t(c.sw)*c.sh*ch); uint32_t rng=4242u; auto next=[&]{ rng=rng*1664525u+1013904223u; return rng>>8; };
+            for (uint32_t y=0;y<c.sh;++y) for (uint32_t x=0;x<c.sw;++x) for (uint32_t k=0;k<ch;++k) {
+                const uint32_t sx=std::min(x,c.vw-1), sy=std::min(y,c.vh-1);
+                if (sx==x && sy==y) v[(size_t(y)*c.sw+x)*ch+k]=float(int(next()%2048u)-1024)/16.f;
+                else v[(size_t(y)*c.sw+x)*ch+k]=v[(size_t(sy)*c.sw+sx)*ch+k];
+            }
+            ctx.transition(src,VK_IMAGE_LAYOUT_GENERAL);
+            if (half) { std::vector<uint16_t> h(v.size()); for (size_t i=0;i<v.size();++i) h[i]=HalfBits(v[i]); ctx.upload(src,h.data(),h.size()*2); }
+            else ctx.upload(src,v.data(),v.size()*4);
+            ctx.transition(src,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL); ctx.transition(ref,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            VkImageBlit area{}; area.srcSubresource=area.dstSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};
+            area.srcOffsets[1]={int(c.vw),int(c.vh),1}; area.dstOffsets[1]={int(c.dw),int(c.dh),1};
+            ctx.one_shot([&](VkCommandBuffer cmd){ vkCmdBlitImage(cmd,src.handle,src.layout,ref.handle,ref.layout,1,&area,VK_FILTER_LINEAR); });
+            ctx.transition(src,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL); ctx.transition(got,VK_IMAGE_LAYOUT_GENERAL);
+            r.kernel.create(ctx,(shaders/module).string(),{},16,{&src,&got});
+            const std::array<uint32_t,4> push{c.dw,c.dh,c.vw,c.vh}; r.Run(push,c.dw,c.dh);
+            ctx.transition(ref,VK_IMAGE_LAYOUT_GENERAL);
+            const size_t n=size_t(256)*160*ch; std::vector<float> a(n), b(n);
+            if (half) { std::vector<uint16_t> ha(n), hb(n); ctx.download(got,ha.data(),n*2); ctx.download(ref,hb.data(),n*2);
+                        for (size_t i=0;i<n;++i){a[i]=HalfFloat(ha[i]);b[i]=HalfFloat(hb[i]);} }
+            else { ctx.download(got,a.data(),n*4); ctx.download(ref,b.data(),n*4); }
+            float worst=0;
+            for (uint32_t y=0;y<c.dh;++y) for (uint32_t x=0;x<c.dw;++x) for (uint32_t k=0;k<ch;++k) {
+                const size_t i=(size_t(y)*256+x)*ch+k;
+                worst=std::max(worst,std::fabs(a[i]-b[i])/std::max(1.f,std::fabs(b[i])));
+            }
+            std::cout<<"motion rescale "<<fm.name<<" "<<c.name<<": max rel diff vs blit="<<worst<<'\n';
+            // Both filter with the hardware's fixed-point weights; allow their rounding and the half step.
+            Require(worst <= (half ? 2e-2f : 1e-2f), "compute motion rescale differs from the LINEAR blit");
+        }
+    }
+    std::cout<<"PASS motion rescale on compute matches the LINEAR blit (smaller, larger, padded)\n";
+}
+
 int main(int argc, char** argv)
 {
     nrvk::Context ctx;
@@ -445,6 +522,7 @@ int main(int argc, char** argv)
         R11G11B10Unpack(ctx, argv[1]);
         R11G11B10Pack(ctx, argv[1]);
         PackedUnorm(ctx, argv[1]);
+        MotionRescale(ctx, argv[1]);
         if (argc == 2) {
             Encode(ctx, argv[1]);
             Transfer(ctx, argv[1]);

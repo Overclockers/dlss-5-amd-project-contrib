@@ -16,6 +16,10 @@
 // and its write-back (a compute pack per format) on the compute family instead of graphics blits, so the
 // whole chain can stay on compute. May rebuild the network.
 #define MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_CONVERT (1u << 11)
+// NrInlineComputeMotion (default off): with dynamic resolution, motion vectors of another extent are rescaled onto the
+// subrect by a compute pass (runtime_mv_rescale_*, bilinear like the blit) instead of a LINEAR blit, so such inline
+// frames can keep the whole chain on compute. Changing it remakes the frame buffers (not the network).
+#define MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_MOTION (1u << 12)
 typedef struct MochizukiNrFrameInfo
 {
     uint32_t struct_size;

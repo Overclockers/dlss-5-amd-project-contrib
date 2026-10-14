@@ -1467,6 +1467,70 @@ struct ConvertPass
             }
         }
 
+        // NrInlineComputeMotion: the same layout with a LINEAR sampler and a 16-byte push {width, height,
+        // srcWidth, srcHeight}; convertPipelines holds runtime_mv_rescale_* keyed by the motion format. A missing
+        // module only leaves that motion format on its blit.
+        void CreateMotion(Vulkan& vk)
+        {
+            VkSamplerCreateInfo sci { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
+            sci.magFilter = sci.minFilter = VK_FILTER_LINEAR;
+            sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+            sci.addressModeU = sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            VkCheck(vkCreateSampler(vk.device, &sci, nullptr, &sampler), "vkCreateSampler (motion rescale)");
+            VkDescriptorSetLayoutBinding bindings[2] {};
+            bindings[0].binding = 0;
+            bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[0].descriptorCount = 1;
+            bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            bindings[1].binding = 1;
+            bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            bindings[1].descriptorCount = 1;
+            bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            VkDescriptorSetLayoutCreateInfo sli { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+            sli.bindingCount = 2;
+            sli.pBindings = bindings;
+            VkCheck(vkCreateDescriptorSetLayout(vk.device, &sli, nullptr, &setLayout),
+                    "vkCreateDescriptorSetLayout (motion rescale)");
+            VkPushConstantRange push {};
+            push.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            push.size = sizeof(uint32_t) * 4;
+            VkPipelineLayoutCreateInfo pli { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+            pli.setLayoutCount = 1;
+            pli.pSetLayouts = &setLayout;
+            pli.pushConstantRangeCount = 1;
+            pli.pPushConstantRanges = &push;
+            VkCheck(vkCreatePipelineLayout(vk.device, &pli, nullptr, &layout), "vkCreatePipelineLayout (motion rescale)");
+            const std::pair<VkFormat, const char*> modules[] {
+                { VK_FORMAT_R16G16_SFLOAT, "runtime_mv_rescale_rg16f.spv" },
+                { VK_FORMAT_R32G32_SFLOAT, "runtime_mv_rescale_rg32f.spv" },
+                { VK_FORMAT_R16G16B16A16_SFLOAT, "runtime_mv_rescale_rgba16f.spv" },
+                { VK_FORMAT_R32G32B32A32_SFLOAT, "runtime_mv_rescale_rgba32f.spv" } };
+            for (const auto& [format, name] : modules)
+            {
+                VkFormatProperties fp {};
+                vkGetPhysicalDeviceFormatProperties(vk.physical, format, &fp);
+                if (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) ||
+                    !(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT))
+                {
+                    nr::logf("[mochizuki] motion rescale: VkFormat %d has no linear-sampled/storage support; it keeps "
+                             "its blit", int(format));
+                    continue;
+                }
+                VkShaderModule module {};
+                try
+                {
+                    module = LoadModule(vk, name);
+                    convertPipelines.emplace_back(format, MakePipeline(vk, layout, module));
+                }
+                catch (const std::exception& e)
+                {
+                    nr::logf("[mochizuki] motion rescale: no compute pass for VkFormat %d (%s); it keeps its blit",
+                             int(format), e.what());
+                }
+                if (module) vkDestroyShaderModule(vk.device, module, nullptr);
+            }
+        }
+
         // The input module for a canonical format (the destination of the input pass).
         static const char* ConvertModule(VkFormat format)
         {
@@ -1716,6 +1780,20 @@ struct ConvertPass
         vkCmdDispatch(c, (w + 7) / 8, (h + 7) / 8, 1);
     }
 
+    // NrInlineComputeMotion: the valid srcW x srcH of the source onto w x h of the destination (bilinear, as the
+    // LINEAR blit). Same preconditions as Dispatch.
+    void DispatchMotion(VkCommandBuffer c, const Pipeline& p, uint32_t w, uint32_t h, uint32_t srcW, uint32_t srcH)
+    {
+        const VkPipeline pipeline = p.Convert(convertFor);
+        if (!set || !pipeline)
+            throw std::logic_error("motion rescale: no compute pass for this motion format");
+        vkCmdBindPipeline(c, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+        vkCmdBindDescriptorSets(c, VK_PIPELINE_BIND_POINT_COMPUTE, p.layout, 0, 1, &set, 0, nullptr);
+        const uint32_t push[4] { w, h, srcW, srcH };
+        vkCmdPushConstants(c, p.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof push, push);
+        vkCmdDispatch(c, (w + 7) / 8, (h + 7) / 8, 1);
+    }
+
     // The output direction: the network's answer in the canonical image into `gameFormat`'s image, so the
     // readback's row pitch and placed footprint (both built for the game's format) describe it correctly.
     // Same preconditions as Dispatch, with the two images the other way round.
@@ -1913,13 +1991,17 @@ struct Geometry
     bool canonicalise = false;
     // Plan A: the canonical format the network runs on when canonicalise is set (UNDEFINED otherwise).
     VkFormat canonicalVk = VK_FORMAT_UNDEFINED;
+    // NrInlineComputeMotion on a bucketed geometry with a compute rescale for its motion format: motionScaled is
+    // also a storage image and motionRescale has its set, so a Rescaled frame needs no blit.
+    bool computeMotion = false;
     bool operator==(const Geometry& o) const
     {
         return width == o.width && height == o.height && colourFormat == o.colourFormat &&
                gameColourFormat == o.gameColourFormat && colourWidth == o.colourWidth &&
                colourHeight == o.colourHeight && motionFormat == o.motionFormat &&
                motionWidth == o.motionWidth && motionHeight == o.motionHeight && firstPass == o.firstPass &&
-               bucketed == o.bucketed && canonicalise == o.canonicalise && canonicalVk == o.canonicalVk;
+               bucketed == o.bucketed && canonicalise == o.canonicalise && canonicalVk == o.canonicalVk &&
+               computeMotion == o.computeMotion;
     }
 };
 
@@ -2000,6 +2082,7 @@ struct FrameBuffers
     // Plan A: the compute pass that fills canonicalColour from colourImage (no set when not canonicalised).
     ConvertPass convert;
     Image motionScaled; // bucketed geometry with motion: the vectors laid over the subrect, at the bucket's extent
+    ConvertPass motionRescale; // geometry.computeMotion: motionImage -> motionScaled on compute (no set otherwise)
     ID3D12Resource* firstResult {};
     ID3D12Resource* result {};
 
@@ -2032,6 +2115,7 @@ struct FrameBuffers
         convert = std::exchange(other.convert, {});
         motionImage = std::exchange(other.motionImage, {});
         motionScaled = std::exchange(other.motionScaled, {});
+        motionRescale = std::exchange(other.motionRescale, {});
         result = std::exchange(other.result, nullptr);
     }
 
@@ -2049,6 +2133,7 @@ struct FrameBuffers
             canonicalColour.Release(device);
             convert.Release(device);
             motionImage.Release(device);
+            motionRescale.Release(device);
             motionScaled.Release(device);
         }
         if (firstResult) firstResult->Release();
@@ -2489,6 +2574,9 @@ struct Session
     // set allocates its own descriptor sets from them. Empty until Start made them, and left empty when the
     // passes are not there, which keeps every frame on its own format (the pre-Plan-A path).
     ConvertPass::Pipeline convertPipeline;
+    // NrInlineComputeMotion: the session's motion rescale pipelines and this set's descriptor set.
+    ConvertPass::Pipeline motionPipeline;
+    ConvertPass motionRescale;
     ID3D12Resource* firstResult {};
     ID3D12Resource* result {}; // what Super Resolution gets in place of the game's colour
 
@@ -3275,6 +3363,7 @@ struct Session
         b.convert = std::exchange(convert, {});
         b.motionImage = std::exchange(motionImage, {});
         b.motionScaled = std::exchange(motionScaled, {});
+        b.motionRescale = std::exchange(motionRescale, {});
         b.result = std::exchange(result, nullptr);
         std::fill(std::begin(fallbackCurrent), std::end(fallbackCurrent), false);
         return b;
@@ -3426,7 +3515,10 @@ struct Session
             b.motionBuffer.Create(device, vk, b.motionFootprint.bytes);
             b.motionImage.Create(vk, mf.vk, g.motionWidth, g.motionHeight);
             if (g.bucketed)
-                b.motionScaled.Create(vk, mf.vk, g.width, g.height);
+                b.motionScaled.Create(vk, mf.vk, g.width, g.height,
+                                      g.computeMotion ? kImageUsage | VK_IMAGE_USAGE_STORAGE_BIT : kImageUsage);
+            if (g.computeMotion)
+                b.motionRescale.Create(vk, motionPipeline, b.motionImage.image, mf.vk, b.motionScaled.image, mf.vk);
         }
         D3D12_HEAP_PROPERTIES hp {};
         hp.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -3468,6 +3560,7 @@ struct Session
         convert = std::exchange(b.convert, {});
         motionImage = std::exchange(b.motionImage, {});
         motionScaled = std::exchange(b.motionScaled, {});
+        motionRescale = std::exchange(b.motionRescale, {});
         result = std::exchange(b.result, nullptr);
         geometry = b.geometry;
     }
@@ -3796,6 +3889,14 @@ struct Session
         {
             nr::logf("[mochizuki] plan A conversion unavailable (%s); a colour-format change rebuilds the network "
                      "as before", e.what());
+        }
+        try
+        {
+            motionPipeline.CreateMotion(vk);
+        }
+        catch (const std::exception& e)
+        {
+            nr::logf("[mochizuki] motion rescale on compute unavailable (%s); rescaled vectors keep their blit", e.what());
         }
         nr::logf("[mochizuki] Vulkan device %s, queue family %u%s", vk.name.c_str(), vk.family,
                  vk.buildQueue != vk.queue ? ", a second queue for the network builds" : "");
@@ -4939,7 +5040,7 @@ struct Session
             if (computeChainOff) chainWhy = computeChainOff;
             else if (hooks.inlineChain == 3) chainWhy = "MZ_TEST_INLINE_CHAIN=3 (test hook)";
             else if (job.firstPass) chainWhy = "the first-pass export needs a blit";
-            else if (motion && job.motionPath != Job::Uploaded && job.motionPath != Job::Padded)
+            else if (motion && job.motionPath == Job::Rescaled && !geometry.computeMotion)
                 chainWhy = "the motion vectors are rescaled by a blit";
             // mask: the host binds no explicit ControlMaskFrame (record/record_engine pass none);
             // the automatic mask is not a ControlMaskFrame.
@@ -5089,11 +5190,30 @@ struct Session
                 Pad(c, motionImage.image, motionW, motionH, std::min(motionW + 1, MW), std::min(motionH + 1, MH));
                 TransferBarrier(c, motionImage.image);
             }
+            if (geometry.computeMotion)
+            {
+                // NrInlineComputeMotion: the same bilinear rescale as a compute pass, so no graphics-only command.
+                ImageBarrier(c, motionImage.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+                ImageBarrier(c, motionScaled.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                             VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_ACCESS_SHADER_WRITE_BIT);
+                motionRescale.DispatchMotion(c, motionPipeline, w, h, motionW, motionH);
+                // Its writes visible to Pad's copies and to ready()'s barrier, which both start at transfer.
+                ImageBarrier(c, motionScaled.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT);
+            }
+            else
+            {
             ImageBarrier(c, motionScaled.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                          VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_ACCESS_TRANSFER_WRITE_BIT);
             Blit(c, motionImage.image, motionScaled.image, { 0, 0 }, { int32_t(motionW), int32_t(motionH) }, { 0, 0 },
                  { int32_t(w), int32_t(h) }, VK_FILTER_LINEAR);
+            }
             if (padded)
             {
                 TransferBarrier(c, motionScaled.image);
@@ -5399,6 +5519,7 @@ struct Session
         toVk.Release(vk.device);
         fromVk.Release(vk.device);
         convertPipeline.Release(vk.device);
+        motionPipeline.Release(vk.device);
         vk.Destroy();
         ReleaseGameQueues();
     }
@@ -5643,6 +5764,9 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
                 g.motionFormat = md.Format;
                 g.motionWidth = g.bucketed ? UINT(md.Width) : motionW;
                 g.motionHeight = g.bucketed ? md.Height : motionH;
+                // NrInlineComputeMotion: not tied to the inline flag (switching inline/split keeps the buffers).
+                g.computeMotion = (info->flags & MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_MOTION) && g.bucketed &&
+                                  s->motionPipeline.Convert(mf.vk);
             }
             // Neither a network nor buffers that cannot be had now fail the session: the frame goes without NR, and
             // they are tried again as their holds say.

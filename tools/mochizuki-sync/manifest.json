@@ -358,13 +358,25 @@
         "windows/src/core/nr_runtime.cpp",
         "windows/src/core/nr_runtime.hpp"
       ]
+    },
+    {
+      "feature": "compute-motion-rescale",
+      "path": "patches/18-compute-motion-rescale.patch",
+      "files": [
+        "linux/build/build_network.py",
+        "windows/build/build_network.py",
+        "linux/shaders/passes/runtime_mv_rescale.comp",
+        "windows/shaders/passes/runtime_mv_rescale.comp"
+      ]
     }
   ],
   "added": [
     "linux/shaders/passes/runtime_planA_convert.comp",
     "linux/shaders/passes/runtime_planA_unconvert.comp",
     "windows/shaders/passes/runtime_planA_convert.comp",
-    "windows/shaders/passes/runtime_planA_unconvert.comp"
+    "windows/shaders/passes/runtime_planA_unconvert.comp",
+    "linux/shaders/passes/runtime_mv_rescale.comp",
+    "windows/shaders/passes/runtime_mv_rescale.comp"
   ],
   "source_comment_policy": "omit-sample-address-annotations-v1"
 }
