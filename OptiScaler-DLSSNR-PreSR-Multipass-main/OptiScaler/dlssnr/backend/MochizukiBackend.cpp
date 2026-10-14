@@ -11,11 +11,14 @@
 
 // NrFrameDiag: last Vulkan core GPU ms from the runtime (cheap stats copy; no GPU access).
 static PFN_MochizukiNrGetInfo gDiagGetInfo = nullptr;
-static float DiagCoreGpuMs(void* context)
+static float DiagCoreGpuMs(void* context, float* encodeMs, float* transferMs)
 {
     if (!gDiagGetInfo || !context) return 0;
     MochizukiNrInfo info {sizeof info};
-    return gDiagGetInfo(context, &info) == LMXXF_NR_OK ? info.gpu_ms_last : 0.f;
+    if (gDiagGetInfo(context, &info) != LMXXF_NR_OK) return 0.f;
+    if (encodeMs) *encodeMs = info.gpu_ms_encode_last;
+    if (transferMs) *transferMs = info.gpu_ms_transfer_last;
+    return info.gpu_ms_last;
 }
 
 namespace DlssNr::Backend
@@ -319,7 +322,8 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     frame.frame_id = frameId;
     frame.flags = LMXXF_NR_FRAME_FLAG_STRENGTH | (temporal ? MOCHIZUKI_NR_FRAME_FLAG_TEMPORAL : 0) |
         (first ? LMXXF_NR_FRAME_FLAG_FIRST_PASS : 0) |
-        (inlineMode ? MOCHIZUKI_NR_FRAME_FLAG_INLINE_EXECUTION : 0);
+        (inlineMode ? MOCHIZUKI_NR_FRAME_FLAG_INLINE_EXECUTION : 0) |
+        (FrameDiag::Enabled() ? MOCHIZUKI_NR_FRAME_FLAG_STAGE_TIMING : 0);
     const auto desc = input.colour->GetDesc();
     frame.color = input.colour;
     frame.color_width = input.width && input.width <= desc.Width ? input.width : UINT(desc.Width);

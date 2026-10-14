@@ -1860,6 +1860,7 @@ struct Job
     uint32_t state = LMXXF_NR_JOB_NONE;
     bool firstPass = false;
     bool inlineExecution = false;
+    bool stageTiming = false; // MOCHIZUKI_NR_FRAME_FLAG_STAGE_TIMING (diagnostic)
     bool enqueued = false; // EnqueueHip ran for it: a second call does nothing
     // Plan A: this frame's colour is converted (compute pass, not a blit) into the geometry's canonical image
     // before the network sees it. Only for a frame whose format differs from the session's first-seen one.
@@ -2433,6 +2434,7 @@ struct Session
     std::mutex statsMutex;
     float gpuMs[kGpuSamples] {};
     float networkMs[kGpuSamples] {}, otherMs[kGpuSamples] {};
+    float encodeMsLast = -1.f, transferMsLast = -1.f; // stage timing, last accepted sample (statsMutex)
     uint32_t gpuMsCount = 0, gpuMsNext = 0;
     nr::Runtime* statsNetwork = nullptr;
     uint64_t statsSerial = 0, gpuSamples = 0, gpuTick = 0;
@@ -5124,6 +5126,7 @@ struct Session
         // Plain fields the core reads while recording; the runtime is used under submitMutex only.
         runtime->set_history_strength(job.history);
         runtime->set_white_point(job.white);
+        runtime->set_stage_timing(job.stageTiming);
         bool consumed = false;
         if (motion)
         {
@@ -5209,6 +5212,8 @@ struct Session
             gpuMs[gpuMsNext] = ms;
             networkMs[gpuMsNext] = runtime->last_network_ms();
             otherMs[gpuMsNext] = runtime->last_other_ms();
+            encodeMsLast = runtime->last_encode_ms();
+            transferMsLast = runtime->last_transfer_ms();
             gpuMsNext = (gpuMsNext + 1) % kGpuSamples;
             gpuMsCount = std::min(gpuMsCount + 1, kGpuSamples);
         }
@@ -5745,6 +5750,7 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
             else
                 s->RequestHistoryReset(Session::ResetNoMotion); // consumed at execution
             next.inlineExecution = (info->flags & MOCHIZUKI_NR_FRAME_FLAG_INLINE_EXECUTION) != 0;
+            next.stageTiming = (info->flags & MOCHIZUKI_NR_FRAME_FLAG_STAGE_TIMING) != 0;
             next.firstPass = g.firstPass && s->net.firstPass && served > 1 && s->firstResult;
             job->first_pass_output = next.firstPass ? s->firstResult : nullptr;
             next.state = LMXXF_NR_JOB_PREPARED;
@@ -6079,6 +6085,8 @@ int32_t GetInfo(void* context, MochizukiNrInfo* out)
         {
             std::lock_guard stats(s->statsMutex);
             info.gpu_samples = s->gpuSamples;
+            info.gpu_ms_encode_last = s->gpuMsCount ? s->encodeMsLast : -1.f;
+            info.gpu_ms_transfer_last = s->gpuMsCount ? s->transferMsLast : -1.f;
             info.gpu_tick = s->gpuTick;
             if (s->gpuMsCount) {
                 const uint32_t last = (s->gpuMsNext + kGpuSamples - 1) % kGpuSamples;

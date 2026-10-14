@@ -1,7 +1,7 @@
 # Mochizuki source pin and interface patches
 
 The runtime uses official core/shaders at the full SHA in `manifest.json`, plus
-thirteen explicit feature patches. There are no whole-file preservation overlays.
+fourteen explicit feature patches. There are no whole-file preservation overlays.
 The host loads our `MochizukiNrRuntime.dll`, which wraps that core; this does not
 claim binary compatibility with an official distributed runtime.
 
@@ -33,6 +33,7 @@ Those tests also run in `run.cmd abi`.
 | 11 inline-compute-writeback | Allow compatible inline frames to keep the entire Vulkan chain on compute | Unsupported conversions keep the segmented path; host queue and failure policy remain in the adapter |
 | 12 weights-only-extraction | Reuse the PE/weight parser with `--extract-weights`; installation skips CUDA scanning and DLL/cubin copies | Analysis defaults and `--extract` remain unchanged; both extraction entry points keep source and model hashes |
 | 13 inline-fp16-conversions | Equal-extent FP16 input and writeback on compute, retaining FLOAT/HDR and the original linear/temporal processing | Enabled only for optional second-family/compute hosts with both conversion shaders; default graphics recordings retain blits. Reduced scale, motion requiring a blit and first-pass export keep segments |
+| 14 core-stage-timing | Optional diagnostic timestamp pairs around the linear-input encode and transfer pass | Off unless the host sets it per frame; reuses the timing ring, never waits |
 
 The patches replay sequentially against `manifest.json`'s commit. Patches 02-05
 share header/implementation context, so do not assume their patch files apply
@@ -47,7 +48,7 @@ the C64 persistent decoder to fused C32 pair from tile chaining, preserving the
 existing barrier and associated arena lifetime boundary; other chains remain.
 Its attribution and validation are in the backend guide and source record.
 
-This thirteen-patch series records the product snapshot; it is not the upstream PR
+This fourteen-patch series records the product snapshot; it is not the upstream PR
 series. The upstream preparation branch has reverted the ACO, buffer-optimization
 and timing-calculation snapshots and retains only optional interface proposals.
 

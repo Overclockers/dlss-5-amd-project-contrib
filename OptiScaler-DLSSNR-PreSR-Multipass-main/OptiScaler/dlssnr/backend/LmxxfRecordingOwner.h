@@ -31,7 +31,8 @@ struct SessionOwner
     LmxxfNrApi api {};
     void* context = nullptr;
     // NrFrameDiag: backend hook for the runtime's last core GPU ms (Mochizuki); null elsewhere.
-    float (*diagCoreGpuMs)(void* context) = nullptr;
+    // encodeMs / transferMs: the core's stage pairs (-1 when absent).
+    float (*diagCoreGpuMs)(void* context, float* encodeMs, float* transferMs) = nullptr;
     // Split NrFrameDiag lines wait here until their game fence retired, so GPU stamps are readable.
     struct PendingSplitDiag {
         FrameDiag::Counters diag; std::shared_ptr<FrameDiag::GpuStamps> stamps;
@@ -47,7 +48,7 @@ struct SessionOwner
                 const UINT64 done = f.fence ? f.fence->GetCompletedValue() : UINT64_MAX;
                 const bool ready = done != UINT64_MAX && done >= f.value;
                 if (!ready && !all && splitDiagPending.size() <= 8) break;
-                if (diagCoreGpuMs) f.diag.coreGpuMs = diagCoreGpuMs(context);
+                if (diagCoreGpuMs) f.diag.coreGpuMs = diagCoreGpuMs(context, &f.diag.encodeGpuMs, &f.diag.transferGpuMs);
                 FrameDiag::AsyncEmit(f.diag, ready ? f.stamps : nullptr, f.queue.Get(), nullptr, nullptr);
                 splitDiagPending.pop_front();
             }
@@ -90,7 +91,8 @@ struct SessionOwner
             }
             if (pending->diag.active) {
                 pending->diag.qpcGameWaitExit = pending->diag.qpcOutputDone = FrameDiag::Qpc();
-                if (diagCoreGpuMs) pending->diag.coreGpuMs = diagCoreGpuMs(context);
+                if (diagCoreGpuMs)
+                    pending->diag.coreGpuMs = diagCoreGpuMs(context, &pending->diag.encodeGpuMs, &pending->diag.transferGpuMs);
                 pending->diag.activeSlots = unsigned(inlineInFlight.size());
                 pending->diag.spinCount = pending->WasAborted() ? 0 : pending->LastSpinCount();
                 pending->diag.historyReset = !pending->Succeeded() && !pending->WasAborted();

@@ -306,6 +306,14 @@
         "windows/src/core/nr_runtime.cpp",
         "windows/src/core/nr_runtime.hpp"
       ]
+    },
+    {
+      "feature": "core-stage-timing",
+      "path": "patches/14-core-stage-timing.patch",
+      "files": [
+        "windows/src/core/nr_runtime.cpp",
+        "windows/src/core/nr_runtime.hpp"
+      ]
     }
   ],
   "source_comment_policy": "omit-sample-address-annotations-v1"
