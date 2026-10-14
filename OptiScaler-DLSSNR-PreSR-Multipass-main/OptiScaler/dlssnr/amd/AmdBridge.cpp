@@ -15,6 +15,7 @@
 #include "../backend/LmxxfEvaluateCut.h"
 #include "../backend/LmxxfGenerationObserver.h"
 #include "../submission/SubmissionHooks.h"
+#include "../NrGameWaitDiag.h"
 #include <State.h>
 #include <Util.h>
 #include <misc/SkipSpoof.h>
@@ -256,6 +257,7 @@ void ExecuteBatch(ID3D12CommandQueue* q, UINT n, ID3D12CommandList* const* c)
 }
 void STDMETHODCALLTYPE Execute(ID3D12CommandQueue* q, UINT n, ID3D12CommandList* const* c)
 {
+    DlssNr::GameWait::OnExecute(q); // NrGameWaitDiag timestamp; no-op unless on and on the presenting thread
     // Only the active host may split the batch. A stale Daniel slot after
     // switching to lmxxf must not isolate lists the lmxxf path submits whole.
     auto b = ActiveHost();

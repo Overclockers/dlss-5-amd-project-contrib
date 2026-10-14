@@ -191,13 +191,17 @@ struct Counters
     int64_t gpuQpc[kGpuStampCount] {}; // GpuStamp points, QPC; 0 = unavailable
     int64_t gpuSideVkDone = 0;         // inline: side queue resumes after the network (Vulkan done as D3D12 sees it)
     float coreGpuMs = 0;               // Mochizuki Vulkan core GPU ms (last sample; excludes bridge copies)
+    // NrGameWaitDiag: last closed game-thread Present interval (gw = 0 when off).
+    bool gw = false;
+    unsigned long long gwPresent = 0; unsigned gwWaits = 0, gwEcls = 0;
+    double gwPresentMs = 0, gwPresentCpuMs = 0, gwToEclMs = -1, gwToWaitMs = -1, gwWaitMs = 0;
 };
 
 inline void Emit(const Counters& c) noexcept
 {
     if (!c.active) return;
     try {
-        char line[1600];
+        char line[2048];
         const int n = std::snprintf(line, sizeof line,
             "NRFRAME schema=1 backend=%s mode=%s outcome=%s "
             "qpc_freq=%lld qpc_record=%lld qpc_admit=%lld qpc_capture_seen=%lld "
@@ -243,9 +247,16 @@ inline void Emit(const Counters& c) noexcept
             MsBetween(c.gpuSideVkDone, c.gpuQpc[kGpuResume]),
             MsBetween(c.gpuQpc[kGpuResume], c.gpuQpc[kGpuDone]),
             c.handoff ? c.handoff : "-", c.spinPollDelay, c.spinSlices, c.watchSlices, c.watchStartDelay);
-        if (n <= 0) return;
+        if (n <= 0 || n >= int(sizeof line)) return;
+        int len = n;
+        if (c.gw) {
+            const int m = std::snprintf(line + len, sizeof line - size_t(len),
+                " gw_present=%llu gw_present_ms=%.3f gw_present_cpu_ms=%.3f gw_to_ecl_ms=%.3f gw_to_wait_ms=%.3f gw_wait_ms=%.3f gw_waits=%u gw_ecls=%u",
+                c.gwPresent, c.gwPresentMs, c.gwPresentCpuMs, c.gwToEclMs, c.gwToWaitMs, c.gwWaitMs, c.gwWaits, c.gwEcls);
+            if (m > 0 && len + m < int(sizeof line)) len += m;
+        }
         const auto path = ModuleDirectory() / L"NrFrameDiag.log";
-        Diagnostics::Append(path, std::string_view(line, size_t(n)), 8ull * 1024 * 1024);
+        Diagnostics::Append(path, std::string_view(line, size_t(len)), 8ull * 1024 * 1024);
     } catch (...) {}
 }
 

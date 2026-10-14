@@ -366,10 +366,13 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
             inlineResources->gpuArmed = Config::Instance()->NrGpuHandoff.value_or_default();
             {   // Spin experiments; only validated values are accepted (8 or fewer slices / delay >= 256 hitched offline).
                 const auto* c = Config::Instance();
-                const int pd = c->NrSpinPollDelay.value_or_default(), sl = c->NrSpinSlices.value_or_default();
+                // Spin options apply only with GPU-armed handoff (menu grays them otherwise).
+                const bool armed = inlineResources->gpuArmed;
+                const int pd = armed ? c->NrSpinPollDelay.value_or_default() : 0, sl = c->NrSpinSlices.value_or_default();
                 const int wsl = c->NrWatchSlices.value_or_default(), wsd = c->NrWatchStartDelay.value_or_default();
+                const int slA = armed ? sl : 0;
                 inlineResources->spinPollDelay = pd == 16 || pd == 64 ? UINT(pd) : 0u;
-                inlineResources->spinSlices = sl == 256 || sl == 1024 ? UINT(sl) : 0u;
+                inlineResources->spinSlices = slA == 256 || slA == 1024 ? UINT(slA) : 0u;
                 inlineResources->watchSlices = wsl == 256 || wsl == 1024 ? UINT(wsl) : 0u;
                 inlineResources->watchStartDelay = wsd >= 1 && wsd <= 8 ? UINT(wsd) : 0u; }
             FrameDiag::Begin(inlineResources->diag, "mochizuki", frameId, frame.color_width, frame.color_height, OPTI_VERSION);

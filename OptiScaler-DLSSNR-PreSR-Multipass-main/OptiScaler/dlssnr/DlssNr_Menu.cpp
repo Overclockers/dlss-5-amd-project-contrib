@@ -57,6 +57,7 @@ static void ResetSharedNrDefaults(Config* config)
     config->NrTimingEnabled = std::optional<bool>{};
     config->NrTimingLog = std::optional<bool>{};
     config->NrFrameDiag = std::optional<bool>{};
+    config->NrGameWaitDiag = std::optional<bool>{};
     config->NrInline.reset();
     config->LmxxfInlineSlots.reset();
     config->NrCaptureBackoff.reset();
@@ -518,10 +519,15 @@ static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const 
         bool frameDiag = config->NrFrameDiag.value_or_default();
         if (MenuUi::Checkbox("Per-frame NR diag (PresentMon)", &frameDiag)) config->NrFrameDiag = frameDiag;
         HelpMarker("Default off. Writes NrFrameDiag.log next to the DLL (split and inline) for PresentMon join. No sync GPU waits.");
+        bool gameWait = config->NrGameWaitDiag.value_or_default();
+        if (MenuUi::Checkbox("Game thread wait timing", &gameWait)) config->NrGameWaitDiag = gameWait;
+        HelpMarker("Default off. Needs per-frame NR diag. Timestamps only: game thread Present -> first submit and"
+                   "\nfence waits (gw_* fields in NrFrameDiag.log). No behavior change. INI: NrGameWaitDiag.");
         MenuUi::TextWrapped("%s", AmdBridge::EffectsStatus().c_str());
         if (MenuUi::Button("Reset diagnostics")) {
             config->NrTimingLog = std::optional<bool>{};
             config->NrFrameDiag = std::optional<bool>{};
+            config->NrGameWaitDiag = std::optional<bool>{};
         }
         ImGui::TreePop();
     }
@@ -729,11 +735,43 @@ void RenderMenu(Config* config, float menuResScale)
                            "\nand it does not fix a game that hands us unwrapped command lists (NR would still"
                            "\nalternate with the original frame). It only skips the split-ineligible rejection.");
                 if (inlineMode) {
+                    bool gpuHandoff = config->NrGpuHandoff.value_or_default();
+                    if (MenuUi::Checkbox("GPU-armed handoff", &gpuHandoff)) config->NrGpuHandoff = gpuHandoff;
+                    HelpMarker("Default on. Mochizuki inline: the GPU side queue watches for this frame's capture and starts NR"
+                               "\nwithout a CPU round trip. Missed capture shows the original frame. Applies to the next frame. INI: NrGpuHandoff.");
+                    ImGui::Indent();
+                    ImGui::BeginDisabled(!gpuHandoff);
+                    if (MenuUi::TreeNode("Inline spin experiments##nr")) {
+                        auto pick = [](const char* label, CustomOptional<int>& opt, const int* values, const char* const* names, int n) {
+                            int idx = 0; for (int i = 0; i < n; ++i) if (values[i] == opt.value_or_default()) idx = i;
+                            if (MenuUi::Combo(label, &idx, names, n)) opt = values[idx];
+                        };
+                        const int delays[] = {0, 16, 64}; const char* delayNames[] = {"Off", "16 (default)", "64"};
+                        pick("Spin poll delay##nr", config->NrSpinPollDelay, delays, delayNames, 3);
+                        HelpMarker("ALU work between GPU flag polls (game wait and side watch). Default 16 (best in-game result)."
+                                   "\nApplies to the next frame. INI: NrSpinPollDelay.");
+                        const int slices[] = {0, 256, 1024}; const char* sliceNames[] = {"64 (default)", "256", "1024"};
+                        pick("Game wait dispatches##nr", config->NrSpinSlices, slices, sliceNames, 3);
+                        HelpMarker("Experimental. Splits the game-queue inline wait into shorter GPU dispatches (same timeout)."
+                                   "\nApplies to the next frame. INI: NrSpinSlices.");
+                        pick("Side watch dispatches##nr", config->NrWatchSlices, slices, sliceNames, 3);
+                        HelpMarker("Experimental. Splits the side-queue capture watch into shorter dispatches."
+                                   "\nApplies to the next frame. INI: NrWatchSlices.");
+                        const int starts[] = {0, 1, 2, 4, 8}; const char* startNames[] = {"Off (default)", "1", "2", "4", "8"};
+                        pick("Side watch start delay##nr", config->NrWatchStartDelay, starts, startNames, 5);
+                        HelpMarker("Experimental. ALU-only dispatches before the watch starts polling."
+                                   "\nCan delay NR start if the capture comes early. Applies to the next frame. INI: NrWatchStartDelay.");
+                        ImGui::TreePop();
+                    }
+                    ImGui::EndDisabled();
+                    ImGui::Unindent();
+                    if (!gpuHandoff) MenuUi::TextDisabled("Spin options need GPU-armed handoff.");
+                    ImGui::BeginDisabled(gpuHandoff);
                     int backoff = std::clamp(config->NrCaptureBackoff.value_or_default(), 0, 2);
                     const char* backoffChoices[] = {"Exponential 50-5000 us (default)", "Fixed 100 us", "Event (side-queue watch)"};
                     if (MenuUi::Combo("Capture poll backoff##nr", &backoff, backoffChoices, IM_ARRAYSIZE(backoffChoices)))
                         config->NrCaptureBackoff = backoff;
-                    HelpMarker("How often the inline worker re-checks that the game captured NR inputs."
+                    HelpMarker("CPU handoff only (GPU-armed handoff off). How often the inline worker re-checks that the game captured NR inputs."
                                "\nFixed 100 us finds ready inputs sooner at a small CPU/poll cost. Applies to the next frame."
                                "\nEvent: side queue watches the capture flag and a fence event wakes the worker."
                                "\nINI: NrCaptureBackoff (0 exponential, 1 fixed 100 us, 2 event).");
@@ -741,32 +779,8 @@ void RenderMenu(Config* config, float menuResScale)
                     if (MenuUi::Checkbox("Reuse inline recordings", &reuse)) config->NrInlineReuse = reuse;
                     HelpMarker("Default off. Reuses finished per-frame inline objects with identical inputs instead of"
                                "\ncreating them every frame, so NR can start sooner. Applies to the next frame. INI: NrInlineReuse.");
-                    bool gpuHandoff = config->NrGpuHandoff.value_or_default();
-                    if (MenuUi::Checkbox("GPU-armed handoff", &gpuHandoff)) config->NrGpuHandoff = gpuHandoff;
-                    HelpMarker("Default off. Mochizuki inline: the GPU side queue watches for this frame's capture and starts NR"
-                               "\nwithout a CPU round trip. Missed capture shows the original frame. Applies to the next frame. INI: NrGpuHandoff.");
-                    if (MenuUi::TreeNode("Inline spin experiments##nr")) {
-                        auto pick = [](const char* label, CustomOptional<int>& opt, const int* values, const char* const* names, int n) {
-                            int idx = 0; for (int i = 0; i < n; ++i) if (values[i] == opt.value_or_default()) idx = i;
-                            if (MenuUi::Combo(label, &idx, names, n)) opt = values[idx];
-                        };
-                        const int slices[] = {0, 256, 1024}; const char* sliceNames[] = {"64 (default)", "256", "1024"};
-                        pick("Game wait dispatches##nr", config->NrSpinSlices, slices, sliceNames, 3);
-                        HelpMarker("Experimental. Splits the game-queue inline wait into shorter GPU dispatches (same timeout)."
-                                   "\nApplies to the next frame. INI: NrSpinSlices.");
-                        pick("Side watch dispatches##nr", config->NrWatchSlices, slices, sliceNames, 3);
-                        HelpMarker("Experimental, GPU-armed handoff only. Splits the side-queue capture watch into shorter dispatches."
-                                   "\nApplies to the next frame. INI: NrWatchSlices.");
-                        const int starts[] = {0, 1, 2, 4, 8}; const char* startNames[] = {"Off (default)", "1", "2", "4", "8"};
-                        pick("Side watch start delay##nr", config->NrWatchStartDelay, starts, startNames, 5);
-                        HelpMarker("Experimental, GPU-armed handoff only. ALU-only dispatches before the watch starts polling."
-                                   "\nCan delay NR start if the capture comes early. Applies to the next frame. INI: NrWatchStartDelay.");
-                        const int delays[] = {0, 16, 64}; const char* delayNames[] = {"Off (default)", "16", "64"};
-                        pick("Spin poll delay##nr", config->NrSpinPollDelay, delays, delayNames, 3);
-                        HelpMarker("Experimental. ALU work between GPU flag polls (game wait and side watch)."
-                                   "\nApplies to the next frame. INI: NrSpinPollDelay.");
-                        ImGui::TreePop();
-                    }
+                    ImGui::EndDisabled();
+                    if (gpuHandoff) MenuUi::TextDisabled("Bypassed by GPU-armed handoff.");
                 }
                 if (isLmxxf && inlineMode) {
                     int slots = std::clamp(config->LmxxfInlineSlots.value_or_default(), 1, 5) - 1;
