@@ -76,6 +76,70 @@ struct Frame {
         }
         upload->Unmap(0,nullptr);
     }
+    // The pixels as they will be uploaded, three floats per pixel: what a frame is measured against. Filled by
+    // Load, which replaces the synthetic pattern above with a raw float32 RGB image of this exact extent.
+    std::vector<float> input;
+    void Load(const wchar_t* path) {
+        FILE* file=nullptr;Require(_wfopen_s(&file,path,L"rb")==0,"input raw open failed");
+        input.assign(size_t(width)*height*3,0.f);
+        Require(fread(input.data(),4,input.size(),file)==input.size(),"input raw read failed");fclose(file);
+        void* data;Hr(upload->Map(0,nullptr,&data));
+        for(UINT y=0;y<height;y++) {
+            auto* row=static_cast<char*>(data)+footprint.Footprint.RowPitch*y;
+            for(UINT x=0;x<width;x++) {
+                const float* p=&input[(size_t(y)*width+x)*3];
+                if(format==DXGI_FORMAT_R9G9B9E5_SHAREDEXP)
+                    reinterpret_cast<DirectX::PackedVector::XMFLOAT3SE*>(row)[x]=DirectX::PackedVector::XMFLOAT3SE(p[0],p[1],p[2]);
+                else if(format==DXGI_FORMAT_R11G11B10_FLOAT)
+                    reinterpret_cast<DirectX::PackedVector::XMFLOAT3PK*>(row)[x]=DirectX::PackedVector::XMFLOAT3PK(p[0],p[1],p[2]);
+                else if(format==DXGI_FORMAT_R8G8B8A8_UNORM_SRGB||format==DXGI_FORMAT_R8G8B8A8_UNORM) {
+                    auto* q=reinterpret_cast<uint8_t*>(row)+x*4;
+                    for(int k=0;k<3;k++)q[k]=uint8_t(std::round(std::min(1.f,std::max(0.f,p[k]))*255));q[3]=255;
+                } else {
+                    auto* q=reinterpret_cast<uint16_t*>(row)+x*4;
+                    for(int k=0;k<3;k++)q[k]=DirectX::PackedVector::XMConvertFloatToHalf(p[k]);q[3]=0x3c00;
+                }
+            }
+        }
+        upload->Unmap(0,nullptr);
+    }
+    // What the network did to a loaded image, per channel: the whole question this project asks. Signed is the cast
+    // (a global shift means the transfer path, not the model), absolute is the size of the edit.
+    void Compare() {
+        Require(!input.empty(),"no loaded input to compare against");
+        void* data;Hr(readback->Map(0,nullptr,&data));
+        double inMean[3] {},outMean[3] {},signedDelta[3] {},absDelta[3] {},over2[3] {},over8[3] {};
+        const double n=double(width)*height;
+        for(UINT y=0;y<height;y++)for(UINT x=0;x<width;x++) {
+            auto* row=static_cast<char*>(data)+footprint.Footprint.RowPitch*y;
+            float o[3] {};
+            if(format==DXGI_FORMAT_R9G9B9E5_SHAREDEXP) {
+                DirectX::XMFLOAT3 v;DirectX::XMStoreFloat3(&v,DirectX::PackedVector::XMLoadFloat3SE(reinterpret_cast<DirectX::PackedVector::XMFLOAT3SE*>(row)+x));
+                o[0]=v.x;o[1]=v.y;o[2]=v.z;
+            } else if(format==DXGI_FORMAT_R11G11B10_FLOAT) {
+                DirectX::XMFLOAT3 v;DirectX::XMStoreFloat3(&v,DirectX::PackedVector::XMLoadFloat3PK(reinterpret_cast<DirectX::PackedVector::XMFLOAT3PK*>(row)+x));
+                o[0]=v.x;o[1]=v.y;o[2]=v.z;
+            } else if(format==DXGI_FORMAT_R8G8B8A8_UNORM_SRGB||format==DXGI_FORMAT_R8G8B8A8_UNORM) {
+                auto* q=reinterpret_cast<uint8_t*>(row)+x*4;for(int k=0;k<3;k++)o[k]=q[k]/255.f;
+            } else {
+                auto* q=reinterpret_cast<uint16_t*>(row)+x*4;for(int k=0;k<3;k++)o[k]=DirectX::PackedVector::XMConvertHalfToFloat(q[k]);
+            }
+            for(int k=0;k<3;k++) {
+                const float i=input[(size_t(y)*width+x)*3+k];
+                Require(std::isfinite(o[k])&&std::abs(o[k])<1000,"non-finite or excessive output");
+                const double d=double(o[k])-i;
+                inMean[k]+=i;outMean[k]+=o[k];signedDelta[k]+=d;absDelta[k]+=std::abs(d);
+                if(std::abs(d)>2.0/255)over2[k]+=1;
+                if(std::abs(d)>8.0/255)over8[k]+=1;
+            }
+        }
+        readback->Unmap(0,nullptr);
+        printf("IMAGE_STATS %ux%u dxgi=%u\n",width,height,unsigned(format));
+        for(int k=0;k<3;k++)
+            printf("  %c in=%.5f out=%.5f signed=%+.5f abs=%.5f over2=%.1f%% over8=%.1f%%\n","RGB"[k],
+                   inMean[k]/n,outMean[k]/n,signedDelta[k]/n,absDelta[k]/n,100*over2[k]/n,100*over8[k]/n);
+        fflush(stdout);
+    }
     void Upload(ID3D12GraphicsCommandList* c) {
         D3D12_TEXTURE_COPY_LOCATION a {color.Get(),D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,{}};
         D3D12_TEXTURE_COPY_LOCATION b {upload.Get(),D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,{}};b.PlacedFootprint=footprint;

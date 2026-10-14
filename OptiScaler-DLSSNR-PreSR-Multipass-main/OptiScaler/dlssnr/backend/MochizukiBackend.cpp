@@ -398,7 +398,14 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
         if (auto stamps = FrameDiag::GpuStamps::Acquire(p->device.Get(), FrameDiag::kGpuStampCount))
         { lease->splitStamps = stamps; stamps->Stamp(cmd, FrameDiag::kGpuCapBegin); }
     }
-    if (p->api.RecordInputs(p->owner->context, job.handle, cmd) != LMXXF_NR_OK)
+    // With no game exposure texture the lane runs its own exposure meter: a compute dispatch with its own descriptor
+    // heap, root signature and root arguments. A split recording tracks those as the game's bindings and seeds the
+    // continuation with them, so keep them in a private scope for exactly this call. The scope is unconditional: it is
+    // two bookkeeping calls, and which side metered must not decide whether the bindings stay out of the game snapshot.
+    resources->BeginPrivateBindings();
+    const int32_t inputs = p->api.RecordInputs(p->owner->context, job.handle, cmd);
+    resources->EndPrivateBindings();
+    if (inputs != LMXXF_NR_OK)
     { p->failed = true; p->Error("input recording failed"); return nullptr; }
     if (inlineResources) { inlineResources->RecordCapture(cmd); inlineResources->RecordWait(cmd); }
     else if (lease->splitStamps) lease->splitStamps->Stamp(cmd, FrameDiag::kGpuCapEnd);
