@@ -382,7 +382,8 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
                 inlineResources->spinPollDelay = pd == 16 || pd == 64 ? UINT(pd) : 0u;
                 inlineResources->spinSlices = slA == 256 || slA == 1024 ? UINT(slA) : 0u;
                 inlineResources->watchSlices = wsl == 256 || wsl == 1024 ? UINT(wsl) : 0u;
-                inlineResources->watchStartDelay = wsd >= 1 && wsd <= 8 ? UINT(wsd) : 0u; }
+                inlineResources->watchStartDelay = wsd >= 1 && wsd <= 8 ? UINT(wsd) : 0u;
+                inlineResources->adaptiveBudget = armed && c->NrAdaptiveWaitBudget.value_or_default(); }
             FrameDiag::Begin(inlineResources->diag, "mochizuki", frameId, frame.color_width, frame.color_height, OPTI_VERSION);
             inlineResources->diag.spinPollDelay = inlineResources->spinPollDelay; inlineResources->diag.spinSlices = inlineResources->spinSlices;
             inlineResources->diag.watchSlices = inlineResources->watchSlices; inlineResources->diag.watchStartDelay = inlineResources->watchStartDelay;

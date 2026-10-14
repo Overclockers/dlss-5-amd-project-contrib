@@ -414,6 +414,8 @@ class Config
     CustomOptional<bool> NrInlineComputeDownscale { false };
     // Compute-queue first-pass export. Default off.
     CustomOptional<bool> NrInlineComputeExport { false };
+    // Adaptive wait budget. Default off.
+    CustomOptional<bool> NrAdaptiveWaitBudget { false };
     CustomOptional<bool> NrInline { false }; // Experimental same-list execution for lmxxf/Mochizuki.
     // Wrap host CreateCommandList results before the swapchain exists.
     // Missing = engine whitelist (Unreal + Forza). false = never. true = force for any engine.

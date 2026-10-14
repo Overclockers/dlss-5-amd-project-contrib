@@ -10,6 +10,8 @@
 #include <cstdio>
 #include <thread>
 #include <algorithm>
+#include <cmath>
+#include <string_view>
 #include <memory>
 #include <vector>
 #include <mutex>
@@ -28,6 +30,50 @@ inline constexpr UINT kClaimWaitSlices = 4 * kWaitSlices;
 // run kClaimAbortMs after the game queue reached the frame; the wait then ends unseen (bypass).
 inline constexpr UINT kAbortPollStride = 256;
 inline UINT gClaimAbortMs = 100; // tests may lower it
+// NrAdaptiveWaitBudget (default off): the post-claim wait's dispatch count follows a measured rate.
+// Each armed wait is timed by two GPU timestamps on the side queue; iterations / ms feeds an EMA. The
+// cap is kAdaptiveTargetMs at that rate (bounded to [kAdaptiveMinSlices, kClaimWaitSlices]). A wait
+// that ends without the capture (cap or abort) halves the slices; kAdaptiveCleanToGrow clean waits
+// in a row double them back up to the calibrated cap. Read on retirement only: no CPU wait.
+inline constexpr double kAdaptiveTargetMs = 4.0;
+inline constexpr UINT kAdaptiveMinSlices = 8;
+inline constexpr UINT kAdaptiveCleanToGrow = 64;
+struct AdaptiveWaitBudget {
+    std::atomic<UINT> slices {kClaimWaitSlices};
+    std::atomic<double> itersPerMs {0.0};
+    std::atomic<UINT> clean {0}, samples {0}, shrinks {0}, grows {0};
+    UINT Cap() const {
+        const double rate = itersPerMs.load(std::memory_order_relaxed);
+        if (rate <= 0.0) return kClaimWaitSlices; // not calibrated yet: the fixed cap
+        const double wanted = kAdaptiveTargetMs * rate / double(kWaitIterations);
+        return UINT(std::clamp(std::ceil(wanted), double(kAdaptiveMinSlices), double(kClaimWaitSlices)));
+    }
+    UINT Slices() const { return std::clamp(slices.load(std::memory_order_relaxed), kAdaptiveMinSlices, kClaimWaitSlices); }
+    void Sample(UINT iterations, double ms) {
+        if (iterations < kAbortPollStride || ms <= 0.01) return;
+        const double rate = double(iterations) / ms, old = itersPerMs.load(std::memory_order_relaxed);
+        itersPerMs.store(old > 0.0 ? old * 0.875 + rate * 0.125 : rate, std::memory_order_relaxed);
+        samples.fetch_add(1, std::memory_order_relaxed);
+    }
+    void Timeout() {
+        clean.store(0, std::memory_order_relaxed);
+        const UINT now = Slices(), next = std::max(kAdaptiveMinSlices, now / 2);
+        if (next != now) { slices.store(next, std::memory_order_relaxed); Changed("shrink", next); }
+    }
+    void Clean() {
+        if (clean.fetch_add(1, std::memory_order_relaxed) + 1 < kAdaptiveCleanToGrow) return;
+        clean.store(0, std::memory_order_relaxed);
+        const UINT now = Slices(), cap = Cap(), next = std::min(cap, std::max(now * 2, kAdaptiveMinSlices));
+        if (next != now) { slices.store(next, std::memory_order_relaxed); Changed(next > now ? "grow" : "fit", next); }
+    }
+    void Changed(const char* why, UINT next) {
+        const UINT n = (std::string_view(why) == "shrink" ? shrinks : grows).fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 4 || n % 1000 == 0)
+            LOG_INFO("NR adaptive wait budget {}: {} slices ({:.0f} iterations/ms, cap {})", why, next,
+                     itersPerMs.load(std::memory_order_relaxed), Cap());
+    }
+};
+inline AdaptiveWaitBudget& AdaptiveBudget() { static AdaptiveWaitBudget budget; return budget; }
 struct AbortChannel {
     Ptr<ID3D12Resource> buffer; // custom heap, CPU write-combine, L0; persistently mapped
     volatile LONG* word = nullptr;
@@ -167,6 +213,8 @@ class Resources
     // claimGen identifies each armed wait; abort writes are generation-tagged, so a late abort for an
     // earlier generation can never cancel a later wait (replay/reuse included).
     std::shared_ptr<AbortChannel> abortChannel; UINT claimGen = 0;
+    // NrAdaptiveWaitBudget: timestamps around this frame's post-claim wait (side queue), resolved in the arm list.
+    Ptr<ID3D12QueryHeap> claimTimer; Ptr<ID3D12Resource> claimTimes; UINT64 claimTimerHz = 0; bool claimTimed = false;
     Ptr<ID3D12CommandAllocator> armAlloc; Ptr<ID3D12GraphicsCommandList> armList;
     struct KernelHandle {
         HANDLE value = nullptr;
@@ -506,7 +554,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
     }
     void PrepareReuse() {
         captureEvents.clear(); started = false; decisionReadable = false; uncertain = noNetwork = false;
-        diag = {}; captureBackoff = 0; gpuArmed = false; spinPollDelay = spinSlices = watchSlices = watchStartDelay = 0; activityToken = 0; reused = true;
+        diag = {}; captureBackoff = 0; gpuArmed = false; spinPollDelay = spinSlices = watchSlices = watchStartDelay = 0; adaptiveBudget = false; activityToken = 0; reused = true;
         inputGated = armedOutcomeReadable = false;
     }
     bool RetirementUncertain() const { return uncertain || sideUncertain; }
@@ -524,6 +572,8 @@ cbuffer Size : register(b0) { uint width; uint height; }
     UINT spinPollDelay = 0, spinSlices = 0;
     // Armed side-watch experiments: watch dispatch count (budget kept) and ALU-only start delay dispatches.
     UINT watchSlices = 0, watchStartDelay = 0;
+    // NrAdaptiveWaitBudget snapshot for this frame (default off: the fixed kClaimWaitSlices cap).
+    bool adaptiveBudget = false;
     bool reused = false; // came from NrInlineReuse pool
     bool Complete() const {
         if (!started) return true;
@@ -682,6 +732,17 @@ cbuffer Size : register(b0) { uint width; uint height; }
         if (gate == 1) { t.waits.fetch_add(1); t.iters.fetch_add(iters); }
         if (!seen) t.bypass.fetch_add(1);
         if (aborted) t.aborts.fetch_add(1); else if (!seen && gate == 1) t.caps.fetch_add(1);
+        if (claimTimed && gate == 1) {
+            claimTimed = false;
+            auto& budget = AdaptiveBudget();
+            void* q = nullptr; D3D12_RANGE times {0, 16};
+            if (SUCCEEDED(claimTimes->Map(0, &times, &q)) && q) {
+                const auto* ts = static_cast<const UINT64*>(q);
+                if (ts[1] > ts[0]) budget.Sample(iters, double(ts[1] - ts[0]) * 1000.0 / double(claimTimerHz));
+                claimTimes->Unmap(0, &none);
+            }
+            if (aborted || !seen) budget.Timeout(); else budget.Clean();
+        }
     }
     ~Resources() { HarvestClaim(); }
     bool AbortAvailable() const { return abortChannel != nullptr; }
@@ -709,7 +770,22 @@ cbuffer Size : register(b0) { uint width; uint height; }
         Op(armList.Get(), 12, sample.Get()); UavBarrier(armList.Get(), capture.Get());
         // Bounded claimed wait (always on): kClaimWaitSlices short dispatches, each exits at once after
         // the capture lands. A capture that never lands ends the wait (unseen -> bypass) well under TDR.
-        for (UINT i = 0; i < kClaimWaitSlices; ++i) { Op(armList.Get(), 14, sample.Get(), kWaitIterations); UavBarrier(armList.Get(), capture.Get()); }
+        claimTimed = false;
+        if (adaptiveBudget && !claimTimer) {
+            D3D12_QUERY_HEAP_DESC qd {}; qd.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP; qd.Count = 2;
+            if (SUCCEEDED(device->CreateQueryHeap(&qd, IID_PPV_ARGS(&claimTimer))) && SUCCEEDED(side->GetTimestampFrequency(&claimTimerHz)))
+                claimTimes = Buffer(D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST, false);
+            else claimTimer.Reset();
+        }
+        const bool timed = adaptiveBudget && claimTimer && claimTimes && claimTimerHz;
+        const UINT claimSlices = adaptiveBudget ? AdaptiveBudget().Slices() : kClaimWaitSlices;
+        if (timed) armList->EndQuery(claimTimer.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
+        for (UINT i = 0; i < claimSlices; ++i) { Op(armList.Get(), 14, sample.Get(), kWaitIterations); UavBarrier(armList.Get(), capture.Get()); }
+        if (timed) {
+            armList->EndQuery(claimTimer.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 1);
+            armList->ResolveQueryData(claimTimer.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0, 2, claimTimes.Get(), 0);
+            claimTimed = true;
+        }
         Op(armList.Get(), 8, sample.Get()); UavBarrier(armList.Get(), sample.Get());
         Check(armList->Close(), "inline arm close");
         sideUncertain = true;

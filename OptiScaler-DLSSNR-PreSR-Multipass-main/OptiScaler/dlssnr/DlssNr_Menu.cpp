@@ -71,6 +71,7 @@ static void ResetSharedNrDefaults(Config* config)
     config->NrInlineComputeMotion.reset();
     config->NrInlineComputeDownscale.reset();
     config->NrInlineComputeExport.reset();
+    config->NrAdaptiveWaitBudget.reset();
 }
 
 // The "(?)" marker every control carries, matching the rest of the menu.
@@ -804,6 +805,10 @@ void RenderMenu(Config* config, float menuResScale)
                     HelpMarker("Default off. Experimental. Multi-layer NR exports its first layer by a compute pack"
                                "\ninto the frame format instead of a blit, so the inline chain is not split by it."
                                "\nRGBA16F, R11G11B10, RGBA8/BGRA8 UNORM and RGB10A2. Rebuilds the network when exporting.\nINI: NrInlineComputeExport.");
+                    bool nrAdaptiveWaitBudget = config->NrAdaptiveWaitBudget.value_or_default();
+                    if (MenuUi::Checkbox("Adaptive wait budget", &nrAdaptiveWaitBudget))
+                        config->NrAdaptiveWaitBudget = nrAdaptiveWaitBudget;
+                    HelpMarker("Inline (GPU-armed): size the post-claim GPU wait from a measured iterations/ms rate (target ~4 ms); halve after a cap or abort, grow back after 64 clean waits. Off = fixed cap.\nINI: NrAdaptiveWaitBudget.");
                     }
                     const bool armedActive = armedApplies && gpuHandoff;
                     ImGui::BeginDisabled(armedActive);
@@ -915,6 +920,7 @@ void RenderMenu(Config* config, float menuResScale)
                     resetOption(config->NrInlineComputeMotion);
                     resetOption(config->NrInlineComputeDownscale);
                     resetOption(config->NrInlineComputeExport);
+                    resetOption(config->NrAdaptiveWaitBudget);
                     SetAllowEnhancedBarriers(config->LmxxfAllowEnhancedBarriers.value_or_default());
                     resetOption(config->LmxxfEarlyExeWrap);
                     resetOption(config->LmxxfEarlyAnyModuleWrap);
