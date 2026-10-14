@@ -270,8 +270,8 @@ int main(int argc, char** argv) {
             std::lock_guard lock(Sub::RecordingMutex());
             const auto timeouts = owner->inlineTimeouts; owner->ReclaimInlineLocked();
             Require(owner->inlineTimeouts == timeouts + 1, "stuck copy: reclaimed as timeout (history reset)");
-            std::puts("stuck copy: capped wait ended, original frame, history reset, reclaimed, no hang PASS");
-            lease.reset(); resources.reset(); gPool.clear(); std::puts("actual inline runtime PASS"); std::fflush(stdout);
+            resources->HarvestClaim(); std::puts("stuck copy: capped wait ended, original frame, history reset, reclaimed, no hang PASS");
+            lease.reset(); resources.reset(); gPool.clear(); { auto& t = DlssNr::FrameDiag::Claim(); std::printf("claim totals waits=%u aborts=%u caps=%u bypass=%u\n", t.waits.load(), t.aborts.load(), t.caps.load(), t.bypass.load()); Require(t.bypass.load() >= 1 && t.aborts.load() + t.caps.load() >= 1 && (!gAbortMs || t.aborts.load() >= 1), "stuck copy: diag totals count the bypass and its abort/cap"); } std::puts("actual inline runtime PASS"); std::fflush(stdout);
             TerminateProcess(GetCurrentProcess(), 0);
         }
         if (gLateCopy) {

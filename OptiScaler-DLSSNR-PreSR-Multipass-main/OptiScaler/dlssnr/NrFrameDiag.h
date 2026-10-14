@@ -19,6 +19,9 @@
 
 namespace DlssNr::FrameDiag
 {
+// Armed post-claim wait totals since load (harvested from retired recordings, no GPU sync).
+struct ClaimTotals { std::atomic<unsigned long long> iters {0}; std::atomic<unsigned> waits {0}, aborts {0}, caps {0}, bypass {0}; };
+inline ClaimTotals& Claim() { static ClaimTotals t; return t; }
 inline int64_t Qpc()
 {
     LARGE_INTEGER v {};
@@ -217,7 +220,7 @@ inline void Emit(const Counters& c) noexcept
             "cpu_wait_enqueue_ms=%.3f cpu_record_ms=%.3f host_A_capture_to_vk_ms=%.3f host_B_side_ready_ms=%.3f "
             "gpu_capture_ms=%.3f gpu_capture_to_resume_ms=%.3f gpu_core_ms=%.3f gpu_handoff_ms=%.3f "
             "gpu_capture_to_vkdone_ms=%.3f gpu_vkdone_to_resume_ms=%.3f gpu_writeback_ms=%.3f handoff=%s spin_delay=%u spin_slices=%u watch_slices=%u watch_start=%u "
-            "gpu_input_encode_ms=%.3f gpu_transfer_ms=%.3f",
+            "gpu_input_encode_ms=%.3f gpu_transfer_ms=%.3f claim_iters=%llu claim_waits=%u claim_aborts=%u claim_caps=%u armed_bypass=%u",
             c.backend, c.mode, c.outcome,
             static_cast<long long>(QpcFrequency()),
             static_cast<long long>(c.qpcRecordBegin),
@@ -251,7 +254,7 @@ inline void Emit(const Counters& c) noexcept
             MsBetween(c.gpuSideVkDone, c.gpuQpc[kGpuResume]),
             MsBetween(c.gpuQpc[kGpuResume], c.gpuQpc[kGpuDone]),
             c.handoff ? c.handoff : "-", c.spinPollDelay, c.spinSlices, c.watchSlices, c.watchStartDelay,
-            double(c.encodeGpuMs), double(c.transferGpuMs));
+            double(c.encodeGpuMs), double(c.transferGpuMs), Claim().iters.load(), Claim().waits.load(), Claim().aborts.load(), Claim().caps.load(), Claim().bypass.load());
         if (n <= 0 || n >= int(sizeof line)) return;
         int len = n;
         if (c.gw) {

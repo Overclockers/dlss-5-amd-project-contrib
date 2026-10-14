@@ -546,6 +546,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
     }
     void BeforeExecute(ID3D12CommandQueue* game, bool bypass = false) {
         if (!Complete()) throw std::runtime_error("inline recording still executing");
+        HarvestClaim();
         captureEvents.clear();
         gameQueue = game;
         started = true; uncertain = noNetwork = false; sideUncertain = true;
@@ -669,6 +670,20 @@ cbuffer Size : register(b0) { uint width; uint height; }
         D3D12_RANGE none {0, 0}; readback->Unmap(0, &none); return true;
     }
     UINT ClaimGeneration() const { return claimGen; }
+    // Lean diagnostics: fold a retired armed frame into FrameDiag::Claim() once (no GPU wait).
+    bool claimHarvested = true;
+    void HarvestClaim() noexcept {
+        if (claimHarvested || !Complete() || !armedOutcomeReadable) return;
+        void* p = nullptr; D3D12_RANGE range {0, 32};
+        if (FAILED(readback->Map(0, &range, &p)) || !p) return;
+        const auto* v = static_cast<const UINT*>(p); const UINT seen = v[3], gate = v[5], aborted = v[6], iters = v[7];
+        D3D12_RANGE none {0, 0}; readback->Unmap(0, &none); claimHarvested = true;
+        auto& t = FrameDiag::Claim();
+        if (gate == 1) { t.waits.fetch_add(1); t.iters.fetch_add(iters); }
+        if (!seen) t.bypass.fetch_add(1);
+        if (aborted) t.aborts.fetch_add(1); else if (!seen && gate == 1) t.caps.fetch_add(1);
+    }
+    ~Resources() { HarvestClaim(); }
     bool AbortAvailable() const { return abortChannel != nullptr; }
     bool ArmCapture() {
         if (!armValue || !armFence) return false;
@@ -729,7 +744,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
                 Barrier(doneList.Get(), sample.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
                 doneList->CopyBufferRegion(readback.Get(), 0, sample.Get(), 0, 32);
                 Barrier(doneList.Get(), sample.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-                armedOutcomeReadable = true;
+                armedOutcomeReadable = true; claimHarvested = false;
             }
             else Op(doneList.Get(), 2, sample.Get());
             UavBarrier(doneList.Get(), control.Get());
