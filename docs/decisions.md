@@ -1,3 +1,10 @@
+## 2026-10-14：mochizuki 自己测光，白点成为其裁切
+
+- **决定**：游戏不提供曝光时，mochizuki runtime 自己测线性帧的平均亮度（每帧一次 16x16 的 GPU dispatch，写入 1 个 float，下一帧经录制自己的完成 fence 读回，log 域 0.25 平滑），把均值放到关键亮度 0.2073 上：曝光 `0.2073/mean` 让白点等效于 `4.826*mean`，与 lmxxf 和 AMD 两条 lane 各自的测光一致。宿主仍可用 `MochizukiNrSetExposure` 给曝光，给了就以它为准；`MochizukiWhitePoint` 在两种情况下都是对基准的裁切（参考亮度 0.2073 处等于原值）。
+- **理由**：`MochizukiNrFrameInfo` 没有曝光字段，宿主也从不调用 `PFN_MochizukiNrSetExposure`，这条 lane 因而完全没有层级基准。白点被当成绝对值时，网络看到的总量与场景亮度差约 4.8 倍，模型答案崩塌；宿主再按 `NrOverallIntensity` 把残差加回去，皮肤就变红。测光把基准交还给图像本身，手动值只做裁切。
+- **边界**：没有可测内容的帧（全黑、非有限样本）不算测量；连续 60 帧没有测量就把 `meteredExposure` 清零并记一行日志，手动白点重新接管。测光自己的绑定不进入游戏录制的绑定快照：宿主用 `ILogicalCommandList::BeginPrivateBindings` 只包住 `RecordInputs`，不覆盖切分点。
+- **未验证**：本机只有离线夹具（`tests/mochizuki/runtime.cpp --image`，`run.cmd meter` 断言层级）与 RX 9070 XT 上的运行；游戏内验收与远端 Actions 单独记录。
+
 ## 2026-10-13：lmxxf inline 使用私有捕获，槽位即时可选
 
 - `NrInline` 仍默认关闭；lmxxf 勾选后才显示 `LmxxfInlineSlots`，范围 1–5、默认 3。沿用本项目 Daniel 接入层的宿主槽位配置，但不复用其网络资源所有权假设。
@@ -297,7 +304,8 @@ v2 录制租约：旧命令保留对应网络与几何资源；在 producer 前�
 第三后端使用独立 Mochizuki 配置、分组 reset 和用户自备模型；共享整体强度和稳定器。
 默认 Auto DRS 采用参考桥接的 bucket 策略减少动态分辨率重建，保留 Exact 选项。
 GPU 计时来自完成的 Vulkan query；核心仅增加完成序号，防止菜单轮询重复计样。
-输入曝光纹理读取暂不接入：本后端使用手动 white point 或自身预处理测光，不借用其他后端开关。
+输入曝光纹理仍不接入（宿主以 `MochizukiNrSetExposure` 传标量）：本后端使用手动 white point、自身
+的 GPU 测光或预处理测光，不借用其他后端开关；自动测光的取舍见 2026-10-14 条目。
 
 本地 RX 9070 XT 已验证真实输出、14 次录制执行、双队列、尺寸切换后旧录制重放、延迟回收与
 编译取消。此证据不是游戏兼容性或 FPS 结论；游戏验收和远端 Actions 均单独记录。

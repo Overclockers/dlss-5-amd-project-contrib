@@ -40,7 +40,11 @@
 #include <windows.h>
 #include <d3d12.h>
 #include <winternl.h> // NTSTATUS, for d3dkmthk.h
+#if __has_include(<d3dkmthk.h>)
 #include <d3dkmthk.h> // D3DKMTQueryVideoMemoryInfo, for the VRAM check (VideoMemory)
+#else
+#include "compat/d3dkmthk.h" // Same three user-mode entries, for a build without the WDK
+#endif
 #define VK_USE_PLATFORM_WIN32_KHR
 #include <vulkan/vulkan.h>
 
@@ -48,6 +52,8 @@
 #include "nr_log.hpp"
 #include "nr_pipeline_binary.hpp"
 #include "nr_runtime.hpp"
+
+#include "MochizukiAutoExposure.h" // the lane's own exposure meter: the game hands over none
 
 #include <algorithm>
 #include <atomic>
@@ -1927,8 +1933,24 @@ struct Session
     std::atomic<float> infoWhite { 1.f };
     // MochizukiNrSetExposure's last word: the game's exposure, 0 for none.
     std::atomic<float> gameExposure { 0.f };
+    // What the lane measured itself when the game supplied nothing (MochizukiAutoExposure.h): the divisor the white
+    // point of the frame below is put through. 0 until the first measurement lands, and it stays the game's exposure
+    // that wins while the host supplies one.
+    std::atomic<float> meteredExposure { 0.f };
+    // Frames since the meter last produced a measurement. It can stop for good (a colour image it cannot read, no free
+    // slot, a recording that never published a tail), and dividing the white point by an exposure from an arbitrary
+    // earlier frame is worse than the manual setting: after this many frames the manual white point is back in charge.
+    static constexpr uint32_t kMeterIdleFrames = 60;
+    uint32_t meterIdle = 0;
+    MochizukiAutoExposure::Probe exposure;
     // Set by the first frame that asks for the preprocess: from then on every network is built able to run it.
     bool prepWanted = false;
+    // What the last SetControls asked for, before any frame has run: RuntimeConfig::preprocess is fixed when the network
+    // is built, so a network built while this is false cannot run the control at all and the frames' requests could
+    // never build one that can. Only ever set, never cleared: a network able to preprocess serves frames that do not.
+    bool prepRequested = false;
+    // When the input line below was last written, so the log has its own heartbeat rather than the session end.
+    ULONGLONG inputLogAt = 0;
     // One bit a frame, newest lowest: its history was consumed. Written under submitMutex only.
     std::atomic<uint64_t> historyBits { 0 };
     std::atomic<uint32_t> historyCount { 0 };
@@ -4440,9 +4462,13 @@ struct Session
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT);
         }
         const nr::Preprocess& prep = job.controls.preprocess;
-        float prepEv = NAN;
+        float prepEv = NAN, prepTarget = NAN;
         if (prep.active() && prep.exposure == 1)
-            prepEv = runtime->preprocess_meter().first + prep.bias_ev;
+        {
+            const std::pair<float, float> meter = runtime->preprocess_meter();
+            prepEv = meter.first + prep.bias_ev;
+            prepTarget = meter.second;
+        }
         infoPrepEv.store(prepEv, std::memory_order_relaxed);
         historyBits.store((historyBits.load(std::memory_order_relaxed) << 1) | uint64_t(consumed),
                           std::memory_order_relaxed);
@@ -4523,6 +4549,9 @@ struct Session
 
     ~Session()
     {
+        // The meter's own D3D12 objects go first: nothing can reference them (Destroy refuses live recordings, and
+        // every recording that carried a measurement has been collected), and they hold the device themselves.
+        exposure.Destroy();
         StopWatchdog();
         JoinBuilder();
         StopReleaser(); // what it has not freed is in `retired`
@@ -4653,6 +4682,14 @@ int32_t Create(const LmxxfNrCreateInfo* info, void** context)
         delete s;
         return Fail(LMXXF_NR_INVALID_ARGUMENT, "Create: device or queue is not a D3D12 object");
     }
+    // The lane's own exposure meter. Monster Hunter Wilds publishes no exposure texture and nothing calls
+    // MochizukiNrSetExposure, so without this the linear encode is handed a white point of 1.0 and the frame's
+    // highlights are normalised by the wrong level (lmxxf_runtime/LmxxfNrRuntime.cpp:1020-1028 measures the same
+    // thing for the same reason). Built once here; a failure only means the frames keep the white point they had.
+    if (s->exposure.Create(s->device))
+        nr::logf("[mochizuki] auto exposure: metering the frame, one grid sample per 16x16 threads");
+    else
+        nr::logf("[mochizuki] auto exposure unavailable: %s", s->exposure.Error().c_str());
     *context = s;
     return LMXXF_NR_OK;
 }
@@ -4788,7 +4825,7 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
             nr::Controls model;
             float history = 1.f, white = 1.f;
             uint32_t linearMode = 0, maxPassesSetting = 0, drsMode = 0;
-            bool compactTransfer = true, aco = false;
+            bool compactTransfer = true, aco = false, prepRequested = false;
             {
                 std::lock_guard lock(s->controlsMutex);
                 model = s->controls.model;
@@ -4797,10 +4834,13 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
                 linearMode = s->controls.linearMode;
                 if (const float e = s->gameExposure.load(std::memory_order_relaxed); e > 0.f)
                     white = std::clamp(white / e, 1e-4f, 1e4f);
+                else if (const float m = s->meteredExposure.load(std::memory_order_relaxed); m > 0.f)
+                    white = std::clamp(white / m, 1e-4f, 1e4f); // the lane's own meter, MochizukiAutoExposure.h
                 maxPassesSetting = s->controls.maxPasses;
                 drsMode = s->controls.drsMode;
                 compactTransfer = s->controls.compactTransfer;
                 aco = s->controls.acoRequested && s->acoAtDevice;
+                prepRequested = s->prepRequested; // the one field of the session SetControls writes under this lock
             }
             // Automatic capacity grows as needed and is retained when fewer passes run.
             // An explicit prebuild count requests that exact capacity, at least the frame's passes.
@@ -4821,8 +4861,33 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
             s->prepWanted = s->prepWanted || model.preprocess.active();
             g.firstPass = (info->flags & LMXXF_NR_FRAME_FLAG_FIRST_PASS) && passes > 1 &&
                 model.apply_model && !model.preprocess.active() && s->Blittable(cf.vk);
-            const NetworkKey key { g.width, g.height, cf.vk, scale, maxPasses, linear, s->prepWanted, compactTransfer,
+            const NetworkKey key { g.width, g.height, cf.vk, scale, maxPasses, linear,
+                                    s->prepWanted || prepRequested, compactTransfer,
                                     g.firstPass, aco };
+            // What the network is about to be shown, on the first frame and then ten seconds apart: the one line that
+            // says whether the model input is normalised at all. `white` is the divisor the linear encode takes out of
+            // the frame; `linear` whether that encode runs at all (a frame whose colour is already display-encoded
+            // must not get one); `exposure` what MochizukiNrSetExposure last supplied, 0 when the game never did, and
+            // `meter` what the lane measured itself in that case. The
+            // rest is what the host asked for, so one session's log shows both ends of a settings change.
+            if (GetTickCount64() - s->inputLogAt >= 10000)
+            {
+                s->inputLogAt = GetTickCount64();
+                nr::logf("[mochizuki] input: %ux%u frame %ux%u colour VkFormat %d DXGI %u linearMode=%u linear=%d "
+                         "white=%.4f exposure=%.4f meter=%.4f prep(want=%d latch=%d active=%d mode=%d curve=%d "
+                         "bias=%.2f) "
+                         "aco=%d compact=%d passes=%u capacity=%u scale=%.2f history=%.3f "
+                         "controls(intensity=%.3f style=%d tone=%.2f structure=%.2f skin=%.2f mask=%d detail=%.3f "
+                         "colour=%.3f)",
+                         g.width, g.height, w, h, int(cf.vk), unsigned(cd.Format), linearMode, linear ? 1 : 0, white,
+                         s->gameExposure.load(std::memory_order_relaxed),
+                         s->meteredExposure.load(std::memory_order_relaxed), s->prepWanted ? 1 : 0,
+                         prepRequested ? 1 : 0, model.preprocess.active() ? 1 : 0, model.preprocess.exposure,
+                         model.preprocess.curve, model.preprocess.bias_ev, aco ? 1 : 0, compactTransfer ? 1 : 0,
+                         passes, maxPasses, scale, history, model.intensity, model.style, model.local_tone,
+                         model.local_structure, model.skin_structure, model.automatic_mask ? 1 : 0, detail,
+                         colourStrength);
+            }
             std::string why;
             s->infoRequestedPasses = passes;
             if (!s->EnsureNetwork(key, g, colour, why, maxPassesSetting == 0, drsMode != 0 && !g.bucketed))
@@ -4948,6 +5013,31 @@ int32_t CoreRecordInputs(void* context, void* job, void* command_list)
                      if (j.motion)
                          CopyToBuffer(c, j.motion, j.motionState, s->motionBuffer.resource, s->motionFootprint,
                                       j.motionWidth, j.motionHeight);
+                     // The lane's own exposure (MochizukiAutoExposure.h). The measurement goes into this list, which
+                     // carries the tail EndRecordingExecution is handed at the end of the frame, so the value is
+                     // picked up one frame later once that tail has passed - nothing here waits on the GPU.
+                     float metered = 0.f;
+                     if (s->exposure.Poll(s->previousTail.Get(), s->previousTailValue, &metered))
+                         s->meteredExposure.store(metered, std::memory_order_relaxed);
+                     if (s->gameExposure.load(std::memory_order_relaxed) > 0.f)
+                     {
+                         // The game supplies this frame's level and CorePrepareFrame prefers it, so a measurement would
+                         // be ignored work. Drop the lane's own value with it: the host can stop supplying one, and a
+                         // level measured before the game took over must not come back as if it were this frame's.
+                         s->meterIdle = 0;
+                         s->meteredExposure.store(0.f, std::memory_order_relaxed);
+                     }
+                     // The meter can stop producing for good (a colour image it cannot read, no free slot, a frame whose
+                     // recording never published a tail). Dividing the white point by an exposure from an arbitrary
+                     // earlier frame is worse than the manual setting: after a second without a measurement the manual
+                     // white point is back in charge, and the log says why.
+                     else if (s->exposure.Record(c, j.colour, j.colourState, j.width, j.height))
+                         s->meterIdle = 0;
+                     else if (++s->meterIdle == Session::kMeterIdleFrames)
+                     {
+                         s->meteredExposure.store(0.f, std::memory_order_relaxed);
+                         nr::logf("[mochizuki] exposure meter stopped producing: white point back to the manual setting");
+                     }
                      j.state = LMXXF_NR_JOB_PRODUCER_SUBMITTED;
                      return int32_t(LMXXF_NR_OK);
                  });
@@ -5211,6 +5301,12 @@ int32_t SetControls(void* context, const MochizukiNrControls* in)
         const MochizukiNrControls c = *in; // Exact current-package ABI only.
         SessionControls sanitised = Sanitise(c);
         std::lock_guard lock(s->controlsMutex);
+        // RuntimeConfig::preprocess is part of the network's identity, so the setting has to be known before a network
+        // is built: wait for a frame to request it and the request can never be met, because the network that would
+        // run it was built without it. Latched, because a network built able to preprocess serves frames that do not
+        // ask for it; the core's own controls preprocess=false leaves such a frame exactly as it was.
+        if (sanitised.model.preprocess.active())
+            s->prepRequested = true;
         s->controls = std::move(sanitised);
         // The device's pipeline-binary extension is fixed. Turning ACO on without it waits for a new device.
         // Turning it off, or back on, rebuilds the next network; the one already installed keeps its pipelines.
@@ -5313,12 +5409,20 @@ extern "C" __declspec(dllexport) int32_t MochizukiNrGetApi(uint32_t abi_version,
 {
     if (!out || out->struct_size != sizeof(LmxxfNrApi))
         return Fail(LMXXF_NR_INVALID_ARGUMENT, "GetApi: struct_size mismatch");
-    if (abi_version != LMXXF_NR_ABI_VERSION)
+    // The host pins the ABI its own build carried and refuses the runtime otherwise, so a
+    // runtime rebuilt from a later revision than the installed OptiScaler is turned away at
+    // this line and the menu reports "host/runtime mismatch". ABI 5 and 6 differ by one
+    // field appended to the end of LmxxfNrFrameInfo (inline_slots, the lmxxf lane's private
+    // capture count). That struct never crosses this interface - the mochizuki lane carries
+    // MochizukiNrFrameInfo, which is unchanged - so both revisions speak the same contract
+    // here and both are accepted. Anything older or newer still fails.
+    if (abi_version != LMXXF_NR_ABI_VERSION && abi_version != LMXXF_NR_ABI_VERSION - 1u)
         return Fail(LMXXF_NR_UNSUPPORTED_ABI, "GetApi: unsupported abi_version");
     nr::set_log_sink(LogLine);
     std::memset(out, 0, sizeof *out);
     out->struct_size = sizeof(LmxxfNrApi);
-    out->abi_version = LMXXF_NR_ABI_VERSION;
+    // Echo what the caller negotiated: a host that checks this field sees its own contract.
+    out->abi_version = abi_version;
     out->QueryCapabilities = QueryCapabilities;
     out->Create = Create;
     out->Destroy = Destroy;

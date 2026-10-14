@@ -43,10 +43,13 @@ if /i "%~1"=="aco-rapid" goto acorapid
 if /i "%~1"=="shader-tail" goto shadertail
 if /i "%~1"=="pass-switch" goto passswitch
 if /i "%~1"=="split-retain" goto splitretain
+if /i "%~1"=="image" goto image
+if /i "%~1"=="meter" goto meter
 if /i "%~1"=="gpu" (
   call tests\mochizuki\run.cmd hdr-shader || exit /b 1
   call tests\mochizuki\run.cmd phase-failure || exit /b 1
   call tests\mochizuki\run.cmd inline || exit /b 1
+  call tests\mochizuki\run.cmd meter || exit /b 1
   exports\mochizuki-tests\runtime.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" --composition
   if errorlevel 1 exit /b 1
   exports\mochizuki-tests\runtime.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime"
@@ -217,4 +220,31 @@ exit /b %errorlevel%
 :acotemporal
 cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /I OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler tests/mochizuki/aco_temporal.cpp /Foexports/mochizuki-tests/aco_temporal.obj /Feexports/mochizuki-tests/aco_temporal.exe /link d3d12.lib dxgi.lib || exit /b 1
 python -X utf8 -B tests/mochizuki/aco_temporal.py %2 %3 %4 %5
+exit /b %errorlevel%
+
+:image
+rem <in.f32> <w> <h> <dxgi> <white> <intensity> <preprocess> <linear>: the required --image fields, forwarded as
+rem given. The optional tail (out.f32, style, curve, frames, exposure, ...) is longer than cmd's own %1-%9, so for a
+rem full line call exports\mochizuki-tests\runtime.exe directly the way the meter case below does.
+exports\mochizuki-tests\runtime.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" --image %1 %2 %3 %4 %5 %6 %7 %8
+exit /b %errorlevel%
+
+:meter
+rem The meter's own claim, on the one frame it cannot get wrong: a uniform linear 0.05 image has to be put on the key
+rem luminance, so the white point must settle at 0.05/0.2073 = 0.2412 whatever the model makes of the picture. Needs
+rem an AMD adapter, the built runtime and the user's own model, like the other GPU cases.
+if not exist exports\mochizuki-runtime\dlssnr-amd\dlssnr.bin (
+  echo MOCHIZUKI_METER_SKIP dlssnr-amd\dlssnr.bin is not installed
+  exit /b 0
+)
+python -X utf8 -B tests\mochizuki\meter_frame.py exports\mochizuki-tests\meter-in.f32 || exit /b 1
+rem --image's optional tail is positional: out.f32, mask, skin, style, structure, tone, transfer, colour, max_ratio,
+rem curve, bias_ev, contrast, saturation, frames, exposure. Frame count is the fourteenth of those, hence thirteen
+rem empty slots before it.
+exports\mochizuki-tests\runtime.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" --image exports\mochizuki-tests\meter-in.f32 256 256 10 1.0 1.0 0 1 "" "" "" "" "" "" "" "" "" "" "" "" "" 30 > exports\mochizuki-tests\meter.log 2>&1
+if errorlevel 1 (
+  type exports\mochizuki-tests\meter.log
+  exit /b 1
+)
+python -X utf8 -B tests\mochizuki\meter_level.py exports\mochizuki-tests\meter.log
 exit /b %errorlevel%

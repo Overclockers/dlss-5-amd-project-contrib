@@ -127,8 +127,9 @@ extern "C"
     /* The game's exposure for the frames that follow: what the frame's linear colour is multiplied by to be shown
      * (the upscaler's exposure texture, times its scale, over the pre-exposure). The white point becomes
      * MochizukiNrControls::white_point divided by it, so the network sees the frame at the brightness the game shows
-     * it. 0, or a value that is not finite and positive, goes back to white_point alone. Call it before PrepareFrame
-     * on the thread that calls it; it never fails the session. */
+     * it. 0, or a value that is not finite and positive, means no game exposure: the runtime then meters the frame's
+     * linear colour itself (one GPU dispatch per frame, no host call) and white_point trims that level. Call it before
+     * PrepareFrame on the thread that calls it; it never fails the session. */
     typedef int32_t (*PFN_MochizukiNrSetExposure)(void* context, float exposure);
 
 #ifdef _WIN32

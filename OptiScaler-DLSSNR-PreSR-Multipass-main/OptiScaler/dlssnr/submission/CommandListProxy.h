@@ -63,6 +63,12 @@ IRecordingResources : public IUnknown
     virtual HRESULT STDMETHODCALLTYPE BeginInlineState(UINT count, ID3D12Resource** resources,
                                                         D3D12_RESOURCE_STATES* states) = 0;
     virtual void STDMETHODCALLTYPE EndInlineState() = 0;
+    // A lane that records private bindings of its own - the mochizuki exposure meter's compute pass - brackets that
+    // call with these. Tracked setters record into a scratch snapshot instead, and the end puts the game's bindings
+    // back on the native list, so the snapshot the continuation is seeded from is never the lane's. Unlike
+    // BeginInlineState this never rejects, scans sources or moves layouts: it only redirects bookkeeping.
+    virtual void STDMETHODCALLTYPE BeginPrivateBindings() = 0;
+    virtual void STDMETHODCALLTYPE EndPrivateBindings() = 0;
     virtual HRESULT STDMETHODCALLTYPE BeginSplitState(UINT count, ID3D12Resource** resources,
                                                        D3D12_RESOURCE_STATES* states) = 0;
     virtual void STDMETHODCALLTYPE TraceNrInputState(const char* backend, uint64_t frame, const char* role,
@@ -87,10 +93,14 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
     std::atomic<bool> rawInterfaceEscaped { false }; // Lifetime-wide; an alias can outlive Reset.
     const char *splitIneligibleReason = nullptr;
     bool inlineUnsafe = false, inlineStateActive = false;
+    // A lane's own recording may bind private state (see BeginPrivateBindings). While this is set the tracked setters
+    // write into inlineState, so the game's snapshot stays what the continuation is seeded from, while the native list
+    // still receives the private bindings the dispatch needs.
+    bool privateBindings = false;
     const char* inlineUnsafeReason = nullptr;
     const char* inlineRejection = "eligible";
     ContinuationState inlineState;
-    ContinuationState& TrackedState() { return inlineStateActive ? inlineState : contState; }
+    ContinuationState& TrackedState() { return (inlineStateActive || privateBindings) ? inlineState : contState; }
     EnhancedBarrierBook enhancedBook;
     std::vector<std::pair<ID3D12Resource*, EnhancedBarrierBook::State>> inlineLayouts;
 
@@ -280,6 +290,21 @@ public:
         inlineState.Reset();
         inlineStateActive = false;
     }
+    void STDMETHODCALLTYPE BeginPrivateBindings() override
+    {
+        if (inlineStateActive || privateBindings) return; // an inline scope already keeps them out of the snapshot
+        inlineState.Reset();
+        privateBindings = true;
+    }
+    void STDMETHODCALLTYPE EndPrivateBindings() override
+    {
+        if (!privateBindings) return;
+        privateBindings = false;
+        // Apply to the native list: the private bindings must not stay where the game's were. The game snapshot itself
+        // was never written to, so the continuation is still seeded from the game's bindings.
+        if (auto* c = Cur()) contState.ApplyTo(c);
+        inlineState.Reset();
+    }
     void STDMETHODCALLTYPE TraceOpenQueries() override
     {
         static std::atomic<uint32_t> traces {0};
@@ -458,7 +483,7 @@ public:
         splitIneligible = false;
         renderPassActive = enhancedBarriersSeen = false;
         splitIneligibleReason = nullptr;
-        inlineUnsafe = inlineStateActive = false;
+        inlineUnsafe = inlineStateActive = privateBindings = false;
         inlineUnsafeReason = nullptr; inlineRejection = "eligible";
         enhancedBook.Reset(); inlineLayouts.clear();
         if (initial)
