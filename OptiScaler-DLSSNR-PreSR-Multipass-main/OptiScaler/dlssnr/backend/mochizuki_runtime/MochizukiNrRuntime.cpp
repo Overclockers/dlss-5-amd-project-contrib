@@ -1493,6 +1493,70 @@ struct ConvertPass
             }
         }
 
+        // NrInlineComputeMotion: the same layout with a LINEAR sampler and a 16-byte push {width, height,
+        // srcWidth, srcHeight}; convertPipelines holds runtime_mv_rescale_* keyed by the motion format. A missing
+        // module only leaves that motion format on its blit.
+        void CreateMotion(Vulkan& vk)
+        {
+            VkSamplerCreateInfo sci { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
+            sci.magFilter = sci.minFilter = VK_FILTER_LINEAR;
+            sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+            sci.addressModeU = sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            VkCheck(vkCreateSampler(vk.device, &sci, nullptr, &sampler), "vkCreateSampler (motion rescale)");
+            VkDescriptorSetLayoutBinding bindings[2] {};
+            bindings[0].binding = 0;
+            bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[0].descriptorCount = 1;
+            bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            bindings[1].binding = 1;
+            bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            bindings[1].descriptorCount = 1;
+            bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            VkDescriptorSetLayoutCreateInfo sli { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+            sli.bindingCount = 2;
+            sli.pBindings = bindings;
+            VkCheck(vkCreateDescriptorSetLayout(vk.device, &sli, nullptr, &setLayout),
+                    "vkCreateDescriptorSetLayout (motion rescale)");
+            VkPushConstantRange push {};
+            push.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            push.size = sizeof(uint32_t) * 4;
+            VkPipelineLayoutCreateInfo pli { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+            pli.setLayoutCount = 1;
+            pli.pSetLayouts = &setLayout;
+            pli.pushConstantRangeCount = 1;
+            pli.pPushConstantRanges = &push;
+            VkCheck(vkCreatePipelineLayout(vk.device, &pli, nullptr, &layout), "vkCreatePipelineLayout (motion rescale)");
+            const std::pair<VkFormat, const char*> modules[] {
+                { VK_FORMAT_R16G16_SFLOAT, "runtime_mv_rescale_rg16f.spv" },
+                { VK_FORMAT_R32G32_SFLOAT, "runtime_mv_rescale_rg32f.spv" },
+                { VK_FORMAT_R16G16B16A16_SFLOAT, "runtime_mv_rescale_rgba16f.spv" },
+                { VK_FORMAT_R32G32B32A32_SFLOAT, "runtime_mv_rescale_rgba32f.spv" } };
+            for (const auto& [format, name] : modules)
+            {
+                VkFormatProperties fp {};
+                vkGetPhysicalDeviceFormatProperties(vk.physical, format, &fp);
+                if (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) ||
+                    !(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT))
+                {
+                    nr::logf("[mochizuki] motion rescale: VkFormat %d has no linear-sampled/storage support; it keeps "
+                             "its blit", int(format));
+                    continue;
+                }
+                VkShaderModule module {};
+                try
+                {
+                    module = LoadModule(vk, name);
+                    convertPipelines.emplace_back(format, MakePipeline(vk, layout, module));
+                }
+                catch (const std::exception& e)
+                {
+                    nr::logf("[mochizuki] motion rescale: no compute pass for VkFormat %d (%s); it keeps its blit",
+                             int(format), e.what());
+                }
+                if (module) vkDestroyShaderModule(vk.device, module, nullptr);
+            }
+        }
+
         // The input module for a canonical format (the destination of the input pass).
         static const char* ConvertModule(VkFormat format)
         {
@@ -1742,6 +1806,20 @@ struct ConvertPass
         vkCmdDispatch(c, (w + 7) / 8, (h + 7) / 8, 1);
     }
 
+    // NrInlineComputeMotion: the valid srcW x srcH of the source onto w x h of the destination (bilinear, as the
+    // LINEAR blit). Same preconditions as Dispatch.
+    void DispatchMotion(VkCommandBuffer c, const Pipeline& p, uint32_t w, uint32_t h, uint32_t srcW, uint32_t srcH)
+    {
+        const VkPipeline pipeline = p.Convert(convertFor);
+        if (!set || !pipeline)
+            throw std::logic_error("motion rescale: no compute pass for this motion format");
+        vkCmdBindPipeline(c, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+        vkCmdBindDescriptorSets(c, VK_PIPELINE_BIND_POINT_COMPUTE, p.layout, 0, 1, &set, 0, nullptr);
+        const uint32_t push[4] { w, h, srcW, srcH };
+        vkCmdPushConstants(c, p.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof push, push);
+        vkCmdDispatch(c, (w + 7) / 8, (h + 7) / 8, 1);
+    }
+
     // The output direction: the network's answer in the canonical image into `gameFormat`'s image, so the
     // readback's row pitch and placed footprint (both built for the game's format) describe it correctly.
     // Same preconditions as Dispatch, with the two images the other way round.
@@ -1886,6 +1964,7 @@ struct Job
     uint32_t state = LMXXF_NR_JOB_NONE;
     bool firstPass = false;
     bool inlineExecution = false;
+    bool stageTiming = false; // MOCHIZUKI_NR_FRAME_FLAG_STAGE_TIMING (diagnostic)
     bool enqueued = false; // EnqueueHip ran for it: a second call does nothing
     // Plan A: this frame's colour is converted (compute pass, not a blit) into the geometry's canonical image
     // before the network sees it. Only for a frame whose format differs from the session's first-seen one.
@@ -1948,13 +2027,17 @@ struct Geometry
     bool canonicalise = false;
     // Plan A: the canonical format the network runs on when canonicalise is set (UNDEFINED otherwise).
     VkFormat canonicalVk = VK_FORMAT_UNDEFINED;
+    // NrInlineComputeMotion on a bucketed geometry with a compute rescale for its motion format: motionScaled is
+    // also a storage image and motionRescale has its set, so a Rescaled frame needs no blit.
+    bool computeMotion = false;
     bool operator==(const Geometry& o) const
     {
         return width == o.width && height == o.height && colourFormat == o.colourFormat &&
                gameColourFormat == o.gameColourFormat && colourWidth == o.colourWidth &&
                colourHeight == o.colourHeight && motionFormat == o.motionFormat &&
                motionWidth == o.motionWidth && motionHeight == o.motionHeight && firstPass == o.firstPass &&
-               bucketed == o.bucketed && canonicalise == o.canonicalise && canonicalVk == o.canonicalVk;
+               bucketed == o.bucketed && canonicalise == o.canonicalise && canonicalVk == o.canonicalVk &&
+               computeMotion == o.computeMotion;
     }
 };
 
@@ -1989,6 +2072,10 @@ struct NetworkKey
     bool int4 = false, renodx = false;
     uint32_t renoWidth = 0, renoHeight = 0, sourceEncoding = 0;
     float linearNits = 0.f;
+    bool computeConvert = false; // NrInlineComputeConvert on a listed-format key (RuntimeConfig::compute_convert_colour)
+    bool computeDownscale = false; // NrInlineComputeDownscale on a key with scale < 1 (RuntimeConfig::compute_downscale)
+    bool computeExport = false; // NrInlineComputeExport on a first-pass key (RuntimeConfig::compute_export)
+    bool motionPasses = false; // NrInlineComputeMotion on a multi-pass key (RuntimeConfig::motion_in_place_passes)
     bool operator==(const NetworkKey&) const = default;
     bool SameModel(const NetworkKey& other) const
     {
@@ -1996,7 +2083,9 @@ struct NetworkKey
                scale == other.scale && linear == other.linear && prep == other.prep &&
                compactTransfer == other.compactTransfer && firstPass == other.firstPass && aco == other.aco &&
                int4 == other.int4 && renodx == other.renodx && renoWidth == other.renoWidth &&
-               renoHeight == other.renoHeight && sourceEncoding == other.sourceEncoding && linearNits == other.linearNits;
+               renoHeight == other.renoHeight && sourceEncoding == other.sourceEncoding && linearNits == other.linearNits &&
+               computeConvert == other.computeConvert && computeDownscale == other.computeDownscale &&
+               computeExport == other.computeExport && motionPasses == other.motionPasses;
     }
 };
 
@@ -2069,6 +2158,7 @@ struct FrameBuffers
     // Plan A: the compute pass that fills canonicalColour from colourImage (no set when not canonicalised).
     ConvertPass convert;
     Image motionScaled; // bucketed geometry with motion: the vectors laid over the subrect, at the bucket's extent
+    ConvertPass motionRescale; // geometry.computeMotion: motionImage -> motionScaled on compute (no set otherwise)
     ID3D12Resource* firstResult {};
     ID3D12Resource* result {};
 
@@ -2101,6 +2191,7 @@ struct FrameBuffers
         convert = std::exchange(other.convert, {});
         motionImage = std::exchange(other.motionImage, {});
         motionScaled = std::exchange(other.motionScaled, {});
+        motionRescale = std::exchange(other.motionRescale, {});
         result = std::exchange(other.result, nullptr);
     }
 
@@ -2118,6 +2209,7 @@ struct FrameBuffers
             canonicalColour.Release(device);
             convert.Release(device);
             motionImage.Release(device);
+            motionRescale.Release(device);
             motionScaled.Release(device);
         }
         if (firstResult) firstResult->Release();
@@ -2505,6 +2597,7 @@ struct Session
     std::mutex statsMutex;
     float gpuMs[kGpuSamples] {};
     float networkMs[kGpuSamples] {}, otherMs[kGpuSamples] {};
+    float encodeMsLast = -1.f, transferMsLast = -1.f; // stage timing, last accepted sample (statsMutex)
     uint32_t gpuMsCount = 0, gpuMsNext = 0;
     nr::Runtime* statsNetwork = nullptr;
     uint64_t statsSerial = 0, gpuSamples = 0, gpuTick = 0;
@@ -2567,6 +2660,10 @@ struct Session
     std::atomic<uint64_t> historyBits { 0 };
     std::atomic<uint32_t> historyCount { 0 };
     std::mutex errorMutex;
+    // Menu status: the inline path of the last inline frame (0 none/split, 1 whole compute, 2 segments) and why.
+    std::atomic<uint32_t> infoInlinePath { 0 };
+    std::mutex inlinePathMutex;
+    char infoInlineWhy[124] {};
     char lastError[256] {};
 
     Geometry geometry;
@@ -2582,6 +2679,9 @@ struct Session
     // set allocates its own descriptor sets from them. Empty until Start made them, and left empty when the
     // passes are not there, which keeps every frame on its own format (the pre-Plan-A path).
     ConvertPass::Pipeline convertPipeline;
+    // NrInlineComputeMotion: the session's motion rescale pipelines and this set's descriptor set.
+    ConvertPass::Pipeline motionPipeline;
+    ConvertPass motionRescale;
     ID3D12Resource* firstResult {};
     ID3D12Resource* result {}; // what Super Resolution gets in place of the game's colour
 
@@ -3368,6 +3468,7 @@ struct Session
         b.convert = std::exchange(convert, {});
         b.motionImage = std::exchange(motionImage, {});
         b.motionScaled = std::exchange(motionScaled, {});
+        b.motionRescale = std::exchange(motionRescale, {});
         b.result = std::exchange(result, nullptr);
         std::fill(std::begin(fallbackCurrent), std::end(fallbackCurrent), false);
         return b;
@@ -3523,7 +3624,10 @@ struct Session
             b.motionBuffer.Create(device, vk, b.motionFootprint.bytes);
             b.motionImage.Create(vk, mf.vk, g.motionWidth, g.motionHeight);
             if (g.bucketed)
-                b.motionScaled.Create(vk, mf.vk, g.width, g.height);
+                b.motionScaled.Create(vk, mf.vk, g.width, g.height,
+                                      g.computeMotion ? kImageUsage | VK_IMAGE_USAGE_STORAGE_BIT : kImageUsage);
+            if (g.computeMotion)
+                b.motionRescale.Create(vk, motionPipeline, b.motionImage.image, mf.vk, b.motionScaled.image, mf.vk);
         }
         D3D12_HEAP_PROPERTIES hp {};
         hp.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -3565,6 +3669,7 @@ struct Session
         convert = std::exchange(b.convert, {});
         motionImage = std::exchange(b.motionImage, {});
         motionScaled = std::exchange(b.motionScaled, {});
+        motionRescale = std::exchange(b.motionRescale, {});
         result = std::exchange(b.result, nullptr);
         geometry = b.geometry;
     }
@@ -3895,6 +4000,14 @@ struct Session
             nr::logf("[mochizuki] plan A conversion unavailable (%s); a colour-format change rebuilds the network "
                      "as before", e.what());
         }
+        try
+        {
+            motionPipeline.CreateMotion(vk);
+        }
+        catch (const std::exception& e)
+        {
+            nr::logf("[mochizuki] motion rescale on compute unavailable (%s); rescaled vectors keep their blit", e.what());
+        }
         nr::logf("[mochizuki] Vulkan device %s, queue family %u%s", vk.name.c_str(), vk.family,
                  vk.buildQueue != vk.queue ? ", a second queue for the network builds" : "");
         if (DataDirectory() != DllDirectory())
@@ -4220,6 +4333,10 @@ struct Session
                 config.max_passes = 1; config.native_compose = true;
                 config.preprocess = false; config.first_pass_output = false;
             }
+            config.compute_convert_colour = key.computeConvert;
+            config.compute_downscale = key.computeDownscale;
+            config.compute_export = key.computeExport;
+            config.motion_in_place_passes = key.motionPasses;
             // The linear path's frame is a proxy made with the soft knee, which the preprocess undoes first.
             config.preprocess_unknee = key.linear;
             nr::TemporalConfig temporal;
@@ -5047,8 +5164,10 @@ struct Session
             if (computeChainOff) chainWhy = computeChainOff;
             else if (hooks.inlineChain == 3) chainWhy = "MZ_TEST_INLINE_CHAIN=3 (test hook)";
             else if (runtime->reno) chainWhy = "RenoDX processing uses the graphics queue";
-            else if (job.firstPass) chainWhy = "the first-pass export needs a blit";
-            else if (motion && job.motionPath != Job::Uploaded && job.motionPath != Job::Padded)
+            else if (job.firstPass && !runtime->first_pass_packed()) chainWhy = "the first-pass export needs a blit";
+            else if (motion && job.motionPath != Job::Uploaded && job.motionPath != Job::Padded &&
+                     !(job.motionPath == Job::Rescaled && geometry.computeMotion))
+
                 chainWhy = "the motion vectors are rescaled by a blit";
             // mask: the host binds no explicit ControlMaskFrame (record/record_engine pass none);
             // the automatic mask is not a ControlMaskFrame.
@@ -5057,6 +5176,16 @@ struct Session
             fullCompute = !chainWhy;
             // Logged when the path or reason changes; a game that flips every frame
             // (first-pass export, DRS) is bounded like the error lines.
+            const uint32_t pathNow = fullCompute ? 1u : 2u;
+            if (infoInlinePath.load(std::memory_order_relaxed) != pathNow ||
+                fullCompute != loggedFullCompute || (chainWhy && loggedChainWhy != chainWhy))
+            {
+                {
+                    std::lock_guard lock(inlinePathMutex);
+                    std::snprintf(infoInlineWhy, sizeof infoInlineWhy, "%s", chainWhy ? chainWhy : "");
+                }
+                infoInlinePath.store(pathNow, std::memory_order_relaxed);
+            }
             if (fullCompute != loggedFullCompute || (chainWhy && loggedChainWhy != chainWhy))
             {
                 loggedFullCompute = fullCompute;
@@ -5070,6 +5199,8 @@ struct Session
                              "family %u (%s)", vk.family, vk.computeFamily, chainWhy);
             }
         }
+        if (!job.inlineExecution && infoInlinePath.load(std::memory_order_relaxed))
+            infoInlinePath.store(0, std::memory_order_relaxed);
         if (job.inlineExecution && vk.computeQueue && (hooks.inlineChain == 1 || hooks.inlineChain == 2) &&
             (hooks.inlineChain == 1) != fullCompute)
             throw NrError(NrError::Other, fullCompute ? "MZ_TEST_INLINE_CHAIN=2: the frame took the whole compute chain"
@@ -5186,11 +5317,30 @@ struct Session
                 Pad(c, motionImage.image, motionW, motionH, std::min(motionW + 1, MW), std::min(motionH + 1, MH));
                 TransferBarrier(c, motionImage.image);
             }
+            if (geometry.computeMotion)
+            {
+                // NrInlineComputeMotion: the same bilinear rescale as a compute pass, so no graphics-only command.
+                ImageBarrier(c, motionImage.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+                ImageBarrier(c, motionScaled.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                             VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_ACCESS_SHADER_WRITE_BIT);
+                motionRescale.DispatchMotion(c, motionPipeline, w, h, motionW, motionH);
+                // Its writes visible to Pad's copies and to ready()'s barrier, which both start at transfer.
+                ImageBarrier(c, motionScaled.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT);
+            }
+            else
+            {
             ImageBarrier(c, motionScaled.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                          VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_ACCESS_TRANSFER_WRITE_BIT);
             Blit(c, motionImage.image, motionScaled.image, { 0, 0 }, { int32_t(motionW), int32_t(motionH) }, { 0, 0 },
                  { int32_t(w), int32_t(h) }, VK_FILTER_LINEAR);
+            }
             if (padded)
             {
                 TransferBarrier(c, motionScaled.image);
@@ -5242,6 +5392,7 @@ struct Session
         // Plain fields the core reads while recording; the runtime is used under submitMutex only.
         runtime->set_history_strength(job.history);
         runtime->set_white_point(job.white);
+        runtime->set_stage_timing(job.stageTiming);
         bool consumed = false;
         if (motion)
         {
@@ -5343,7 +5494,15 @@ struct Session
                 throw;
             }
         }
-        if (job.firstPass)
+        if (job.firstPass && runtime->first_pass_packed())
+        {
+            // NrInlineComputeExport: pass 0 packed into the frame's format on compute, then copied out.
+            runtime->record_first_pack(c, w, h);
+            VkBufferImageCopy copy = colourFootprint.vk;
+            copy.imageExtent = { w, h, 1 };
+            vkCmdCopyImageToBuffer(c, runtime->first_pass_packed(), VK_IMAGE_LAYOUT_GENERAL, firstOutput.buffer, 1, &copy);
+        }
+        else if (job.firstPass)
         {
             const VkImage first = runtime->first_pass_output();
             if (!first) throw std::runtime_error("first pass output missing");
@@ -5392,6 +5551,8 @@ struct Session
             gpuMs[gpuMsNext] = ms;
             networkMs[gpuMsNext] = runtime->last_network_ms();
             otherMs[gpuMsNext] = runtime->last_other_ms();
+            encodeMsLast = runtime->last_encode_ms();
+            transferMsLast = runtime->last_transfer_ms();
             gpuMsNext = (gpuMsNext + 1) % kGpuSamples;
             gpuMsCount = std::min(gpuMsCount + 1, kGpuSamples);
         }
@@ -5562,6 +5723,7 @@ struct Session
         toVk.Release(vk.device);
         fromVk.Release(vk.device);
         convertPipeline.Release(vk.device);
+        motionPipeline.Release(vk.device);
         vk.Destroy();
         ReleaseGameQueues();
     }
@@ -5836,6 +5998,9 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
                 g.motionFormat = md.Format;
                 g.motionWidth = g.bucketed ? UINT(md.Width) : motionW;
                 g.motionHeight = g.bucketed ? md.Height : motionH;
+                // NrInlineComputeMotion: the host sends it on inline frames only (switching modes remakes the buffers).
+                g.computeMotion = (info->flags & MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_MOTION) && g.bucketed &&
+                                  s->motionPipeline.Convert(mf.vk);
             }
             // Neither a network nor buffers that cannot be had now fail the session: the frame goes without NR, and
             // they are tried again as their holds say.
@@ -5861,6 +6026,12 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
             // Plan A: the key's format is the canonical one on a converted frame; otherwise the game's, which is
             // then the first-seen format itself (or, for an unconvertible pair, the new one: a rebuild, as before).
             const VkFormat keyFormat = g.canonicalise ? canonicalVk : cf.vk;
+            // NrInlineComputeConvert: only a listed-format key carries it (other formats never rebuild for it). The host
+            // sends it on inline frames only, so split keeps its key; switching modes rebuilds once.
+            const bool convertListed = keyFormat == VK_FORMAT_B10G11R11_UFLOAT_PACK32 ||
+                keyFormat == VK_FORMAT_R8G8B8A8_UNORM || keyFormat == VK_FORMAT_R8G8B8A8_SRGB ||
+                keyFormat == VK_FORMAT_B8G8R8A8_UNORM || keyFormat == VK_FORMAT_B8G8R8A8_SRGB ||
+                keyFormat == VK_FORMAT_A2B10G10R10_UNORM_PACK32 || keyFormat == VK_FORMAT_A2R10G10B10_UNORM_PACK32;
             NetworkKey key { g.width, g.height, keyFormat, scale, maxPasses, linear, s->prepWanted || prepRequested,
                                     compactTransfer, g.firstPass, aco };
             key.int4 = int4; key.renodx = renodx;
@@ -5870,6 +6041,12 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
                 key.maxPasses = nr::renodx::stack_passes(reno);
                 key.scale = 1.f; key.prep = false; key.firstPass = g.firstPass = false;
             }
+            key.computeConvert = (info->flags & MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_CONVERT) && convertListed;
+            key.computeDownscale = (info->flags & MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_DOWNSCALE) && scale < 1.f;
+            key.computeExport = (info->flags & MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_EXPORT) && g.firstPass;
+            // NrInlineComputeMotion with more than one layer: every layer samples the motion
+            // vectors in place, so multi-pass needs no motion blit (inline frames only).
+            key.motionPasses = (info->flags & MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_MOTION) && maxPasses > 1;
             // What the network is about to be shown, on the first frame and then ten seconds apart: the one line that
             // says whether the model input is normalised at all. `white` is the divisor the linear encode takes out of
             // the frame; `linear` whether that encode runs at all (a frame whose colour is already display-encoded
@@ -6002,6 +6179,7 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
             else
                 s->RequestHistoryReset(Session::ResetNoMotion); // consumed at execution
             next.inlineExecution = (info->flags & MOCHIZUKI_NR_FRAME_FLAG_INLINE_EXECUTION) != 0;
+            next.stageTiming = (info->flags & MOCHIZUKI_NR_FRAME_FLAG_STAGE_TIMING) != 0;
             next.firstPass = g.firstPass && s->net.firstPass && served > 1 && s->firstResult;
             job->first_pass_output = next.firstPass ? s->firstResult : nullptr;
             next.state = LMXXF_NR_JOB_PREPARED;
@@ -6386,6 +6564,8 @@ int32_t GetInfo(void* context, MochizukiNrInfo* out)
         {
             std::lock_guard stats(s->statsMutex);
             info.gpu_samples = s->gpuSamples;
+            info.gpu_ms_encode_last = s->gpuMsCount ? s->encodeMsLast : -1.f;
+            info.gpu_ms_transfer_last = s->gpuMsCount ? s->transferMsLast : -1.f;
             info.gpu_tick = s->gpuTick;
             if (s->gpuMsCount) {
                 const uint32_t last = (s->gpuMsNext + kGpuSamples - 1) % kGpuSamples;
@@ -6420,6 +6600,11 @@ int32_t GetInfo(void* context, MochizukiNrInfo* out)
             info.int4_requested = s->controls.int4;
             info.aco_effective = s->acoEffective ? 1u : 0u;
             std::memcpy(info.aco_fallback, s->acoFallback, sizeof info.aco_fallback);
+        }
+        info.inline_path = s->infoInlinePath.load(std::memory_order_relaxed);
+        {
+            std::lock_guard lock(s->inlinePathMutex);
+            std::memcpy(info.inline_path_why, s->infoInlineWhy, sizeof info.inline_path_why);
         }
         {
             std::lock_guard lock(s->errorMutex);

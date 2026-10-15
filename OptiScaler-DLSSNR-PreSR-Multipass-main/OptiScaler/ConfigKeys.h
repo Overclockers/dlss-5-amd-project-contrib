@@ -43,12 +43,22 @@ inline constexpr const char *LmxxfInlineSlots = "LmxxfInlineSlots";
 inline constexpr const char *NrCaptureBackoff = "NrCaptureBackoff";
 inline constexpr const char *NrInlineReuse = "NrInlineReuse";
 inline constexpr const char *NrGpuHandoff = "NrGpuHandoff";
+inline constexpr const char *NrSpinPollDelay = "NrSpinPollDelay";
+inline constexpr const char *NrSpinSlices = "NrSpinSlices";
+inline constexpr const char *NrWatchSlices = "NrWatchSlices";
+inline constexpr const char *NrWatchStartDelay = "NrWatchStartDelay";
+inline constexpr const char *NrInlineComputeConvert = "NrInlineComputeConvert";
+inline constexpr const char *NrInlineComputeMotion = "NrInlineComputeMotion";
+inline constexpr const char *NrInlineComputeDownscale = "NrInlineComputeDownscale";
+inline constexpr const char *NrInlineComputeExport = "NrInlineComputeExport";
+inline constexpr const char *NrAdaptiveWaitBudget = "NrAdaptiveWaitBudget";
 inline constexpr const char *EarlyExeWrap = "LmxxfEarlyExeWrap";
 inline constexpr const char *EarlyAnyModuleWrap = "LmxxfEarlyAnyModuleWrap";
 inline constexpr const char *Diagnostic = "LmxxfDiagnostic";
 inline constexpr const char *NrTimingEnabled = "NrTimingEnabled";
 inline constexpr const char *NrTimingLog = "NrTimingLog";
 inline constexpr const char *NrFrameDiag = "NrFrameDiag";
+inline constexpr const char *NrGameWaitDiag = "NrGameWaitDiag";
 inline constexpr const char *NrPersonPartition = "NrPersonPartition";
 inline constexpr const char *NrPersonModel = "NrPersonModel";
 inline constexpr const char *NrFaceInputSize = "NrFaceInputSize";
@@ -305,6 +315,7 @@ inline constexpr const char *const kKnown[] = {
     NrTimingEnabled,
     NrTimingLog,
     NrFrameDiag,
+    NrGameWaitDiag,
     NrPersonPartition,
     NrPersonModel,
     NrFaceInputSize,
@@ -489,6 +500,15 @@ inline constexpr const char *const kKnown[] = {
     NrCaptureBackoff,
     NrInlineReuse,
     NrGpuHandoff,
+    NrSpinPollDelay,
+    NrSpinSlices,
+    NrWatchSlices,
+    NrWatchStartDelay,
+    NrInlineComputeConvert,
+    NrInlineComputeMotion,
+    NrInlineComputeDownscale,
+    NrInlineComputeExport,
+    NrAdaptiveWaitBudget,
     EarlyExeWrap,
     EarlyAnyModuleWrap,
     Diagnostic,

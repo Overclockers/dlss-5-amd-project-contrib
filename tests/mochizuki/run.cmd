@@ -25,10 +25,12 @@ if /i "%~1"=="abi" call :acounit || exit /b 1
 if /i "%~1"=="aco-unit" goto acounit
 if /i "%~1"=="windows005" goto windows005
 if /i "%~1"=="inline" goto inline
+if /i "%~1"=="inline-armed" goto inline
 if /i "%~1"=="aco-inline" goto inline
 if /i "%~1"=="aco-temporal" goto acotemporal
 if /i "%~1"=="hdr-shader" goto hdrshader
 if /i "%~1"=="phase-failure" goto phasefailure
+if /i "%~1"=="inline-lifecycle" goto lifecycle
 if /i "%~1"=="wait-profile" goto waitprofile
 if /i "%~1"=="aco-wait-profile" goto waitprofile
 if /i "%~1"=="inline-profile" goto waitprofile
@@ -88,6 +90,22 @@ rem R8G8B8A8_UNORM: the whole chain is one compute phase; its submit fails.
 set "MZ_TEST_PHASE_SUBMIT_FAIL_AT=1"
 set "MZ_TEST_INLINE_CHAIN=1"
 exports\mochizuki-tests\queue_segments.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" unorm8 || exit /b 1
+rem R11G11B10_FLOAT + compute convert: input unpack and runtime_pack_r11 write-back keep the chain in one compute phase.
+exports\mochizuki-tests\queue_segments.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" r11 || exit /b 1
+exports\mochizuki-tests\queue_segments.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" bgra8 || exit /b 1
+exports\mochizuki-tests\queue_segments.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" srgb8 || exit /b 1
+exports\mochizuki-tests\queue_segments.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" bgra8srgb || exit /b 1
+exports\mochizuki-tests\queue_segments.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" rgb10a2 || exit /b 1
+rem Dynamic resolution with motion vectors of another size: NrInlineComputeMotion keeps one compute phase.
+exports\mochizuki-tests\queue_segments.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" motion || exit /b 1
+rem Model scale 0.5: NrInlineComputeDownscale keeps one compute phase (RGBA16F and R11G11B10).
+exports\mochizuki-tests\queue_segments.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" scaled || exit /b 1
+exports\mochizuki-tests\queue_segments.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" scaledr11 || exit /b 1
+rem Two layers (multi), and two layers with the first-layer export on compute (export).
+exports\mochizuki-tests\queue_segments.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" multi || exit /b 1
+exports\mochizuki-tests\queue_segments.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" export || exit /b 1
+rem Two layers, R11G11B10 with larger RG16F motion vectors: NrInlineComputeMotion samples them in place on every layer.
+exports\mochizuki-tests\queue_segments.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" multimotion || exit /b 1
 set "MZ_TEST_PHASE_SUBMIT_FAIL_AT="
 set "MZ_TEST_INLINE_CHAIN="
 rem A refused whole-chain compute recording fails the frame without a passthrough.
@@ -98,6 +116,15 @@ set "RC=%errorlevel%"
 set "MZ_TEST_COMPUTE_REFUSE_AT="
 set "MZ_TEST_INLINE_CHAIN="
 exit /b %RC%
+
+:lifecycle
+cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /I OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler tests/mochizuki/queue_segments.cpp /Foexports/mochizuki-tests/queue_segments.obj /Feexports/mochizuki-tests/queue_segments.exe /link d3d12.lib dxgi.lib dxguid.lib || exit /b 1
+rem All compute toggles on: geometry, format, motion extent, model scale, layers and queue change mid-run;
+rem two inline frames in flight; ResetHistory; Destroy/Create. Every frame completes and collects.
+set "MZ_TEST_PHASE_SUBMIT_FAIL_AT="
+set "MZ_TEST_INLINE_CHAIN="
+exports\mochizuki-tests\queue_segments.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" lifecycle
+exit /b %errorlevel%
 
 :waitprofile
 set "MOCHI_ACO_ARG="
@@ -124,6 +151,24 @@ set "INCLUDE=%INCLUDE%;%CD%"
 set "MOCHI_INLINE_RUNTIME=%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll"
 if not "%~2"=="" set "MOCHI_INLINE_RUNTIME=%~f2"
 cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /I OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/include tests/lmxxf/nr_inline_runtime_gpu.cpp /Foexports/mochizuki-tests/nr_inline_runtime_gpu.obj /Feexports/mochizuki-tests/nr_inline_runtime_gpu.exe /link d3d12.lib dxgi.lib dxguid.lib d3dcompiler.lib OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/library/detours/detours.lib || exit /b 1
+rem Production inline defaults (NrGpuHandoff=true, NrSpinPollDelay=16), then a capture that lands
+rem after the side watch: the input gate must close, skip the copies and select the original frame.
+for %%M in ("" "--timeout" "--ahead" "--large --temporal") do (
+  exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --gpu-handoff --poll-delay=16 %%~M %MOCHI_ACO_ARG%
+  if errorlevel 1 exit /b 1
+)
+exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --gpu-handoff --poll-delay=16 --late-capture=64 %MOCHI_ACO_ARG%
+if errorlevel 1 exit /b 1
+rem Claimed gate, copy still pending when the side watch ends: the network must wait for the copy on the GPU.
+exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --gpu-handoff --poll-delay=16 --late-copy=64 --abort-ms=5000 %MOCHI_ACO_ARG%
+if errorlevel 1 exit /b 1
+rem Claimed gate, capture never lands within the capped side wait: bypass, history reset, reclaim, no hang.
+exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --gpu-handoff --poll-delay=16 --stuck-copy=1024 %MOCHI_ACO_ARG%
+if errorlevel 1 exit /b 1
+rem Same, ended by the watchdog abort word (1 ms) instead of the cap.
+exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --gpu-handoff --poll-delay=16 --stuck-copy=1024 --abort-ms=1 %MOCHI_ACO_ARG%
+if errorlevel 1 exit /b 1
+if /i "%~1"=="inline-armed" exit /b 0
 exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki %MOCHI_ACO_ARG%
 if errorlevel 1 exit /b 1
 exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --timeout %MOCHI_ACO_ARG%

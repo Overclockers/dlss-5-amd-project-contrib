@@ -344,6 +344,15 @@ bool Config::Reload(std::filesystem::path iniPath)
             NrCaptureBackoff.set_from_config(readInt(CfgKey::kSection, CfgKey::NrCaptureBackoff));
             NrInlineReuse.set_from_config(readBool(CfgKey::kSection, CfgKey::NrInlineReuse));
             NrGpuHandoff.set_from_config(readBool(CfgKey::kSection, CfgKey::NrGpuHandoff));
+            NrSpinPollDelay.set_from_config(readInt(CfgKey::kSection, CfgKey::NrSpinPollDelay));
+            NrSpinSlices.set_from_config(readInt(CfgKey::kSection, CfgKey::NrSpinSlices));
+            NrWatchSlices.set_from_config(readInt(CfgKey::kSection, CfgKey::NrWatchSlices));
+            NrWatchStartDelay.set_from_config(readInt(CfgKey::kSection, CfgKey::NrWatchStartDelay));
+            NrInlineComputeConvert.set_from_config(readBool(CfgKey::kSection, CfgKey::NrInlineComputeConvert));
+            NrInlineComputeMotion.set_from_config(readBool(CfgKey::kSection, CfgKey::NrInlineComputeMotion));
+            NrInlineComputeDownscale.set_from_config(readBool(CfgKey::kSection, CfgKey::NrInlineComputeDownscale));
+            NrInlineComputeExport.set_from_config(readBool(CfgKey::kSection, CfgKey::NrInlineComputeExport));
+            NrAdaptiveWaitBudget.set_from_config(readBool(CfgKey::kSection, CfgKey::NrAdaptiveWaitBudget));
             LmxxfEarlyExeWrap.set_from_config(readBool("DlssNr", "LmxxfEarlyExeWrap"));
             LmxxfEarlyAnyModuleWrap.set_from_config(readBool("DlssNr", "LmxxfEarlyAnyModuleWrap"));
             DlssNrMaxRatio.set_from_config(readFloat("DlssNr", "MaxRatio"));
@@ -414,6 +423,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             NrTimingEnabled.set_from_config(readBool(CfgKey::kSection, CfgKey::NrTimingEnabled));
             NrTimingLog.set_from_config(readBool(CfgKey::kSection, CfgKey::NrTimingLog));
             NrFrameDiag.set_from_config(readBool(CfgKey::kSection, CfgKey::NrFrameDiag));
+            NrGameWaitDiag.set_from_config(readBool(CfgKey::kSection, CfgKey::NrGameWaitDiag));
             NrPersonPartition.set_from_config(readBool(CfgKey::kSection, CfgKey::NrPersonPartition));
             NrPersonModel.set_from_config(readInt(CfgKey::kSection, CfgKey::NrPersonModel));
             NrFaceInputSize.set_from_config(readInt(CfgKey::kSection, CfgKey::NrFaceInputSize));
@@ -1802,6 +1812,7 @@ bool Config::SaveIni()
     ini.SetValue(CfgKey::kSection, CfgKey::NrTimingEnabled, GetBoolValue(Instance()->NrTimingEnabled.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::NrTimingLog, GetBoolValue(Instance()->NrTimingLog.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::NrFrameDiag, GetBoolValue(Instance()->NrFrameDiag.value_for_config()).c_str());
+    ini.SetValue(CfgKey::kSection, CfgKey::NrGameWaitDiag, GetBoolValue(Instance()->NrGameWaitDiag.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::NrPersonPartition, GetBoolValue(Instance()->NrPersonPartition.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::NrPersonModel, GetIntValue(Instance()->NrPersonModel.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::NrFaceInputSize, GetIntValue(Instance()->NrFaceInputSize.value_for_config()).c_str());
@@ -2010,6 +2021,15 @@ bool Config::SaveIni()
     ini.SetValue(CfgKey::kSection, CfgKey::NrCaptureBackoff, GetIntValue(Instance()->NrCaptureBackoff.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::NrInlineReuse, GetBoolValue(Instance()->NrInlineReuse.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::NrGpuHandoff, GetBoolValue(Instance()->NrGpuHandoff.value_for_config()).c_str());
+    ini.SetValue(CfgKey::kSection, CfgKey::NrSpinPollDelay, GetIntValue(Instance()->NrSpinPollDelay.value_for_config()).c_str());
+    ini.SetValue(CfgKey::kSection, CfgKey::NrSpinSlices, GetIntValue(Instance()->NrSpinSlices.value_for_config()).c_str());
+    ini.SetValue(CfgKey::kSection, CfgKey::NrWatchSlices, GetIntValue(Instance()->NrWatchSlices.value_for_config()).c_str());
+    ini.SetValue(CfgKey::kSection, CfgKey::NrWatchStartDelay, GetIntValue(Instance()->NrWatchStartDelay.value_for_config()).c_str());
+    ini.SetValue(CfgKey::kSection, CfgKey::NrInlineComputeConvert, GetBoolValue(Instance()->NrInlineComputeConvert.value_for_config()).c_str());
+    ini.SetValue(CfgKey::kSection, CfgKey::NrInlineComputeMotion, GetBoolValue(Instance()->NrInlineComputeMotion.value_for_config()).c_str());
+    ini.SetValue(CfgKey::kSection, CfgKey::NrInlineComputeDownscale, GetBoolValue(Instance()->NrInlineComputeDownscale.value_for_config()).c_str());
+    ini.SetValue(CfgKey::kSection, CfgKey::NrInlineComputeExport, GetBoolValue(Instance()->NrInlineComputeExport.value_for_config()).c_str());
+    ini.SetValue(CfgKey::kSection, CfgKey::NrAdaptiveWaitBudget, GetBoolValue(Instance()->NrAdaptiveWaitBudget.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::NrInline,
                  GetBoolValue(Instance()->NrInline.value_for_config()).c_str());
     if (auto earlyWrap = Instance()->LmxxfEarlyExeWrap.value_for_config(); earlyWrap.has_value())

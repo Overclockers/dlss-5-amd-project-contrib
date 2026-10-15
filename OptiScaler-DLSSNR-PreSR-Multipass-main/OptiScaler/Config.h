@@ -342,6 +342,8 @@ class Config
     CustomOptional<bool> NrTimingLog { false };
     // Default-off per-frame NR diag for PresentMon join (NrFrameDiag.log).
     CustomOptional<bool> NrFrameDiag { false };
+    // Default-off game-thread timing (Present -> submit, fence waits) in NrFrameDiag lines; timestamps only.
+    CustomOptional<bool> NrGameWaitDiag { false };
     CustomOptional<bool> NrPersonPartition { false };
     CustomOptional<int> NrPersonModel { 0 };
     CustomOptional<int> NrFaceInputSize { 320 };
@@ -401,7 +403,21 @@ class Config
     CustomOptional<int> NrCaptureBackoff { 0 };
     // Reuse retired inline recordings (same inputs) instead of creating D3D12 objects every frame. Default off.
     CustomOptional<bool> NrInlineReuse { false };
-    CustomOptional<bool> NrGpuHandoff { false };
+    CustomOptional<bool> NrGpuHandoff { true };
+    CustomOptional<int> NrSpinPollDelay { 16 };
+    CustomOptional<int> NrSpinSlices { 0 };
+    CustomOptional<int> NrWatchSlices { 0 };
+    CustomOptional<int> NrWatchStartDelay { 0 };
+    // Mochizuki inline: listed colour formats converted on the compute queue (whole chain on compute). Default on.
+    CustomOptional<bool> NrInlineComputeConvert { true };
+    // Compute-queue motion rescale. Default on.
+    CustomOptional<bool> NrInlineComputeMotion { true };
+    // Compute-queue model downscale. Default on.
+    CustomOptional<bool> NrInlineComputeDownscale { true };
+    // Compute-queue first-pass export. Default on.
+    CustomOptional<bool> NrInlineComputeExport { true };
+    // Adaptive wait budget. Default off.
+    CustomOptional<bool> NrAdaptiveWaitBudget { false };
     CustomOptional<bool> NrInline { false }; // Experimental same-list execution for lmxxf/Mochizuki.
     // Wrap host CreateCommandList results before the swapchain exists.
     // Missing = engine whitelist (Unreal + Forza). false = never. true = force for any engine.

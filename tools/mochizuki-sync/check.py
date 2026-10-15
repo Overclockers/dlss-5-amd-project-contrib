@@ -93,7 +93,7 @@ def verify(repo, upstream, manifest_path=MANIFEST):
                      if normalize(path, (stage / path).read_bytes()) != normalize(path, (vendor / path).read_bytes())]
         if different:
             raise ValueError('Unrecorded vendor changes or stale patches: ' + ', '.join(different))
-    print(f'MOCHIZUKI_SOURCE_PIN_OK {pin} files={len(files)} patches={len(manifest["patches"])}')
+    print(f'MOCHIZUKI_SOURCE_PIN_OK {pin} files={len(files)} added={len(added)} patches={len(manifest["patches"])}')
 
 
 def main():

@@ -187,12 +187,22 @@ int main() {
                 "NrCaptureBackoff",  # Host-owned inline capture polling policy.
                 "NrInlineReuse",  # Host-owned inline recording reuse.
                 "NrGpuHandoff",  # Host-owned GPU-armed inline handoff.
+                "NrSpinPollDelay",  # Host-owned inline spin experiment.
+                "NrSpinSlices",  # Host-owned inline spin experiment.
+                "NrWatchSlices",  # Host-owned inline spin experiment.
+                "NrWatchStartDelay",  # Host-owned inline spin experiment.
+                "NrInlineComputeConvert",  # Host-owned inline experiment (frame flag to the runtime).
+                "NrInlineComputeMotion",  # Host-owned inline experiment.
+                "NrInlineComputeDownscale",  # Host-owned inline experiment.
+                "NrInlineComputeExport",  # Host-owned inline experiment.
+                "NrAdaptiveWaitBudget",  # Host-owned inline experiment.
                 "EarlyExeWrap",
                 "EarlyAnyModuleWrap",
                 "Diagnostic",
                 "NrTimingEnabled",  # Product telemetry, not an upstream kernel option.
                 "NrTimingLog",
                 "NrFrameDiag",
+                "NrGameWaitDiag",  # Host-owned game-thread timing diag.
                 "LmxxfModelHistory",  # Host-owned FrameInfo flag, not an upstream environment key.
                 "NrStabilizerEnabled", "NrStabilizerAlpha", "NrStabilizerThreshold",
                 "NrOverallIntensity",  # Shared final-output blend, no runtime environment alias.

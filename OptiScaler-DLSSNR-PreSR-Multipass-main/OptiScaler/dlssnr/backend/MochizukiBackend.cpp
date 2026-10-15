@@ -12,11 +12,14 @@
 
 // NrFrameDiag: last Vulkan core GPU ms from the runtime (cheap stats copy; no GPU access).
 static PFN_MochizukiNrGetInfo gDiagGetInfo = nullptr;
-static float DiagCoreGpuMs(void* context)
+static float DiagCoreGpuMs(void* context, float* encodeMs, float* transferMs)
 {
     if (!gDiagGetInfo || !context) return 0;
     MochizukiNrInfo info {sizeof info};
-    return gDiagGetInfo(context, &info) == LMXXF_NR_OK ? info.gpu_ms_last : 0.f;
+    if (gDiagGetInfo(context, &info) != LMXXF_NR_OK) return 0.f;
+    if (encodeMs) *encodeMs = info.gpu_ms_encode_last;
+    if (transferMs) *transferMs = info.gpu_ms_transfer_last;
+    return info.gpu_ms_last;
 }
 
 namespace DlssNr::Backend
@@ -328,7 +331,13 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     frame.flags = LMXXF_NR_FRAME_FLAG_STRENGTH | (temporal ? MOCHIZUKI_NR_FRAME_FLAG_TEMPORAL : 0) |
         (first ? LMXXF_NR_FRAME_FLAG_FIRST_PASS : 0) |
         (inlineMode ? MOCHIZUKI_NR_FRAME_FLAG_INLINE_EXECUTION : 0) |
-        (input.nativeGuideScale ? MOCHIZUKI_NR_FRAME_FLAG_AFTER_UPSCALE : 0);
+        (input.nativeGuideScale ? MOCHIZUKI_NR_FRAME_FLAG_AFTER_UPSCALE : 0) |
+        (FrameDiag::Enabled() ? MOCHIZUKI_NR_FRAME_FLAG_STAGE_TIMING : 0) |
+        (inlineMode && Config::Instance()->NrInlineComputeConvert.value_or_default() ? MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_CONVERT : 0) |
+        // Inline only: split keeps its blits, motion and network (switching modes may rebuild once).
+        (inlineMode && Config::Instance()->NrInlineComputeMotion.value_or_default() ? MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_MOTION : 0) |
+        (inlineMode && Config::Instance()->NrInlineComputeDownscale.value_or_default() ? MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_DOWNSCALE : 0) |
+        (inlineMode && Config::Instance()->NrInlineComputeExport.value_or_default() ? MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_EXPORT : 0);
     const auto desc = input.colour->GetDesc();
     frame.color = input.colour;
     frame.color_width = input.width && input.width <= desc.Width ? input.width : UINT(desc.Width);
@@ -401,7 +410,22 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
             p->owner->inlinePipelines = inlineResources->PipelineCache();
             inlineResources->captureBackoff = Config::Instance()->NrCaptureBackoff.value_or_default();
             inlineResources->gpuArmed = Config::Instance()->NrGpuHandoff.value_or_default();
+            {   // Spin experiments; only validated values are accepted (8 or fewer slices / delay >= 256 hitched offline).
+                const auto* c = Config::Instance();
+                // Spin options apply only with GPU-armed handoff (menu grays them otherwise).
+                const bool armed = inlineResources->gpuArmed;
+                const int pd = armed ? c->NrSpinPollDelay.value_or_default() : 0, sl = c->NrSpinSlices.value_or_default();
+                const int wsl = c->NrWatchSlices.value_or_default(), wsd = c->NrWatchStartDelay.value_or_default();
+                const int slA = armed ? sl : 0;
+                inlineResources->spinPollDelay = pd == 16 || pd == 64 ? UINT(pd) : 0u;
+                inlineResources->spinSlices = slA == 256 || slA == 1024 ? UINT(slA) : 0u;
+                inlineResources->watchSlices = wsl == 256 || wsl == 1024 ? UINT(wsl) : 0u;
+                inlineResources->watchStartDelay = wsd >= 1 && wsd <= 8 ? UINT(wsd) : 0u;
+                inlineResources->adaptiveBudget = armed && c->NrAdaptiveWaitBudget.value_or_default(); }
             FrameDiag::Begin(inlineResources->diag, "mochizuki", frameId, frame.color_width, frame.color_height, OPTI_VERSION);
+            inlineResources->diag.spinPollDelay = inlineResources->spinPollDelay; inlineResources->diag.spinSlices = inlineResources->spinSlices;
+            inlineResources->diag.watchSlices = inlineResources->watchSlices; inlineResources->diag.watchStartDelay = inlineResources->watchStartDelay;
+            inlineResources->diag.adaptiveBudget = inlineResources->adaptiveBudget;
             inlineResources->diag.inlineReuse = inlineResources->reused;
             const auto id0 = logical->Identity();
             inlineResources->diag.listId = id0.list;
@@ -440,6 +464,8 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     // continuation with them, so keep them in a private scope for exactly this call. The scope is unconditional: it is
     // two bookkeeping calls, and which side metered must not decide whether the bindings stay out of the game snapshot.
     resources->BeginPrivateBindings();
+    // NrGpuHandoff: the input copies run only if the game claims the gate before the side watch closes it.
+    if (inlineResources) inlineResources->BeginInputs(cmd);
     const int32_t inputs = p->api.RecordInputs(p->owner->context, job.handle, cmd);
     resources->EndPrivateBindings();
     if (inputs != LMXXF_NR_OK)
@@ -483,6 +509,7 @@ bool MochizukiBackend::Shutdown()
 {
     ReleaseSession();
     if (p->module) { FreeLibrary(p->module); p->module = nullptr; p->api = {}; }
+    InlineRecording::StopAbortWatchdog(); // owned thread joined here, not at static destruction
     return true;
 }
 void MochizukiBackend::InvalidateHistory()

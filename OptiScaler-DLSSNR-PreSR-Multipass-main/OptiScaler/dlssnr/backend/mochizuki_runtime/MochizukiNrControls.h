@@ -204,6 +204,13 @@ extern "C"
         uint32_t aco_effective; /* 1 when this device was created with ACO and it stayed on */
         char aco_fallback[128]; /* why ACO is off, or that a change waits for the next start; empty when unused */
         uint32_t int4_requested, int4_effective, renodx_effective;
+        /* Last accepted sample's core stages, only on frames with MOCHIZUKI_NR_FRAME_FLAG_STAGE_TIMING; -1 when
+         * the stage did not run in it (encode: linear input only) or stage timing was off. */
+        float gpu_ms_encode_last, gpu_ms_transfer_last;
+        /* The last inline frame's path: 0 none (split frames), 1 whole chain on compute, 2 segments
+         * (graphics conversions + compute network); inline_path_why gives the segment reason. */
+        uint32_t inline_path;
+        char inline_path_why[124];
         /* struct_size includes the current definition's tail padding. */
     } MochizukiNrInfo;
 

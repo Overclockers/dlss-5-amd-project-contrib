@@ -61,11 +61,21 @@ static void ResetSharedNrDefaults(Config* config)
     config->NrTimingEnabled = std::optional<bool>{};
     config->NrTimingLog = std::optional<bool>{};
     config->NrFrameDiag = std::optional<bool>{};
+    config->NrGameWaitDiag = std::optional<bool>{};
     config->NrInline.reset();
     config->LmxxfInlineSlots.reset();
     config->NrCaptureBackoff.reset();
     config->NrInlineReuse.reset();
     config->NrGpuHandoff.reset();
+    config->NrSpinPollDelay.reset();
+    config->NrSpinSlices.reset();
+    config->NrWatchSlices.reset();
+    config->NrWatchStartDelay.reset();
+    config->NrInlineComputeConvert.reset();
+    config->NrInlineComputeMotion.reset();
+    config->NrInlineComputeDownscale.reset();
+    config->NrInlineComputeExport.reset();
+    config->NrAdaptiveWaitBudget.reset();
 }
 
 // The "(?)" marker every control carries, matching the rest of the menu.
@@ -585,6 +595,10 @@ static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const 
             MenuUi::TextWrapped("Vulkan core GPU: %.3f ms | Network: %.3f ms | Other: %.3f ms",
                 timing.gpu_ms_mean, timing.gpu_ms_network_mean, timing.gpu_ms_other_mean);
         }
+        if (timing.inline_path == 1)
+            MenuUi::TextWrapped("Inline path: whole chain on compute");
+        else if (timing.inline_path == 2)
+            MenuUi::TextWrapped("Inline path: segmented (%s)", timing.inline_path_why[0] ? timing.inline_path_why : "?");
         if (timing.aco_requested)
             MenuUi::TextWrapped("ACO requested, effective %u. %s", timing.aco_effective, timing.aco_fallback);
         if (timing.int4_requested)
@@ -596,10 +610,15 @@ static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const 
         bool frameDiag = config->NrFrameDiag.value_or_default();
         if (MenuUi::Checkbox("Per-frame NR diag (PresentMon)", &frameDiag)) config->NrFrameDiag = frameDiag;
         HelpMarker("Default off. Writes NrFrameDiag.log next to the DLL (split and inline) for PresentMon join. No sync GPU waits.");
+        bool gameWait = config->NrGameWaitDiag.value_or_default();
+        if (MenuUi::Checkbox("Game thread wait timing", &gameWait)) config->NrGameWaitDiag = gameWait;
+        HelpMarker("Default off. Needs per-frame NR diag. Timestamps only: game thread Present -> first submit and"
+                   "\nfence waits (gw_* fields in NrFrameDiag.log). No behavior change. INI: NrGameWaitDiag.");
         MenuUi::TextWrapped("%s", AmdBridge::EffectsStatus().c_str());
         if (MenuUi::Button("Reset diagnostics")) {
             config->NrTimingLog = std::optional<bool>{};
             config->NrFrameDiag = std::optional<bool>{};
+            config->NrGameWaitDiag = std::optional<bool>{};
         }
         ImGui::TreePop();
     }
@@ -807,22 +826,91 @@ void RenderMenu(Config* config, float menuResScale)
                            "\nand it does not fix a game that hands us unwrapped command lists (NR would still"
                            "\nalternate with the original frame). It only skips the split-ineligible rejection.");
                 if (inlineMode) {
+                    // GPU-armed handoff and the spin options are Mochizuki-only; lmxxf ignores them.
+                    const bool armedApplies = kind == Backend::Kind::Mochizuki;
+                    bool gpuHandoff = config->NrGpuHandoff.value_or_default();
+                    if (armedApplies) {
+                    if (MenuUi::Checkbox("GPU-armed handoff", &gpuHandoff)) config->NrGpuHandoff = gpuHandoff;
+                    HelpMarker("Default on. Mochizuki inline: the GPU side queue watches for this frame's capture and starts NR"
+                               "\nwithout a CPU round trip. A capture that comes after the watch skips that frame's input copy,"
+                               "\nshows the original frame and resets history. Applies to the next frame. INI: NrGpuHandoff.");
+                    ImGui::Indent();
+                    ImGui::BeginDisabled(!gpuHandoff);
+                    if (MenuUi::TreeNode("Inline spin experiments##nr")) {
+                        auto pick = [](const char* label, CustomOptional<int>& opt, const int* values, const char* const* names, int n) {
+                            int idx = 0; for (int i = 0; i < n; ++i) if (values[i] == opt.value_or_default()) idx = i;
+                            if (MenuUi::Combo(label, &idx, names, n)) opt = values[idx];
+                        };
+                        const int delays[] = {0, 16, 64}; const char* delayNames[] = {"Off", "16 (default)", "64"};
+                        pick("Spin poll delay##nr", config->NrSpinPollDelay, delays, delayNames, 3);
+                        HelpMarker("ALU work between GPU flag polls (game wait and side watch). Default 16 (best in-game result)."
+                                   "\nApplies to the next frame. INI: NrSpinPollDelay.");
+                        const int slices[] = {0, 256, 1024}; const char* sliceNames[] = {"64 (default)", "256", "1024"};
+                        pick("Game wait dispatches##nr", config->NrSpinSlices, slices, sliceNames, 3);
+                        HelpMarker("Experimental. Splits the game-queue inline wait into shorter GPU dispatches (same timeout)."
+                                   "\nApplies to the next frame. INI: NrSpinSlices.");
+                        pick("Side watch dispatches##nr", config->NrWatchSlices, slices, sliceNames, 3);
+                        HelpMarker("Experimental. Splits the side-queue capture watch into shorter dispatches."
+                                   "\nApplies to the next frame. INI: NrWatchSlices.");
+                        const int starts[] = {0, 1, 2, 4, 8}; const char* startNames[] = {"Off (default)", "1", "2", "4", "8"};
+                        pick("Side watch start delay##nr", config->NrWatchStartDelay, starts, startNames, 5);
+                        HelpMarker("Experimental. ALU-only dispatches (followed by a barrier) before the watch starts polling."
+                                   "\nCan delay NR start if the capture comes early. Applies to the next frame. INI: NrWatchStartDelay.");
+                        ImGui::TreePop();
+                    }
+                    ImGui::EndDisabled();
+                    ImGui::Unindent();
+                    if (!gpuHandoff) MenuUi::TextDisabled("Spin options need GPU-armed handoff.");
+                    bool computeConvert = config->NrInlineComputeConvert.value_or_default();
+                    if (MenuUi::Checkbox("Compute-queue colour conversion", &computeConvert))
+                        config->NrInlineComputeConvert = computeConvert;
+                    HelpMarker("Default on. R11G11B10_FLOAT, RGBA8/BGRA8 (UNORM and sRGB) and RGB10A2 colour"
+                               "\nframes convert input and write-back on the compute queue instead of graphics blits,"
+                               "\nso the inline chain is not split across queues."
+                               "\nModel scale below 100% also needs compute model downscale; rescaled motion vectors split it unless compute motion rescale is on."
+                               "\nRebuilds the network for those formats. INI: NrInlineComputeConvert.");
+                    bool nrInlineComputeMotion = config->NrInlineComputeMotion.value_or_default();
+                    if (MenuUi::Checkbox("Compute-queue motion rescale", &nrInlineComputeMotion))
+                        config->NrInlineComputeMotion = nrInlineComputeMotion;
+                    HelpMarker("Default on. With dynamic resolution, motion vectors of another size are"
+                               "\nrescaled by a compute pass (bilinear, like the blit) instead of a graphics blit,"
+                               "\nso the inline chain is not split by them. With 2+ layers, every layer also samples the motion"
+                               "\nvectors in place (no motion blit). Remakes the frame buffers (and the network with 2+ layers)."
+                               "\nINI: NrInlineComputeMotion.");
+                    bool nrInlineComputeDownscale = config->NrInlineComputeDownscale.value_or_default();
+                    if (MenuUi::Checkbox("Compute-queue model downscale", &nrInlineComputeDownscale))
+                        config->NrInlineComputeDownscale = nrInlineComputeDownscale;
+                    HelpMarker("Default on. Model scale below 100%: the frame is filtered down by a compute pass"
+                               "\n(the same taps as the blit) and the answer written back on compute, so the inline chain"
+                               "\nis not split by the downscale. Rebuilds the network when scaled.\nINI: NrInlineComputeDownscale.");
+                    bool nrInlineComputeExport = config->NrInlineComputeExport.value_or_default();
+                    if (MenuUi::Checkbox("Compute-queue first-pass export", &nrInlineComputeExport))
+                        config->NrInlineComputeExport = nrInlineComputeExport;
+                    HelpMarker("Default on. Multi-layer NR exports its first layer by a compute pack"
+                               "\ninto the frame format instead of a blit, so the inline chain is not split by it."
+                               "\nRGBA16F, R11G11B10, RGBA8/BGRA8 UNORM and RGB10A2. Rebuilds the network when exporting.\nINI: NrInlineComputeExport.");
+                    bool nrAdaptiveWaitBudget = config->NrAdaptiveWaitBudget.value_or_default();
+                    if (MenuUi::Checkbox("Adaptive wait budget", &nrAdaptiveWaitBudget))
+                        config->NrAdaptiveWaitBudget = nrAdaptiveWaitBudget;
+                    HelpMarker("Default off. Inline (GPU-armed): size the post-claim GPU wait from a measured iterations/ms rate (target ~4 ms); halve after a cap or abort, grow back after 64 clean waits. Off = fixed cap.\nINI: NrAdaptiveWaitBudget.");
+                    }
+                    const bool armedActive = armedApplies && gpuHandoff;
+                    ImGui::BeginDisabled(armedActive);
                     int backoff = std::clamp(config->NrCaptureBackoff.value_or_default(), 0, 2);
                     const char* backoffChoices[] = {"Exponential 50-5000 us (default)", "Fixed 100 us", "Event (side-queue watch)"};
                     if (MenuUi::Combo("Capture poll backoff##nr", &backoff, backoffChoices, IM_ARRAYSIZE(backoffChoices)))
                         config->NrCaptureBackoff = backoff;
-                    HelpMarker("How often the inline worker re-checks that the game captured NR inputs."
+                    HelpMarker("CPU handoff only (GPU-armed handoff off). How often the inline worker re-checks that the game captured NR inputs."
                                "\nFixed 100 us finds ready inputs sooner at a small CPU/poll cost. Applies to the next frame."
                                "\nEvent: side queue watches the capture flag and a fence event wakes the worker."
                                "\nINI: NrCaptureBackoff (0 exponential, 1 fixed 100 us, 2 event).");
+                    ImGui::EndDisabled();
+                    if (armedActive) MenuUi::TextDisabled("Capture poll backoff is bypassed by GPU-armed handoff.");
                     bool reuse = config->NrInlineReuse.value_or_default();
                     if (MenuUi::Checkbox("Reuse inline recordings", &reuse)) config->NrInlineReuse = reuse;
                     HelpMarker("Default off. Reuses finished per-frame inline objects with identical inputs instead of"
-                               "\ncreating them every frame, so NR can start sooner. Applies to the next frame. INI: NrInlineReuse.");
-                    bool gpuHandoff = config->NrGpuHandoff.value_or_default();
-                    if (MenuUi::Checkbox("GPU-armed handoff", &gpuHandoff)) config->NrGpuHandoff = gpuHandoff;
-                    HelpMarker("Default off. Mochizuki inline: the GPU side queue watches for this frame's capture and starts NR"
-                               "\nwithout a CPU round trip. Missed capture shows the original frame. Applies to the next frame. INI: NrGpuHandoff.");
+                               "\ncreating them every frame, so NR can start sooner. Also applies with GPU-armed handoff."
+                               "\nApplies to the next frame. INI: NrInlineReuse.");
                 }
                 if (isLmxxf && inlineMode) {
                     int slots = std::clamp(config->LmxxfInlineSlots.value_or_default(), 1, 5) - 1;
@@ -907,6 +995,15 @@ void RenderMenu(Config* config, float menuResScale)
                     resetOption(config->NrCaptureBackoff);
                     resetOption(config->NrInlineReuse);
                     resetOption(config->NrGpuHandoff);
+                    resetOption(config->NrSpinPollDelay);
+                    resetOption(config->NrSpinSlices);
+                    resetOption(config->NrWatchSlices);
+                    resetOption(config->NrWatchStartDelay);
+                    resetOption(config->NrInlineComputeConvert);
+                    resetOption(config->NrInlineComputeMotion);
+                    resetOption(config->NrInlineComputeDownscale);
+                    resetOption(config->NrInlineComputeExport);
+                    resetOption(config->NrAdaptiveWaitBudget);
                     SetAllowEnhancedBarriers(config->AllowEnhancedBarriersEffective());
                     resetOption(config->LmxxfEarlyExeWrap);
                     resetOption(config->LmxxfEarlyAnyModuleWrap);

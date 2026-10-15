@@ -14,6 +14,9 @@ RUNTIME = (
     'runtime_alpha', 'runtime_encode', 'runtime_transfer', 'runtime_upscale', 'runtime_prep',
     'runtime_depth', 'cascade_lograt', 'cascade_blur', 'cascade_feed', 'runtime_downscale', 'runtime_taps',
     'runtime_transfer_store', 'runtime_pack_u8', 'runtime_pack_f16', 'runtime_unpack_f16',
+    'runtime_pack_r11', 'runtime_pack_u8_bgra', 'runtime_pack_u10', 'runtime_pack_u10_bgra',
+    # Motion-vector rescale on compute (NrInlineComputeMotion), one module per motion format.
+    'runtime_mv_rescale_rg16f', 'runtime_mv_rescale_rg32f', 'runtime_mv_rescale_rgba16f', 'runtime_mv_rescale_rgba32f',
     # Plan A's colour-format conversion, both directions. The unconvert pass is one module per destination
     # format (PLAN_A_DST_FORMAT is a compile-time storage-image qualifier), and so is the
     # convert pass; ConvertPass::Pipeline::ConvertModule/UnconvertModule name the same set, and a

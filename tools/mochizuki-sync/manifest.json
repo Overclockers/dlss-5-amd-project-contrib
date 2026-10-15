@@ -709,13 +709,89 @@
         "windows/src/core/nr_pipeline_binary.hpp",
         "windows/src/core/nr_runtime.cpp"
       ]
+    },
+    {
+      "feature": "core-stage-timing",
+      "path": "patches/16-core-stage-timing.patch",
+      "files": [
+        "windows/src/core/nr_runtime.cpp",
+        "windows/src/core/nr_runtime.hpp"
+      ]
+    },
+    {
+      "feature": "inline-r11g11b10-compute-convert",
+      "path": "patches/17-inline-r11g11b10-compute-convert.patch",
+      "files": [
+        "windows/src/core/nr_runtime.cpp",
+        "windows/src/core/nr_runtime.hpp"
+      ]
+    },
+    {
+      "feature": "inline-r11g11b10-compute-writeback",
+      "path": "patches/18-inline-r11g11b10-compute-writeback.patch",
+      "files": [
+        "linux/build/build_network.py",
+        "linux/shaders/passes/runtime_alpha.comp",
+        "windows/build/build_network.py",
+        "windows/shaders/passes/runtime_alpha.comp",
+        "windows/src/core/nr_runtime.cpp",
+        "windows/src/core/nr_runtime.hpp"
+      ]
+    },
+    {
+      "feature": "inline-compute-convert-formats",
+      "path": "patches/19-inline-compute-convert-formats.patch",
+      "files": [
+        "linux/build/build_network.py",
+        "linux/shaders/passes/runtime_alpha.comp",
+        "windows/build/build_network.py",
+        "windows/shaders/passes/runtime_alpha.comp",
+        "windows/src/core/nr_runtime.cpp",
+        "windows/src/core/nr_runtime.hpp"
+      ]
+    },
+    {
+      "feature": "compute-motion-rescale",
+      "path": "patches/20-compute-motion-rescale.patch",
+      "files": [
+        "linux/build/build_network.py",
+        "windows/build/build_network.py",
+        "linux/shaders/passes/runtime_mv_rescale.comp",
+        "windows/shaders/passes/runtime_mv_rescale.comp"
+      ]
+    },
+    {
+      "feature": "compute-downscale",
+      "path": "patches/21-compute-downscale.patch",
+      "files": [
+        "windows/src/core/nr_runtime.cpp",
+        "windows/src/core/nr_runtime.hpp"
+      ]
+    },
+    {
+      "feature": "compute-first-pass-export",
+      "path": "patches/22-compute-first-pass-export.patch",
+      "files": [
+        "windows/src/core/nr_runtime.cpp",
+        "windows/src/core/nr_runtime.hpp"
+      ]
+    },
+    {
+      "feature": "multipass-motion-in-place",
+      "path": "patches/23-multipass-motion-in-place.patch",
+      "files": [
+        "windows/src/core/nr_runtime.cpp",
+        "windows/src/core/nr_runtime.hpp"
+      ]
     }
   ],
   "added_files": [
     "linux/shaders/passes/runtime_planA_convert.comp",
     "linux/shaders/passes/runtime_planA_unconvert.comp",
     "windows/shaders/passes/runtime_planA_convert.comp",
-    "windows/shaders/passes/runtime_planA_unconvert.comp"
+    "windows/shaders/passes/runtime_planA_unconvert.comp",
+    "linux/shaders/passes/runtime_mv_rescale.comp",
+    "windows/shaders/passes/runtime_mv_rescale.comp"
   ],
   "source_comment_policy": "omit-sample-address-annotations-v1"
 }

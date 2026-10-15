@@ -16,8 +16,23 @@ static void STDMETHODCALLTYPE TraceBatch(ID3D12CommandQueue* q, UINT n, ID3D12Co
 static int gCaptureBackoff = 0;
 // --gpu-handoff runs every inline frame with NrGpuHandoff=true (side-queue capture watch gates the network).
 static bool gGpuHandoff = false;
+// --poll-delay=N / --spin-slices=N set NrSpinPollDelay / NrSpinSlices on every inline frame.
+static UINT gPollDelay = 0, gSpinSlices = 0, gWatchSlices = 0, gWatchStart = 0; // + --watch-slices=N / --watch-start=N
+// --late-capture=N (needs --gpu-handoff): N long ALU dispatches on the game queue before the input gate,
+// so the side watch expires before the capture. Expect: gate closed, input copies skipped, original
+// frame, history reset, no hang. Only the first inline test runs in this mode.
+static UINT gLateCapture = 0;
+// --late-copy=N (needs --gpu-handoff): N long ALU dispatches on the game queue after the game claimed the
+// input gate, before its input copies, so the side watch expires while the copy is still pending. Expect:
+// gate stays claimed, the side queue holds the network on the GPU until the capture proves the copies
+// done, so the network reads complete input (its private output equals the split baseline); no hang.
+static UINT gLateCopy = 0;
+// --stuck-copy=N (needs --gpu-handoff): like --late-copy but N far exceeds the post-claim wait cap, i.e. the
+// capture never lands within it. Expect: the capped side wait ends, seen=0 gate=1, original frame, history
+// reset (timeout reclaim), resources released, no hang/TDR.
+static UINT gStuckCopy = 0, gAbortMs = 0;
 struct BackoffResources : In::Resources {
-    template<class... A> explicit BackoffResources(A&&... a) : In::Resources(std::forward<A>(a)...) { captureBackoff = gCaptureBackoff; gpuArmed = gGpuHandoff; }
+    template<class... A> explicit BackoffResources(A&&... a) : In::Resources(std::forward<A>(a)...) { captureBackoff = gCaptureBackoff; gpuArmed = gGpuHandoff; spinPollDelay = gPollDelay; spinSlices = gSpinSlices; watchSlices = gWatchSlices; watchStartDelay = gWatchStart; testInputDelay = gLateCapture; testCopyDelay = gLateCopy + gStuckCopy; }
 };
 // --reuse routes every recording through the NrInlineReuse pool (AcquireResources).
 static bool gReuse = false;
@@ -29,7 +44,7 @@ static std::shared_ptr<In::Resources> MakeResources(ID3D12Device* d, ID3D12Resou
     std::lock_guard lock(Sub::RecordingMutex());
     auto r = In::AcquireResources(&gPool, d, s, n, f, w, h, std::move(cached));
     if (r->reused) ++gReuseHits;
-    r->captureBackoff = gCaptureBackoff; r->gpuArmed = gGpuHandoff; return r;
+    r->captureBackoff = gCaptureBackoff; r->gpuArmed = gGpuHandoff; r->spinPollDelay = gPollDelay; r->spinSlices = gSpinSlices; r->watchSlices = gWatchSlices; r->watchStartDelay = gWatchStart; r->testInputDelay = gLateCapture; r->testCopyDelay = gLateCopy + gStuckCopy; return r;
 }
 
 int main(int argc, char** argv) {
@@ -53,6 +68,18 @@ int main(int argc, char** argv) {
     for (int i = 3; i < argc; ++i) if (std::strcmp(argv[i], "--event-backoff") == 0) gCaptureBackoff = 2;
     for (int i = 3; i < argc; ++i) if (std::strcmp(argv[i], "--reuse") == 0) gReuse = true;
     for (int i = 3; i < argc; ++i) if (std::strcmp(argv[i], "--gpu-handoff") == 0) gGpuHandoff = true;
+    for (int i = 3; i < argc; ++i) if (std::strncmp(argv[i], "--poll-delay=", 13) == 0) gPollDelay = UINT(std::atoi(argv[i] + 13));
+    for (int i = 3; i < argc; ++i) if (std::strncmp(argv[i], "--spin-slices=", 14) == 0) gSpinSlices = UINT(std::atoi(argv[i] + 14));
+    for (int i = 3; i < argc; ++i) if (std::strncmp(argv[i], "--watch-slices=", 15) == 0) gWatchSlices = UINT(std::atoi(argv[i] + 15));
+    for (int i = 3; i < argc; ++i) if (std::strncmp(argv[i], "--watch-start=", 14) == 0) gWatchStart = UINT(std::atoi(argv[i] + 14));
+    for (int i = 3; i < argc; ++i) if (std::strncmp(argv[i], "--late-capture=", 15) == 0) gLateCapture = UINT(std::atoi(argv[i] + 15));
+    for (int i = 3; i < argc; ++i) if (std::strncmp(argv[i], "--late-copy=", 12) == 0) gLateCopy = UINT(std::atoi(argv[i] + 12));
+    for (int i = 3; i < argc; ++i) if (std::strncmp(argv[i], "--stuck-copy=", 13) == 0) gStuckCopy = UINT(std::atoi(argv[i] + 13));
+    // --abort-ms=N: post-claim watchdog abort delay (with --stuck-copy: the abort must end the wait, not the cap).
+    for (int i = 3; i < argc; ++i) if (std::strncmp(argv[i], "--abort-ms=", 11) == 0) { gAbortMs = UINT(std::atoi(argv[i] + 11)); In::gClaimAbortMs = gAbortMs; }
+    Require(!gStuckCopy || (gGpuHandoff && !timeoutMode && !gLateCapture && !gLateCopy), "--stuck-copy needs --gpu-handoff alone");
+    Require(!gLateCapture || (gGpuHandoff && !timeoutMode), "--late-capture needs --gpu-handoff without --timeout");
+    Require(!gLateCopy || (gGpuHandoff && !timeoutMode && !gLateCapture), "--late-copy needs --gpu-handoff without --timeout/--late-capture");
     Require(!aco || mochi, "ACO fixture requires Mochizuki");
     const UINT waitSlices = mochi ? In::kWaitSlices : In::kLmxxfWaitSlices;
     const UINT waitIterations = mochi ? In::kWaitIterations : In::kLmxxfWaitIterations;
@@ -199,7 +226,7 @@ int main(int argc, char** argv) {
         ID3D12Resource* sources[] {colour.Get()}; D3D12_RESOURCE_STATES states[] {D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE};
         Check(proxy->BeginInlineState(1, sources, states), "state scope");
         lease = Own::Attach(owner, job.handle, proxy.Get(), resources); Require(bool(lease), "inline ownership");
-        ok(api.RecordInputs(context, job.handle, proxy.Get()), "inline inputs");
+        resources->BeginInputs(proxy.Get()); ok(api.RecordInputs(context, job.handle, proxy.Get()), "inline inputs");
         resources->RecordCapture(proxy.Get()); resources->RecordWait(proxy.Get(), timeoutMode ? 0 : waitSlices, waitIterations);
         ok(api.RecordOutputs(context, job.handle, proxy.Get()), "inline outputs");
         resources->RecordSelect(proxy.Get(), states[0]); proxy->EndInlineState(); lease->ready = true;
@@ -225,14 +252,78 @@ int main(int argc, char** argv) {
             if (complete) break;
             Require(GetTickCount64() < deadline, "inline actual network/worker timeout"); Sleep(1);
         }
-        Require(!owner->failed && resources->Succeeded() != timeoutMode, "actual network/frozen timeout decision");
+        const bool late = gLateCapture != 0;
+        if (gStuckCopy) {
+            Require(!owner->failed, "stuck copy: no runtime failure");
+            UINT seen = 9, gate = 9; Require(resources->ArmedOutcome(seen, gate), "stuck copy: armed outcome readable");
+            std::printf("stuck copy replay=%u seen=%u gate=%u applied=%u\n", replay, seen, gate, unsigned(resources->Succeeded()));
+            Require(seen == 0 && gate == 1, "stuck copy: capped claimed wait expired unseen");
+            UINT aborted = 9, iters = 0; Require(resources->ClaimWaitStats(aborted, iters), "stuck copy: wait stats readable");
+            std::printf("stuck copy abort_channel=%u gen=%u aborted=%u wait_iters=%u\n", unsigned(resources->AbortAvailable()), resources->ClaimGeneration(), aborted, iters);
+            if (gAbortMs) {
+                Require(resources->AbortAvailable(), "stuck copy: CPU-mapped abort word available on this device");
+                Require(aborted == resources->ClaimGeneration(), "stuck copy: watchdog abort (current generation) ended the wait, visible to the GPU");
+                Require(iters < In::kClaimWaitSlices * In::kWaitIterations, "stuck copy: abort ended before the iteration cap");
+            }
+            Require(!resources->Succeeded(), "stuck copy: bypass (network result not applied)");
+            Require(Hash(device.Get(), queue, resources->OutputTexture()) == originalHash, "stuck copy: output is the original frame");
+            std::lock_guard lock(Sub::RecordingMutex());
+            const auto timeouts = owner->inlineTimeouts; owner->ReclaimInlineLocked();
+            Require(owner->inlineTimeouts == timeouts + 1, "stuck copy: reclaimed as timeout (history reset)");
+            resources->HarvestClaim(); std::puts("stuck copy: capped wait ended, original frame, history reset, reclaimed, no hang PASS");
+            lease.reset(); resources.reset(); gPool.clear(); { auto& t = DlssNr::FrameDiag::Claim(); std::printf("claim totals waits=%u aborts=%u caps=%u bypass=%u\n", t.waits.load(), t.aborts.load(), t.caps.load(), t.bypass.load()); Require(t.bypass.load() >= 1 && t.aborts.load() + t.caps.load() >= 1 && (!gAbortMs || t.aborts.load() >= 1), "stuck copy: diag totals count the bypass and its abort/cap"); } std::puts("actual inline runtime PASS"); std::fflush(stdout);
+            TerminateProcess(GetCurrentProcess(), 0);
+        }
+        if (gLateCopy) {
+            // The game's own bounded wait starts after its (late) copies, like the network, so the frame
+            // normally applies; either way the network must have read the completed input.
+            Require(!owner->failed, "late copy: no runtime failure");
+            UINT seen = 9, gate = 9; Require(resources->ArmedOutcome(seen, gate), "late copy: armed outcome readable");
+            const bool applied = resources->Succeeded();
+            const auto network = Hash(device.Get(), queue, static_cast<ID3D12Resource*>(job.private_output));
+            std::printf("late copy replay=%u seen=%u gate=%u applied=%u network=%016llx expected=%016llx\n",
+                        replay, seen, gate, unsigned(applied), network, expected);
+            Require(seen == 1 && gate == 1, "late copy: claimed gate held the network until the capture");
+            Require(network == expected, "late copy: network read the completed input (equals split baseline)");
+            Require(Hash(device.Get(), queue, resources->OutputTexture()) == (applied ? expected : originalHash),
+                    "late copy: output is the network result or, after the game's own timeout, the original");
+            if (!applied) {
+                std::lock_guard lock(Sub::RecordingMutex());
+                const auto timeouts = owner->inlineTimeouts; owner->ReclaimInlineLocked();
+                Require(owner->inlineTimeouts == timeouts + 1, "late copy: game-side timeout reclaimed (history reset)");
+            }
+            std::printf("late copy actual inline replay=%u applied=%u PASS\n", replay, unsigned(applied));
+            continue;
+        }
+        Require(!owner->failed && resources->Succeeded() != (timeoutMode || late), "actual network/frozen timeout decision");
+        if (gGpuHandoff && !timeoutMode) {
+            UINT seen = 9, gate = 9; Require(resources->ArmedOutcome(seen, gate), "armed outcome readable");
+            std::printf("armed outcome replay=%u seen=%u gate=%u late=%u\n", replay, seen, gate, gLateCapture);
+            if (late) Require(seen == 0 && gate == 2, "late capture: gate closed before the game claimed it, copies skipped");
+            else Require(seen == 1 && gate == 1, "armed capture seen after the game claimed the gate");
+        }
+        if (late) {
+            std::lock_guard lock(Sub::RecordingMutex());
+            const auto timeouts = owner->inlineTimeouts; owner->ReclaimInlineLocked();
+            Require(owner->inlineTimeouts == timeouts + 1, "late capture reclaimed as timeout (history reset)");
+        }
         if (!mochi) {
             LmxxfNrTimings physical {sizeof physical}; ok(api.GetTimings(context, &physical), "physical HIP completion");
             Require(physical.valid && physical.frame_id == 2, "side completion cannot precede actual HIP event completion");
         }
-        const auto selected = timeoutMode ? originalHash : expected;
+        const auto selected = timeoutMode || late ? originalHash : expected;
         Require(Hash(device.Get(), queue, resources->OutputTexture()) == selected, "inline output equals selected current-frame source");
         std::printf("%s actual inline replay=%u timeout=%u hash=%016llx PASS\n", mochi ? "Vulkan" : "HIP", replay, timeoutMode, selected);
+    }
+    if (gLateCopy) {
+        std::puts("late copy: claimed gate, network held on the GPU until the copies finished, complete input, no hang PASS");
+        lease.reset(); resources.reset(); gPool.clear(); std::puts("actual inline runtime PASS"); std::fflush(stdout);
+        TerminateProcess(GetCurrentProcess(), 0);
+    }
+    if (gLateCapture) {
+        std::puts("late capture: gate closed, input copies skipped, original frame, history reset, no hang PASS");
+        lease.reset(); resources.reset(); gPool.clear(); std::puts("actual inline runtime PASS"); std::fflush(stdout);
+        TerminateProcess(GetCurrentProcess(), 0); // skip the remaining scenarios (they assume the capture lands)
     }
     // Saturated admission on a completed retained recording must preserve the
     // real mixed game batch, select original, then recover when a slot is free.
@@ -328,7 +419,7 @@ int main(int argc, char** argv) {
             ID3D12Resource* sources[] {colour.Get()}; D3D12_RESOURCE_STATES states[] {D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE};
             Check(list->BeginInlineState(1, sources, states), "continuous state");
             auto nextLease = Own::Attach(owner, next.handle, list.Get(), in); Require(bool(nextLease), "continuous lease");
-            ok(api.RecordInputs(context, next.handle, list.Get()), "continuous inputs");
+            in->BeginInputs(list.Get()); ok(api.RecordInputs(context, next.handle, list.Get()), "continuous inputs");
             in->RecordCapture(list.Get()); in->RecordWait(list.Get(), timeoutMode ? 0 : waitSlices, waitIterations);
             ok(api.RecordOutputs(context, next.handle, list.Get()), "continuous outputs");
             in->RecordSelect(list.Get(), states[0]); nextLease->ready = true;
@@ -419,7 +510,7 @@ int main(int argc, char** argv) {
                     Check(list->BeginInlineState(1, sources, states), "ahead baseline state");
                     recorded = Own::Attach(owner, job.handle, list.Get(), resources);
                     Require(bool(recorded), "ahead baseline lease");
-                    ok(api.RecordInputs(context, job.handle, list.Get()), "ahead baseline inputs");
+                    resources->BeginInputs(list.Get()); ok(api.RecordInputs(context, job.handle, list.Get()), "ahead baseline inputs");
                     resources->RecordCapture(list.Get()); resources->RecordWait(list.Get(), waitSlices, waitIterations);
                     ok(api.RecordOutputs(context, job.handle, list.Get()), "ahead baseline outputs");
                     resources->RecordSelect(list.Get(), states[0]); recorded->ready = true;
@@ -456,7 +547,7 @@ int main(int argc, char** argv) {
                     Check(frames[i].list->BeginInlineState(1, sources, states), "ahead state");
                     frames[i].lease = Own::Attach(owner, job.handle, frames[i].list.Get(), frames[i].resources);
                     Require(bool(frames[i].lease), "ahead lease");
-                    ok(api.RecordInputs(context, job.handle, frames[i].list.Get()), "ahead inputs");
+                    frames[i].resources->BeginInputs(frames[i].list.Get()); ok(api.RecordInputs(context, job.handle, frames[i].list.Get()), "ahead inputs");
                     frames[i].resources->RecordCapture(frames[i].list.Get());
                     frames[i].resources->RecordWait(frames[i].list.Get(), timeoutMode ? 0 : waitSlices, waitIterations);
                     ok(api.RecordOutputs(context, job.handle, frames[i].list.Get()), "ahead outputs");
@@ -557,7 +648,7 @@ int main(int argc, char** argv) {
                 Check(frames[i].list->BeginInlineState(1, sources, states), "stagger state");
                 frames[i].lease = Own::Attach(owner, job.handle, frames[i].list.Get(), frames[i].resources);
                 Require(bool(frames[i].lease), "stagger lease");
-                ok(api.RecordInputs(context, job.handle, frames[i].list.Get()), "stagger inputs");
+                frames[i].resources->BeginInputs(frames[i].list.Get()); ok(api.RecordInputs(context, job.handle, frames[i].list.Get()), "stagger inputs");
                 frames[i].resources->RecordCapture(frames[i].list.Get());
                 frames[i].resources->RecordWait(frames[i].list.Get(), timeoutMode ? 0 : waitSlices, waitIterations);
                 ok(api.RecordOutputs(context, job.handle, frames[i].list.Get()), "stagger outputs");
@@ -610,5 +701,23 @@ int main(int argc, char** argv) {
     }
     owner.reset();
     if (gReuse) std::printf("inline reuse hits=%u\n", gReuseHits);
+    {   // Abort watchdog lifecycle: owned thread, idempotent Stop joins it, Watch restarts it after a Stop.
+        auto& wd = In::AbortWatchdog::Get();
+        In::StopAbortWatchdog(); In::StopAbortWatchdog();
+        Require(!wd.Running() && wd.Pending() == 0, "watchdog stopped");
+        Ptr<ID3D12Fence> armF, sideF;
+        Require(SUCCEEDED(device->CreateFence(1, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&armF))) &&
+                SUCCEEDED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&sideF))), "watchdog fences");
+        auto ch = std::make_shared<In::AbortChannel>(); volatile LONG word = 0; ch->word = &word;
+        wd.Watch(ch, armF.Get(), 1, sideF.Get(), 1, 7, 60000); // armed, never retires, deadline far away
+        Require(wd.Running() && wd.Pending() == 1, "watchdog running");
+        In::StopAbortWatchdog();
+        Require(!wd.Running() && wd.Pending() == 0 && word == 0 && ch.use_count() == 1, "watchdog joined and released");
+        wd.Watch(ch, armF.Get(), 1, sideF.Get(), 1, 8, 1); // restart; abort fires after 1 ms
+        for (int i = 0; i < 500 && word != 8; ++i) Sleep(2);
+        Require(word == 8 && ch->aborts.load() == 1, "watchdog restarted and aborted");
+        In::StopAbortWatchdog();
+        std::puts("abort watchdog stop/join/restart PASS");
+    }
     gPool.clear(); FreeLibrary(dll); std::puts("actual inline runtime PASS"); return 0;
 }

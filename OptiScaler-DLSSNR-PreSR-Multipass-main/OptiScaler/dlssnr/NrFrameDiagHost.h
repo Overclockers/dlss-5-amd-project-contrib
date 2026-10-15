@@ -2,6 +2,7 @@
 // Host-side NrFrameDiag entry points that read OptiScaler Config/State.
 // Standalone tests include only NrFrameDiag.h (core) via the recording headers.
 #include "NrFrameDiag.h"
+#include "NrGameWaitDiag.h"
 #include <Config.h>
 #include <State.h>
 
@@ -19,8 +20,15 @@ inline std::atomic<uint64_t>& PresentSerialAtom()
     return serial;
 }
 
+inline bool GameWaitEnabled()
+{
+    auto* cfg = Config::Instance();
+    return cfg && cfg->NrFrameDiag.value_or_default() && cfg->NrGameWaitDiag.value_or_default();
+}
+
 inline void NotePresent(void* /*swapchain*/) noexcept
 {
+    GameWait::PresentBegin(GameWaitEnabled());
     if (!Enabled()) return;
     PresentSerialAtom().fetch_add(1, std::memory_order_relaxed);
 }
@@ -44,6 +52,12 @@ inline void Begin(Counters& c, const char* backend, uint64_t frameId, unsigned w
         c.aco = cfg->MochizukiAcoMode.value_or_default() ? 1u : 0u;
     }
     if (version) std::snprintf(c.version, sizeof c.version, "%s", version);
+    GameWait::Snapshot gw;
+    if (GameWait::Last(gw)) {
+        c.gw = true; c.gwPresent = gw.present; c.gwWaits = gw.waits; c.gwEcls = gw.ecls;
+        c.gwPresentMs = gw.presentMs; c.gwPresentWallMs = gw.presentWallMs; c.gwBeginQpc = gw.beginQpc; c.gwEndQpc = gw.endQpc; c.gwToEclMs = gw.toEclMs;
+        c.gwToWaitMs = gw.toWaitMs; c.gwWaitMs = gw.waitMs;
+    }
 }
 
 inline void EmitBypass(const char* backend, uint64_t frameId, unsigned slots, unsigned w, unsigned h,

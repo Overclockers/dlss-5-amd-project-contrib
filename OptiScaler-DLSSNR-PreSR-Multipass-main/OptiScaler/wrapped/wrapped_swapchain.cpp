@@ -675,6 +675,8 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::Present(UINT SyncInterval, UIN
         return DXGI_ERROR_DEVICE_REMOVED;
     if ((Flags & DXGI_PRESENT_TEST) == 0)
         DlssNr::FrameDiag::NotePresent(_real);
+    struct GameWaitPresentEnd { bool on; ~GameWaitPresentEnd() { if (on) DlssNr::GameWait::PresentEnd(); } }
+        gameWaitEnd { (Flags & DXGI_PRESENT_TEST) == 0 };
 
 #ifdef USE_LOCAL_MUTEX
     OwnedLockGuard lock(_localMutex, 4);
@@ -1036,6 +1038,10 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::Present1(UINT SyncInterval, UI
 {
     if (_real1 == nullptr)
         return DXGI_ERROR_DEVICE_REMOVED;
+    if ((Flags & DXGI_PRESENT_TEST) == 0)
+        DlssNr::FrameDiag::NotePresent(_real1);
+    struct GameWaitPresentEnd { bool on; ~GameWaitPresentEnd() { if (on) DlssNr::GameWait::PresentEnd(); } }
+        gameWaitEnd { (Flags & DXGI_PRESENT_TEST) == 0 };
 
 #ifdef USE_LOCAL_MUTEX
     OwnedLockGuard lock(_localMutex, 5);

@@ -19,6 +19,9 @@
 
 namespace DlssNr::FrameDiag
 {
+// Armed post-claim wait totals since load (harvested from retired recordings, no GPU sync).
+struct ClaimTotals { std::atomic<unsigned long long> iters {0}; std::atomic<unsigned> waits {0}, aborts {0}, caps {0}, bypass {0}; };
+inline ClaimTotals& Claim() { static ClaimTotals t; return t; }
 inline int64_t Qpc()
 {
     LARGE_INTEGER v {};
@@ -179,6 +182,8 @@ struct Counters
     unsigned captureBackoffUsFinal = 0;
     const char* captureBackoffMode = "-"; // exp | fixed100 | event (inline only)
     bool inlineReuse = false; // recording came from the NrInlineReuse pool
+    unsigned spinPollDelay = 0, spinSlices = 0, watchSlices = 0, watchStartDelay = 0; // inline spin experiments (0 = default)
+    bool adaptiveBudget = false; // NrAdaptiveWaitBudget applied to this frame (inline GPU-armed only)
     const char* handoff = "-"; // inline: cpu (worker discovers capture) | gpu (NrGpuHandoff)
     unsigned waitEnqueueOrderMs = 0;
     unsigned lockWaitMs = 0;
@@ -190,13 +195,20 @@ struct Counters
     int64_t gpuQpc[kGpuStampCount] {}; // GpuStamp points, QPC; 0 = unavailable
     int64_t gpuSideVkDone = 0;         // inline: side queue resumes after the network (Vulkan done as D3D12 sees it)
     float coreGpuMs = 0;               // Mochizuki Vulkan core GPU ms (last sample; excludes bridge copies)
+    float encodeGpuMs = -1;            // inside core: linear-input encode pass (-1: did not run / no sample)
+    float transferGpuMs = -1;          // inside core: transfer (composition / linear decode) pass (-1 likewise)
+    // NrGameWaitDiag: last closed game-thread Present interval (gw = 0 when off).
+    bool gw = false;
+    unsigned long long gwPresent = 0; unsigned gwWaits = 0, gwEcls = 0;
+    long long gwBeginQpc = 0, gwEndQpc = 0;
+    double gwPresentMs = 0, gwPresentWallMs = 0, gwToEclMs = -1, gwToWaitMs = -1, gwWaitMs = 0;
 };
 
 inline void Emit(const Counters& c) noexcept
 {
     if (!c.active) return;
     try {
-        char line[1600];
+        char line[2048];
         const int n = std::snprintf(line, sizeof line,
             "NRFRAME schema=1 backend=%s mode=%s outcome=%s "
             "qpc_freq=%lld qpc_record=%lld qpc_admit=%lld qpc_capture_seen=%lld "
@@ -208,7 +220,8 @@ inline void Emit(const Counters& c) noexcept
             "res=%ux%u aco=%u fg=%d version=%s "
             "cpu_wait_enqueue_ms=%.3f cpu_record_ms=%.3f host_A_capture_to_vk_ms=%.3f host_B_side_ready_ms=%.3f "
             "gpu_capture_ms=%.3f gpu_capture_to_resume_ms=%.3f gpu_core_ms=%.3f gpu_handoff_ms=%.3f "
-            "gpu_capture_to_vkdone_ms=%.3f gpu_vkdone_to_resume_ms=%.3f gpu_writeback_ms=%.3f handoff=%s",
+            "gpu_capture_to_vkdone_ms=%.3f gpu_vkdone_to_resume_ms=%.3f gpu_writeback_ms=%.3f handoff=%s spin_delay=%u spin_slices=%u watch_slices=%u watch_start=%u "
+            "gpu_input_encode_ms=%.3f gpu_transfer_ms=%.3f claim_iters=%llu claim_waits=%u claim_aborts=%u claim_caps=%u armed_bypass=%u adaptive_budget=%u",
             c.backend, c.mode, c.outcome,
             static_cast<long long>(QpcFrequency()),
             static_cast<long long>(c.qpcRecordBegin),
@@ -241,10 +254,19 @@ inline void Emit(const Counters& c) noexcept
             MsBetween(c.gpuQpc[kGpuCapEnd], c.gpuSideVkDone),
             MsBetween(c.gpuSideVkDone, c.gpuQpc[kGpuResume]),
             MsBetween(c.gpuQpc[kGpuResume], c.gpuQpc[kGpuDone]),
-            c.handoff ? c.handoff : "-");
-        if (n <= 0) return;
+            c.handoff ? c.handoff : "-", c.spinPollDelay, c.spinSlices, c.watchSlices, c.watchStartDelay,
+            double(c.encodeGpuMs), double(c.transferGpuMs), Claim().iters.load(), Claim().waits.load(), Claim().aborts.load(), Claim().caps.load(), Claim().bypass.load(),
+            c.adaptiveBudget ? 1u : 0u);
+        if (n <= 0 || n >= int(sizeof line)) return;
+        int len = n;
+        if (c.gw) {
+            const int m = std::snprintf(line + len, sizeof line - size_t(len),
+                " gw_present=%llu gw_begin_qpc=%lld gw_end_qpc=%lld gw_present_ms=%.3f gw_present_wall_ms=%.3f gw_to_ecl_ms=%.3f gw_to_wait_ms=%.3f gw_wait_ms=%.3f gw_waits=%u gw_ecls=%u",
+                c.gwPresent, c.gwBeginQpc, c.gwEndQpc, c.gwPresentMs, c.gwPresentWallMs, c.gwToEclMs, c.gwToWaitMs, c.gwWaitMs, c.gwWaits, c.gwEcls);
+            if (m > 0 && len + m < int(sizeof line)) len += m;
+        }
         const auto path = ModuleDirectory() / L"NrFrameDiag.log";
-        Diagnostics::Append(path, std::string_view(line, size_t(n)), 8ull * 1024 * 1024);
+        Diagnostics::Append(path, std::string_view(line, size_t(len)), 8ull * 1024 * 1024);
     } catch (...) {}
 }
 

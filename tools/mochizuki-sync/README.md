@@ -1,7 +1,7 @@
 # Mochizuki source pin and interface patches
 
 The runtime uses official core/shaders at the full SHA in `manifest.json`, plus
-fourteen explicit feature patches. There are no whole-file preservation overlays.
+twenty-two explicit feature patches. There are no whole-file preservation overlays.
 The host loads our `MochizukiNrRuntime.dll`, which wraps that core; this does not
 claim binary compatibility with an official distributed runtime.
 
@@ -11,7 +11,7 @@ tests\mochizuki\run.cmd source-pin
 ```
 
 The first command reads **Git objects at the pin**, replays the patch series in
-a temporary directory under `exports/`, and compares 563 upstream files and four patch-created Plan A shaders with
+a temporary directory under `exports/`, and compares 563 upstream files and six patch-created shaders (Plan A convert/unconvert and motion rescale) with
 vendor. It rejects missing/extra source paths, patch conflicts and unrecorded
 vendor edits. It normalizes text CRLF only; machine-code records remain opaque.
 It does not fetch, change vendor, advance the pin, build, package or publish.
@@ -35,6 +35,14 @@ Those tests also run in `run.cmd abi`.
 
 | 14 Plan A format conversions | Record the pre-existing local format conversion shaders and recipe additions | Host canonical-format compatibility; explicit patch-created file inventory |
 | 15 Windows 0.0.5 product policy | Ignore external INT4 weight overrides in owned mode; preserve separate-answer output policy | Product configuration and resource ownership |
+| 16 core-stage-timing | Optional diagnostic timestamp pairs around the linear-input encode and transfer pass | Off unless the host sets it per frame; reuses the timing ring, never waits |
+| 17 inline-r11g11b10-compute-convert | Optional B10G11R11 input conversion on compute (copy + runtime_unpack_f16), so such inline frames can keep the whole chain on compute | Off unless RuntimeConfig::compute_convert_r11g11b10; only when the write-back already needs no blit (direct_out / store_native) and model scale is 1; otherwise the blit and its refusal remain |
+| 18 inline-r11g11b10-compute-writeback | When write-back is not direct/store_native, pack the answer through runtime_pack_r11 (r11f_g11f_b10f storage image + copy) so B10G11R11 inline frames keep the whole chain on compute | Same toggle as 15; requires B10G11R11 storage-image support and runtime_pack_r11.spv |
+| 19 inline-compute-convert-formats | Extends 15/16 to RGBA8/BGRA8 (UNORM and sRGB via the UNORM twin) and A2B10G10R10/A2R10G10B10: compute input via runtime_unpack_f16 and write-back via runtime_pack_u8, runtime_pack_u8_bgra, runtime_pack_u10, runtime_pack_u10_bgra into an R32_UINT image + copy; RuntimeConfig::compute_convert_r11g11b10 becomes compute_convert_colour | Off unless RuntimeConfig::compute_convert_colour; a format whose sampled/storage/transfer support or shader is missing keeps its blit and logs the reason once |
+| 20 compute-motion-rescale | New `runtime_mv_rescale.comp` (bilinear, clamp-to-edge; the compute form of the adapter's LINEAR motion blit) and its rg16f/rg32f/rgba16f/rgba32f variants in both `build_network.py` tables | Product-only; used only when the host sets NrInlineComputeMotion on a dynamic-resolution geometry |
+| 21 compute-downscale | `RuntimeConfig::compute_downscale`: model scale below 1 on the compute family when the frame is kept in its own format (runtime_downscale, the blit's own taps) and the full-size answer is stored natively, copied (RGBA32F) or packed on compute (runtime_pack_f16 / the per-format packs) | Off unless the host sets it (NrInlineComputeDownscale); otherwise the downscale blit and its refusal remain |
+| 22 compute-first-pass-export | `RuntimeConfig::compute_export`: with first_pass_output, a compute pack of pass 0 into the frame's format (`first_pass_packed`, `record_first_pack`; runtime_pack_f16/_r11/_u8/_u8_bgra/_u10/_u10_bgra) | Off unless the host sets it (NrInlineComputeExport); other formats keep the host's blit |
+| 23 multipass-motion-in-place | `RuntimeConfig::motion_in_place_passes`: with max_passes > 1, every pass samples the engine motion vectors in place through per-recording sets for the multi-pass pre/post kernels; no motion blit | Off unless the host sets it (NrInlineComputeMotion with 2+ layers); otherwise multi-pass blits the motion as before |
 
 The patches replay sequentially against `manifest.json`'s commit. Patches 02-05
 share header/implementation context, so do not assume their patch files apply
@@ -43,11 +51,12 @@ apply its preceding series in a disposable checkout and reduce the proposal to
 its own API requirements; do not send all local policy changes as one PR.
 
 Subsequent patches in the manifest include the unused `up_shown` removal (07),
-the local 30-layer mode (08). Former patch 09, adapted from Overclockers'
-`60f9202f` in project PR #5, is now covered by the official decoder-tail fix.
-It is dropped from the replay series; its attribution remains in the source history.
+the local 30-layer mode (08). Former patch 09 (aco-decoder-tail-barrier) still does not
+apply on the 0.0.5 pin after patches 01-15; it stays dropped. Official already covers the
+decoder-tail case. Patch 23 also folds the former downscale-convert log tweak that was 22
+on the pre-0.0.5 series.
 
-This fourteen-patch series records the product snapshot; it is not the upstream PR
+This twenty-two-patch series records the product snapshot; it is not the upstream PR
 series. The upstream preparation branch has reverted the ACO, buffer-optimization
 and timing-calculation snapshots and retains only optional interface proposals.
 

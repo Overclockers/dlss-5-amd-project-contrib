@@ -189,6 +189,23 @@ struct RuntimeConfig {
     // separate_answer: do not use store_native; keep a distinct answer image.
     bool compact_transfer = false;
     bool separate_answer = false;
+    // Default off. The listed colour formats (B10G11R11, RGBA8/BGRA8 UNORM and SRGB, A2B10G10R10 /
+    // A2R10G10B10 UNORM) take the compute input conversion and a compute write-back pack instead
+    // of the graphics blits; otherwise the blit path and its refusal remain.
+    bool compute_convert_colour = false;
+    // Model scale below 1 on the compute family: the frame kept in its own format and filtered down by
+    // runtime_downscale (the blit's own taps and arithmetic), and the full-size answer written back by a
+    // compute pack (runtime_pack_*) when it is not stored in the frame's format. Off: the scaled path
+    // refuses compute recording as before.
+    bool compute_downscale = false;
+    // With first_pass_output: also build a compute pack of pass 0 into the frame's own format
+    // (first_pass_packed / record_first_pack), so the host can export it without a blit. Formats
+    // without a pack keep first_pass_packed null.
+    bool compute_export = false;
+    // With max_passes > 1: every pass samples the engine motion vectors in place (as one pass does),
+    // through per-recording sets for the multi-pass pre/post kernels, instead of the LINEAR blit into
+    // the estimator field (a graphics-only command). Off: multi-pass blits the motion as before.
+    bool motion_in_place_passes = false;
     // Optional full-frame RGBA32F of pass 0, recorded before later passes
     // overwrite it. Requires ordinary multi-pass transfer (no native compose,
     // no mask, max_passes >= 2). The image lives as long as the runtime.
@@ -485,6 +502,12 @@ public:
     // Increases only when a timestamp sample is accepted. Hosts use it to avoid
     // counting one GPU sample twice. Zero until the first accepted sample.
     uint64_t gpu_timing_serial() const;
+    // Optional stage timing, off by default (a host diagnostic): a timestamp pair around the
+    // linear-input encode and one around the transfer pass, read with the ring above (never waits).
+    // last_*_ms: the last read slot's stage, -1 when it did not run there or timing is off.
+    void set_stage_timing(bool on);
+    float last_encode_ms() const;
+    float last_transfer_ms() const;
     // Instantaneous network and other parts of the last accepted sample.
     // Other is the core total minus the network. Zero until that sample.
     float last_network_ms() const;
@@ -493,6 +516,12 @@ public:
     // Owned by the runtime. Valid until the runtime is destroyed, including while
     // a recording that writes it is still executing.
     VkImage first_pass_output() const;
+    // RuntimeConfig::compute_export: pass 0 in the frame's format (or its 32-bit copy class, R32_UINT),
+    // GENERAL, for a copy out after record_first_pack; null when not built.
+    VkImage first_pass_packed() const;
+    // Packs the valid w x h of first_pass_output into first_pass_packed on the compute family and leaves
+    // it visible to a transfer read. Does nothing when first_pass_packed is null.
+    void record_first_pack(VkCommandBuffer cmd, uint32_t w, uint32_t h);
     // The preprocess meter as the GPU last left it: {smoothed EV, this frame's
     // target EV}, bias not included. For the log; NaN until it has metered.
     std::pair<float, float> preprocess_meter() const;
