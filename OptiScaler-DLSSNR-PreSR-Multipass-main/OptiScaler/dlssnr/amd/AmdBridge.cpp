@@ -4,6 +4,7 @@
 #include "AwaitingListTracker.h"
 #include "../submission/SubmissionTls.h"
 #include "AmdPreSr.h"
+#include "MotionExtent.h"
 #include "PresentExperimental.h"
 #include "../backend/DanielBackend.h"
 #include "../effects/NrOutputEffects.h"
@@ -702,20 +703,15 @@ bool Evaluate(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* params, ID3D1
         }
     }
     auto haveFlags = params->Get(NVSDK_NGX_Parameter_DLSS_Feature_Create_Flags, &flags) == NVSDK_NGX_Result_Success;
-    if (haveFlags && !(flags & NVSDK_NGX_DLSS_Feature_Flags_MVLowRes) && f.motion)
+    if (f.motion)
     {
-        if (!beforeUpscale)
-        {
-            f.motionWidth = f.width;
-            f.motionHeight = f.height;
-        }
-        else
-        {
-            params->Get(NVSDK_NGX_Parameter_OutWidth, &f.motionWidth);
-            params->Get(NVSDK_NGX_Parameter_OutHeight, &f.motionHeight);
-        }
-        if (!f.motionWidth) f.motionWidth = static_cast<UINT>(f.motion->GetDesc().Width);
-        if (!f.motionHeight) f.motionHeight = f.motion->GetDesc().Height;
+        const auto md = f.motion->GetDesc();
+        const bool fullResMotion = haveFlags && !(flags & NVSDK_NGX_DLSS_Feature_Flags_MVLowRes);
+        // f.width is the output size only after the post-SR rewrite above.
+        const auto motion = DlssNr::DisplayMotionExtent(beforeUpscale, fullResMotion, f.width, f.height,
+                                                       static_cast<unsigned>(md.Width), md.Height);
+        f.motionWidth = motion.width;
+        f.motionHeight = motion.height;
     }
     // Mochizuki's DRS buckets must see every render subrect, including changing
     // extents. Its runtime owns rebuilds and history invalidation for these.
