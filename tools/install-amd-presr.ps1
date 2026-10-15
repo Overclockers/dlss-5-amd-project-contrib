@@ -865,6 +865,26 @@ if ($canMochizuki -and $mochizukiModel -and (Test-Path -LiteralPath (Join-Path $
         Add-WeightProblem 'mochizuki' (-not $chosenModel) $en $zh
     }
     $mochizukiModel = $chosenModel
+    # Install-One never overwrites an existing dlssnr.bin. If we selected a matching
+    # model from outside the game folder, always move the game copy aside — including
+    # when a prior matching int4.bin made the game model look reusable before generation.
+    $gameModelPath = Join-Path $game 'dlssnr-amd/dlssnr.bin'
+    if ($mochizukiModel -and (Test-Path -LiteralPath $gameModelPath -PathType Leaf)) {
+        $chosenFull = [IO.Path]::GetFullPath($mochizukiModel)
+        $gameFull = [IO.Path]::GetFullPath($gameModelPath)
+        if ($chosenFull -ne $gameFull) {
+            $mochizukiStaleGameModel = $gameModelPath
+            if (-not ($mismatches | Where-Object { $_.Data['Model'] -eq $gameModelPath })) {
+                Add-WeightProblem 'mochizuki' $false @(
+                    "  Wrong file: $gameModelPath (game-folder model is not the copy Setup will install)",
+                    "  Setup will use the matching model instead: $mochizukiModel",
+                    '  The wrong game-folder copy will be renamed to dlssnr.bin.mismatch-<time> when Mochizuki is installed.') @(
+                    "  有问题的文件：$gameModelPath（游戏目录中的模型不是本次将安装的副本）",
+                    "  安装程序将改用版本匹配的模型：$mochizukiModel",
+                    '  安装 Mochizuki 时，游戏目录里这个有问题的文件会被改名为 dlssnr.bin.mismatch-<时间>。')
+            }
+        }
+    }
 }
 
 $lmxxfCandidates = @((Join-Path $release 'native-game-tiled-assets'), (Join-Path $Root 'native-game-tiled-assets'),

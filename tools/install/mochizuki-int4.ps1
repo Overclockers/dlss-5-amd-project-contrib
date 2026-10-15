@@ -17,9 +17,10 @@ function Get-MochizukiInt4FileHash([string]$Path) {
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
-# Returns $null when $Existing already holds this package's weights, otherwise the path
-# of a verified candidate in $WorkDir. A conversion failure or hash mismatch throws an
-# exception whose Data['MochizukiInt4Mismatch'] is $true (Expected/Actual/Model set).
+# Returns $null when $Existing already holds this package's weights AND $Model generates
+# the same pin; otherwise the path of a verified candidate in $WorkDir. A conversion
+# failure or hash mismatch throws an exception whose Data['MochizukiInt4Mismatch'] is
+# $true (Expected/Actual/Model set). Matching Existing alone never skips the Model check.
 function New-MochizukiInt4Candidate {
     param([Parameter(Mandatory=$true)][string]$Model,
           [Parameter(Mandatory=$true)][string]$Data,
@@ -33,10 +34,11 @@ function New-MochizukiInt4Candidate {
         }
     }
     $expected = Get-MochizukiInt4ExpectedHash $Tools
-    if ($Existing -and (Test-Path -LiteralPath $Existing -PathType Leaf) -and
-        (Get-MochizukiInt4FileHash $Existing) -eq $expected) {
-        return $null
-    }
+    # Existing matching the pin is not enough: a wrong dlssnr.bin can sit beside a
+    # previously installed matching int4. Always generate from $Model; reuse Existing
+    # only when this model produces the same pin (return $null), else throw mismatch.
+    $existingMatches = [bool]($Existing -and (Test-Path -LiteralPath $Existing -PathType Leaf) -and
+        ((Get-MochizukiInt4FileHash $Existing) -eq $expected))
     $temporary = Join-Path $WorkDir ('.mochizuki-int4-' + [Guid]::NewGuid().ToString('N') + '.tmp')
     $ok = $false
     try {
@@ -55,9 +57,12 @@ function New-MochizukiInt4Candidate {
             throw $error0
         }
         $ok = $true
+        if ($existingMatches) { return $null }
         return $temporary
     } finally {
-        if (-not $ok -and (Test-Path -LiteralPath $temporary)) { Remove-Item -LiteralPath $temporary -Force }
+        if ((-not $ok -or $existingMatches) -and (Test-Path -LiteralPath $temporary)) {
+            Remove-Item -LiteralPath $temporary -Force
+        }
     }
 }
 

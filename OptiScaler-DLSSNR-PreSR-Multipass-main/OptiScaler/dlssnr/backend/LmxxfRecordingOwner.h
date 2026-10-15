@@ -90,8 +90,8 @@ struct SessionOwner
                     LOG_ERROR("NR inline: completion of a submitted recording cannot be proven after {} attempts "
                               "(game_signal=0x{:08X} game_proof=0x{:08X} side_proof=0x{:08X}); its D3D12 resources stay "
                               "allocated until device removal or process exit (abandoned={})",
-                              InlineRecording::Resources::kProofAttempts, static_cast<unsigned>(pending->gameSignalHr),
-                              static_cast<unsigned>(pending->gameProofHr), static_cast<unsigned>(pending->sideProofHr),
+                              InlineRecording::Resources::kProofAttempts, static_cast<unsigned>(pending->GameSignalHr()),
+                              static_cast<unsigned>(pending->GameProofHr()), static_cast<unsigned>(pending->SideProofHr()),
                               abandonedInline.size());
                     if (InlineAbandonLimit())
                         LOG_ERROR("NR inline disabled for this session: {} recordings abandoned without completion proof; "
@@ -567,11 +567,9 @@ inline bool CollectLocked()
         if (!lease->invalidated) { ++it; continue; }
         if (lease->begun) { pending = true; ++it; continue; }
         if (lease->inlineResources && !lease->inlineResources->Complete()) {
-            // Unknown signals cannot gain proof by polling. Keep the pins but
-            // stop a permanent 100 ms timer; later explicit collection can retry.
-            if (lease->inlineResources->RetirementUncertain() && lease->inlineResources->RetryProof()) {
-                pending = true; ++it; continue; // proven; collect once the proof fence completes
-            }
+            // ReclaimInlineLocked already ran RetryProof for in-flight recordings.
+            // Do not burn a second attempt here. Keep pins; do not rearm a permanent timer
+            // while still uncertain; once proven, wait for the proof fence to complete.
             if (!lease->inlineResources->RetirementUncertain()) pending = true;
             ++it; continue;
         }

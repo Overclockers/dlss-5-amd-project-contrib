@@ -409,6 +409,9 @@ cbuffer Size : register(b0) { uint width; uint height; }
         return game && sideOk;
     }
     bool ProofExhausted() const { return RetirementUncertain() && proofAttempts >= kProofAttempts && !DeviceLost(); }
+    HRESULT GameSignalHr() const { return gameSignalHr; }
+    HRESULT GameProofHr() const { return gameProofHr; }
+    HRESULT SideProofHr() const { return sideProofHr; }
     // Set under RecordingMutex from the lease that admitted this recording.
     uint64_t activityToken = 0;
     // Filled when NrFrameDiag is on; RecordingOwner / backends emit on reclaim.
@@ -467,7 +470,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
     void GameSubmitted(ID3D12Fence* fence, UINT64 value, HRESULT hr) {
         if (FAILED(hr) || !fence || !value || value == UINT64_MAX) {
             uncertain = true; gameSignalHr = FAILED(hr) ? hr : E_UNEXPECTED;
-            TryProveGame();
+            RetryProof(); // counts toward kProofAttempts (no free TryProveGame)
             return;
         }
         gameFence = fence; gameValue = value;
