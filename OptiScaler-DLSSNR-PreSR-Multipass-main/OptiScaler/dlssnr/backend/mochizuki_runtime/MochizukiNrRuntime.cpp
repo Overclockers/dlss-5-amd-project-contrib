@@ -1991,6 +1991,8 @@ struct Job
     bool meter = false;
     ID3D12Resource* exposureTexture {};
     D3D12_RESOURCE_STATES exposureState {};
+    float exposureFactor = 1.f;
+    MochizukiAutoExposure::Probe::Ticket meterTicket, texelTicket;
 };
 
 // The handle PrepareFrame hands out for job generation gen: odd, so never null and never a pointer.
@@ -2334,7 +2336,7 @@ struct Recording
     FrameBuffers buffers;
     std::shared_ptr<ProductRuntime> network;
     NetworkKey net;
-    Microsoft::WRL::ComPtr<ID3D12Resource> colour, motion;
+    Microsoft::WRL::ComPtr<ID3D12Resource> colour, motion, exposureTexture;
     Microsoft::WRL::ComPtr<ID3D12Fence> tail;
     Microsoft::WRL::ComPtr<ID3D12CommandQueue> executingQueue;
     uint64_t tailValue = 0, executions = 0;
@@ -5954,6 +5956,7 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
             float renoExposure = 0.f;
             ID3D12Resource* exposureTexture = nullptr;
             D3D12_RESOURCE_STATES exposureState {};
+            float exposureFactor = 1.f;
             {
                 std::lock_guard lock(s->controlsMutex);
                 model = s->controls.model;
@@ -5974,6 +5977,7 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
                 renoExposure = s->exposureTexture ? s->textureExposure.load(std::memory_order_relaxed) : 0.f;
                 if (!(renoExposure > 0.f)) renoExposure = s->gameExposure.load(std::memory_order_relaxed);
                 exposureState = s->exposureTextureState;
+                exposureFactor = s->exposureScale / s->exposurePre;
                 maxPassesSetting = s->controls.maxPasses;
                 drsMode = s->controls.drsMode;
                 compactTransfer = s->controls.compactTransfer;
@@ -6147,6 +6151,7 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
             next.afterUpscale = (info->flags & MOCHIZUKI_NR_FRAME_FLAG_AFTER_UPSCALE) != 0;
             next.renoExposure = renoExposure;
             next.exposureTexture = exposureTexture;
+            next.exposureFactor = exposureFactor;
             next.exposureState = exposureState;
             s->infoWhite.store(white, std::memory_order_relaxed);
             if (mf.vk)
@@ -6219,23 +6224,17 @@ int32_t CoreRecordInputs(void* context, void* job, void* command_list)
                      // later once that tail has passed - nothing here waits on the GPU. Everything here runs under
                      // jobMutex (the lock above), so the probes and meterIdle need no lock of their own.
                      float value = 0.f;
-                     if (s->gameTexel.Poll(s->previousTail.Get(), s->previousTailValue, &value))
+                     if (s->gameTexel.Poll(&value))
                      {
-                         float pre = 1.f, scale = 1.f;
-                         {
-                             std::lock_guard controls(s->controlsMutex);
-                             pre = s->exposurePre;
-                             scale = s->exposureScale;
-                         }
-                         const float e = value * scale / pre;
+                         const float e = value;
                          s->textureExposure.store(std::isfinite(e) && e > 0.f ? e : 0.f, std::memory_order_relaxed);
                      }
-                     if (s->exposure.Poll(s->previousTail.Get(), s->previousTailValue, &value))
+                     if (s->exposure.Poll(&value))
                          s->meteredExposure.store(value, std::memory_order_relaxed);
                      if (j.exposureTexture)
                      {
                          // The game's own level wins; the meter would be ignored work.
-                         s->gameTexel.RecordTexel(c, j.exposureTexture, j.exposureState);
+                         s->gameTexel.RecordTexel(c, j.exposureTexture, j.exposureState, j.texelTicket, j.exposureFactor);
                          s->meterIdle = 0;
                          s->meteredExposure.store(0.f, std::memory_order_relaxed);
                      }
@@ -6250,7 +6249,7 @@ int32_t CoreRecordInputs(void* context, void* job, void* command_list)
                      // The meter can pause (a colour image it cannot read, no free slot, a recording that has not
                      // published a newer tail yet). After a second without a measurement the manual white point is
                      // back in charge; it resumes by itself as soon as a measurement lands again.
-                     else if (s->exposure.Record(c, j.colour, j.colourState, j.width, j.height))
+                     else if (s->exposure.Record(c, j.colour, j.colourState, j.width, j.height, j.meterTicket))
                          s->meterIdle = 0;
                      else if (++s->meterIdle == Session::kMeterIdleFrames)
                      {

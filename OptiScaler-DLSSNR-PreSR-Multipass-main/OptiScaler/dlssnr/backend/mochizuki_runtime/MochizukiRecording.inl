@@ -76,6 +76,7 @@ int32_t PrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfNrJob
         r->frameId = info->frame_id;
         r->colour = s->job.colour;
         r->motion = s->job.motion;
+        r->exposureTexture = s->job.exposureTexture;
         r->network = s->runtime;
         r->net = s->net;
         r->inlineExecution = inlineExec;
@@ -167,6 +168,8 @@ int32_t BeginRecordingExecution(void* context, void* token, void* queue)
     if (s->previousTail && FAILED(q->Wait(s->previousTail.Get(), s->previousTailValue)))
         return Fail(LMXXF_NR_FAILED, "Begin: previous consumer wait failed");
     r->executingQueue = q;
+    s->exposure.Begin(r->job.meterTicket);
+    s->gameTexel.Begin(r->job.texelTicket);
     r->job.enqueued = false;
     if (r->executions++) r->job.reset = true; // A replay is a history discontinuity.
     if (!r->inlineExecution) {
@@ -269,6 +272,13 @@ int32_t EndRecordingExecution(void* context, void* token, void* queue, uint32_t 
         }
         r->tail = f;
         r->tailValue = value;
+        // Do not publish measurements for executions that never enqueued. Legacy GPU-armed mode
+        // can still enqueue after a missed capture: this check alone does not certify its predicated
+        // measurement or input contents. See docs/architecture/nr-capture-proof-deferral.md.
+        if (r->job.enqueued) {
+            s->exposure.Submitted(r->job.meterTicket, f, value);
+            s->gameTexel.Submitted(r->job.texelTicket, f, value);
+        }
         s->previousTail = f;
         s->previousTailValue = value;
     }

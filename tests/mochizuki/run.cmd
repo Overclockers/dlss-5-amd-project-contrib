@@ -21,11 +21,14 @@ if /i "%~1"=="source-pin" (
 )
 call tests\_lib\msvc-env.cmd || exit /b 1
 if not exist exports\mochizuki-tests mkdir exports\mochizuki-tests
+if /i "%~1"=="exposure-recording" goto exposurerecording
 if /i "%~1"=="abi" call :acounit || exit /b 1
+if /i "%~1"=="abi" call :exposurerecording || exit /b 1
 if /i "%~1"=="aco-unit" goto acounit
 if /i "%~1"=="windows005" goto windows005
 if /i "%~1"=="inline" goto inline
 if /i "%~1"=="inline-armed" goto inline
+if /i "%~1"=="inline-proof" goto inline
 if /i "%~1"=="aco-inline" goto inline
 if /i "%~1"=="aco-temporal" goto acotemporal
 if /i "%~1"=="hdr-shader" goto hdrshader
@@ -65,6 +68,11 @@ exit /b %errorlevel%
 
 :splitretain
 exports\mochizuki-tests\runtime.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" --split-retain
+exit /b %errorlevel%
+
+:exposurerecording
+cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /I OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler tests/mochizuki/exposure_recording.cpp /Foexports/mochizuki-tests/exposure_recording.obj /Feexports/mochizuki-tests/exposure_recording.exe /link d3d12.lib dxgi.lib d3dcompiler.lib || exit /b 1
+exports\mochizuki-tests\exposure_recording.exe
 exit /b %errorlevel%
 
 :passswitch
@@ -151,6 +159,13 @@ set "INCLUDE=%INCLUDE%;%CD%"
 set "MOCHI_INLINE_RUNTIME=%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll"
 if not "%~2"=="" set "MOCHI_INLINE_RUNTIME=%~f2"
 cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /I OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/include tests/lmxxf/nr_inline_runtime_gpu.cpp /Foexports/mochizuki-tests/nr_inline_runtime_gpu.obj /Feexports/mochizuki-tests/nr_inline_runtime_gpu.exe /link d3d12.lib dxgi.lib dxguid.lib d3dcompiler.lib OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/library/detours/detours.lib || exit /b 1
+if /i "%~1"=="inline-proof" (
+  for %%N in (1 2) do (
+    exports\mochizuki-tests\nr_inline_runtime_gpu.exe "%MOCHI_INLINE_RUNTIME%" "%CD%\exports\mochizuki-runtime" --mochizuki --gpu-handoff --poll-delay=16 --signal-proof=%%N
+    if errorlevel 1 exit /b 1
+  )
+  exit /b 0
+)
 rem Production inline defaults (NrGpuHandoff=true, NrSpinPollDelay=16), then a capture that lands
 rem after the side watch: the input gate must close, skip the copies and select the original frame.
 for %%M in ("" "--timeout" "--ahead" "--large --temporal") do (

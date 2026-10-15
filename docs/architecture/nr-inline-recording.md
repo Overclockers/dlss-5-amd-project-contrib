@@ -25,6 +25,14 @@ owned by that recording until completion and are never reused across fence value
 Sampling backoff uses a private high-resolution waitable timer (ordinary timer
 fallback), without changing the global timer period. This avoids 50-us sleeps
 turning into whole Windows timer ticks.
+
+Mochizuki's default `NrGpuHandoff` submits a bounded GPU capture watch and then
+prequeues the network without CPU result verification. Cap/abort still launches the
+network; its output is discarded and history reset is requested at reclaim. This
+retains a known unfinished-input/history risk by explicit product decision after the
+CPU verification fix regressed sustained 1440p throughput. See the
+[capture-proof deferral](nr-capture-proof-deferral.md) for evidence, dormant code,
+recovery instructions and research stop criteria. CPU capture mode still verifies input.
 Enqueue ordering uses a condition variable notified after the preceding runtime End.
 The worker acquires its enqueue turn **before** sampling capture. This applies to
 both lmxxf and Mochizuki: ahead workers must not flood the shared side queue with
@@ -33,7 +41,12 @@ Order failure skips capture entirely and reports `inline order`; capture failure
 after admission reports `inline capture`. Failure still publishes a fresh side
 tail, and neither path releases a reservation without the actual game tail.
 
-After observing capture, the worker calls the current recording ABI's Enqueue on
+A failed game tail signal may be replaced by a later signal on the same queue. That
+certificate is forwarded to runtime End; if it is not available yet, End and the enqueue
+turn stay deferred through bounded collection retries. End is called only once. Failure
+after the proof budget is exhausted still retains uncertain resources.
+
+After capture verification (CPU mode) or watch submission (GPU-armed mode), the worker calls the current recording ABI's Enqueue on
 the same-device side compute queue. Existing HIP/Vulkan external-fence ordering
 remains: side queue input Signal, network wait/run/signal, side queue output Wait.
 For lmxxf, the same compute queue first executes the recording's private pre-list

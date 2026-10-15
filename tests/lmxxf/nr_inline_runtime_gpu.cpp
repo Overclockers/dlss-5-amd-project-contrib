@@ -2,6 +2,7 @@
 #include <wrl/client.h>
 #include <chrono>
 #include <thread>
+#include "queue_faults.h"
 #include "OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/dlssnr/backend/LmxxfRecordingOwner.h"
 #include "OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/dlssnr/backend/mochizuki_runtime/MochizukiNrApi.h"
 template<class T> using Ptr = Microsoft::WRL::ComPtr<T>;
@@ -31,6 +32,7 @@ static UINT gLateCopy = 0;
 // capture never lands within it. Expect: the capped side wait ends, seen=0 gate=1, original frame, history
 // reset (timeout reclaim), resources released, no hang/TDR.
 static UINT gStuckCopy = 0, gAbortMs = 0;
+static unsigned gSignalProofFailures = 0;
 struct BackoffResources : In::Resources {
     template<class... A> explicit BackoffResources(A&&... a) : In::Resources(std::forward<A>(a)...) { captureBackoff = gCaptureBackoff; gpuArmed = gGpuHandoff; spinPollDelay = gPollDelay; spinSlices = gSpinSlices; watchSlices = gWatchSlices; watchStartDelay = gWatchStart; testInputDelay = gLateCapture; testCopyDelay = gLateCopy + gStuckCopy; }
 };
@@ -77,6 +79,7 @@ int main(int argc, char** argv) {
     for (int i = 3; i < argc; ++i) if (std::strncmp(argv[i], "--stuck-copy=", 13) == 0) gStuckCopy = UINT(std::atoi(argv[i] + 13));
     // --abort-ms=N: post-claim watchdog abort delay (with --stuck-copy: the abort must end the wait, not the cap).
     for (int i = 3; i < argc; ++i) if (std::strncmp(argv[i], "--abort-ms=", 11) == 0) { gAbortMs = UINT(std::atoi(argv[i] + 11)); In::gClaimAbortMs = gAbortMs; }
+    for (int i = 3; i < argc; ++i) if (std::strncmp(argv[i], "--signal-proof=", 15) == 0) gSignalProofFailures = unsigned(std::atoi(argv[i] + 15));
     Require(!gStuckCopy || (gGpuHandoff && !timeoutMode && !gLateCapture && !gLateCopy), "--stuck-copy needs --gpu-handoff alone");
     Require(!gLateCapture || (gGpuHandoff && !timeoutMode), "--late-capture needs --gpu-handoff without --timeout");
     Require(!gLateCopy || (gGpuHandoff && !timeoutMode && !gLateCapture), "--late-copy needs --gpu-handoff without --timeout/--late-capture");
@@ -235,6 +238,11 @@ int main(int argc, char** argv) {
     }
     for (unsigned replay = 0; replay < 2; ++replay) {
         auto* queue = replay ? other.Get() : game.Get();
+        Ptr<ID3D12CommandQueue> faultQueue;
+        if (gSignalProofFailures) {
+            faultQueue.Attach(new SignalFailQueue(queue, int(gSignalProofFailures), gGpuHandoff ? 1u : 0u));
+            queue = faultQueue.Get(); // pass arm Signal, then fail the actual tail / first proof Signal
+        }
         if (replay == 0) {
             Ptr<ID3D12CommandAllocator> tailAllocator; Ptr<ID3D12GraphicsCommandList> tailList;
             Check(device->CreateCommandAllocator(q.Type, IID_PPV_ARGS(&tailAllocator)), "mixed batch allocator");
@@ -266,11 +274,13 @@ int main(int argc, char** argv) {
                 Require(iters < In::kClaimWaitSlices * In::kWaitIterations, "stuck copy: abort ended before the iteration cap");
             }
             Require(!resources->Succeeded(), "stuck copy: bypass (network result not applied)");
+            // This legacy path tests output fallback/reclamation only. The network still launches;
+            // it does NOT prove unfinished-input or subsequent-history safety (see the deferral doc).
             Require(Hash(device.Get(), queue, resources->OutputTexture()) == originalHash, "stuck copy: output is the original frame");
             std::lock_guard lock(Sub::RecordingMutex());
             const auto timeouts = owner->inlineTimeouts; owner->ReclaimInlineLocked();
             Require(owner->inlineTimeouts == timeouts + 1, "stuck copy: reclaimed as timeout (history reset)");
-            resources->HarvestClaim(); std::puts("stuck copy: capped wait ended, original frame, history reset, reclaimed, no hang PASS");
+            resources->HarvestClaim(); std::puts("stuck copy: capped wait ended, legacy network enqueue, original frame, history reset, reclaimed; input safety NOT certified PASS");
             lease.reset(); resources.reset(); gPool.clear(); { auto& t = DlssNr::FrameDiag::Claim(); std::printf("claim totals waits=%u aborts=%u caps=%u bypass=%u\n", t.waits.load(), t.aborts.load(), t.caps.load(), t.bypass.load()); Require(t.bypass.load() >= 1 && t.aborts.load() + t.caps.load() >= 1 && (!gAbortMs || t.aborts.load() >= 1), "stuck copy: diag totals count the bypass and its abort/cap"); } std::puts("actual inline runtime PASS"); std::fflush(stdout);
             TerminateProcess(GetCurrentProcess(), 0);
         }
@@ -296,6 +306,18 @@ int main(int argc, char** argv) {
             continue;
         }
         Require(!owner->failed && resources->Succeeded() != (timeoutMode || late), "actual network/frozen timeout decision");
+        if (gSignalProofFailures) {
+            Require(!lease->begun && !lease->runtimeRetirementUncertain && owner->inlineEnqueueOrder.empty(),
+                    "actual runtime accepted the recovered End certificate");
+            Require(Hash(device.Get(), queue, resources->OutputTexture()) == expected, "proof recovery preserves image");
+            proxy.Reset(); Own::Collect();
+            Require(lease->job == nullptr, "actual runtime collected the recovered execution");
+            auto next = prepare(nullptr, 500);
+            ok(api.InvalidateRecording(context, next.handle), "proof recovery invalidates new recording");
+            ok(api.CollectRecording(context, next.handle), "proof recovery collects new recording");
+            std::printf("ACTUAL_RUNTIME_PROOF_OK failed_signals=%u recovered End, collect, next PrepareFrame\n", gSignalProofFailures);
+            std::fflush(stdout); TerminateProcess(GetCurrentProcess(), 0);
+        }
         if (gGpuHandoff && !timeoutMode) {
             UINT seen = 9, gate = 9; Require(resources->ArmedOutcome(seen, gate), "armed outcome readable");
             std::printf("armed outcome replay=%u seen=%u gate=%u late=%u\n", replay, seen, gate, gLateCapture);

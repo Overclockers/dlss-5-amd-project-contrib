@@ -24,6 +24,7 @@ static void ReportFailure(const Own::SessionOwner::Failure& failure) noexcept {
 }
 struct Runtime {
     unsigned invalidated=0,collected=0,enqueueFailures=0,ended=0,begins=0,resets=0;
+    int32_t endStatus=E_PENDING; void* endFence=nullptr; uint64_t endValue=0;
     static int32_t Invalidate(void* context,void*) {++static_cast<Runtime*>(context)->invalidated;return LMXXF_NR_OK;}
     static int32_t Collect(void* context,void*) {++static_cast<Runtime*>(context)->collected;return LMXXF_NR_OK;}
     static int32_t Reset(void* context) {++static_cast<Runtime*>(context)->resets;return LMXXF_NR_OK;}
@@ -33,7 +34,11 @@ struct Runtime {
     static int32_t Error(char* out,uint32_t size) {
         if(size)std::snprintf(out,size,"injected network enqueue failure");return LMXXF_NR_OK;
     }
-    static int32_t End(void* context,void*,void*,uint32_t,void*,uint64_t,int32_t) {++static_cast<Runtime*>(context)->ended;return LMXXF_NR_OK;}
+    static int32_t End(void* context,void*,void*,uint32_t flags,void* fence,uint64_t value,int32_t status) {
+        auto& r=*static_cast<Runtime*>(context);++r.ended;r.endStatus=status;r.endFence=fence;r.endValue=value;
+        // Match both real runtimes: an End with submitted work and no certificate is terminal, not retryable.
+        return flags && (FAILED(status)||!fence||!value) ? LMXXF_NR_UNAVAILABLE : LMXXF_NR_OK;
+    }
 };
 
 int main() try {
@@ -343,6 +348,31 @@ int main() try {
     }
     drain(owner->inlinePipelines->sideQueue.Get());Require(sideFailed->Complete(),"side proof completes");
     std::puts("INLINE_RETRY_PROOF_OK flaky game and side signals proven by bounded retries");
+    // Exercise the lease's actual End path, not just Resources::Complete. End must see the
+    // recovered certificate, immediately or after collection retries, and run exactly once.
+    for (int failures : {0, 2}) {
+        Runtime proofRuntime;
+        auto proofOwner=std::make_shared<Own::SessionOwner>();proofOwner->api=owner->api;proofOwner->context=&proofRuntime;
+        Ptr<ID3D12CommandQueue> proofQueue;proofQueue.Attach(new SignalFailQueue(game.Get(),failures));
+        auto frame=makeResources();frame->BeforeExecute(proofQueue.Get());frame->NetworkQueued(false);
+        auto job=std::make_shared<Own::Lease>(proofOwner,reinterpret_cast<void*>(uintptr_t(400+failures)),Sub::RecordingIdentity{});
+        job->inlineResources=frame;job->begun=job->ready=job->inlineEnqueueFinished=true;
+        job->inlineResetSerial=1;proofOwner->inlineInFlight.push_back(frame);proofOwner->NoteInlineEnqueue(job->job);
+        Sub::RecordingExecution e{};e.serial=1;e.queue=proofQueue.Get();e.producerSubmitted=true;e.status=E_FAIL;
+        {std::lock_guard lock(Sub::RecordingMutex());Own::Registry().push_back(job);job->Executed(e);}
+        if(failures)Require(proofRuntime.ended==0&&job->begun,"End deferred while proof is unavailable");
+        const auto until=GetTickCount64()+5000;
+        for(;;){
+            {std::lock_guard lock(Sub::RecordingMutex());Own::CollectLocked();if(!job->begun)break;}
+            Require(GetTickCount64()<until,"deferred End proof recovery");Sleep(1);
+        }
+        Require(proofRuntime.ended==1&&SUCCEEDED(proofRuntime.endStatus)&&proofRuntime.endFence&&proofRuntime.endValue,
+            "real End contract receives recovered successful certificate exactly once");
+        Require(!proofOwner->failed&&proofOwner->inlineEnqueueOrder.empty(),"recovered End advances enqueue head without poisoning runtime");
+        drain(game.Get());drain(frame->SideQueue());
+        {std::lock_guard lock(Sub::RecordingMutex());job->Invalidated(job->identity);Own::CollectLocked();Require(!job->job,"recovered End collects");}
+    }
+    std::puts("INLINE_RUNTIME_PROOF_OK immediate and deferred End receive recovered fence/status, exactly once");
     // Truly unprovable: every Signal on the game queue fails. Bounded retries, then abandoned
     // outside the slot count; the collection timer is not rearmed forever.
     auto broken=new SignalFailQueue(game.Get());Ptr<ID3D12CommandQueue> brokenGame;brokenGame.Attach(broken);

@@ -72,6 +72,24 @@ class LocalPackageTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(b'Mochizuki build script missing', result.stdout)
 
+    def test_native_stderr_uses_exit_code_and_keeps_log(self):
+        # Run the actual helper with Windows PowerShell 5.1; a source-text check would miss this bug.
+        source = SCRIPT.read_text(encoding='utf-8-sig')
+        helper = source[source.index('function Invoke-LoggedNative'):source.index('\ntry {')]
+        for code in (0, 23):
+            log = self.root / f'native-{code}.log'
+            fixture = self.root / f'native-{code}.ps1'
+            fixture.write_text("$ErrorActionPreference = 'Stop'\n" + helper +
+                "\ntry { Invoke-LoggedNative -Executable $env:ComSpec "
+                f"-Arguments @('/d','/c','echo compiler-warning 1>&2 & exit /b {code}') "
+                f"-Log '{log}' -Failure 'Native failed'; exit 0 " +
+                "} catch { Write-Host $_.Exception.Message; exit 1 }", encoding='utf-8-sig')
+            result = subprocess.run([str(PS), '-NoProfile', '-File', str(fixture)], capture_output=True, timeout=30)
+            self.assertEqual(result.returncode, 0 if code == 0 else 1, result.stdout + result.stderr)
+            self.assertIn('compiler-warning', log.read_text(encoding='utf-16'))
+            if code:
+                self.assertIn(b'exit 23', result.stdout)
+
 
 if __name__ == '__main__':
     unittest.main()

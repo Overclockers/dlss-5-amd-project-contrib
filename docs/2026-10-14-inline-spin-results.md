@@ -1,5 +1,7 @@
 # NR inline 测试结果汇总（2026-10-14，燕云 1440p，RX 9070 XT）
 
+> 2026-10-15 决策更新：新增CPU完成核验造成1440p多槽约8–12%吞吐回退，用户决定暂缓该修复并恢复原GPU-armed预提交行为。cap/abort后仍launch的输入竞争与后续history风险未解决；不得以输出丢弃宣称安全。保存代码、归因、无效方案及恢复研究止步线见[输入核验暂缓记录](architecture/nr-capture-proof-deferral.md)。下列旧游戏数据不是本次最终源码的游戏验收。
+
 > 范围：只针对这台 RX 9070 XT、燕云当前测试场景。每个设置一般只有一段约 60 秒录制，没有交替复测；同包同设置的跨局 GPUBusy 波动可达 ~0.46 ms（21 vs 22）。下面的排名和因果结论都只代表**本轮观察**。
 
 ## 0. 结论（本轮收尾）
@@ -119,7 +121,7 @@
 
 ## Post-claim wait cap (always on)
 
-The armed side-queue wait after a claimed input gate (op 14) is now bounded: kClaimWaitSlices = 4 x kWaitSlices dispatches of kWaitIterations polls, each exiting at once after the capture lands. If the capture never lands, the frame records unseen, publishes bypass (original frame, timeout reclaim = history reset). The network still executes behind it but its output is discarded. Test: run.cmd inline-armed adds --stuck-copy=1024 (seen=0 gate=1, original, reclaimed, PASS); --late-copy=64 still applies with network == split baseline.
+The armed side-queue wait after a claimed input gate (op 14) is bounded: kClaimWaitSlices = 4 x kWaitSlices dispatches of kWaitIterations polls. Following the 2026-10-15 product decision, network enqueue remains asynchronous even after cap/abort; op 9 selects original when unseen, and reclaim requests history reset. This does not certify unfinished-input or subsequent-history safety. The CPU-verification fix and zero-enqueue regression assertion are archived, not active. See [capture-proof deferral](architecture/nr-capture-proof-deferral.md).
 
 
 ## B10G11R11 compute write-back (runtime_pack_r11)
@@ -141,3 +143,10 @@ Items 3-5 and NrInlineComputeConvert default on since 2026-10-15 (validated in E
 | C | NrAdaptiveWaitBudget | Adaptive wait budget | Post-claim wait slices follow a GPU-timed iterations/ms EMA (target ~4 ms, 8..256 slices); halve on cap/abort, grow after 64 clean waits |
 
 Known gaps: multi-layer motion in place needs NrInlineComputeMotion (patch 21). Adaptive budget data is read on retirement only (no CPU wait). The timed span includes early-out dispatches after the capture arrives, so the rate is a slight underestimate (conservative cap).
+
+## 2026-10-15 待办与补充（E33 整链 compute 复测后）
+
+- **下一步：按 GPU 计时自动选自旋档位。** 目前 Game wait dispatches 16/256/1024 要按游戏手动选（燕云 poll16 最好，E33 要 256/1024）。改为运行时依据 GPU 时间戳自动选择，不再靠手调；仅作用于 inline，不影响 split。尚未开始。
+- **E33 最新数据（1080p，四个开关全开，整链在 compute 上）：** split 73.9 fps（p50 13.5 / p95 14.8 ms）；inline 1 层约 69 fps（p50 14.2–14.3 / p95 19.6–20.1 ms）；inline 2 层约 47 fps（p50 20.7 / p95 30–31 ms，网络本身约 13 ms）。第 10 节同为 E33，是这几个开关上线前（颜色转换仍走图形队列 blit、链路拆三段）的数据。
+- **inline p95 比 split 高约 5 ms（偶发卡顿）：** 用户决定暂不追。中位数只差约 0.7 ms。
+- Adaptive wait budget 在 E33 无可见效果（claim_caps/claim_aborts 均为 0），维持默认关。

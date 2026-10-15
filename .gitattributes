@@ -8,6 +8,8 @@
 tools/lmxxf-sync/patches/*.patch text eol=lf
 # Unified patch blank context lines carry a required space; git apply checks source whitespace.
 tools/mochizuki-sync/patches/*.patch text eol=lf whitespace=-blank-at-eol
+# Dormant research patches must remain directly applicable after a Windows checkout.
+docs/research/nr-capture-proof/*.patch text eol=lf whitespace=-blank-at-eol
 
 # Frozen upstream fixtures: their raw SHA256 must survive a Windows checkout.
 tests/sync/fixtures/lmxxf/*.upstream.* text eol=lf

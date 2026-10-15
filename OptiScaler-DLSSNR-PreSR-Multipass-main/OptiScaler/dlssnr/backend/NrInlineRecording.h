@@ -521,17 +521,16 @@ cbuffer Size : register(b0) { uint width; uint height; }
     // (this recording takes fresh pooled ones if it is reused).
     void DiagEmitAsync() {
         if (!diag.active) return;
-        FrameDiag::AsyncEmit(diag, std::move(gameStamps), gameQueue.Get(),
-                             noNetwork ? nullptr : std::move(sideStamps), side.Get());
-        gameStamps.reset(); sideStamps.reset();
+        FrameDiag::AsyncEmit(diag, gameStamps, gameQueue.Get(),
+                             noNetwork ? nullptr : sideStamps, side.Get());
+        // The native game list retains these query addresses and may replay until invalidated.
     }
     // Fault-injection (tests only): ALU-only game-queue delay dispatches before the input gate.
     UINT testInputDelay = 0;
     // Fault-injection (tests only): ALU-only game-queue delay dispatches after the claim, before the copies.
     UINT testCopyDelay = 0;
     // NrGpuHandoff only: claim the input gate, then predicate the input copies on the claim. If the side
-    // watch expired first it closed the gate, so the copies are skipped and the network (whose output
-    // is then discarded) never races the game writing its input. Call before RecordInputs.
+    // watch expired first it closed the gate, so the copies are skipped. Call before RecordInputs.
     void BeginInputs(ID3D12GraphicsCommandList* list) {
         inputGated = false;
         if (!gpuArmed) return;
@@ -621,16 +620,23 @@ cbuffer Size : register(b0) { uint width; uint height; }
     // Caller holds RecordingMutex. Bounded: a queue whose Signal keeps failing cannot prove anything.
     bool RetryProof() {
         if (!RetirementUncertain()) return true;
+        // The capture worker may be in the middle of submitting the arm/poll list outside
+        // RecordingMutex. An unfinished submission is not a failed proof Signal attempt.
+        if (!uncertain && sideUncertain && !scheduled.load(std::memory_order_acquire)) return false;
         if (proofAttempts >= kProofAttempts) return false;
         ++proofAttempts;
         const bool game = TryProveGame();
         const bool sideOk = TryProveSide();
         return game && sideOk;
     }
-    bool ProofExhausted() const { return RetirementUncertain() && proofAttempts >= kProofAttempts && !DeviceLost(); }
+    bool ProofExhausted() const { return scheduled.load(std::memory_order_acquire) && RetirementUncertain() && proofAttempts >= kProofAttempts && !DeviceLost(); }
     HRESULT GameSignalHr() const { return gameSignalHr; }
     HRESULT GameProofHr() const { return gameProofHr; }
     HRESULT SideProofHr() const { return sideProofHr; }
+    bool GameCertificate(ID3D12Fence*& fence, UINT64& value) const {
+        if (uncertain || !gameFence || !gameValue || gameValue == UINT64_MAX) return false;
+        fence = gameFence.Get(); value = gameValue; return true;
+    }
     // Set under RecordingMutex from the lease that admitted this recording.
     uint64_t activityToken = 0;
     // Filled when NrFrameDiag is on; RecordingOwner / backends emit on reclaim.
@@ -776,9 +782,11 @@ cbuffer Size : register(b0) { uint width; uint height; }
         }
         return false;
     }
-    // NrGpuHandoff replacement for WaitCapture: no CPU wait. Side queue: Wait(arm) -> bounded watch on the
-    // capture flag -> record seen/unseen. The caller then enqueues the network behind it on the same queue;
-    // NetworkQueued's done op publishes 1 (apply) only if the watch saw the capture, else 2 (original frame).
+    // GPU-armed legacy handoff: enqueue behind the bounded watch without a CPU round trip.
+    // On cap/abort the network still runs; op 9 discards its output and reclaim requests history reset.
+    // KNOWN DEFERRED RISK: a claimed but unfinished copy can race the network; output discard and
+    // delayed history reset do not prove input/history safety. Retained by explicit product decision.
+    // See docs/architecture/nr-capture-proof-deferral.md and its dormant restoration patch.
     bool GpuArmed() const { return armValue != 0; }
     bool armedOutcomeReadable = false;
     // After completion of an armed frame: seen (network output valid) and gate (1 claimed, 2 closed).
@@ -842,9 +850,8 @@ cbuffer Size : register(b0) { uint width; uint height; }
         // NrWatchSlices: same watch budget in shorter dispatches (shorter-resident waves).
         const UINT ws = watchSlices ? watchSlices : kWaitSlices, wi = UINT(UINT64(kWaitSlices) * kWaitIterations / ws);
         for (UINT i = 0; i < ws; ++i) { Op(armList.Get(), 7, sample.Get(), wi); UavBarrier(armList.Get(), capture.Get()); }
-        // Close the input gate. A game that has not claimed it skips its input copies, so the network
-        // never reads input the game is still writing (its output is discarded: bypass + history reset).
-        // A game that claimed it is copying: wait on the GPU until its capture proves the copies done.
+        // Close the input gate. Unclaimed copies are skipped; already-claimed copies may still run.
+        // The bounded wait below can expire before those copies finish (known deferred input race).
         Op(armList.Get(), 12, sample.Get()); UavBarrier(armList.Get(), capture.Get());
         // Bounded claimed wait (always on): kClaimWaitSlices short dispatches, each exits at once after
         // the capture lands. A capture that never lands ends the wait (unseen -> bypass) well under TDR.

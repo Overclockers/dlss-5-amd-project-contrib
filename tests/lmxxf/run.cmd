@@ -44,6 +44,7 @@ if /i "%TIER%"=="gpu" goto gpu
 if /i "%TIER%"=="hip-passthrough" goto hip-passthrough
 if /i "%TIER%"=="inline" goto inline
 if /i "%TIER%"=="inline-discard" goto inline-discard
+if /i "%TIER%"=="diag-lifetime" goto diag-lifetime
 if /i "%TIER%"=="inline-gpu" goto inline-gpu
 if /i "%TIER%"=="slots" goto slots
 if /i "%TIER%"=="wait-profile" goto slots
@@ -68,6 +69,7 @@ goto pass
 :warp
 call :RunSplitState || goto fail
 call :RunInlineFixture warp || goto fail
+call :RunDiagLifetime || goto fail
 %CXX% /I"%INC%" tests\lmxxf\lmxxf_wrapped_command_list.cpp /Fe"%OUT%\lmxxf_wrapped_command_list.exe" /Fo"%OUT%\lmxxf_wrapped_command_list.obj" /link %D3D% "%DETOURS%" || goto fail
 "%OUT%\lmxxf_wrapped_command_list.exe" || goto fail
 %CXX% tests\lmxxf\lmxxf_temporal_control.cpp /Fe"%OUT%\lmxxf_temporal_control.exe" /Fo"%OUT%\lmxxf_temporal_control.obj" /link %D3D% d3dcompiler.lib || goto fail
@@ -151,6 +153,15 @@ exit /b %errorlevel%
 :inline-discard
 call :RunInlineDiscard || goto fail
 goto pass
+
+:diag-lifetime
+call :RunDiagLifetime || goto fail
+goto pass
+
+:RunDiagLifetime
+%CXX% /I"%INC%" tests\lmxxf\nr_diag_lifetime.cpp /Fe"%OUT%\nr_diag_lifetime.exe" /Fo"%OUT%\nr_diag_lifetime.obj" /link %D3D% d3dcompiler.lib "%DETOURS%" || exit /b 1
+"%OUT%\nr_diag_lifetime.exe"
+exit /b %errorlevel%
 
 :RunInlineDiscard
 %CXX% /I"%INC%" tests\lmxxf\nr_inline_discard.cpp /Fe"%OUT%\nr_inline_discard.exe" /Fo"%OUT%\nr_inline_discard.obj" /link %D3D% d3dcompiler.lib "%DETOURS%" || exit /b 1

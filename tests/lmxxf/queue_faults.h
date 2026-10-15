@@ -8,8 +8,10 @@ class SignalFailQueue final:public ID3D12CommandQueue
     std::atomic<ULONG> refs{1};
     ID3D12CommandQueue* inner;
     std::atomic<int> failures; // <0: every Signal fails; otherwise the first N fail, later ones run
+    std::atomic<unsigned> passSignals;
 public:
-    explicit SignalFailQueue(ID3D12CommandQueue* queue,int failFirst=-1):inner(queue),failures(failFirst){inner->AddRef();}
+    explicit SignalFailQueue(ID3D12CommandQueue* queue,int failFirst=-1,unsigned passFirst=0)
+        :inner(queue),failures(failFirst),passSignals(passFirst){inner->AddRef();}
     ~SignalFailQueue(){inner->Release();}
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid,void** out)override{
         if(!out)return E_POINTER;*out=nullptr;
@@ -33,7 +35,10 @@ public:
     void STDMETHODCALLTYPE SetMarker(UINT m,const void* d,UINT n)override{inner->SetMarker(m,d,n);}
     void STDMETHODCALLTYPE BeginEvent(UINT m,const void* d,UINT n)override{inner->BeginEvent(m,d,n);}
     void STDMETHODCALLTYPE EndEvent()override{inner->EndEvent();}
-    HRESULT STDMETHODCALLTYPE Signal(ID3D12Fence* f,UINT64 v)override{if(failures<0)return E_FAIL;if(failures>0){--failures;return E_FAIL;}return inner->Signal(f,v);}
+    HRESULT STDMETHODCALLTYPE Signal(ID3D12Fence* f,UINT64 v)override{
+        if(passSignals>0){--passSignals;return inner->Signal(f,v);}
+        if(failures<0)return E_FAIL;if(failures>0){--failures;return E_FAIL;}return inner->Signal(f,v);
+    }
     HRESULT STDMETHODCALLTYPE Wait(ID3D12Fence* f,UINT64 n)override{return inner->Wait(f,n);}
     HRESULT STDMETHODCALLTYPE GetTimestampFrequency(UINT64* f)override{return inner->GetTimestampFrequency(f);}
     HRESULT STDMETHODCALLTYPE GetClockCalibration(UINT64* g,UINT64* c)override{return inner->GetClockCalibration(g,c);}

@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -136,18 +137,28 @@ struct GpuStamps
         return ok;
     }
     // CPU read of an already-completed resolve; no GPU wait. 0 = unavailable.
-    void Read(int64_t* qpc, UINT n, ID3D12CommandQueue* queue) const noexcept
+    void Snapshot(UINT64* ticks, UINT n) const noexcept
     {
-        for (UINT i = 0; i < n; ++i) qpc[i] = 0;
-        if (!heap || !readback || !queue || n > count) return;
-        UINT64 freq = 0, gpu = 0, cpu = 0;
-        if (!Calibration(queue, freq, gpu, cpu)) return;
+        for (UINT i = 0; i < n; ++i) ticks[i] = 0;
+        if (!heap || !readback || n > count) return;
         void* p = nullptr; D3D12_RANGE range {0, size_t(8) * n};
         if (FAILED(readback->Map(0, &range, &p)) || !p) return;
-        const auto* t = static_cast<const UINT64*>(p);
-        for (UINT i = 0; i < n; ++i)
-            if (t[i]) qpc[i] = int64_t(cpu) + int64_t(double(int64_t(t[i] - gpu)) * double(QpcFrequency()) / double(freq));
+        std::memcpy(ticks, p, size_t(8) * n);
         D3D12_RANGE none {0, 0}; readback->Unmap(0, &none);
+    }
+    static void Convert(const UINT64* ticks, int64_t* qpc, UINT n, ID3D12CommandQueue* queue) noexcept
+    {
+        for (UINT i = 0; i < n; ++i) qpc[i] = 0;
+        UINT64 freq = 0, gpu = 0, cpu = 0;
+        if (!queue || !Calibration(queue, freq, gpu, cpu)) return;
+        for (UINT i = 0; i < n; ++i)
+            if (ticks[i]) qpc[i] = int64_t(cpu) + int64_t(double(int64_t(ticks[i] - gpu)) * double(QpcFrequency()) / double(freq));
+    }
+    void Read(int64_t* qpc, UINT n, ID3D12CommandQueue* queue) const noexcept
+    {
+        UINT64 ticks[kGpuStampCount] {};
+        if (n > kGpuStampCount) return;
+        Snapshot(ticks, n); Convert(ticks, qpc, n, queue);
     }
 };
 
@@ -275,7 +286,7 @@ inline void Emit(const Counters& c) noexcept
 struct AsyncEmitJob
 {
     Counters c;
-    std::shared_ptr<GpuStamps> game, side;
+    UINT64 game[kGpuStampCount] {}, side[1] {};
     ID3D12CommandQueue* gameQueue = nullptr; ID3D12CommandQueue* sideQueue = nullptr; // AddRef'd
     ~AsyncEmitJob() { if (gameQueue) gameQueue->Release(); if (sideQueue) sideQueue->Release(); }
 };
@@ -286,7 +297,10 @@ inline void AsyncEmit(Counters c, std::shared_ptr<GpuStamps> game, ID3D12Command
     AsyncEmitJob* job = nullptr;
     try {
         job = new AsyncEmitJob;
-        job->c = c; job->game = std::move(game); job->side = std::move(side);
+        job->c = c;
+        // Snapshot while the caller still serializes replay/reuse. Calibration and file I/O stay asynchronous.
+        if (game) game->Snapshot(job->game, kGpuStampCount);
+        if (side) side->Snapshot(job->side, 1);
         job->gameQueue = gameQueue; job->sideQueue = sideQueue;
         if (gameQueue) gameQueue->AddRef();
         if (sideQueue) sideQueue->AddRef();
@@ -298,15 +312,15 @@ inline void AsyncEmit(Counters c, std::shared_ptr<GpuStamps> game, ID3D12Command
     const auto run = [](PTP_CALLBACK_INSTANCE instance, void* p) {
         auto* x = static_cast<Ctx*>(p);
         auto* j = x->job;
-        if (j->game && j->gameQueue) j->game->Read(j->c.gpuQpc, kGpuStampCount, j->gameQueue);
-        if (j->side && j->sideQueue) { int64_t v = 0; j->side->Read(&v, 1, j->sideQueue); j->c.gpuSideVkDone = v; }
+        if (j->gameQueue) GpuStamps::Convert(j->game, j->c.gpuQpc, kGpuStampCount, j->gameQueue);
+        if (j->sideQueue) { int64_t v = 0; GpuStamps::Convert(j->side, &v, 1, j->sideQueue); j->c.gpuSideVkDone = v; }
         Emit(j->c);
         delete j;
         if (x->self && instance) FreeLibraryWhenCallbackReturns(instance, x->self);
         delete x;
     };
     if (!ctx || !TrySubmitThreadpoolCallback(run, ctx, nullptr)) {
-        if (job->game && job->gameQueue) job->game->Read(job->c.gpuQpc, kGpuStampCount, job->gameQueue);
+        if (job->gameQueue) GpuStamps::Convert(job->game, job->c.gpuQpc, kGpuStampCount, job->gameQueue);
         Emit(job->c); delete job; delete ctx;
         if (self) FreeLibrary(self);
     }

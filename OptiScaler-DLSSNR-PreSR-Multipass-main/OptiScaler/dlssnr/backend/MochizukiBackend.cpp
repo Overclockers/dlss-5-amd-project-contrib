@@ -456,7 +456,7 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     // NrFrameDiag GPU stamps (default off): capture begin/end, resume, done on the game queue.
     if (inlineResources) inlineResources->DiagStamp(cmd, FrameDiag::kGpuCapBegin);
     else if (lease->diag.active) {
-        if (auto stamps = FrameDiag::GpuStamps::Acquire(p->device.Get(), FrameDiag::kGpuStampCount))
+        if (auto stamps = p->owner->AcquireSplitStamps(p->device.Get()))
         { lease->splitStamps = stamps; stamps->Stamp(cmd, FrameDiag::kGpuCapBegin); }
     }
     // With no game exposure texture the lane runs its own exposure meter: a compute dispatch with its own descriptor

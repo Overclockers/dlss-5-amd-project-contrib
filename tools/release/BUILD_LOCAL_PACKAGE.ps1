@@ -1,6 +1,16 @@
 ﻿[CmdletBinding()]
 param([string]$Root, [string]$Version, [switch]$PlanOnly)
 $ErrorActionPreference = 'Stop'
+function Invoke-LoggedNative {
+    param([string]$Executable, [string[]]$Arguments, [string]$Log, [string]$Failure)
+    # Windows PowerShell 5.1 wraps native stderr in ErrorRecord, even for an exit-0 warning.
+    # Keep it in the log and use the process exit code to decide success. Script errors still stop.
+    $ErrorActionPreference = 'Continue'
+    $PSNativeCommandUseErrorActionPreference = $false
+    & $Executable @Arguments 2>&1 | Tee-Object -FilePath $Log -ErrorAction Stop
+    $nativeExit = $LASTEXITCODE
+    if ($nativeExit -ne 0) { throw "$Failure (exit $nativeExit); see $Log" }
+}
 try {
     if (!$Root) {
         Add-Type -AssemblyName System.Windows.Forms
@@ -89,17 +99,16 @@ exit /b 0
         Push-Location $Root
         try {
             [IO.File]::WriteAllText($versionPath,"$Version`r`n",[Text.Encoding]::ASCII)
-            & $env:ComSpec /d /c "`"$batchPath`"" 2>&1 | Tee-Object -FilePath (Join-Path $logs 'build.log')
-            if ($LASTEXITCODE -ne 0) { throw "Compilation failed; see $logs\build.log" }
+            Invoke-LoggedNative -Executable $env:ComSpec -Arguments @('/d', '/c', "`"$batchPath`"") `
+                -Log (Join-Path $logs 'build.log') -Failure 'Compilation failed'
             . (Join-Path $Root 'tools/release/package-signing.ps1')
             $signingCertificate = Get-PackageSigningCertificate
             $ps = Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/powershell.exe'
-            & $ps -NoProfile -ExecutionPolicy Bypass -File tools/release/PACKAGE_RELEASE.ps1 `
-                -LocalTest -Version $Version -Name $name -OutDir dist `
-                -SigningThumbprint $signingCertificate.Thumbprint `
-                -OptiDll exports/release-local/OptiScaler.dll -DepsRoot $deps 2>&1 |
-                Tee-Object -FilePath (Join-Path $logs 'package.log')
-            if ($LASTEXITCODE -ne 0) { throw "Packaging failed; see $logs\package.log" }
+            Invoke-LoggedNative -Executable $ps -Arguments @('-NoProfile', '-ExecutionPolicy', 'Bypass',
+                '-File', 'tools/release/PACKAGE_RELEASE.ps1', '-LocalTest', '-Version', $Version,
+                '-Name', $name, '-OutDir', 'dist', '-SigningThumbprint', $signingCertificate.Thumbprint,
+                '-OptiDll', 'exports/release-local/OptiScaler.dll', '-DepsRoot', $deps) `
+                -Log (Join-Path $logs 'package.log') -Failure 'Packaging failed'
             $zip = Join-Path $Root "dist/$name.zip"
             if (!(Test-Path -LiteralPath $zip -PathType Leaf)) { throw 'ZIP not produced.' }
             Write-Host "`nSUCCESS: $zip" -ForegroundColor Green

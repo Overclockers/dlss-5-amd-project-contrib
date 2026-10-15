@@ -24,6 +24,7 @@ int main(int argc, char** argv) {
     bool explicitWait = false, explicitIterations = false;
     bool verify = false, verifyAhead = false, history = false, autoExposure = false, first = false, debug = false, hot = false, sweep = false;
     bool waitSweep = false, mochi = false, aco = false, unorm8 = false;
+    bool gpuHandoff = false; unsigned pollDelay = 0;
     double interval = 0;
     for (int i=4;i<argc;++i) {
         std::string a=argv[i];
@@ -31,6 +32,8 @@ int main(int argc, char** argv) {
         sweep |= a=="--sweep"; first |= a=="--first"; debug |= a=="--debug"; hot |= a=="--hot";
         waitSweep |= a=="--wait-sweep"; mochi |= a=="--mochizuki"; aco |= a=="--aco";
         unorm8 |= a=="--unorm8";
+        gpuHandoff |= a=="--gpu-handoff";
+        if(a.find("--poll-delay=")==0) pollDelay=unsigned(std::stoi(a.substr(13)));
         if(a.find("--frames=")==0) frames=unsigned(std::stoi(a.substr(9)));
         if(a.find("--interval=")==0) interval=std::stod(a.substr(11));
         if(a.find("--height=")==0) height=unsigned(std::stoi(a.substr(9)));
@@ -42,6 +45,7 @@ int main(int argc, char** argv) {
     const unsigned maxSlots = mochi ? 4 : 5;
     Require(slots<=maxSlots && frames && height && iterations && interval>=0,"benchmark arguments");
     Require(!aco || mochi,"ACO requires Mochizuki");
+    Require(!gpuHandoff || mochi,"GPU handoff requires Mochizuki");
     Require(!unorm8 || mochi,"UNORM8 comparison is for Mochizuki's whole compute chain");
     Require(!mochi || (!autoExposure && !hot),"Mochizuki does not support this auto-exposure/hot fixture");
     Require(!(hot && (sweep || waitSweep)) && !(sweep && waitSweep),"choose one sweep mode");
@@ -221,11 +225,13 @@ int main(int argc, char** argv) {
                 f->in=std::make_shared<In::Resources>(device.Get(),colour.Get(),static_cast<ID3D12Resource*>(job.private_output),
                     static_cast<ID3D12Resource*>(job.first_pass_output),width,height,owner->inlinePipelines);
                 owner->inlinePipelines=f->in->PipelineCache();
+                f->in->gpuArmed=gpuHandoff; f->in->spinPollDelay=pollDelay;
                 ID3D12Resource* sources[]{colour.Get(),motion.Get(),depth.Get()};D3D12_RESOURCE_STATES states[]{Read,Read,Read};
                 Check(f->list->BeginInlineState(history?3:1,sources,states),"inline scope");
             }
             f->lease=Own::Attach(owner,job.handle,f->list.Get(),f->in);Require(bool(f->lease),"attach");
             f->lease->neural=true;
+            if(f->in) f->in->BeginInputs(f->list.Get());
             ok(api.RecordInputs(context,job.handle,f->list.Get()),"inputs");
             if(f->in) {f->in->RecordCapture(f->list.Get());f->in->RecordWait(f->list.Get(),wait,iterations);}
             else Check(DlssNr::Backend::LmxxfCut::TrySplitAtEvaluate(f->list.Get()),"split");
@@ -275,8 +281,8 @@ int main(int argc, char** argv) {
     if(hot)Require(hotSplit>0&&hotInline>0,"hot transition actually submitted both split and inline");
     auto percentile=[](std::vector<double> v,double p){if(v.empty())return 0.;std::sort(v.begin(),v.end());return v[size_t((v.size()-1)*p)];};
     auto average=[](const std::vector<double>& v){double sum=0;for(auto x:v)sum+=x;return v.empty()?0.:sum/v.size();};
-    std::printf("BENCH backend=%s aco=%u unorm8=%u trial=%u slots=%u history=%u auto=%u first=%u height=%u interval_ms=%.3f wait=%u iterations=%u frames=%u applied=%u timeout=%u skipped=%u wall_ms=%.3f nr_per_s=%.3f gpu_p50_ms=%.3f gpu_p95_ms=%.3f cpu_mean_ms=%.3f observed_completion_p95_ms=%.3f peak_local_mib=%.1f\n",
-        mochi?"mochizuki":"lmxxf",aco,unorm8,trial,slots,history,autoExposure,first,height,interval,wait,iterations,frames,applied,timedout,skipped,wall,applied*1000./wall,
+    std::printf("BENCH backend=%s aco=%u unorm8=%u gpu_handoff=%u poll_delay=%u trial=%u slots=%u history=%u auto=%u first=%u height=%u interval_ms=%.3f wait=%u iterations=%u frames=%u applied=%u timeout=%u skipped=%u wall_ms=%.3f nr_per_s=%.3f gpu_p50_ms=%.3f gpu_p95_ms=%.3f cpu_mean_ms=%.3f observed_completion_p95_ms=%.3f peak_local_mib=%.1f\n",
+        mochi?"mochizuki":"lmxxf",aco,unorm8,gpuHandoff,pollDelay,trial,slots,history,autoExposure,first,height,interval,wait,iterations,frames,applied,timedout,skipped,wall,applied*1000./wall,
         percentile(gpuMs,.5),percentile(gpuMs,.95),average(cpuMs),percentile(latencyMs,.95),memory/1048576.);
     std::fflush(stdout);
     };

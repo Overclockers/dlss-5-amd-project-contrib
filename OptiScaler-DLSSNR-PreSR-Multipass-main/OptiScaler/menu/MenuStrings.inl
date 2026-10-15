@@ -1132,5 +1132,7 @@
 {"RenoDX: Guides", "RenoDX：引导信息"},
 {"INT4 mixed requested (requires ACO)", "已请求 INT4 混合网络（需要 ACO）"},
 {"Default network requested", "已请求默认网络"},
+{"GPU-armed handoff", "GPU 捕获交接"},
+{"Default on. Mochizuki inline: the GPU side queue runs a bounded capture watch.\nNR starts without CPU capture verification. A miss shows the original frame and resets history later.\nKnown input/history risk on timeout or abort. Applies to the next frame. INI: NrGpuHandoff.", "默认开启。Mochizuki inline：GPU 侧队列有界等待本帧输入捕获。\n不经 CPU 确认捕获即启动 NR；未完成时显示原画面，回收时重置历史。\n超时或中止时存在已知的输入与历史同步问题。\n下一帧生效。INI: NrGpuHandoff。"},
 {"Person protection is unavailable with RenoDX. Your settings are preserved for the original mode.", "RenoDX 模式不支持人物保护。原模式的设置会保留，切回后恢复使用。"},
 {"Ctrl+F11 switches the default network and INT4 mixed. ACO preference is unchanged; INT4 requires active ACO. Save Settings to keep the selection.", "Ctrl+F11 切换默认网络和 INT4 混合网络，不改变 ACO 设置。INT4 需要 ACO 实际生效。保存设置可保留选择。"},

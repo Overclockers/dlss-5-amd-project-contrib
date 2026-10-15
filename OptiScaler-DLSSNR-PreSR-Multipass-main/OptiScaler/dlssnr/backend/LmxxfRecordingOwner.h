@@ -39,20 +39,34 @@ struct SessionOwner
     // Split NrFrameDiag lines wait here until their game fence retired, so GPU stamps are readable.
     struct PendingSplitDiag {
         FrameDiag::Counters diag; std::shared_ptr<FrameDiag::GpuStamps> stamps;
+        std::shared_ptr<std::atomic<bool>> readable;
         Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue; Microsoft::WRL::ComPtr<ID3D12Fence> fence; UINT64 value = 0;
     };
     std::mutex splitDiagMutex;
     std::deque<PendingSplitDiag> splitDiagPending;
-    void FlushSplitDiag(bool all = false) noexcept {
+    std::shared_ptr<std::atomic<unsigned>> splitDiagSlots = std::make_shared<std::atomic<unsigned>>(0);
+    std::shared_ptr<FrameDiag::GpuStamps> AcquireSplitStamps(ID3D12Device* device) {
+        if (splitDiagSlots->load() >= 8) return {}; // skip; retained recipes and pending GPU writes own the budget
+        auto stamps = FrameDiag::GpuStamps::Acquire(device, FrameDiag::kGpuStampCount);
+        if (!stamps) return {};
+        ++*splitDiagSlots;
+        try {
+            return {stamps.get(), [stamps, slots = splitDiagSlots](FrameDiag::GpuStamps*) mutable {
+                stamps.reset(); --*slots;
+            }};
+        } catch (...) { return {}; } // shared_ptr invokes the supplied deleter if its allocation fails
+    }
+    void FlushSplitDiag() noexcept {
         try {
             std::lock_guard lock(splitDiagMutex);
             while (!splitDiagPending.empty()) {
                 auto& f = splitDiagPending.front();
                 const UINT64 done = f.fence ? f.fence->GetCompletedValue() : UINT64_MAX;
                 const bool ready = done != UINT64_MAX && done >= f.value;
-                if (!ready && !all && splitDiagPending.size() <= 8) break;
+                if (!ready && done != UINT64_MAX) break;
                 if (diagCoreGpuMs) f.diag.coreGpuMs = diagCoreGpuMs(context, &f.diag.encodeGpuMs, &f.diag.transferGpuMs);
-                FrameDiag::AsyncEmit(f.diag, ready ? f.stamps : nullptr, f.queue.Get(), nullptr, nullptr);
+                const bool readable = ready && (!f.readable || f.readable->load());
+                FrameDiag::AsyncEmit(f.diag, readable ? f.stamps : nullptr, f.queue.Get(), nullptr, nullptr);
                 splitDiagPending.pop_front();
             }
         } catch (...) {}
@@ -108,6 +122,8 @@ struct SessionOwner
                 LOG_WARN("NR inline: device removed; releasing inline resources without fence proof");
             }
             if (!pending->Succeeded()) {
+                // Legacy armed misses reset at reclaim, not before ahead enqueues. This does not certify
+                // subsequent history safety; see docs/architecture/nr-capture-proof-deferral.md.
                 activity.Reset(); api.ResetHistory(context);
                 if (pending->WasAborted()) ++inlineAborted;
                 else {
@@ -262,6 +278,8 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
     // Split-path diag lives on the lease; inline uses InlineRecording::Resources::diag.
     FrameDiag::Counters diag;
     std::shared_ptr<FrameDiag::GpuStamps> splitStamps; // NrFrameDiag split GPU stamps
+    std::shared_ptr<std::atomic<bool>> splitDiagReadable; // lazy: diagnostics off adds no per-lease allocation
+    bool splitExecuted = false;
     ID3D12CommandQueue* splitDiagQueue = nullptr; ID3D12Fence* splitDiagFence = nullptr; UINT64 splitDiagValue = 0; // borrowed in FinishExecution
     void EmitSplitDiag(const char* outcome) noexcept
     {
@@ -270,13 +288,16 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
         diag.outcome = outcome ? outcome : "fail";
         if (splitStamps && splitDiagFence && splitDiagQueue) {
             try {
+                if (!splitDiagReadable) splitDiagReadable = std::make_shared<std::atomic<bool>>(true);
                 SessionOwner::PendingSplitDiag p; p.diag = diag; p.stamps = splitStamps;
+                p.readable = splitDiagReadable;
                 p.queue = splitDiagQueue; p.fence = splitDiagFence; p.value = splitDiagValue;
                 { std::lock_guard lock(owner->splitDiagMutex); owner->splitDiagPending.push_back(std::move(p)); }
                 owner->FlushSplitDiag();
             } catch (...) { FrameDiag::Emit(diag); }
         } else FrameDiag::Emit(diag);
-        splitStamps.reset(); splitDiagFence = nullptr; splitDiagQueue = nullptr;
+        // A retained closed list can replay its EndQuery/Resolve. Pin until the lease collects.
+        splitDiagFence = nullptr; splitDiagQueue = nullptr;
         diag = {};
     }
     Lease(std::shared_ptr<SessionOwner> session, void* token, Submission::RecordingIdentity id)
@@ -289,7 +310,11 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
             return E_UNEXPECTED;
         }
         // Never reset flags still used by an earlier execution of this recording.
-        if (inlineResources && inlineResources->Started() && !inlineResources->Complete()) return E_PENDING;
+        if (inlineResources && (begun || (inlineResources->Started() && !inlineResources->Complete()))) return E_PENDING;
+        if (!inlineResources) {
+            if (splitExecuted && splitDiagReadable) splitDiagReadable->store(false); // never read timestamps a replay may overwrite
+            splitExecuted = true;
+        }
         tracing = traceId && traceExecutions < 2;
         if (tracing) ++traceExecutions;
         Trace("execute.begin", e.queue);
@@ -381,7 +406,8 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
             const bool ordered = lease->WaitInlineTurn();
             const auto waitedMs = static_cast<unsigned>(GetTickCount64() - turnStart);
             if (diag.active) { diag.qpcEnqueueWaitEnd = FrameDiag::Qpc(); diag.waitEnqueueOrderMs = waitedMs; }
-            // NrGpuHandoff: no CPU capture wait; the side queue watches and gates the network itself.
+            // Armed mode reports watch submission, not observed capture. It retains the documented
+            // cap/abort input-race risk; CPU capture mode still verifies completion before enqueue.
             const bool captured = ordered && (lease->inlineResources->GpuArmed()
                 ? lease->inlineResources->ArmCapture() : lease->inlineResources->WaitCapture());
             std::lock_guard lock(Submission::RecordingMutex());
@@ -397,6 +423,7 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
             } else if (!ordered) {
                 lease->owner->RecordFailure("inline order", E_FAIL, nullptr, "inline enqueue turn timed out");
                 lease->owner->failed = true;
+
             } else {
                 lease->owner->RecordFailure("inline capture", E_FAIL, nullptr, "input capture was not observed; network was not started");
                 lease->owner->failed = true;
@@ -432,10 +459,21 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
             inlineEnqueueFinished = true;
         }
     }
-    void FinishInline() noexcept
+    void FinishInline(bool schedule = true) noexcept
     {
         auto facts = inlineExecution;
         facts.queue = inlineQueue.Get(); facts.fence = inlineFence.Get();
+        ID3D12Fence* proof = nullptr; UINT64 value = 0;
+        if (inlineResources->GameCertificate(proof, value)) {
+            // For a submitted unsplit list, status is the tail Signal result. A later same-queue
+            // signal replaces that certificate; it does not erase an EnqueueHip/runtime failure.
+            facts.fence = proof; facts.fenceValue = value; facts.status = S_OK;
+        } else if (!inlineResources->ProofExhausted() && !inlineResources->DeviceLost()) {
+            // End is not retryable in either real runtime. Keep Begin and the enqueue turn alive
+            // until bounded collection retries obtain the certificate, or exhaust and fail closed.
+            if (schedule) ScheduleCollectionLocked();
+            return;
+        }
         // The consumer was recorded in the same submitted native list as its capture.
         facts.continuationSubmitted = facts.producerSubmitted && ready;
         FinishExecution(facts);
@@ -444,7 +482,7 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
         inlineQueue.Reset(); inlineFence.Reset();
         if (invalidated) {
             owner->api.InvalidateRecording(owner->context, job);
-            if (CollectLocked()) ScheduleCollectionLocked();
+            if (schedule) ScheduleCollectionLocked();
         }
     }
     void Between(const Submission::RecordingExecution& e) noexcept override
@@ -566,6 +604,10 @@ inline bool CollectLocked()
     {
         auto& lease = *it;
         lease->owner->ReclaimInlineLocked();
+        if (lease->begun && lease->inlineResources && lease->executionReported && lease->inlineEnqueueFinished)
+            lease->FinishInline(false);
+        if (lease->begun && lease->inlineResources && lease->executionReported && lease->inlineEnqueueFinished)
+            pending = !lease->inlineResources->ProofExhausted() || pending;
         if (!lease->invalidated) { ++it; continue; }
         if (lease->begun) { pending = true; ++it; continue; }
         if (lease->inlineResources && !lease->inlineResources->Complete()) {

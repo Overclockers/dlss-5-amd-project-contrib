@@ -831,9 +831,9 @@ void RenderMenu(Config* config, float menuResScale)
                     bool gpuHandoff = config->NrGpuHandoff.value_or_default();
                     if (armedApplies) {
                     if (MenuUi::Checkbox("GPU-armed handoff", &gpuHandoff)) config->NrGpuHandoff = gpuHandoff;
-                    HelpMarker("Default on. Mochizuki inline: the GPU side queue watches for this frame's capture and starts NR"
-                               "\nwithout a CPU round trip. A capture that comes after the watch skips that frame's input copy,"
-                               "\nshows the original frame and resets history. Applies to the next frame. INI: NrGpuHandoff.");
+                    HelpMarker("Default on. Mochizuki inline: the GPU side queue runs a bounded capture watch."
+                               "\nNR starts without CPU capture verification. A miss shows the original frame and resets history later."
+                               "\nKnown input/history risk on timeout or abort. Applies to the next frame. INI: NrGpuHandoff.");
                     ImGui::Indent();
                     ImGui::BeginDisabled(!gpuHandoff);
                     if (MenuUi::TreeNode("Inline spin experiments##nr")) {

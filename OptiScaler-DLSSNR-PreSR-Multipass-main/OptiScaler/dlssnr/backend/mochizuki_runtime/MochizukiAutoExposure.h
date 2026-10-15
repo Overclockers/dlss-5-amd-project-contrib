@@ -1,5 +1,5 @@
 #pragma once
-// Metered auto exposure for the mochizuki lane (see work/notes/2026-10-14-mochizuki-auto-exposure.md).
+// Metered auto exposure for the Mochizuki lane.
 //
 // WHY THIS EXISTS
 // The host never calls MochizukiNrSetExposure and Monster Hunter Wilds publishes no exposure texture, so the
@@ -32,6 +32,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <memory>
 
 #include <d3d12.h>
 #include <windows.h>
@@ -188,7 +189,7 @@ void main(uint3 thread : SV_GroupThreadID)
     // GPU side. One 16x16 thread group samples a 16x16 grid of the game's colour image (the same region the input copy
     // uses), reduces it to the mean linear luminance and writes that one float into a buffer of our own. The CPU side
     // never waits: a slot's value is read once the D3D12 fence the runtime was already handed for that frame has
-    // passed, and a frame that never produces a tail is dropped.
+    // passed. A retained native list keeps its slot reserved through all replays, until Collect.
 
     template <class T>
     inline void ReleaseObject(T*& object)
@@ -241,9 +242,10 @@ void main(uint3 thread : SV_GroupThreadID)
     class Probe
     {
     public:
-        static constexpr UINT kSlots = 4;   // measurements in flight; four frames is more than the queue holds
+        static constexpr UINT kSlots = 4;   // retained measurement recipes; skip when all four are owned
         static constexpr UINT kBytes = 256; // one float, over-allocated so the copy offsets stay aligned
-        static constexpr UINT kStale = 8;   // frames a recorded slot waits for its tail before it can be reused
+        struct Measurement { UINT slot; };
+        using Ticket = std::shared_ptr<Measurement>;
 
         Probe() = default;
         Probe(const Probe&) = delete;
@@ -296,9 +298,10 @@ void main(uint3 thread : SV_GroupThreadID)
         }
 
         // Copies the game's exposure texel into a free readback slot; picked up by Poll once the tail has passed.
-        bool RecordTexel(ID3D12GraphicsCommandList* list, ID3D12Resource* texture, D3D12_RESOURCE_STATES state)
+        bool RecordTexel(ID3D12GraphicsCommandList* list, ID3D12Resource* texture, D3D12_RESOURCE_STATES state,
+                         Ticket& ticket, float factor = 1.f)
         {
-            if (!texel_ || !Ready() || !list || pending_ >= 0 || !UsableExposureTexture(texture))
+            if (!texel_ || !Ready() || !list || ticket || !UsableExposureTexture(texture))
             {
                 ++skipped_;
                 return false;
@@ -310,6 +313,9 @@ void main(uint3 thread : SV_GroupThreadID)
                 return false;
             }
             Slot& slot = slots_[free];
+            ticket = std::make_shared<Measurement>(Measurement{UINT(free)});
+            slot.owner = ticket;
+            slot.factor = factor;
             const D3D12_RESOURCE_DESC d = texture->GetDesc();
             slot.half = d.Format == DXGI_FORMAT_R16_FLOAT;
             D3D12_TEXTURE_COPY_LOCATION src {};
@@ -324,7 +330,6 @@ void main(uint3 thread : SV_GroupThreadID)
             Transition(list, texture, state, D3D12_RESOURCE_STATE_COPY_SOURCE);
             list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
             Transition(list, texture, D3D12_RESOURCE_STATE_COPY_SOURCE, state);
-            pending_ = free;
             return true;
         }
 
@@ -434,9 +439,9 @@ void main(uint3 thread : SV_GroupThreadID)
             {
                 // A slot's buffers are written by a dispatch in a list the meter does not own, so one whose fence has
                 // not passed may still be read by the GPU. Fail closed the way the session's own retire path does:
-                // retain what may still be in flight instead of handing the memory back to the device. The pending slot
-                // is the same case one step earlier - its list has not published a tail, so nothing proves it has run.
-                const bool inFlight = pending_ >= 0 && &slot == &slots_[size_t(pending_)];
+                // retain what may still be in flight instead of handing the memory back to the device. An unsubmitted
+                // recipe also keeps its bindings: a different recording's tail says nothing about its future execution.
+                const bool inFlight = !slot.owner.expired();
                 const uint64_t completed = slot.fence ? slot.fence->GetCompletedValue() : 0;
                 if (inFlight || (slot.bound && completed != UINT64_MAX && completed < slot.tailValue))
                 {
@@ -452,15 +457,14 @@ void main(uint3 thread : SV_GroupThreadID)
                 slot.tailValue = 0;
                 slot.bound = false;
             }
-            ReleaseObject(pso_);
-            ReleaseObject(root_);
-            ReleaseObject(heap_);
+            // Destroy is normally reached only after all recipes have collected. If the caller violates
+            // that contract, retain the bindings too: a retained native list still references them.
+            bool retained = false;
+            for (const auto& slot : slots_) retained |= !slot.owner.expired();
+            if (retained) { pso_ = nullptr; root_ = nullptr; heap_ = nullptr; }
+            else { ReleaseObject(pso_); ReleaseObject(root_); ReleaseObject(heap_); }
             ReleaseObject(device_);
             increment_ = 0;
-            pending_ = -1;
-            stale_ = 0;
-            lastTail_ = nullptr;
-            lastTailValue_ = 0;
             warm_ = false;
             texel_ = false;
             mean_ = 0.0f;
@@ -472,9 +476,9 @@ void main(uint3 thread : SV_GroupThreadID)
         // Records the measurement of `colour`, which is in `state` right now, into `list`. False when the frame was
         // skipped: no free slot, a frame already recorded, or an image the meter cannot read.
         bool Record(ID3D12GraphicsCommandList* list, ID3D12Resource* colour, D3D12_RESOURCE_STATES state, UINT width,
-                    UINT height)
+                    UINT height, Ticket& ticket)
         {
-            if (texel_ || !Ready() || !list || !colour || !width || !height || pending_ >= 0)
+            if (texel_ || !Ready() || !list || !colour || !width || !height || ticket)
             {
                 ++skipped_;
                 return false;
@@ -493,6 +497,8 @@ void main(uint3 thread : SV_GroupThreadID)
                 return false;
             }
             Slot& slot = slots_[free];
+            ticket = std::make_shared<Measurement>(Measurement{UINT(free)});
+            slot.owner = ticket;
 
             D3D12_SHADER_RESOURCE_VIEW_DESC view {};
             view.Format = description.Format;
@@ -521,14 +527,24 @@ void main(uint3 thread : SV_GroupThreadID)
             list->CopyBufferRegion(slot.readback, 0, slot.value, 0, UINT(sizeof(float)));
             Transition(list, slot.value, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             Transition(list, colour, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, state);
-            pending_ = free;
             return true;
         }
 
-        // Collects finished measurements and binds last frame's slot to the tail it went into. `tail` and `tailValue`
-        // are the session's previousTail/previousTailValue: the fence the runtime was last handed. Returns true when a
-        // new exposure came out.
-        bool Poll(ID3D12Fence* tail, uint64_t tailValue, float* exposure)
+        // Called for the actual recording at Begin/End, including replays. Its descriptor and buffers
+        // remain reserved until Collect destroys the ticket, even after its first execution completes.
+        void Begin(const Ticket& ticket)
+        {
+            if (ticket) Unbind(slots_[ticket->slot]);
+        }
+        void Submitted(const Ticket& ticket, ID3D12Fence* tail, uint64_t value)
+        {
+            if (!ticket || !tail || !value) return;
+            Slot& slot = slots_[ticket->slot];
+            Unbind(slot);
+            slot.fence = tail; tail->AddRef(); slot.tailValue = value; slot.bound = true;
+        }
+        // No inferred previousTail: only this measurement's own submitted execution can make it readable.
+        bool Poll(float* exposure)
         {
             bool produced = false;
             for (Slot& slot : slots_)
@@ -545,7 +561,7 @@ void main(uint3 thread : SV_GroupThreadID)
                 if (texel_)
                 {
                     // The game's own exposure: taken as is (the game already smooths it), only sanity-checked.
-                    if (Read(slot, &mean) && std::isfinite(mean) && mean > 0.0f && mean < 1e6f)
+                    if (Read(slot, &mean) && std::isfinite(mean *= slot.factor) && mean > 0.0f && mean < 1e6f)
                     {
                         mean_ = exposure_ = mean;
                         ++measured_;
@@ -563,30 +579,6 @@ void main(uint3 thread : SV_GroupThreadID)
                 Unbind(slot);
             }
 
-            if (pending_ >= 0)
-            {
-                const bool newer = tail && (tail != lastTail_ || tailValue != lastTailValue_);
-                if (newer)
-                {
-                    Slot& slot = slots_[pending_];
-                    slot.fence = tail;
-                    slot.fence->AddRef();
-                    slot.tailValue = tailValue;
-                    slot.bound = true;
-                    pending_ = -1;
-                    stale_ = 0;
-                }
-                else if (++stale_ >= kStale)
-                {
-                    // The frame published no new tail, so this slot's value can never be attributed to one, and the
-                    // older fence the session last handed over is not a proof that the list that wrote it has run.
-                    // Never manufacture one: keep the slot pending - Free() skips it - until a strictly newer tail
-                    // arrives, which the queue's ordering does prove covers every earlier list.
-                    ++skipped_;
-                }
-            }
-            lastTail_ = tail;
-            lastTailValue_ = tailValue;
             if (exposure) *exposure = exposure_;
             return produced;
         }
@@ -600,6 +592,8 @@ void main(uint3 thread : SV_GroupThreadID)
             uint64_t tailValue {};
             bool bound {};
             bool half {}; // texel mode: the readback holds an R16_FLOAT
+            float factor = 1.f; // scale / pre-exposure belonging to the recorded texel
+            std::weak_ptr<Measurement> owner;
         };
 
         void Describe(const char* what, ID3DBlob* messages)
@@ -636,10 +630,10 @@ void main(uint3 thread : SV_GroupThreadID)
             return handle;
         }
 
-        int Free() const
+        int Free()
         {
             for (UINT i = 0; i < kSlots; ++i)
-                if (!slots_[i].bound && int(i) != pending_) return int(i);
+                if (slots_[i].owner.expired()) { Unbind(slots_[i]); return int(i); }
             return -1;
         }
 
@@ -680,10 +674,6 @@ void main(uint3 thread : SV_GroupThreadID)
         ID3D12DescriptorHeap* heap_ {};
         UINT increment_ {};
         Slot slots_[kSlots] {};
-        ID3D12Fence* lastTail_ {};
-        uint64_t lastTailValue_ {};
-        int pending_ { -1 };
-        UINT stale_ {};
         bool warm_ {};
         bool texel_ {};
         float mean_ {};
