@@ -75,6 +75,22 @@ class SourcePinTests(unittest.TestCase):
         with self.assertRaises(subprocess.CalledProcessError):
             checker.verify(self.repo, self.upstream, self.manifest)
 
+    def test_patch_added_file_is_accepted_only_when_declared(self):
+        (self.repo / 'third_party/mochizuki/added.comp').write_bytes(b'new pass\r\n')
+        added = self.repo / 'tools/mochizuki-sync/added.patch'
+        added.write_text('--- /dev/null\n+++ b/added.comp\n@@ -0,0 +1 @@\n+new pass\n', encoding='utf-8', newline='\n')
+        manifest = json.loads(self.manifest.read_text(encoding='utf-8'))
+        manifest['text_extensions'].append('.comp')
+        manifest['patches'].append({'path': 'added.patch'})
+        with self.assertRaisesRegex(ValueError, 'Closure inventory'):
+            checker.verify(self.repo, self.upstream, self.manifest_with(manifest))
+        manifest['added_files'] = ['added.comp']
+        checker.verify(self.repo, self.upstream, self.manifest_with(manifest))
+
+    def manifest_with(self, manifest):
+        self.manifest.write_text(json.dumps(manifest), encoding='utf-8')
+        return self.manifest
+
 
 if __name__ == '__main__':
     unittest.main()
