@@ -621,6 +621,54 @@ class InstallerExitTests(unittest.TestCase):
         self.assertIn("310.8.0", output)
         self.assertTrue((self.game / "MochizukiNrRuntime.dll").is_file())
 
+    def test_unselected_mochizuki_never_prepares_weights(self):
+        self.ready_install()
+        self.ready_lmxxf_dual_arch()
+        self.ready_mochizuki(model=True)
+        # Loading this helper itself must be deferred, not just the converter call.
+        (self.package / 'mochizuki-int4.ps1').write_text("throw 'UNSELECTED_MOCHI_HELPER'", encoding='utf-8-sig')
+        for backend in ('lmxxf', 'daniel'):
+            with self.subTest(backend=backend):
+                code, output = self.run_direct(flags=('-NonInteractive', '-Backend', backend))
+                self.assertEqual(code, 0, output)
+                self.assertNotIn('UNSELECTED_MOCHI_HELPER', output)
+                self.assertNotIn('Preparing INT4', output)
+                self.assertNotIn('DLL is not supported', output)
+                self.assertFalse((self.game / 'dlssnr-amd/dlssnr-int4.bin').exists())
+
+    def test_interactive_backend_choice_precedes_int4(self):
+        self.ready_mochizuki(model=True)
+        args = [str(PS), '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                str(self.package / 'Setup.ps1'), '-GameDir', str(self.game), '-Proxy', 'dxgi.dll', '-NoPause']
+        code, output = self.run_process(args, '2\n\n\n')
+        self.assertEqual(code, 0, output)
+        self.assertLess(output.index('Choose NR backends to install:'), output.index('Preparing INT4'))
+        self.assertEqual(output.count('Preparing INT4'), 1, output)
+        self.assertTrue((self.game / 'dlssnr-amd/dlssnr-int4.bin').is_file())
+
+    def test_mochizuki_interactive_runtime_only_skips_extraction(self):
+        self.ready_supported_mochizuki_source()
+        (self.package / 'mochizuki-model.py').write_text("raise RuntimeError('EXTRACTOR_MUST_NOT_RUN')", encoding='utf-8')
+        args = [str(PS), '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                str(self.package / 'Setup.ps1'), '-GameDir', str(self.game),
+                '-Proxy', 'dxgi.dll', '-Backend', 'mochizuki', '-NoPause']
+        code, output = self.run_process(args, '2\n')
+        self.assertEqual(code, 0, output)
+        self.assertIn('MODEL SETUP REQUIRED', output)
+        self.assertNotIn('EXTRACTOR_MUST_NOT_RUN', output)
+        self.assertNotIn('Preparing INT4', output)
+        self.assertFalse((self.game / 'dlssnr-amd/dlssnr.bin').exists())
+        self.assertTrue((self.game / 'MochizukiNrRuntime.dll').is_file())
+
+    def test_existing_mochizuki_model_ignores_unneeded_nvidia_dll(self):
+        self.ready_mochizuki(model=True)
+        (self.game / 'nvngx_dlssnr.dll').write_bytes(b'unrelated DLL version')
+        code, output = self.run_direct(flags=('-NonInteractive', '-Backend', 'mochizuki'))
+        self.assertEqual(code, 0, output)
+        self.assertNotIn('DLL is not supported', output)
+        self.assertNotIn('Extracting Mochizuki model', output)
+        self.assertIn('Install SUCCEEDED.', output)
+
     def test_mochizuki_existing_model_needs_no_extraction(self):
         self.ready_mochizuki(model=True)
         expected = (self.package / "dlssnr-amd/dlssnr.bin").read_bytes()
@@ -758,9 +806,12 @@ class InstallerExitTests(unittest.TestCase):
         model.write_bytes(b'user invalid model')
         code, output = self.run_direct(flags=('-NonInteractive', '-Backend', 'mochizuki'))
         self.assertEqual(code, 0, output)
-        self.assertIn('MODEL SETUP REQUIRED', output)
-        self.assertNotIn('Install SUCCEEDED.', output)
-        self.assertEqual(model.read_bytes(), b'user invalid model')
+        self.assertIn('Install SUCCEEDED.', output)
+        self.assertIn('Renamed mismatched Mochizuki model', output)
+        self.assertEqual(model.read_bytes(), (self.package / 'dlssnr-amd/dlssnr.bin').read_bytes())
+        backups = list(model.parent.glob('dlssnr.bin.mismatch-*'))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].read_bytes(), b'user invalid model')
 
     def test_mochizuki_unsupported_nvidia_dll_reports_model_pending(self):
         self.ready_mochizuki()
