@@ -226,15 +226,21 @@ Add-Type -TypeDefinition 'public static class PackageFixture { public static int
         self.assertIn('Mochizuki source/artifact mismatch', out)
         self.assertFalse(self.archive.exists())
 
-    def run_ps(self, args, env=None):
-        result = subprocess.run([PS, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', *args],
-                                cwd=self.root, env=env or self.env, capture_output=True, timeout=60)
+    def run_ps(self, args, env=None, timeout=60):
+        try:
+            result = subprocess.run([PS, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', *args],
+                                    cwd=self.root, env=env or self.env, capture_output=True, timeout=timeout)
+        except subprocess.TimeoutExpired as error:
+            output = ((error.stdout or b'') + (error.stderr or b'')).decode('utf-8', errors='replace')
+            self.fail(f'PowerShell timed out after {timeout}s: {args}\nLast output:\n{output[-12000:]}')
         return result.returncode, (result.stdout + result.stderr).decode('utf-8', errors='replace')
 
     def package(self):
+        # Real signing and ZIP verification share the runner with host LTO.
+        # The old 60-second process limit killed a healthy release smoke run.
         return self.run_ps(['-File', str(self.root / 'tools/release/PACKAGE_RELEASE.ps1'),
                            '-OptiDll', str(self.opti), '-AllowMissingDeps', '-Name', 'package',
-                           '-SigningThumbprint', self.thumbprint])
+                           '-SigningThumbprint', self.thumbprint], timeout=180)
 
     def assert_rejected(self, fault):
         damage_modules(self.modules, fault)
