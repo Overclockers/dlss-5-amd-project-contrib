@@ -9,7 +9,7 @@
 | 1 | 风险成立。有限 dispatch 只限制工作量，不能保证调度进度或帧预算。保留 `Config.h` 的默认 false，纠正文档和发布文案。AMD 机制测试成功/耗尽路径通过，但耗尽用例游戏 tail 达 243.880 / 257.522 ms，不能据此启用默认。 |
 | 2 | Host 的 `uncertain` 确实把普通无网络失败变成永久占槽。失败也追加新的侧队列 tail Signal，与真实 game tail 共同证明完成；不直接把 `serial` 当作有效证明。未知 Signal 仍保留，停止无法产生新证据的 100 ms timer。runtime End 失败也停止无意义的重复回收。 |
 | 3 | 成立。捕获采样采用 50 µs 指数退避到 5 ms，最多 2048 次且有 10 s deadline；等待实际 fence 值时 Sleep(1)，不再仅 SwitchToThread。 |
-| 4 | 成立。发布正文迁至 `docs/release-notes/<解析版本>.md`；缺失、空白、无版本标题或标题不匹配均失败。workflow 生成当前源码链接，Release 使用 body_path。 |
+| 4 | 成立。发布正文直接维护在 release.yml（2026-10-15 调整）；空白、无版本标题或标题不匹配均失败。workflow 生成当前源码链接，Release 使用 body_path。 |
 | 5 | 镜像链接存在。三语 README 与发布正文移除 gofile，指向上游提取方法，明确模型由用户按适用许可自行准备；没有把外部报告的法律判断当作已证事实。 |
 | 6 | 成立。补入 lmxxf MIT；所有明确列出的宿主、后端、人物模型及依赖许可改为 staging 前必需项，复制失败中止；ZIP 独立门禁按 Licenses 的完整路径检查。 |
 | 7 | 成立。根目录 LICENSE 复制既有产品 GPL-3.0 全文，NOTICE 说明来源链与组件许可；两者入包。没有替第三方重新授权。 |

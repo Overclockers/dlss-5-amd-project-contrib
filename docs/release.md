@@ -11,7 +11,7 @@
 ## 版本号
 
 - 版本串来自仓库根的 `VERSION`；`PACKAGE_RELEASE.ps1` 未显式给 `-Version` 时读它，并把 `VERSION` 放进包里。
-- 日常发版只更新三语 README 的标题版本号，保留其 Release 更新日志入口，不再向 README 添加逐版更新摘要。中英文更新日志统一维护在 `docs/release-notes/<VERSION>.md`，workflow 按解析后的版本读取；缺失或为空则中止；安装说明等长期文档仅在功能用法确有变化时更新。
+- 日常发版只更新三语 README 的标题版本号，保留其 Release 更新日志入口，不再向 README 添加逐版更新摘要。中英文发布正文直接维护在 `.github/workflows/release.yml` 的 `Prepare release notes` 步骤中，不另存 docs；正文为空或版本标题与 VERSION 不一致则中止；安装说明等长期文档仅在功能用法确有变化时更新。
 - 当前产品名为 **OptScaler(NR)**。品牌仅用于安装/卸载窗口、README、包名等产品展示：窗口显示 `OptScaler(NR) <版本>`，正式 ZIP 为 `OptScaler-NR-<版本>.zip`，直接作为 GitHub Release 附件上传。ZIP 使用连字符，避免 GitHub 上传附件时将括号改为点号、导致按文件名核验失败。同步修改名称时检查打包、上传和下载路径。`OptiScaler.dll` / INI、旧日志名、源码目录及注册表位置保持兼容，旧安装记录仍可识别，新记录写入 `project=OptScaler(NR)`。
 - **tag 与 GitHub Release 标题固定为 `v<版本>`**（例如 `v1.10.2`），不添加品牌或其他描述；workflow 的发布标题直接使用 `github.ref_name`。CI 在 tag 名含 `-alpha`、`-beta` 或 `-rc` 时发成 prerelease，否则是正式版（Latest）。只认这三个后缀。
 - 1.8.x 时代的形式是 `1.8.x-0.3.y`（本 fork 版本 + 支持的 daniel runtime 版本）；1.9 起双后端，不再带 runtime 后缀。
@@ -107,7 +107,7 @@ Actions按精确键缓存Mochizuki产物及公开人物模型/ONNX Runtime（键
 
 ### 执行顺序
 
-1. **固定待发布源码与文案。** 更新 `VERSION`、各语言 README 标题和 `docs/release-notes/<VERSION>.md` 的发布正文，确认版本一致且描述准确。检查 `git status --short` 确认工作区无未跟踪/未提交的脏改动。
+1. **固定待发布源码与文案。** 更新 `VERSION`、各语言 README 标题和 `.github/workflows/release.yml` 中的发布正文，确认版本一致且描述准确。检查 `git status --short` 确认工作区无未跟踪/未提交的脏改动。
 2. **本地核心契约与新鲜度核验。**
    在本地运行模块契约与产物新鲜度检查，确保 40/80 模块契约与当前源码匹配：
    ```powershell
