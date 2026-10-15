@@ -60,7 +60,7 @@ try {
         }
         if ($deps) { break }
     }
-    if (!$deps) { throw 'Extract an existing complete package into this checkout or its main checkout dist/exports, then retry.' }
+    if (!$deps) { Write-Host 'No previous package found; using dependency binaries from the source checkout (git submodule update --init --recursive if missing).' }
     $mochi = Test-Path -LiteralPath (Join-Path $Root 'OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/dlssnr/backend/mochizuki_runtime/MochizukiNrRuntime.cpp')
     if ($mochi -and !(Test-Path -LiteralPath (Join-Path $Root 'tools/build/build-mochizuki-runtime.cmd'))) { throw 'Mochizuki build script missing.' }
     $branch = & git -C $Root branch --show-current
@@ -80,6 +80,8 @@ try {
 @echo off
 setlocal
 call tests\_lib\msvc-env.cmd || exit /b 1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\release\prepare-person-assets.ps1
+if errorlevel 1 exit /b 1
 call tools\build\build-lmxxf-runtime.cmd exports\lmxxf-runtime || exit /b 1
 '@
         if ($mochi) { $batch += "`r`ncall tools\build\build-mochizuki-runtime.cmd $(if (!$Rebuild) { '--reuse' }) || exit /b 1" }
@@ -110,10 +112,12 @@ exit /b 0
             . (Join-Path $Root 'tools/release/package-signing.ps1')
             $signingCertificate = Get-PackageSigningCertificate
             $ps = Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/powershell.exe'
-            Invoke-LoggedNative -Executable $ps -Arguments @('-NoProfile', '-ExecutionPolicy', 'Bypass',
+            $packageArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass',
                 '-File', 'tools/release/PACKAGE_RELEASE.ps1', '-LocalTest', '-Version', $Version,
                 '-Name', $name, '-OutDir', 'dist', '-SigningThumbprint', $signingCertificate.Thumbprint,
-                '-OptiDll', 'exports/release-local/OptiScaler.dll', '-DepsRoot', $deps) `
+                '-OptiDll', 'exports/release-local/OptiScaler.dll')
+            if ($deps) { $packageArgs += @('-DepsRoot', $deps) }
+            Invoke-LoggedNative -Executable $ps -Arguments $packageArgs `
                 -Log (Join-Path $logs 'package.log') -Failure 'Packaging failed'
             $zip = Join-Path $Root "dist/$name.zip"
             if (!(Test-Path -LiteralPath $zip -PathType Leaf)) { throw 'ZIP not produced.' }

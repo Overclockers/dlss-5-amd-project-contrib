@@ -1,4 +1,5 @@
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
@@ -45,6 +46,17 @@ class LocalPackageTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual((self.root / 'VERSION').read_bytes(), b'1.0.0\r\n')
         self.assertFalse((self.root / 'exports').exists())
+
+    def test_no_previous_package_uses_source_checkout(self):
+        shutil.rmtree(self.root / 'dist')
+        result = self.run_script('-Version', '1.12.1', '-PlanOnly')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(b'using dependency binaries from the source checkout', result.stdout)
+        self.assertFalse((self.root / 'exports').exists())
+        result = self.run_script('-Version', '1.12.1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b'Compilation failed', result.stdout + result.stderr)
+        self.assertEqual((self.root / 'VERSION').read_bytes(), b'1.0.0\r\n')
 
     def test_bad_version_rejected(self):
         result = self.run_script('-Version', '../bad', '-PlanOnly')

@@ -30,8 +30,10 @@ MSBuild Build 增量编译，Mochizuki 使用现有 `--reuse` 内容校验，人
 HIP `.hsaco` 使用该分支已提交模块，不另行追更或重编 HIP 实验。Daniel 闭源 DLL 和
 模型仍由安装器原有流程获取，不属于本仓库可编译目标。
 
-依赖从所选工作树或主工作区 `dist/exports` 的完整解压包自动寻找；缺失时先解压一份
-已有完整包再运行。脚本必须在已配置编译工具与子模块的开发机运行。MSBuild 参数与
+依赖可复用所选工作树或主工作区 `dist/exports` 的完整解压包；没有旧包时，直接使用
+源码树中的依赖，不要求预先出包。先用 `git submodule update --init --recursive` 准备子模块；
+人物模型与 ONNX Runtime 由现有准备脚本按需下载/生成，CRT 从本机 MSVC 复制，首次运行需联网。
+脚本必须在已配置编译工具、Python 与子模块的开发机运行。MSBuild 参数与
 `build-release-local.cmd` 使用相同的固定工具链，升级工具链时须同时更新这两个入口。
 
 输出为所选工作树 `dist/OptScaler-NR-<版本>-local-<时间>.zip`，避免覆盖旧包；
