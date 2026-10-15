@@ -1,8 +1,6 @@
-diff --git a/linux/build/build_network.py b/linux/build/build_network.py
-index 7ee833fc..f2d4dc52 100644
 --- a/linux/build/build_network.py
 +++ b/linux/build/build_network.py
-@@ -27,7 +27,8 @@ GLSLANG = R / 'toolchain/glslang/bin/glslang'
+@@ -27,7 +27,8 @@
  RUNTIME = ['runtime_alpha', 'runtime_encode', 'runtime_transfer', 'runtime_upscale', 'runtime_prep', 'runtime_depth', 'cascade_lograt', 'cascade_blur', 'cascade_feed',
             'runtime_downscale', 'runtime_taps']
  # runtime passes built from another pass's source with defines: name -> (source, defines)
@@ -12,8 +10,6 @@ index 7ee833fc..f2d4dc52 100644
  MOTION = ['motion_luma', 'motion_estimate']
  
  
-diff --git a/linux/shaders/passes/runtime_alpha.comp b/linux/shaders/passes/runtime_alpha.comp
-index 76f9054b..c7df0f43 100644
 --- a/linux/shaders/passes/runtime_alpha.comp
 +++ b/linux/shaders/passes/runtime_alpha.comp
 @@ -1,4 +1,22 @@
@@ -39,16 +35,14 @@ index 76f9054b..c7df0f43 100644
  // Preserve caller alpha. Float output keeps NR RGB; 8-bit output uses the same
  // explicit rounding as the reference frame writer before the driver's format-converting blit.
  layout(local_size_x=8, local_size_y=8) in;
-@@ -16,3 +34,4 @@ void main() {
+@@ -16,3 +34,4 @@
      }
      imageStore(result,xy,vec4(rgb,texelFetch(original,xy,0).a));
  }
 +#endif
-diff --git a/windows/build/build_network.py b/windows/build/build_network.py
-index a12515ed..ea1fd0b9 100644
 --- a/windows/build/build_network.py
 +++ b/windows/build/build_network.py
-@@ -31,7 +31,8 @@ GLSLANG = R / 'toolchain/glslang/bin/glslang'
+@@ -31,7 +31,8 @@
  RUNTIME = ['runtime_alpha', 'runtime_encode', 'runtime_transfer', 'runtime_upscale', 'runtime_prep', 'runtime_depth', 'cascade_lograt', 'cascade_blur', 'cascade_feed',
             'runtime_downscale', 'runtime_taps']
  # runtime passes built from another pass's source with defines: name -> (source, defines)
@@ -58,8 +52,6 @@ index a12515ed..ea1fd0b9 100644
  MOTION = ['motion_luma', 'motion_estimate']
  
  
-diff --git a/windows/shaders/passes/runtime_alpha.comp b/windows/shaders/passes/runtime_alpha.comp
-index 76f9054b..c7df0f43 100644
 --- a/windows/shaders/passes/runtime_alpha.comp
 +++ b/windows/shaders/passes/runtime_alpha.comp
 @@ -1,4 +1,22 @@
@@ -85,16 +77,14 @@ index 76f9054b..c7df0f43 100644
  // Preserve caller alpha. Float output keeps NR RGB; 8-bit output uses the same
  // explicit rounding as the reference frame writer before the driver's format-converting blit.
  layout(local_size_x=8, local_size_y=8) in;
-@@ -16,3 +34,4 @@ void main() {
+@@ -16,3 +34,4 @@
      }
      imageStore(result,xy,vec4(rgb,texelFetch(original,xy,0).a));
  }
 +#endif
-diff --git a/windows/src/core/nr_runtime.cpp b/windows/src/core/nr_runtime.cpp
-index cfbb56a3..5f5fc4d4 100644
 --- a/windows/src/core/nr_runtime.cpp
 +++ b/windows/src/core/nr_runtime.cpp
-@@ -329,6 +329,14 @@ struct Temporal {
+@@ -335,6 +335,14 @@
  struct Runtime::Impl {
      NrSession session;
      nrvk::Kernel alpha, mask_pre, mask_resolve;
@@ -109,7 +99,7 @@ index cfbb56a3..5f5fc4d4 100644
      // The linear-light path: the proxy is made in place on tex_in and the
      // original kept here for the decode. Only when RuntimeConfig::linear_input.
      nrvk::Kernel encode, transfer_pass, first_transfer;
-@@ -982,6 +990,8 @@ struct Runtime::Impl {
+@@ -1001,6 +1009,8 @@
          }
          if (depth_copy.device) depth_copy.destroy();
          if (alpha.device) alpha.destroy();
@@ -118,7 +108,7 @@ index cfbb56a3..5f5fc4d4 100644
          if (encode.device) encode.destroy();
          if (transfer_pass.device) transfer_pass.destroy();
          if (first_transfer.device) first_transfer.destroy();
-@@ -1206,8 +1216,9 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
+@@ -1225,8 +1235,9 @@
      vkGetPhysicalDeviceQueueFamilyProperties(host.physical, &count, props.data());
      if (host.queue_family >= count || !(props[host.queue_family].queueFlags & VK_QUEUE_COMPUTE_BIT))
          throw std::invalid_argument("NR host queue must support compute");
@@ -130,7 +120,7 @@ index cfbb56a3..5f5fc4d4 100644
      std::string why;
      if (!s.ctx.adopt(host.instance, host.physical, host.device, host.queue, host.queue_family, &why))
          throw std::runtime_error("NR device unsupported: " + why);
-@@ -1437,6 +1448,22 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
+@@ -1539,6 +1550,22 @@
                                          : (config.max_passes > 1 ? &impl_->shown_keep : &s.tex_in);
      if (!impl_->store_native && !impl_->compact_rgba)
          impl_->alpha.create(s.ctx, (adapters / "runtime_alpha.spv").string(), {}, 12, {answer, frame_alpha});
@@ -153,10 +143,11 @@ index cfbb56a3..5f5fc4d4 100644
      if (config.linear_input) {
          impl_->linear = true;
          impl_->white_point = config.white_point;
-@@ -1764,6 +1791,21 @@ uint32_t Runtime::model_height() const { return impl_->mh; }
+@@ -1875,6 +1902,21 @@
+ 
  void Runtime::set_network_segments(std::function<VkCommandBuffer(VkCommandBuffer, bool)> callback) {
      impl_->network_segments = std::move(callback);
- }
++}
 +const char* Runtime::compute_refusal(bool motion, VkFormat motion_format, VkImageUsageFlags motion_usage,
 +                                     int passes, bool mask) const {
 +    auto& m = *impl_;
@@ -171,11 +162,10 @@ index cfbb56a3..5f5fc4d4 100644
 +}
 +void Runtime::set_compute_recording(bool on) {
 +    impl_->compute_recording = on || !impl_->graphics_family;
-+}
+ }
  void Runtime::set_white_point(float v) {
      if (impl_->linear) impl_->white_point = v > 1e-4f ? v : 1e-4f;
- }
-@@ -2075,6 +2117,7 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
+@@ -2197,6 +2239,7 @@
          barrier(cmd,encoded.handle,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                  VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,
                  VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT);
@@ -183,7 +173,7 @@ index cfbb56a3..5f5fc4d4 100644
          vkCmdBlitImage(cmd,encoded.handle,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                         colour_dst,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&blit,VK_FILTER_NEAREST);
          barrier(cmd,encoded.handle,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,
-@@ -2083,6 +2126,7 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
+@@ -2205,6 +2248,7 @@
      } else if (impl_->transfer == Transfer::DirectBlit) {
          // FP16 / 16-bit UNORM / 10-bit packed: no sRGB transfer function to route
          // around, so the blit's own format conversion is the whole of it.
@@ -191,7 +181,7 @@ index cfbb56a3..5f5fc4d4 100644
          vkCmdBlitImage(cmd, frame.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                         colour_dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
      } else {
-@@ -2104,6 +2148,7 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
+@@ -2226,6 +2270,7 @@
          down.srcSubresource = down.dstSubresource = region.srcSubresource;
          down.srcOffsets[1] = {int32_t(frame.width), int32_t(frame.height), 1};
          down.dstOffsets[1] = {int32_t(nw), int32_t(nh), 1};
@@ -199,7 +189,7 @@ index cfbb56a3..5f5fc4d4 100644
          vkCmdBlitImage(cmd, impl_->keep_full.handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                         s.tex_in.handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &down, impl_->downscale_filter);
          barrier(cmd, impl_->keep_full.handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
-@@ -2259,6 +2304,7 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
+@@ -2381,6 +2426,7 @@
              mv.srcOffsets[1] = {int32_t(engine->motion_x + engine->motion.width),
                                  int32_t(engine->motion_y + engine->motion.height), 1};
              mv.dstOffsets[1] = {int32_t(t.lw[0]), int32_t(t.lh[0]), 1};
@@ -207,7 +197,7 @@ index cfbb56a3..5f5fc4d4 100644
              vkCmdBlitImage(cmd, engine->motion.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                             t.flow[0].handle, VK_IMAGE_LAYOUT_GENERAL, 1, &mv, VK_FILTER_LINEAR);
              barrier(cmd, t.flow[0].handle, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
-@@ -2326,6 +2372,7 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
+@@ -2448,6 +2494,7 @@
                  // a depth that is on neither surface, which is precisely the
                  // edge this tap exists to get right. Vulkan also forbids linear
                  // filtering on a depth aspect.
@@ -215,7 +205,7 @@ index cfbb56a3..5f5fc4d4 100644
                  vkCmdBlitImage(cmd, engine->depth.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                 t.depth.handle, VK_IMAGE_LAYOUT_GENERAL, 1, &d, VK_FILTER_NEAREST);
                  barrier(cmd, t.depth.handle, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
-@@ -2657,6 +2704,7 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
+@@ -2784,6 +2831,7 @@
              barrier(cmd,encoded.handle,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                      VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT,
                      VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT);
@@ -223,7 +213,7 @@ index cfbb56a3..5f5fc4d4 100644
              vkCmdBlitImage(cmd,out,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                             encoded.handle,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&blit,VK_FILTER_NEAREST);
              barrier(cmd,encoded.handle,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-@@ -2667,7 +2715,27 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
+@@ -2794,7 +2842,27 @@
              barrier(cmd,encoded.handle,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,
                      VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT,
                      VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT|VK_ACCESS_TRANSFER_WRITE_BIT);
@@ -251,11 +241,9 @@ index cfbb56a3..5f5fc4d4 100644
              vkCmdBlitImage(cmd, out, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                             wb, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
          } else {
-diff --git a/windows/src/core/nr_runtime.hpp b/windows/src/core/nr_runtime.hpp
-index f7a26055..7ea3757a 100644
 --- a/windows/src/core/nr_runtime.hpp
 +++ b/windows/src/core/nr_runtime.hpp
-@@ -430,6 +430,19 @@ public:
+@@ -450,6 +450,19 @@
      // a null callback preserves the original single-buffer behavior.
      void set_network_segments(std::function<VkCommandBuffer(VkCommandBuffer, bool)>);
  

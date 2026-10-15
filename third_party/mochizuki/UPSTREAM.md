@@ -1,16 +1,15 @@
 # Mochizuki Vulkan NR core
 
 - Source: https://github.com/mochizuki0323/DLSSNR-AMD
-- Source snapshot: `a9b13dd4cdb5f4bf43db358492d72e6e5e2acd67` (2026-10-11). Official summary: Windows native D3D10/11/12 with a Vulkan device of NR's own, ACO Mode, AMD 26.9.2 fixes, and the 0.0.4 feature set.
-- Previous pins, kept only as history: Linux-only v0.0.4 tag `9e4574e1812d7d0632d6db02721a20c9617be434`, and the old Windows v0.0.3 baseline `82560c4fbfaac347fc5e22c22025191402ae916b`. Do not mix those trees back in.
+- Source snapshot: `8a70f7f418294ff1e306b66893456e5319ff8205` (2026-10-14), Windows 0.0.5 preview: ACO INT4 mixed, RenoDX processing, driver identity under GPU spoofing, and the shared 0.0.5 core/shader fixes.
+- Previous pins, kept only as history: Windows `a9b13dd4cdb5f4bf43db358492d72e6e5e2acd67`,  Linux-only v0.0.4 tag `9e4574e1812d7d0632d6db02721a20c9617be434`, and the old Windows v0.0.3 baseline `82560c4fbfaac347fc5e22c22025191402ae916b`. Do not mix those trees back in.
 - License: MIT for this core; the original LICENSE is retained. The product adapter under `dlssnr/backend/mochizuki_runtime/` comes from MatheusFerreiraS/neural-amd-opti `283fdb0a1df9e9c4c78de0d2d848e775cf6ae8ae` (GPL-3.0). The combined runtime is distributed under GPL-3.0, with the MIT notice retained.
-- Closure: `windows/src/core`, `windows/shaders`, `windows/build` (recipe, unroll, quad-quant, `arch/rdna4.sh`), `windows/data/aco` records and `shell-aliases.txt`, `linux/shaders`, `linux/build/build_network.py`, `linux/build/arch/rdna4.sh`, and `linux/package/model-tools`. Patch 12 adds weights-only installation extraction; the weight parser, unpackers and model hash lists remain unchanged.
-- Not imported: `windows/src/pe`, official installers, the Vulkan loader, the ReShade add-on, OptiScaler-NR package scripts, DX9/DX10/DX11 hosts, and the INT4 host path.
+- Closure: `windows/src/core`, `windows/shaders`, `windows/build` (recipe, unroll, quad-quant, `arch/rdna4.sh`), `windows/data/aco` records and `shell-aliases.txt`, `linux/shaders`, `linux/build/build_network.py`, `linux/build/arch/rdna4.sh`, and `linux/package/model-tools`. The 0.0.5 closure also includes `linux/data/int4/rdna4`, Windows INT4 ACO records, the INT4 weight generator, RenoDX core, shaders and their MIT notices. Patch 12 adds weights-only installation extraction; the weight parser, unpackers and model hash lists remain unchanged.
+- Not imported: `windows/src/pe`, official installers, the Vulkan loader, the ReShade add-on, OptiScaler-NR package scripts, DX9/DX10/DX11 hosts. INT4 and RenoDX processing use this product's runtime and Ins menu; upstream Present/menu/screenshot hooks are not imported.
 
-The source pin and thirteen feature patches are machine-readable in
+The source pin and fourteen feature patches are machine-readable in
 [tools/mochizuki-sync/manifest.json](../../tools/mochizuki-sync/manifest.json).
-[Replay verification](../../tools/mochizuki-sync/README.md) reproduces all 173
-closure files from the pinned Git objects plus these patches, without overwriting
+[Replay verification](../../tools/mochizuki-sync/README.md) reproduces 563 upstream files and four patch-created Plan A shaders from the pinned Git objects plus these patches, without overwriting
 vendor. [Extension decisions](../../docs/architecture/mochizuki-upstream-extensions.md)
 record their consumers, upstream suitability and missing validation.
 
@@ -52,7 +51,7 @@ ACO is off unless `MochizukiAcoMode` is true. The host pushes the current INI in
 
 The product device enables `VK_EXT_pipeline_robustness` when the physical device lists the extension and the feature is on. `adopt()` reads that feature from the physical device, and `Kernel::create` then chains a robustness info. `Features::prepare` and `mark` run only after a bundle was configured. `MZ_PROBE_PIPELINE_BINARY` remains a test probe, not the ACO path.
 
-The builder writes Linux SPIR-V to `dlssnr-amd/aco/shaders` and copies the official records and aliases beside it. Generation failure fails the build. Package and uninstall ownership is the exact relative list in `tools/install/mochizuki-owned.txt` (220 paths: the 58 official records, both shader trees' pinned outputs, and `aco/shell-aliases.txt`). The packager copies only those paths and ships the pin as `mochizuki-owned.txt`. It does not copy `dlssnr.bin`, `pipeline.cache`, `aco-cache`, `test.spv` or a file whose name merely resembles a package file. Uninstall deletes a shader or ACO file only when its path is on that pin, and removes a directory only when it is empty. A missing pin deletes no shader or ACO file. Unknown files stay. Linked paths stay. `dlssnr.bin` and `aco-cache` stay.
+The builder writes Linux SPIR-V to `dlssnr-amd/aco/shaders` and copies the official records and aliases beside it. Generation failure fails the build. Package and uninstall ownership is the exact relative list in `tools/install/mochizuki-owned.txt` (794 paths, including default/INT4 ACO records, INT4 recovery data and RenoDX shaders). The packager copies only those paths and ships the pin as `mochizuki-owned.txt`. It does not copy `dlssnr.bin`, `pipeline.cache`, `aco-cache`, `test.spv` or a file whose name merely resembles a package file. Uninstall deletes a shader or ACO file only when its path is on that pin, and removes a directory only when it is empty. A missing pin deletes no shader or ACO file. Unknown files stay. Linked paths stay. `dlssnr.bin`, `dlssnr-int4.bin` and `aco-cache` stay.
 
 ## Optional FP16 compute conversions
 
@@ -80,9 +79,10 @@ On 2026-10-11, `tests/mochizuki/run.cmd aco` selected AMD Radeon RX 9070 XT (ven
 
 ## Decoder-tail synchronization correction (2026-10-12)
 
-`09-aco-decoder-tail-barrier.patch` adapts the graph fix by **Overclockers** from
+Former `09-aco-decoder-tail-barrier.patch` adapted the graph fix by **Overclockers** from
 [project PR #5](https://github.com/TheAutomatic/dlss-5-amd-project/pull/5), commit
 [`60f9202fd6bc0384d1d4615658cee2ddca9b3004`](https://github.com/TheAutomatic/dlss-5-amd-project/commit/60f9202fd6bc0384d1d4615658cee2ddca9b3004).
+The official 0.0.5 graph now includes this fix, so patch 09 has been removed.
 The C64 persistent decoder to fused C32 pair is no longer admitted by `tchain_pair`.
 The existing inter-dispatch barrier and arena lifetime boundary are therefore
 retained together. Earlier decoder/encoder/C512/ViT chains keep their official
@@ -108,4 +108,4 @@ These are fixture results, not new game acceptance or FPS measurements.
 
 ## Not claimed
 
-No game scene was part of this integration. Official timing numbers are not reused as local results. INT4 stays off. The same-repo draft's explicit barrier switch was not added.
+No game scene was part of those historical checks. Official timing numbers are not reused as local results. INT4 was off in those checks and remains off by default. Current 0.0.5 integration and validation scope are recorded in [the integration review](../../docs/architecture/mochizuki-005-integration.md). The same-repo draft's explicit barrier switch was not added.

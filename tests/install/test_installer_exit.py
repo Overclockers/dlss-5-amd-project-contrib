@@ -16,6 +16,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "_lib"))
 from lmxxf_fixtures import damage_modules, locked_file, make_modules, snapshot_files
+from mochizuki_fixtures import int4_tools, PAYLOAD as INT4_PAYLOAD
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -445,6 +446,16 @@ class InstallerExitTests(unittest.TestCase):
         (aco / "records/0123456789abcdef.nrp").write_bytes(b"NRPAL fixture")
         (aco / "shell-aliases.txt").write_bytes(b"g_from.spv g_attn.spv\n")
         (aco / "shaders/shader-constants.txt").write_bytes(b"fixture\n")
+        for name in ('mochizuki-owned.txt', 'mochizuki-int4.ps1'):
+            shutil.copy2(REPO / 'tools/install' / name, self.package)
+        for relative in (self.package / 'mochizuki-owned.txt').read_text().splitlines():
+            if not relative.strip() or relative.startswith('#'):
+                continue
+            path = shaders.parent / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not path.exists():
+                path.write_bytes(b'pinned asset fixture')
+        int4_tools(self.package / 'model-tools')
         if model:
             (shaders.parent / "dlssnr.bin").write_bytes(b"NRMODEL1" + (599).to_bytes(4, "little") + bytes(20))
 
@@ -584,7 +595,9 @@ class InstallerExitTests(unittest.TestCase):
     def test_mochizuki_incomplete_aco_rejected_before_install_changes(self):
         self.ready_mochizuki()
         for relative in ("dlssnr-amd/aco/shaders/shader-constants.txt", "dlssnr-amd/aco/records",
-                         "dlssnr-amd/aco/shell-aliases.txt"):
+                         "dlssnr-amd/aco/shell-aliases.txt", "dlssnr-amd/aco/int4/records",
+                         "dlssnr-amd/int4/settings.txt", "dlssnr-amd/shaders/renodx",
+                         "model-tools/dlssnr-int4-weights.exe", "mochizuki-int4.ps1"):
             path = self.package / relative
             saved = self.root / "removed-aco-asset"
             if saved.exists():
@@ -616,6 +629,25 @@ class InstallerExitTests(unittest.TestCase):
         self.assertIn("Install SUCCEEDED.", output)
         self.assertNotIn("Extracting Mochizuki model", output)
         self.assertEqual((self.game / "dlssnr-amd/dlssnr.bin").read_bytes(), expected)
+        self.assertEqual((self.game / "dlssnr-amd/dlssnr-int4.bin").read_bytes(), INT4_PAYLOAD)
+
+    def test_mochizuki_int4_reuse_and_failed_conversion_preserve_weights(self):
+        self.ready_mochizuki(model=True)
+        flags = ('-NonInteractive', '-Backend', 'mochizuki')
+        code, output = self.run_direct(flags=flags)
+        self.assertEqual(code, 0, output)
+        output_model = self.game / 'dlssnr-amd/dlssnr-int4.bin'
+        first_time = output_model.stat().st_mtime_ns
+        code, output = self.run_direct(flags=flags)
+        self.assertEqual(code, 0, output)
+        self.assertIn('INT4 weights already match', output)
+        self.assertEqual(output_model.stat().st_mtime_ns, first_time)
+        (self.package / 'model-tools/dlssnr-int4.sha256').write_text('0' * 64)
+        code, output = self.run_direct(flags=flags)
+        self.assertNotEqual(code, 0, output)
+        self.assertIn('Generated INT4 model hash differs', output)
+        self.assertEqual(output_model.read_bytes(), INT4_PAYLOAD)
+        self.assertFalse(list(output_model.parent.glob('.mochizuki-int4-*.tmp')))
 
     def test_mochizuki_reuses_game_model(self):
         self.ready_mochizuki()

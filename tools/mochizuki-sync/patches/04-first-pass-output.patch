@@ -1,6 +1,6 @@
 --- a/windows/src/core/nr_runtime.cpp
 +++ b/windows/src/core/nr_runtime.cpp
-@@ -83,6 +83,9 @@
+@@ -89,6 +89,9 @@
  };
  static_assert(sizeof(TransferPush) == 48, "runtime_transfer.comp's push block");
  constexpr uint32_t kTransferEnlarged = 1, kTransferGuided = 2, kTransferRoundU8 = 4;
@@ -10,7 +10,7 @@
  
  struct PrepPush {
      uint32_t w, h, mode, flags, curve;
-@@ -328,8 +331,8 @@
+@@ -334,8 +337,8 @@
      nrvk::Kernel alpha, mask_pre, mask_resolve;
      // The linear-light path: the proxy is made in place on tex_in and the
      // original kept here for the decode. Only when RuntimeConfig::linear_input.
@@ -21,7 +21,7 @@
      bool linear{};
      // Preprocess (RuntimeConfig::preprocess): runtime_prep.comp's meter,
      // forward and back modes, the frame as it came in (`prep_keep`, model
-@@ -980,6 +983,8 @@
+@@ -999,6 +1002,8 @@
          if (alpha.device) alpha.destroy();
          if (encode.device) encode.destroy();
          if (transfer_pass.device) transfer_pass.destroy();
@@ -30,7 +30,7 @@
          if (prep_k.device) prep_k.destroy();
          if (prep_back_k.device) prep_back_k.destroy();
          if (transfer_prep.device) transfer_prep.destroy();
-@@ -1462,6 +1467,14 @@
+@@ -1565,6 +1570,14 @@
          if (impl_->scaled)
              impl_->upscale_pass.create(s.ctx, (adapters / "runtime_upscale.spv").string(), {}, 20,
                                         {&s.surf0, shown, &impl_->up_result, &impl_->up_shown});
@@ -45,7 +45,7 @@
      }
      if (config.preprocess && !mask_config.width) {
          impl_->prep = true;
-@@ -2514,6 +2527,25 @@
+@@ -2641,6 +2654,25 @@
                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                      VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
          }
@@ -71,7 +71,7 @@
      }
      if (temporal) {
          // Leave the bound history holding the FIRST pass's, which is what the
-@@ -2567,8 +2599,6 @@
+@@ -2694,8 +2726,6 @@
              // resolve; see the shader. At the frame extent; the model-sized
              // answer is sampled.
              const bool prep_variant = prep_on && impl_->transfer_prep.device;
@@ -80,7 +80,7 @@
              const int enlargement = std::clamp(c.transfer, 0, 2);
              const uint32_t mode = kShaderMode[enlargement];
              const uint32_t scaler = uint32_t(std::clamp(c.classic_scaler, 0, 3));
-@@ -2699,6 +2729,7 @@
+@@ -2826,6 +2856,7 @@
  uint64_t Runtime::gpu_timing_serial() const { return impl_->gpu_timing_serial; }
  float Runtime::last_network_ms() const { return impl_->network_ms; }
  float Runtime::last_other_ms() const { return impl_->other_ms; }
@@ -90,7 +90,7 @@
      if (!s || s[1] != 1.0f) return {NAN, NAN};
 --- a/windows/src/core/nr_runtime.hpp
 +++ b/windows/src/core/nr_runtime.hpp
-@@ -168,6 +168,10 @@
+@@ -177,6 +177,10 @@
      // (its linear-HDR encode, or linear_input's own): the preprocess undoes the
      // knee first, so its curve is the only one. False for an SDR frame.
      bool preprocess_unknee = false;
@@ -101,7 +101,7 @@
  };
  
  // A build on this thread stops before its next pipeline once *build_cancel is
-@@ -434,6 +438,10 @@
+@@ -454,6 +458,10 @@
      // Other is the core total minus the network. Zero until that sample.
      float last_network_ms() const;
      float last_other_ms() const;

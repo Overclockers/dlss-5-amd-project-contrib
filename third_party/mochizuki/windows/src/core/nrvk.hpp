@@ -838,6 +838,22 @@ struct Kernel {
     VkDescriptorPool pool{};
     VkDescriptorSet set{};
     uint32_t push_range{};   // the layout's push constant bytes
+    uint32_t aco_push_gap{}; // ACO INT4 uses Linux's push layout, omitting Windows's arena address.
+    void push_constants(VkCommandBuffer cmd, uint32_t bytes, const void* data) const {
+        if (!bytes) return;
+        if (!aco_push_gap) {
+            vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, bytes, data);
+            return;
+        }
+        if (bytes < aco_push_gap + 8 || bytes > 128)
+            throw std::runtime_error("invalid ACO INT4 push block");
+        std::array<uint8_t,128> compact{};
+        std::memcpy(compact.data(), data, aco_push_gap);
+        std::memcpy(compact.data()+aco_push_gap, static_cast<const uint8_t*>(data)+aco_push_gap+8,
+                    bytes-aco_push_gap-8);
+        // Keep the pipeline layout's declared range, including its zeroed tail.
+        vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, bytes, compact.data());
+    }
 
     // **Image bindings follow the buffers**, in set 0, continuing the binding
     // numbers. The two image adapters are the only layers that need them - a
@@ -853,6 +869,13 @@ struct Kernel {
                 const std::vector<Context::Image*>& images = {}) {
         device = ctx.device;
         push_range = push_bytes;
+#if NR_INT4
+        if (!nr::binary::directory().empty() && nr::build_cfg("NR_I4_WEIGHTS")) {
+            const auto name=spirv_path.substr(spirv_path.find_last_of("/\\")+1);
+            if (!nr::binary::native_shell(name))
+                aco_push_gap=name.rfind("g_gemm",0)==0 && push_bytes>=88 ? 80u : name=="g_vitattn.spv" ? 20u : 0u;
+        }
+#endif
         const uint32_t nb = uint32_t(bindings.size());
         const uint32_t ni = uint32_t(images.size());
         const uint32_t n = nb + ni;
@@ -1118,7 +1141,7 @@ struct Runner {
         vkCmdResetQueryPool(cmd, queries, 0, 2);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, k.pipeline);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, k.layout, 0, 1, &k.set, 0, nullptr);
-        if (push_bytes) vkCmdPushConstants(cmd, k.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, push_bytes, push);
+        k.push_constants(cmd, push_bytes, push);
         vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, queries, 0);
         VkMemoryBarrier between{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
         between.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -1288,9 +1311,7 @@ struct Runner {
                     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, s.k->pipeline);
                     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, s.k->layout,
                                             0, 1, &s.k->set, 0, nullptr);
-                    if (s.push_bytes)
-                        vkCmdPushConstants(cmd, s.k->layout, VK_SHADER_STAGE_COMPUTE_BIT,
-                                           0, s.push_bytes, s.push);
+                    s.k->push_constants(cmd, s.push_bytes, s.push);
                     vkCmdDispatch(cmd, s.gx, s.gy, s.gz);
                     if (nq)
                         vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,

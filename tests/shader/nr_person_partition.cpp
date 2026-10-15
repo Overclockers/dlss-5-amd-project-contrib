@@ -1,5 +1,15 @@
 #include "nr_effects_float_utils.h"
+// Keep IPC deadlines on wall time, but make the pipelined capture age/schedule
+// deterministic: software WARP execution speed is not the freshness contract.
+#include "../../OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/dlssnr/person/PersonInference.h"
+#include "../../OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/dlssnr/person/PersonCapture.h"
+static std::atomic<uint64_t> partitionTestTick{0};
+static uint64_t PartitionTestClock(){const auto tick=partitionTestTick.load();return tick?tick:GetTickCount64();}
+#define GetTickCount64 PartitionTestClock
+#define CaptureClock PartitionTestClock
 #include "../../OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/dlssnr/person/PersonPartition.h"
+#undef CaptureClock
+#undef GetTickCount64
 namespace Person = DlssNr::Person;
 static void UploadGuide(ID3D12Device*d,ID3D12CommandQueue*q,ID3D12Resource*r,float value,unsigned channels){
  auto desc=r->GetDesc();D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp{};UINT64 bytes=0;d->GetCopyableFootprints(&desc,0,1,0,&fp,nullptr,nullptr,&bytes);
@@ -147,13 +157,15 @@ int main(){
   if(GetTickCount64()-start>=30000){std::string message=std::string("capture worker timeout waiting for ")+what+": "+Person::Worker().Status();Require(false,message.c_str());}
   Sleep(1);}};
  until("ready",[&]{return Person::Worker().Ready();});
+ std::lock_guard captureLock(Submission::RecordingMutex());
+ partitionTestTick.store(GetTickCount64());
  Ptr<ID3D12Fence>gate;Check(d->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&gate)),"capture gate");
  struct Unblock{ID3D12Fence* fence;~Unblock(){fence->Signal(1);}} unblock{gate.Get()};
  Check(q->Wait(gate.Get(),1),"hold capture GPU");
  std::vector<Recording>pending;
  uint64_t newestCapture=0;
  for(unsigned i=0;i<5;++i){
-  if(i)Sleep(64); // Leave margin for GetTickCount64's ~16 ms quantization.
+  if(i)partitionTestTick.fetch_add(64);
   pending.push_back(record());
   Check(pending.back().proxy->ExecuteOn(q.Get()),"pipelined capture execute");
   if(i<4)newestCapture=Person::Global().frame;
@@ -163,7 +175,17 @@ int main(){
  Check(gate->Signal(1),"release captures");WaitQueue(d.Get(),q.Get());Person::Poll();
  until("first result",[&]{return Person::Worker().Latest()!=nullptr;});
  Require(Person::Worker().Latest()->frame==newestCapture,"latest completed GPU capture wins");
+ // A completed image older than the unchanged 250ms limit must never replace it.
+ partitionTestTick.fetch_add(64);
+ auto delayed=record();
+ Require(std::count_if(Person::Global().leases.begin(),Person::Global().leases.end(),[](auto& l){return !l->sent&&l->storage->readback;})==1,"delayed capture prepared");
+ Check(delayed.proxy->ExecuteOn(q.Get()),"delayed capture execute");
+ WaitQueue(d.Get(),q.Get());partitionTestTick.fetch_add(251);Person::Poll();
+ Require(Person::Global().captureSchedule.submittedFrame==newestCapture,"expired GPU capture not submitted");
+ Require(Person::Worker().Latest()->frame==newestCapture,"expired GPU capture cannot replace result");
+ delayed.proxy.Reset();
  pending.clear();Person::Worker().Configure(false,fixture);Person::Reset();
+ partitionTestTick.store(0);
  Require(Person::Global().leases.empty(),"pipeline captures released after fence");
  Ptr<ID3D12InfoQueue>info;if(SUCCEEDED(d.As(&info)))for(UINT64 i=0;i<info->GetNumStoredMessages();++i){SIZE_T bytes=0;info->GetMessage(i,nullptr,&bytes);std::vector<char>data(bytes);auto*m=reinterpret_cast<D3D12_MESSAGE*>(data.data());info->GetMessage(i,m,&bytes);if(m->Severity<=D3D12_MESSAGE_SEVERITY_ERROR)std::fprintf(stderr,"%s\n",m->pDescription);Require(m->Severity>D3D12_MESSAGE_SEVERITY_ERROR,"D3D12 debug");}
  puts("person partition: PASS (first/final, alpha, two-frame motion, time/reset rejection, stale/replay, disocclusion, closed-list lifetime)");

@@ -22,7 +22,9 @@ int wmain(int argc,wchar_t**argv){
  if(mode!="legacy")h->flags=Ipc::ShmVersion;
  h->state=uint32_t(Ipc::WorkerState::Ready);SetEvent(response);
  HANDLE waits[]={stop,request};
- while(WaitForMultipleObjects(2,waits,FALSE,5000)==WAIT_OBJECT_0+1){
+ // Match the real worker's idle lifetime. Slow WARP capture is not a stop request;
+ // Provider owns this process with a kill-on-close job and an explicit stop event.
+ while(WaitForMultipleObjects(2,waits,FALSE,INFINITE)==WAIT_OBJECT_0+1){
   h->state=uint32_t(Ipc::WorkerState::Processing);
   if(mode=="slow")Sleep(30);
   h->respFrame=h->reqFrame;h->respEpoch=h->reqEpoch;h->respTick=h->reqTick;

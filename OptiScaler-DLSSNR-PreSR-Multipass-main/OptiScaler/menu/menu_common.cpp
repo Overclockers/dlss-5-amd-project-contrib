@@ -8,6 +8,7 @@
 #include "MenuWindowLayout.h"
 #include "SplashNotice.h"
 #include "MenuFont.h"
+#include "MochizukiNetworkShortcut.h"
 #include <dlssnr/DlssNr_ExposureScan.h>
 #include <dlssnr/amd/AmdPreSr.h>
 
@@ -172,6 +173,8 @@ static float lastMenuScale = 0.0f;
 static CustomOptional<uint32_t> comboPreset { 0 };
 static int lastKey = 0;
 static bool inputDlssNr = false;
+static bool inputMochizukiNetwork = false;
+static MochizukiNetworkShortcut mochizukiNetworkShortcut;
 static bool capturingKey = false;
 
 template <typename T, size_t N> struct RingBuffer
@@ -262,12 +265,24 @@ void MenuCommon::UpdateManualInput(HWND targetHwnd)
 
     const auto config = Config::Instance();
 
+    const auto currentTick = GetTickCount64();
+    const bool canAcceptInputs = lastInputTick + debounceThreshold < currentTick;
+    const bool typing = ImGui::GetCurrentContext() && ImGui::GetIO().WantTextInput;
+    const auto networkKey = mochizukiNetworkShortcut.Update(
+        OptiInput::IsKeyDown(VK_CONTROL) || OptiInput::IsKeyDown(VK_LCONTROL) || OptiInput::IsKeyDown(VK_RCONTROL),
+        OptiInput::IsKeyDown(VK_F11),
+        OptiInput::IsFocused() && DlssNr::Backend::ActiveKindFromConfig() == DlssNr::Backend::Kind::Mochizuki,
+        !capturingKey && !typing && canAcceptInputs);
+    inputMochizukiNetwork |= networkKey.toggle;
+
     auto CheckShortcut = [&](int vk, bool& inputFlag, const char* logMessage)
     {
         if (inputFlag)
             return;
 
         if (vk <= 0 || vk >= 256)
+            return;
+        if (vk == VK_F11 && networkKey.suppressF11)
             return;
 
         if (OptiInput::IsKeyReleased(vk))
@@ -278,9 +293,6 @@ void MenuCommon::UpdateManualInput(HWND targetHwnd)
             LOG_DEBUG("{}", logMessage);
         }
     };
-
-    const auto currentTick = GetTickCount64();
-    const bool canAcceptInputs = lastInputTick + debounceThreshold < currentTick;
 
     if (!capturingKey && canAcceptInputs)
     {
@@ -1342,6 +1354,23 @@ void MenuCommon::HandleMenuShortcuts(RenderMenuContext& ctx)
         {
             inputFps = false;
             config->ShowFps = !config->ShowFps.value_or_default();
+        }
+
+        if (inputMochizukiNetwork)
+        {
+            inputMochizukiNetwork = false;
+            if (DlssNr::Backend::ActiveKindFromConfig() == DlssNr::Backend::Kind::Mochizuki)
+            {
+                config->MochizukiInt4Mixed = !config->MochizukiInt4Mixed.value_or_default();
+                DlssNr::AmdBridge::InvalidateHistory();
+                LOG_INFO("Ctrl+F11: Mochizuki INT4 request={}, ACO preference unchanged",
+                         config->MochizukiInt4Mixed.value_or_default());
+                ImGuiToast toast { ImGuiToastType::Info, 3000 };
+                toast.setTitle("Mochizuki");
+                toast.setContent("%s", MenuLocale::Translate(config->MochizukiInt4Mixed.value_or_default()
+                    ? "INT4 mixed requested (requires ACO)" : "Default network requested"));
+                ImGui::InsertNotification(toast);
+            }
         }
 
         if (inputDlssNr)

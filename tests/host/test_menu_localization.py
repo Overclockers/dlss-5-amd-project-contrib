@@ -30,7 +30,10 @@ class MenuLocalizationTests(unittest.TestCase):
                      'Apply NR edit (experimental)',
                      'Temporal history', 'Temporal history (anti-flicker)', 'ViT adaptive reuse', 'Save Settings', 'Close',
                      'Low-frequency gain', 'Fine-detail gain', 'Skin detail protection', 'Edge detail protection',
-                     'Person protection', 'Person NR strength', 'Person detail'):
+                     'Person protection', 'Person NR strength', 'Person detail',
+                     'INT4 mixed requested (requires ACO)', 'Default network requested',
+                     'Person protection is unavailable with RenoDX. Your settings are preserved for the original mode.',
+                     'Ctrl+F11 switches the default network and INT4 mixed. ACO preference is unchanged; INT4 requires active ACO. Save Settings to keep the selection.'):
             self.assertIn(text, dict(ENTRIES))
 
     def test_language_is_host_owned_and_default_english(self):

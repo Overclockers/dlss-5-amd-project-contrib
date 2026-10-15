@@ -42,5 +42,18 @@ def dependencies(repo):
         unpack(archive, cache / 'glslang')
     return headers / 'include', glslang
 
+
+def slang_dependency(repo):
+    cache = repo / 'exports/mochizuki-toolchain'
+    cache.mkdir(parents=True, exist_ok=True)
+    archive = cache / 'slang-2026.19-windows-x86_64.zip'
+    fetch('https://github.com/shader-slang/slang/releases/download/v2026.19/' + archive.name,
+          archive, 'fc922f214b5d115f663932e59e80e0f6b6cc6fae140979cf307da6459b6f8f33')
+    target = cache / 'slang-2026.19'
+    compiler = target / 'bin/slangc.exe'
+    if not compiler.is_file():
+        unpack(archive, target)
+    return compiler
+
 if __name__ == '__main__':
     print(*dependencies(Path(__file__).resolve().parents[2]), sep='\n')

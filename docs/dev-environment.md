@@ -102,3 +102,8 @@ tests\run-all.cmd --tier ci|device|gpu|all [--out 目录] [--skip-sync] [--keep-
 
 - `tools/build/build-ci.ps1`：Actions的宿主/CI并行入口，需已配置MSVC环境与pwsh。
 - `tools/lmxxf-sync/test-cache.py`：同步工具回归的内容/环境/UTC周成功记录；通过tests/sync/run.cmd使用。
+
+Mochizuki 0.0.5 additionally builds RenoDX shaders with pinned Slang 2026.19
+(`tools/build/mochizuki-renodx.py`) and the native INT4 model converter.
+`tools/install/mochizuki-int4.ps1` validates generated user weights against the
+upstream hash; the build and release packages never include these weights.

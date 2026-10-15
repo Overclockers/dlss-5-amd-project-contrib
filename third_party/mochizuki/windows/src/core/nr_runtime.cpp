@@ -9,6 +9,12 @@
 #include <filesystem>
 #include <string>
 #include <mutex>
+#if NR_INT4
+#include "nr_ini_int4.hpp"
+#ifdef _WIN32
+extern "C" __declspec(dllimport) unsigned long __stdcall GetEnvironmentVariableA(const char*, char*, unsigned long);
+#endif
+#endif
 
 // Arena reuse: byte-identical to one value one slot at 16 extents, first and fourth
 // frame, model scale 1 and 0.5.
@@ -102,7 +108,7 @@ void dispatch(VkCommandBuffer cmd, const nrvk::Kernel& k, uint32_t x, uint32_t y
               uint32_t z, const void* push, uint32_t bytes, VkDescriptorSet set = VK_NULL_HANDLE) {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, k.pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, k.layout, 0, 1, set ? &set : &k.set, 0, nullptr);
-    if (bytes) vkCmdPushConstants(cmd, k.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, bytes, push);
+    k.push_constants(cmd, bytes, push);
     vkCmdDispatch(cmd, x, y, z);
 }
 
@@ -363,6 +369,10 @@ struct Runtime::Impl {
     Preprocess prep_last{};
     std::chrono::steady_clock::time_point prep_metered{};
     uint32_t prep_gen{}, prep_gen_single{};
+    // The pre block's noise seed on frames without a motion source (Runtime::record, Controls::noise_every_frame):
+    // Advance the frame sequence once per launch, independently of motion inputs.
+    // Reset restarts the sequence.
+    uint32_t plain_seed{};
     float white_point{1.0f};
     // Model Resolution: the network runs at mw x mh, the frame is width x
     // height. When they differ, `keep_full` holds the frame as handed over
@@ -594,6 +604,9 @@ struct Runtime::Impl {
     // The network's input image is in the frame's own format (its UNORM twin
     // for *_SRGB) and a plain copy fills it; see the graph's --tex-in-format.
     bool direct_in{};
+#if NR_INT4
+    bool int4_mixed{};   // the int4 mixed network (Runtime::int4_mixed)
+#endif
     // The post block stores into an image in the frame's (UNORM) format and the
     // write-back is a copy; see the graph's --out0-format.
     bool direct_out{};
@@ -724,7 +737,7 @@ struct Runtime::Impl {
         if (!d.pool) {
             const VkDescriptorPoolSize sizes[] = {
                 {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 16},
-                {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 7}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4}};
+                {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4}};
             VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
             pi.maxSets = 2; pi.poolSizeCount = 3; pi.pPoolSizes = sizes;
             ok = vkCreateDescriptorPool(dev, &pi, nullptr, &d.pool) == VK_SUCCESS;
@@ -759,12 +772,18 @@ struct Runtime::Impl {
                 d.post[0] = kernel_set(dev, d.pool, *plain_post, {a, a, w, w, w}, {&surf0, &surf1, &cim});
                 ok = d.pre[0] && d.post[0];
             } else {
-            d.pre[c] = t.hp ? kernel_set(dev, d.pool, t.pre_pp[c], t.pre_buffers, {&cim, &mim, &t.hist(c), &dim, &t.hpass})
-                            : kernel_set(dev, d.pool, t.pre_pp[c], t.pre_buffers, {&cim, &mim, &t.hist(c), &dim});
-            d.post[c] = t.hp ? kernel_set(dev, d.pool, t.post_pp[c], t.post_buffers,
-                                          {&surf0, &t.hist_store[c ^ 1u], &cim, &mim, &t.hist(c), &t.hpass})
-                             : kernel_set(dev, d.pool, t.post_pp[c], t.post_buffers,
-                                          {&surf0, &t.hist_store[c ^ 1u], &cim, &mim, &t.hist(c)});
+            // One pass: this parity's ping-pong pre and post. More (no ping-pong, `c` 0): the pre and post
+            // every pass runs, the model's write going to surf1 as in their own sets.
+            const nrvk::Kernel& pre_k = t.pingpong ? t.pre_pp[c] : t.pre;
+            const nrvk::Kernel& post_k = t.pingpong ? t.post_pp[c] : t.post;
+            nrvk::Context::Image surf1 = s.surf1;
+            nrvk::Context::Image* written = t.pingpong ? &t.hist_store[c ^ 1u] : &surf1;
+            d.pre[c] = t.hp ? kernel_set(dev, d.pool, pre_k, t.pre_buffers, {&cim, &mim, &t.hist(c), &dim, &t.hpass})
+                            : kernel_set(dev, d.pool, pre_k, t.pre_buffers, {&cim, &mim, &t.hist(c), &dim});
+            d.post[c] = t.hp ? kernel_set(dev, d.pool, post_k, t.post_buffers,
+                                          {&surf0, written, &cim, &mim, &t.hist(c), &t.hpass})
+                             : kernel_set(dev, d.pool, post_k, t.post_buffers,
+                                          {&surf0, written, &cim, &mim, &t.hist(c)});
             ok = d.pre[c] && d.post[c];
             }
         }
@@ -1236,6 +1255,55 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
     s.ctx.secondary_family = host.secondary_family;
     s.ctx.buffer_device_address = host.buffer_device_address;
     s.ctx.require_matrix_config();
+#if NR_INT4
+    // int4_mixed ([Int4Mixed] in dlssnr-amd.ini; DLSSNR_INT4 wins over the ini, the caller's choice - the in-game
+    // switch - over both). Installed, it needs dlssnr-amd/int4/ (shaders, quantisers, settings.txt), the weights the
+    // installer made (dlssnr-amd/dlssnr-int4.bin) and ACO Mode enabled on a device supporting VK_KHR_pipeline_binary;
+    // anything missing: the default network, and the log says why.
+    bool int4 = false;
+    std::string int4_env;
+#ifdef _WIN32
+    { char b[16] = {}; const unsigned long n = GetEnvironmentVariableA("DLSSNR_INT4", b, sizeof b); if (n && n < sizeof b) int4_env = b; }
+#endif
+    if (int4_env.empty()) if (const char* e = std::getenv("DLSSNR_INT4")) int4_env = e;
+    if (config.int4_mixed >= 0) int4_env = config.int4_mixed ? "1" : "0";
+    const char* int4_from = config.int4_mixed >= 0 ? "switch" : int4_env.empty() ? "dlssnr-amd.ini" : "DLSSNR_INT4";
+    if (int4_env.empty()) {
+        // no Enabled: on (nr_ini_int4.hpp) - but only an installed tree has int4 data; a development tree stays off
+        const int iv = nr::ini_int4((data.parent_path() / "dlssnr-amd.ini").string()).enabled;
+        int4_env = iv == 0 ? "0" : iv == 1 || installed ? "1" : "";
+    }
+    // What the build reads for int4 (nr_build_cfg.hpp): installed, only this map - empty for the default network, so
+    // nothing in the environment reaches it; a development tree keeps reading the environment.
+    std::map<std::string, std::string> int4_cfg;
+    const std::filesystem::path i4root = data / "int4";
+    if (int4_env == "1") {
+        std::error_code ec;
+        const char* missing = !installed ? "not an installed tree"
+            : !std::filesystem::is_directory(i4root / "shaders" / "temporal", ec) || !std::filesystem::is_directory(i4root / "vit", ec) ||
+                      !std::filesystem::is_regular_file(i4root / "settings.txt", ec) ? "dlssnr-amd/int4/ is incomplete"
+            : !std::filesystem::is_regular_file(data / "dlssnr-int4.bin", ec) ? "dlssnr-amd/dlssnr-int4.bin is missing (run install.ps1 again)"
+            : nr::binary::directory().empty() || !nr::binary::enabled(host.device) ? "ACO Mode is off or pipeline binaries are unavailable"
+            : nullptr;
+        if (missing) {
+            nr::logf("[nr] int4_mixed requested (%s) but %s: default network", int4_from, missing);
+        } else {
+            if (!std::filesystem::is_directory(std::filesystem::path(aco) / "int4/records", ec))
+                throw std::runtime_error("the ACO INT4 records are missing");
+            int4 = true;
+            int4_cfg["NR_I4_DIR"] = (i4root / "vit").string();
+            if (std::filesystem::is_directory(i4root / "swin", ec)) int4_cfg["NR_SWI4_DIR"] = (i4root / "swin").string();
+            int4_cfg["NR_I4_WEIGHTS"] = (data / "dlssnr-int4.bin").string();
+            // the rewritten pipeline binaries (nrvk.hpp create_iu4), keyed by driver like pipeline.cache
+            std::filesystem::create_directories(i4root / "pipeline-binaries", ec);
+            if (!ec) int4_cfg["NR_I4_CACHE"] = (i4root / "pipeline-binaries").string();
+            const auto t = slurp((i4root / "settings.txt").string());
+            nr::int4_settings(std::string(t.begin(), t.end()), int4_cfg);
+            nr::logf("[nr] int4_mixed network (%s)", int4_from);
+        }
+    }
+    impl_->int4_mixed = int4;
+#endif
     // Where the pass's own cost is measured. Two queries per ring slot. A queue
     // family is allowed to report no timestamp bits - then there is no pool, and
     // every accessor answers zero rather than a number made up from a clock.
@@ -1265,7 +1333,14 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
         "--host-boundary", arena_reuse() ? "--reuse" : "--no-reuse", "--source-width", std::to_string(mw),
         "--source-height", std::to_string(mh), "--accumulation", config.accumulation,
         "--pipeline-cache", (installed ? data / "pipeline.cache" : root / "dlssnr-amd.pipelinecache").string()};
-    // The weights as one file (linux/package/model-tools/pack_model.py); the names inside are
+#if NR_INT4
+    if (int4)   // the int4 network: its own shaders and its own pipeline cache
+        for (size_t i = 0; i + 1 < arguments.size(); ++i) {
+            if (arguments[i] == "--spv-dir") arguments[i + 1] = (i4root / "shaders").string();
+            if (arguments[i] == "--pipeline-cache") arguments[i + 1] = (i4root / "pipeline.cache").string();
+        }
+#endif
+    // The weights as one file (windows/build/pack_model.py); the names inside are
     // the relative paths the graph asks for under --unpacked.
     if (installed) {
         const auto pack = data / "dlssnr.bin";
@@ -1321,6 +1396,9 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
     std::vector<char*> argv;
     for (auto& a : arguments) argv.push_back(a.data());
     timer.mark("device");
+#if NR_INT4
+    const nr::BuildCfgScope cfg_scope(installed ? &int4_cfg : nullptr);   // what this build reads (nr_build_cfg.hpp)
+#endif
     if (s.build(int(argv.size()), argv.data(), &prepared_plan) != 0 || !s.missing.empty())
         throw std::runtime_error("NR graph initialization failed");
     timer.mark("graph");
@@ -1418,6 +1496,30 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
                  impl_->keep_native ? "in its own format" : "as RGBA32F",
                  impl_->store_native ? "stored in its own format"
                  : impl_->compact_rgba ? "reused RGBA32F keep" : "RGBA32F, converted on the way back");
+    }
+    // At the frame's extent, one pass, the input copied in the frame's own format (direct_in), no
+    // native compose: the transfer pass stores the answer in that format too, into keep_full, with the
+    // alpha pass's rounding (store_native, as below 100%), so there is no alpha pass and the write-back
+    // is a copy. The formats whose store is the write-back blit's own conversion (direct_out's).
+    // NR_UNSCALED_STORE=0: the RGBA32F answer, the alpha pass and the blit, as before.
+    if (!config.separate_answer && !impl_->scaled && impl_->direct_in && !config.native_compose && config.max_passes == 1 &&
+        !config.linear_input && !config.preprocess && !mask_config.width) {
+        const char* env = std::getenv("NR_UNSCALED_STORE");
+        const VkFormat cf = config.colour_format;
+        const VkFormat keep_format = transfer == Transfer::Encoded ? unorm : cf;
+        const bool listed = impl_->round_u8 || cf == VK_FORMAT_R16G16B16A16_SFLOAT ||
+            cf == VK_FORMAT_R16G16B16A16_UNORM || cf == VK_FORMAT_B10G11R11_UFLOAT_PACK32;
+        VkFormatProperties3 k3{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3};
+        VkFormatProperties2 k2{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2, &k3};
+        vkGetPhysicalDeviceFormatProperties2(host.physical, keep_format, &k2);
+        const VkFormatFeatureFlags2 kf = k3.optimalTilingFeatures;
+        if (!(env && !std::atoi(env)) && listed && (kf & VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT) &&
+            (kf & VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT) && (kf & VK_FORMAT_FEATURE_2_TRANSFER_SRC_BIT)) {
+            impl_->store_native = true;
+            impl_->keep_full = s.ctx.image(config.width, config.height, keep_format, true, true, true);
+            s.ctx.transition(impl_->keep_full, VK_IMAGE_LAYOUT_GENERAL);
+            nr::logf("[nr] answer stored in the frame's format by the transfer pass: no alpha pass, write-back copied");
+        }
     }
     if (config.max_passes > 1) {
         if (mask_config.width) throw std::invalid_argument("the control mask path does not support more than one pass");
@@ -1520,8 +1622,9 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
         nrvk::Context::Image* shown = config.max_passes > 1 ? &impl_->shown_keep : &s.tex_in;
         nrvk::Context::Image* keep = impl_->scaled ? &impl_->keep_full
                                      : impl_->linear ? &impl_->keep : shown;
-        // Unscaled, the enlargement binding is never read; the answer stands in.
-        nrvk::Context::Image* up_r = impl_->scaled ? &impl_->up_result : answer;
+        // Unscaled, the enlargement binding is never read; the model's answer stands in (an
+        // RGBA32F image, as they are declared).
+        nrvk::Context::Image* up_r = impl_->scaled ? &impl_->up_result : &s.surf0;
         impl_->transfer_pass.create(s.ctx, (adapters / transfer_spv).string(), {}, sizeof(TransferPush),
                                {&s.surf0, shown, keep, answer, up_r});
         impl_->transfer_binds = {s.surf0, *shown, *keep, *answer, *up_r};
@@ -1621,6 +1724,11 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
             ? (!aco.empty() ? std::filesystem::path(aco) / "shaders/temporal"
                : installed ? data / "shaders/temporal" : root / "build/windows/rdna4/network/temporal")
             : std::filesystem::path(temporal_config.shaders));
+#if NR_INT4
+        // The int4 network's temporal pre/post variants are built with its defines (hard-swish, whose scale
+        // NR_HS_FOLDPP folds into the pre/post weights): int4/shaders/temporal, never the default ones.
+        if (int4) shaders = std::filesystem::canonical(i4root / "shaders" / "temporal");
+#endif
         require_variant_profile(shaders);
         if (!inside(shaders))
             throw std::invalid_argument("temporal shaders must be inside NR root");
@@ -1783,7 +1891,8 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
     // Only the 8-bit path needs the private transfer image: it exists to keep an
     // *_SRGB view from applying its transfer function to the bits, not to
     // convert anything. The wide Wayland formats blit straight through.
-    if(transfer == Transfer::Encoded) {
+    // (Not with the answer stored in the frame's format at its extent: in and out are copies there.)
+    if(transfer == Transfer::Encoded && !(impl_->store_native && !impl_->scaled)) {
         auto& im=impl_->encoded;im.w=config.width;im.h=config.height;im.format=unorm;
         VkImageCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         info.imageType=VK_IMAGE_TYPE_2D;info.format=unorm;info.extent={im.w,im.h,1};
@@ -1815,6 +1924,9 @@ Runtime::~Runtime() = default;
 
 uint32_t Runtime::model_width() const { return impl_->mw; }
 uint32_t Runtime::model_height() const { return impl_->mh; }
+#if NR_INT4
+bool Runtime::int4_mixed() const { return impl_->int4_mixed; }
+#endif
 
 void Runtime::set_network_segments(std::function<VkCommandBuffer(VkCommandBuffer, bool)> callback) {
     impl_->network_segments = std::move(callback);
@@ -1865,6 +1977,11 @@ void Runtime::drop_history() {
     impl_->bound_feature = 0;
 }
 
+void Runtime::forget_history() {
+    impl_->temporal.latch = false;
+    for (auto& f : impl_->features) f.second.latch = false;
+}
+
 uint32_t Runtime::live_features() const { return uint32_t(impl_->features.size()); }
 
 Runtime::TemporalHistoryView Runtime::temporal_history() const {
@@ -1879,6 +1996,11 @@ Runtime::TemporalHistoryView Runtime::temporal_history() const {
 }
 
 RecordResult Runtime::record(VkCommandBuffer cmd, const ColourFrame& frame, const Controls& c) {
+    return record(cmd,frame,c,nullptr).frame;
+}
+
+RecordResult Runtime::record(VkCommandBuffer cmd, const ColourFrame& frame, const Controls& c, bool reset) {
+    if (reset) impl_->plain_seed = 0;
     return record(cmd,frame,c,nullptr).frame;
 }
 
@@ -2041,11 +2163,11 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
         engine->depth.format == VK_FORMAT_R32_SFLOAT && (engine->depth.usage & VK_IMAGE_USAGE_SAMPLED_BIT) &&
         engine->depth_x == 0 && engine->depth_y == 0 &&
         engine->depth.width == impl_->temporal.depth.w && engine->depth.height == impl_->temporal.depth.h;
-    // The motion vectors in place: any engine frame with one pass and the
-    // ping-pong sets, a sampled image and a linearly filterable format.
+    // The motion vectors in place: any engine frame with a sampled image in a
+    // linearly filterable format, whatever the pass count (every pass reads the
+    // frame's vectors), as NVIDIA's DLL reads them.
     const bool motion_direct =
-        NR_DIRECT_MOTION && !impl_->motion_src_failed && engine && temporal && !mask && passes == 1 &&
-        impl_->temporal.pingpong && engine->motion.image &&
+        NR_DIRECT_MOTION && !impl_->motion_src_failed && engine && temporal && !mask && engine->motion.image &&
         (engine->motion.usage & VK_IMAGE_USAGE_SAMPLED_BIT) && impl_->filters_linearly(engine->motion.format);
     // (research NR_DIRECT_STORE=1): the post block stores into the frame itself.
     // With a separate target (storage-capable) the post block stores into it and the
@@ -2479,6 +2601,11 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
         b.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;b.dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
         vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,0,nullptr,1,&b,0,nullptr);
     }
+    if (!temporal && !mask) {
+        // No motion source: the seed is 0 unless Controls::noise_every_frame, then the DLL's counter.
+        if (c.noise_every_frame) pre_seed = impl_->plain_seed++;
+        else impl_->plain_seed = 0;
+    }
     // Bind this feature's history: copy the previously bound feature's state out
     // and this one's in. Only on a change, so the single-feature case records
     // nothing at all here.
@@ -2584,7 +2711,7 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
             // This frame's noise seed, computed in the shader: the precomputed
             // field is seed 0's.
             uint8_t pre_push[kPrePushBytes];
-            if (temporal && step.k == t.original_pre && pre_seed) {
+            if ((temporal ? step.k == t.original_pre : !mask && step.k == impl_->plain_pre) && pre_seed) {
                 if (step.push_bytes != kPrePushBytes)
                     throw std::runtime_error("temporal pre block: unexpected push size");
                 const uint32_t no_field = 0;
