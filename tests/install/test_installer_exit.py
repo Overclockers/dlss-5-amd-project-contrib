@@ -643,11 +643,34 @@ class InstallerExitTests(unittest.TestCase):
         self.assertIn('INT4 weights already match', output)
         self.assertEqual(output_model.stat().st_mtime_ns, first_time)
         (self.package / 'model-tools/dlssnr-int4.sha256').write_text('0' * 64)
+        before = self.game_snapshot()
         code, output = self.run_direct(flags=flags)
         self.assertNotEqual(code, 0, output)
-        self.assertIn('Generated INT4 model hash differs', output)
+        self.assertIn('does not match the version this package expects', output)
         self.assertEqual(output_model.read_bytes(), INT4_PAYLOAD)
+        self.assertEqual(self.game_snapshot(), before, output)
         self.assertFalse(list(output_model.parent.glob('.mochizuki-int4-*.tmp')))
+
+    def game_snapshot(self):
+        return {p.relative_to(self.game).as_posix(): p.read_bytes() if p.is_file() else None
+                for p in sorted(self.game.rglob('*'))}
+
+    def test_mochizuki_int4_mismatch_leaves_game_untouched(self):
+        self.ready_mochizuki(model=True)
+        (self.game / 'game.exe').write_bytes(b'game executable fixture')
+        (self.game / 'dxgi.dll').write_bytes(b'original proxy fixture')
+        (self.package / 'model-tools/dlssnr-int4.sha256').write_text('ab' * 32 + '\n')
+        before = self.game_snapshot()
+        code, output = self.run_direct(flags=('-NonInteractive', '-Backend', 'mochizuki'))
+        self.assertNotEqual(code, 0, output)
+        self.assertEqual(self.game_snapshot(), before, output)
+        for text in ('The Mochizuki model you supplied does not match the version this package expects.',
+                     'nvngx_dlssnr.dll 310.8.0; INT4 weights SHA-256 ' + 'ab' * 32,
+                     'Nothing was installed. The game folder was not changed.',
+                     'run Mochizuki-Model.bat, then run Setup again.', 'Install FAILED.'):
+            self.assertIn(text, output)
+        self.assertNotIn('Install SUCCEEDED.', output)
+        self.assertFalse(list(self.package.rglob('.mochizuki-int4-*.tmp')))
 
     def test_mochizuki_reuses_game_model(self):
         self.ready_mochizuki()

@@ -42,8 +42,13 @@ param(
 $ErrorActionPreference = 'Stop'
 $lmxxfStage = $null
 $setupSourceStage = $null
+$mochizukiInt4Candidate = $null
 
 function Pause-Exit([int]$code) {
+    if ($mochizukiInt4Candidate -and (Test-Path -LiteralPath $mochizukiInt4Candidate)) {
+        try { Remove-Item -LiteralPath $mochizukiInt4Candidate -Force -ErrorAction Stop }
+        catch { Write-Warning "INT4 staging cleanup failed: $($_.Exception.Message)" }
+    }
     if ($lmxxfStage) {
         try { Remove-LmxxfTemporaryTree $lmxxfStage ([IO.Path]::GetDirectoryName($lmxxfStage)) }
         catch { Write-Warning "Module staging cleanup failed: $($_.Exception.Message)" }
@@ -899,6 +904,28 @@ if ($installMochizuki -and -not $mochizukiModel -and $mochizukiNv) {
     }
 }
 
+# Prepare and validate INT4 weights before anything is written to the game folder:
+# a model that does not match this package fails Setup with the game left unchanged.
+$mochizukiInt4Expected = $null
+$mochizukiInt4Existing = $false
+if ($installMochizuki -and $mochizukiModel -and (Test-Path -LiteralPath (Join-Path $mochizukiAssets 'int4') -PathType Container)) {
+    . $int4Helper
+    try {
+        $mochizukiInt4Expected = Get-MochizukiInt4ExpectedHash $mochizukiTools
+        $mochizukiInt4Candidate = New-MochizukiInt4Candidate -Model $mochizukiModel -Data (Join-Path $mochizukiAssets 'int4') `
+            -Tools $mochizukiTools -Existing (Join-Path $game 'dlssnr-amd/dlssnr-int4.bin')
+        $mochizukiInt4Existing = -not $mochizukiInt4Candidate
+    } catch {
+        if ($_.Exception.Data['MochizukiInt4Mismatch']) {
+            Write-Host ''
+            foreach ($line in (Get-MochizukiInt4MismatchText $_.Exception)) { Write-Host $line -ForegroundColor Red }
+            Write-Host ''
+            Fail 'Mochizuki model does not match this package (INT4 check). Nothing was installed. / Mochizuki 模型与安装包版本不一致（INT4 校验），未安装任何文件。'
+        }
+        Fail $_.Exception.Message
+    }
+}
+
 # --- process danielblnc runtime if selected ---
 $stagedA = $null
 if ($installDaniel) {
@@ -1430,10 +1457,14 @@ if ($installMochizuki) {
             $relative = $file.FullName.Substring($int4Root.Length).TrimStart('\','/')
             Install-One $file.FullName (Join-Path 'dlssnr-amd/int4' $relative)
         }
-        $installedModel = Join-Path $game 'dlssnr-amd/dlssnr.bin'
-        if (Test-MochizukiModelHeader $installedModel) {
-            . $int4Helper
-            Initialize-MochizukiInt4 -Model $installedModel -Data (Join-Path $game 'dlssnr-amd/int4') -Tools $mochizukiTools
+        # Validated before any game-folder change (see "Prepare and validate INT4 weights").
+        if ($mochizukiInt4Existing) {
+            Write-Host 'INT4 weights already match this package.'
+        } elseif ($mochizukiInt4Candidate) {
+            Install-MochizukiInt4Candidate $mochizukiInt4Candidate (Join-Path $game 'dlssnr-amd/dlssnr-int4.bin') $mochizukiInt4Expected
+            Remove-Item -LiteralPath $mochizukiInt4Candidate -Force -ErrorAction SilentlyContinue
+            $mochizukiInt4Candidate = $null
+            Write-Host 'INT4 weights verified.'
         }
     }
     if (-not (Test-Path -LiteralPath (Join-Path $game 'dlssnr-amd/dlssnr.bin'))) {
