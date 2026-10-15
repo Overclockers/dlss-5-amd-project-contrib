@@ -37,6 +37,7 @@ def main():
     obj = out / 'obj'
     obj.mkdir(parents=True, exist_ok=True)
     headers, glslang = deps.dependencies(repo)
+    slang = deps.slang_dependency(repo) if not args.skip_shaders else None
     up = repo / 'third_party/mochizuki'
     product = repo / 'OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler'
     adapter = product / 'dlssnr/backend/mochizuki_runtime'
@@ -78,7 +79,6 @@ def main():
         print('TEST_REFERENCE_BUILD_OK', out / 'MochizukiNrRuntime.dll')
         return  # Never issue a production build manifest or release/ABI proof here.
     if not args.skip_shaders:
-        slang = deps.slang_dependency(repo)
         subprocess.run([sys.executable, str(up / 'windows/build/build_network.py'), 'rdna4',
                         '--glslang', str(glslang), '--out', str(out / 'dlssnr-amd/shaders')], check=True)
         runpy.run_path(str(Path(__file__).with_name('mochizuki-renodx.py')))['build'](
