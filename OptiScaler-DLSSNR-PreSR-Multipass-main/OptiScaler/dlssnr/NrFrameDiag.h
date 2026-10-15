@@ -183,6 +183,7 @@ struct Counters
     const char* captureBackoffMode = "-"; // exp | fixed100 | event (inline only)
     bool inlineReuse = false; // recording came from the NrInlineReuse pool
     unsigned spinPollDelay = 0, spinSlices = 0, watchSlices = 0, watchStartDelay = 0; // inline spin experiments (0 = default)
+    bool adaptiveBudget = false; // NrAdaptiveWaitBudget applied to this frame (inline GPU-armed only)
     const char* handoff = "-"; // inline: cpu (worker discovers capture) | gpu (NrGpuHandoff)
     unsigned waitEnqueueOrderMs = 0;
     unsigned lockWaitMs = 0;
@@ -220,7 +221,7 @@ inline void Emit(const Counters& c) noexcept
             "cpu_wait_enqueue_ms=%.3f cpu_record_ms=%.3f host_A_capture_to_vk_ms=%.3f host_B_side_ready_ms=%.3f "
             "gpu_capture_ms=%.3f gpu_capture_to_resume_ms=%.3f gpu_core_ms=%.3f gpu_handoff_ms=%.3f "
             "gpu_capture_to_vkdone_ms=%.3f gpu_vkdone_to_resume_ms=%.3f gpu_writeback_ms=%.3f handoff=%s spin_delay=%u spin_slices=%u watch_slices=%u watch_start=%u "
-            "gpu_input_encode_ms=%.3f gpu_transfer_ms=%.3f claim_iters=%llu claim_waits=%u claim_aborts=%u claim_caps=%u armed_bypass=%u",
+            "gpu_input_encode_ms=%.3f gpu_transfer_ms=%.3f claim_iters=%llu claim_waits=%u claim_aborts=%u claim_caps=%u armed_bypass=%u adaptive_budget=%u",
             c.backend, c.mode, c.outcome,
             static_cast<long long>(QpcFrequency()),
             static_cast<long long>(c.qpcRecordBegin),
@@ -254,7 +255,8 @@ inline void Emit(const Counters& c) noexcept
             MsBetween(c.gpuSideVkDone, c.gpuQpc[kGpuResume]),
             MsBetween(c.gpuQpc[kGpuResume], c.gpuQpc[kGpuDone]),
             c.handoff ? c.handoff : "-", c.spinPollDelay, c.spinSlices, c.watchSlices, c.watchStartDelay,
-            double(c.encodeGpuMs), double(c.transferGpuMs), Claim().iters.load(), Claim().waits.load(), Claim().aborts.load(), Claim().caps.load(), Claim().bypass.load());
+            double(c.encodeGpuMs), double(c.transferGpuMs), Claim().iters.load(), Claim().waits.load(), Claim().aborts.load(), Claim().caps.load(), Claim().bypass.load(),
+            c.adaptiveBudget ? 1u : 0u);
         if (n <= 0 || n >= int(sizeof line)) return;
         int len = n;
         if (c.gw) {

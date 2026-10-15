@@ -113,3 +113,4 @@ No game scene was part of this integration. Official timing numbers are not reus
 Patch 16 adds runtime_pack_r11 (B10G11R11 compute write-back via an r11f_g11f_b10f storage image) so NrInlineComputeConvert does not need direct_out/store_native.
 Patch 17 extends the same toggle (RuntimeConfig::compute_convert_colour) to RGBA8/BGRA8 UNORM/sRGB and A2B10G10R10/A2R10G10B10 with runtime_pack_u8_bgra, runtime_pack_u10 and runtime_pack_u10_bgra.
 Patch 21 adds RuntimeConfig::motion_in_place_passes: with max_passes > 1 every pass samples the engine motion vectors in place (per-recording sets for the multi-pass pre/post kernels), so a multi-pass frame needs no motion blit. The host sets it only with NrInlineComputeMotion.
+Patch 22 drops the colour-conversion refusal log on a scaled frame when RuntimeConfig::compute_downscale is set; the downscale path reports its own result. Log only.

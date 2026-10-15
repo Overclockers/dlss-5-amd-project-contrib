@@ -392,6 +392,13 @@
         "windows/src/core/nr_runtime.cpp",
         "windows/src/core/nr_runtime.hpp"
       ]
+    },
+    {
+      "feature": "compute-downscale-convert-log",
+      "path": "patches/22-compute-downscale-convert-log.patch",
+      "files": [
+        "windows/src/core/nr_runtime.cpp"
+      ]
     }
   ],
   "added": [

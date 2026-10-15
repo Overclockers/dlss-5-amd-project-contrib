@@ -387,6 +387,7 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
             FrameDiag::Begin(inlineResources->diag, "mochizuki", frameId, frame.color_width, frame.color_height, OPTI_VERSION);
             inlineResources->diag.spinPollDelay = inlineResources->spinPollDelay; inlineResources->diag.spinSlices = inlineResources->spinSlices;
             inlineResources->diag.watchSlices = inlineResources->watchSlices; inlineResources->diag.watchStartDelay = inlineResources->watchStartDelay;
+            inlineResources->diag.adaptiveBudget = inlineResources->adaptiveBudget;
             inlineResources->diag.inlineReuse = inlineResources->reused;
             const auto id0 = logical->Identity();
             inlineResources->diag.listId = id0.list;
