@@ -5779,7 +5779,7 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
                 g.motionFormat = md.Format;
                 g.motionWidth = g.bucketed ? UINT(md.Width) : motionW;
                 g.motionHeight = g.bucketed ? md.Height : motionH;
-                // NrInlineComputeMotion: not tied to the inline flag (switching inline/split keeps the buffers).
+                // NrInlineComputeMotion: the host sends it on inline frames only (switching modes remakes the buffers).
                 g.computeMotion = (info->flags & MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_MOTION) && g.bucketed &&
                                   s->motionPipeline.Convert(mf.vk);
             }
@@ -5807,8 +5807,8 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
             // Plan A: the key's format is the canonical one on a converted frame; otherwise the game's, which is
             // then the first-seen format itself (or, for an unconvertible pair, the new one: a rebuild, as before).
             const VkFormat keyFormat = g.canonicalise ? canonicalVk : cf.vk;
-            // NrInlineComputeConvert: only a listed-format key carries it (other formats never rebuild for it). Not tied
-            // to the inline flag, so switching inline/split does not rebuild; split never records on compute.
+            // NrInlineComputeConvert: only a listed-format key carries it (other formats never rebuild for it). The host
+            // sends it on inline frames only, so split keeps its key; switching modes rebuilds once.
             const bool convertListed = keyFormat == VK_FORMAT_B10G11R11_UFLOAT_PACK32 ||
                 keyFormat == VK_FORMAT_R8G8B8A8_UNORM || keyFormat == VK_FORMAT_R8G8B8A8_SRGB ||
                 keyFormat == VK_FORMAT_B8G8R8A8_UNORM || keyFormat == VK_FORMAT_B8G8R8A8_SRGB ||
@@ -5819,7 +5819,7 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
                                     (info->flags & MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_DOWNSCALE) && scale < 1.f,
                                     (info->flags & MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_EXPORT) && g.firstPass,
                                     // NrInlineComputeMotion with more than one layer: every layer samples the motion
-                                    // vectors in place, so multi-pass needs no motion blit (not tied to the inline flag).
+                                    // vectors in place, so multi-pass needs no motion blit (inline frames only).
                                     (info->flags & MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_MOTION) && maxPasses > 1 };
             std::string why;
             s->infoRequestedPasses = passes;

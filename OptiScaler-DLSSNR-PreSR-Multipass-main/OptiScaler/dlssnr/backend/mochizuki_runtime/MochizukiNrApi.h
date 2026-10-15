@@ -16,17 +16,17 @@
 // and its write-back (a compute pack per format) on the compute family instead of graphics blits, so the
 // whole chain can stay on compute. May rebuild the network.
 #define MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_CONVERT (1u << 11)
-// NrInlineComputeMotion (host default on): with dynamic resolution, motion vectors of another extent are rescaled onto the
+// NrInlineComputeMotion (host default on, inline frames only): with dynamic resolution, motion vectors of another extent are rescaled onto the
 // subrect by a compute pass (runtime_mv_rescale_*, bilinear like the blit) instead of a LINEAR blit, so such inline
 // frames can keep the whole chain on compute. With more than one layer it also sets RuntimeConfig::motion_in_place_passes:
 // every layer samples the motion vectors in place, with no motion blit. Changing it remakes the frame buffers, and the
 // network when there is more than one layer.
 #define MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_MOTION (1u << 12)
-// NrInlineComputeDownscale (host default on): model scale below 1 keeps the frame in its own format and filters it down
+// NrInlineComputeDownscale (host default on, inline frames only): model scale below 1 keeps the frame in its own format and filters it down
 // with runtime_downscale (the blit's own taps), and packs the full-size answer on compute when it is not stored in
 // the frame's format, so such inline frames can keep the whole chain on compute. Rebuilds the network when scaled.
 #define MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_DOWNSCALE (1u << 13)
-// NrInlineComputeExport (host default on): the first-pass export (multi-layer NR) packs pass 0 into the frame's format on
+// NrInlineComputeExport (host default on, inline frames only): the first-pass export (multi-layer NR) packs pass 0 into the frame's format on
 // compute (runtime_pack_*) instead of a blit, so such inline frames can keep the whole chain on compute. RGBA16F,
 // R11G11B10, RGBA8/BGRA8 UNORM and RGB10A2; other formats keep the blit. Rebuilds the network when exporting.
 #define MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_EXPORT (1u << 14)

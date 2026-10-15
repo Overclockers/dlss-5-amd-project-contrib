@@ -129,7 +129,7 @@ Without direct_out/store_native, NrInlineComputeConvert now packs the answer thr
 
 ## 2026-10-15 follow-ups (branch work/nr-spin-gpu-cost)
 
-Items 3-5 and NrInlineComputeConvert default on since 2026-10-15 (validated in E33 and Where Winds Meet, 1 and 2 layers); NrAdaptiveWaitBudget stays off. Each has an ini key, a menu checkbox and is cleared by the menu resets.
+Items 3-5 and NrInlineComputeConvert default on since 2026-10-15 (validated in E33 and Where Winds Meet, 1 and 2 layers); NrAdaptiveWaitBudget stays off. All five apply to inline frames only; split keeps its blits and network. Each has an ini key, a menu checkbox and is cleared by the menu resets.
 
 | Item | Ini key | Menu label | Effect |
 |---|---|---|---|
