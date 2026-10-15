@@ -216,6 +216,12 @@ jobs:
 
           $deps = @(
             'OptiScaler-DLSSNR-PreSR-Multipass-main/external/xess/bin/libxess.dll',
+            'OptiScaler-DLSSNR-PreSR-Multipass-main/external/xess/bin/libxess_fg.dll',
+            'OptiScaler-DLSSNR-PreSR-Multipass-main/external/xess/bin/libxell.dll',
+            'OptiScaler-DLSSNR-PreSR-Multipass-main/external/directx_agility_sdk/lib/D3D12Core.dll',
+            'OptiScaler-DLSSNR-PreSR-Multipass-main/external/FidelityFX-SDK/PrebuiltSignedDLL/amd_fidelityfx_vk.dll',
+            'OptiScaler-DLSSNR-PreSR-Multipass-main/external/FidelityFX-SDK-v2/Kits/FidelityFX/signedbin/amd_fidelityfx_loader_dx12.dll',
+            'OptiScaler-DLSSNR-PreSR-Multipass-main/external/FidelityFX-SDK-v2/Kits/FidelityFX/signedbin/amd_fidelityfx_framegeneration_dx12.dll',
             'OptiScaler-DLSSNR-PreSR-Multipass-main/external/FidelityFX-SDK-v2/Kits/FidelityFX/signedbin/amd_fidelityfx_upscaler_dx12.dll'
           )
           foreach ($d in $deps) {
@@ -386,6 +392,21 @@ jobs:
             if ($entryNames -notcontains $r) {
               throw "REQUIRED COMPONENT MISSING IN ZIP: $r"
             }
+          }
+
+          $dependencyPaths = @(
+            'OptiScaler/amd_fidelityfx_loader_dx12.dll',
+            'OptiScaler/amd_fidelityfx_upscaler_dx12.dll',
+            'OptiScaler/amd_fidelityfx_framegeneration_dx12.dll',
+            'OptiScaler/amd_fidelityfx_vk.dll',
+            'OptiScaler/libxess.dll', 'OptiScaler/libxess_fg.dll', 'OptiScaler/libxell.dll',
+            'OptiScaler/D3D12_OptiScaler/D3D12Core.dll',
+            'person-model/person-worker.exe', 'person-model/onnxruntime.dll',
+            'person-model/pphumanseg.onnx', 'person-model/yolo11n-seg.onnx', 'person-model/yunet.onnx',
+            'person-model/msvcp140.dll', 'person-model/vcruntime140.dll', 'person-model/vcruntime140_1.dll'
+          )
+          foreach ($path in $dependencyPaths) {
+            if ($entryPaths -notcontains $path) { throw "REQUIRED DEPENDENCY MISSING IN ZIP: $path" }
           }
 
           foreach ($path in @('model-tools/dlssnr-int4-weights.exe', 'model-tools/dlssnr-int4.sha256', 'mochizuki-int4.ps1') +
