@@ -100,6 +100,9 @@ struct Pipelines {
 };
 class Resources
 {
+public:
+    static constexpr unsigned kProofAttempts = 8; // bounded completion-proof signals per recording
+private:
     std::shared_ptr<Pipelines> pipelines;
     Ptr<ID3D12Device> device;
     Ptr<ID3D12CommandQueue> side;
@@ -124,6 +127,11 @@ class Resources
     std::atomic<bool> scheduled {false};
     bool started = false, uncertain = false;
     std::atomic<bool> sideUncertain {false};
+    // Completion proof after a failed signal (m5). A later Signal of our own fence on the
+    // same queue completes only after everything submitted to that queue before it.
+    Ptr<ID3D12Fence> proofFence; UINT64 proofSerial = 0;
+    unsigned proofAttempts = 0;
+    HRESULT gameSignalHr = S_OK, gameProofHr = S_OK, sideProofHr = S_OK;
     bool noNetwork = false;
     bool decisionReadable = false;
     struct Output {
@@ -364,6 +372,43 @@ cbuffer Size : register(b0) { uint width; uint height; }
         diag = {}; captureBackoff = 0; gpuArmed = false; activityToken = 0; reused = true;
     }
     bool RetirementUncertain() const { return uncertain || sideUncertain; }
+    // After device removal the GPU no longer reads these objects; they may be released without fence proof.
+    bool DeviceLost() const { return device && FAILED(device->GetDeviceRemovedReason()); }
+    // Caller holds RecordingMutex. Game queue: the queue that received this recording's game list.
+    bool TryProveGame() {
+        if (!uncertain) return true;
+        if (!gameQueue || !device) return false;
+        if (!proofFence) {
+            gameProofHr = device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&proofFence));
+            if (FAILED(gameProofHr)) { proofFence.Reset(); return false; }
+        }
+        gameProofHr = gameQueue->Signal(proofFence.Get(), proofSerial + 1);
+        if (FAILED(gameProofHr)) return false;
+        gameFence = proofFence; gameValue = ++proofSerial; uncertain = false;
+        LOG_WARN("NR inline: game-queue completion signal failed (hr=0x{:08X}); completion is proven by a later signal on the same queue",
+                 static_cast<unsigned>(gameSignalHr));
+        return true;
+    }
+    // Caller holds RecordingMutex. Only after the side work was scheduled: no worker still submits to it.
+    bool TryProveSide() {
+        if (!sideUncertain) return true;
+        if (!scheduled.load(std::memory_order_acquire) || !side) return false;
+        sideProofHr = side->Signal(sideFence.Get(), serial + 1);
+        if (FAILED(sideProofHr)) return false;
+        finalValue = ++serial; sideUncertain = false;
+        LOG_WARN("NR inline: side-queue completion signal failed; completion is proven by a later signal on the side queue");
+        return true;
+    }
+    // Caller holds RecordingMutex. Bounded: a queue whose Signal keeps failing cannot prove anything.
+    bool RetryProof() {
+        if (!RetirementUncertain()) return true;
+        if (proofAttempts >= kProofAttempts) return false;
+        ++proofAttempts;
+        const bool game = TryProveGame();
+        const bool sideOk = TryProveSide();
+        return game && sideOk;
+    }
+    bool ProofExhausted() const { return RetirementUncertain() && proofAttempts >= kProofAttempts && !DeviceLost(); }
     // Set under RecordingMutex from the lease that admitted this recording.
     uint64_t activityToken = 0;
     // Filled when NrFrameDiag is on; RecordingOwner / backends emit on reclaim.
@@ -376,12 +421,13 @@ cbuffer Size : register(b0) { uint width; uint height; }
     bool reused = false; // came from NrInlineReuse pool
     bool Complete() const {
         if (!started) return true;
+        if (DeviceLost()) return true;
         if (RetirementUncertain() || !scheduled.load(std::memory_order_acquire) || !finalValue || !gameFence || !gameValue) return false;
         const auto a = sideFence->GetCompletedValue(), b = gameFence->GetCompletedValue();
         return a != UINT64_MAX && b != UINT64_MAX && a >= finalValue && b >= gameValue;
     }
     bool Succeeded() const {
-        if (!Complete() || !decisionReadable || noNetwork) return false;
+        if (!Complete() || DeviceLost() || !decisionReadable || noNetwork) return false;
         void* p = nullptr; D3D12_RANGE range {0, 8};
         if (FAILED(decisionReadback->Map(0, &range, &p)) || !p) return false;
         const bool ok = *static_cast<const UINT64*>(p) != 0;
@@ -389,7 +435,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
     }
     UINT LastSpinCount() const {
         void* p = nullptr; D3D12_RANGE range {0,16};
-        if (!Complete() || !decisionReadable || FAILED(decisionReadback->Map(0, &range, &p)) || !p) return 0;
+        if (!Complete() || DeviceLost() || !decisionReadable || FAILED(decisionReadback->Map(0, &range, &p)) || !p) return 0;
         const auto count = static_cast<const UINT*>(p)[2];
         D3D12_RANGE none {0,0}; decisionReadback->Unmap(0, &none); return count;
     }
@@ -397,7 +443,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
         if (!Complete()) throw std::runtime_error("inline recording still executing");
         captureEvents.clear();
         gameQueue = game;
-        started = true; uncertain = noNetwork = false; sideUncertain = true;
+        started = true; uncertain = noNetwork = false; sideUncertain = true; proofAttempts = 0;
         finalValue = gameValue = 0; gameFence.Reset();
         scheduled.store(false, std::memory_order_release);
         Check(sampleAlloc->Reset(), "inline reset allocator"); Check(sampleList->Reset(sampleAlloc.Get(), nullptr), "inline reset list");
@@ -419,7 +465,11 @@ cbuffer Size : register(b0) { uint width; uint height; }
         }
     }
     void GameSubmitted(ID3D12Fence* fence, UINT64 value, HRESULT hr) {
-        if (FAILED(hr) || !fence || !value || value == UINT64_MAX) { uncertain = true; return; }
+        if (FAILED(hr) || !fence || !value || value == UINT64_MAX) {
+            uncertain = true; gameSignalHr = FAILED(hr) ? hr : E_UNEXPECTED;
+            TryProveGame();
+            return;
+        }
         gameFence = fence; gameValue = value;
     }
     void CertifyWithoutNetwork(ID3D12Fence* fence, UINT64 value, HRESULT hr, bool producerSubmitted = false) {
@@ -540,9 +590,10 @@ cbuffer Size : register(b0) { uint width; uint height; }
             if (stamp) sideStamps->Resolve(doneList.Get());
             Check(doneList->Close(), "inline done close"); Execute(side.Get(), doneList.Get());
         }
+        // Scheduled before the tail signal: if it fails, TryProveSide may append a later one.
+        scheduled.store(true, std::memory_order_release);
         finalValue = ++serial; Check(side->Signal(sideFence.Get(), finalValue), "inline tail signal");
         sideUncertain = false;
-        scheduled.store(true, std::memory_order_release);
     }
 };
 // Caller holds RecordingMutex. Null pool = always create (default). The pool holds one

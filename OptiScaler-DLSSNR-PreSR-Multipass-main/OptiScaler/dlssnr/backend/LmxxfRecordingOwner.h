@@ -16,6 +16,9 @@
 #ifndef LOG_INFO
 #define LOG_INFO(...) ((void)0)
 #endif
+#ifndef LOG_ERROR
+#define LOG_ERROR(...) ((void)0)
+#endif
 
 namespace DlssNr::Backend::LmxxfRecording
 {
@@ -62,6 +65,11 @@ struct SessionOwner
     static constexpr size_t kInlineAhead = 4;
     size_t inlineLimit = 1;
     std::vector<std::shared_ptr<InlineRecording::Resources>> inlineInFlight;
+    // Started recordings whose completion cannot be proven (m5): kept alive, out of the slot count.
+    // Released on device removal; otherwise intentionally leaked at teardown. Inline stops at kInlineAhead.
+    std::vector<std::shared_ptr<InlineRecording::Resources>> abandonedInline;
+    bool deviceLostLogged = false;
+    bool InlineAbandonLimit() const { return abandonedInline.size() >= kInlineAhead; }
     std::deque<void*> inlineEnqueueOrder;
     std::condition_variable_any inlineTurnChanged;
     std::shared_ptr<InlineRecording::Pipelines> inlinePipelines;
@@ -75,7 +83,29 @@ struct SessionOwner
         for (auto it = inlineInFlight.begin(); it != inlineInFlight.end();) {
             auto& pending = *it;
             // A fresh reservation reports Complete because it has not started.
-            if (!pending || !pending->Started() || !pending->Complete()) { ++it; continue; }
+            if (!pending || !pending->Started()) { ++it; continue; }
+            if (!pending->Complete()) {
+                if (pending->RetirementUncertain() && !pending->RetryProof() && pending->ProofExhausted()) {
+                    abandonedInline.push_back(pending);
+                    LOG_ERROR("NR inline: completion of a submitted recording cannot be proven after {} attempts "
+                              "(game_signal=0x{:08X} game_proof=0x{:08X} side_proof=0x{:08X}); its D3D12 resources stay "
+                              "allocated until device removal or process exit (abandoned={})",
+                              InlineRecording::Resources::kProofAttempts, static_cast<unsigned>(pending->gameSignalHr),
+                              static_cast<unsigned>(pending->gameProofHr), static_cast<unsigned>(pending->sideProofHr),
+                              abandonedInline.size());
+                    if (InlineAbandonLimit())
+                        LOG_ERROR("NR inline disabled for this session: {} recordings abandoned without completion proof; "
+                                  "frames bypass the inline path", abandonedInline.size());
+                    activity.Reset(); api.ResetHistory(context);
+                    it = inlineInFlight.erase(it);
+                    continue;
+                }
+                if (!pending->Complete()) { ++it; continue; }
+            }
+            if (pending->DeviceLost() && !deviceLostLogged) {
+                deviceLostLogged = true;
+                LOG_WARN("NR inline: device removed; releasing inline resources without fence proof");
+            }
             if (!pending->Succeeded()) {
                 activity.Reset(); api.ResetHistory(context);
                 if (pending->WasAborted()) ++inlineAborted;
@@ -103,6 +133,10 @@ struct SessionOwner
             spun = pending->WasAborted() ? 0 : pending->LastSpinCount();
             it = inlineInFlight.erase(it);
         }
+        if (!abandonedInline.empty() && abandonedInline.front() && abandonedInline.front()->DeviceLost()) {
+            LOG_WARN("NR inline: device removed; releasing {} abandoned inline recordings", abandonedInline.size());
+            abandonedInline.clear();
+        }
         const auto completed = inlineApplied + inlineTimeouts + inlineAborted;
         if (side && (completed <= 3 || completed % 3600 == 0))
             LOG_INFO("NR inline completed={} applied={} timeouts={} aborted={} bypassed={} live_recordings={} in_flight={} side_queue={} last_slice_spins={}",
@@ -111,7 +145,7 @@ struct SessionOwner
     }
     bool InlineBusy() {
         ReclaimInlineLocked();
-        return inlineInFlight.size() >= inlineLimit;
+        return InlineAbandonLimit() || inlineInFlight.size() >= inlineLimit;
     }
     void InlineBypassed() {
         ++inlineBypassed;
@@ -126,7 +160,7 @@ struct SessionOwner
         ReclaimInlineLocked();
         if (!resources) return false;
         if (std::find(inlineInFlight.begin(), inlineInFlight.end(), resources) != inlineInFlight.end()) return true;
-        if (inlineInFlight.size() >= inlineLimit) return false;
+        if (InlineAbandonLimit() || inlineInFlight.size() >= inlineLimit) return false;
         inlineInFlight.push_back(resources);
         return true;
     }
@@ -168,6 +202,9 @@ struct SessionOwner
     }
     ~SessionOwner()
     {
+        // GPU work of abandoned recordings may still run: never release it here.
+        if (!abandonedInline.empty() && !(abandonedInline.front() && abandonedInline.front()->DeviceLost()))
+            for (auto& r : abandonedInline) new std::shared_ptr<InlineRecording::Resources>(std::move(r));
         if (context && api.Destroy(context) != LMXXF_NR_OK)
         {
             OutputDebugStringA("lmxxf: retaining session/module with outstanding recording jobs\n");
@@ -532,6 +569,9 @@ inline bool CollectLocked()
         if (lease->inlineResources && !lease->inlineResources->Complete()) {
             // Unknown signals cannot gain proof by polling. Keep the pins but
             // stop a permanent 100 ms timer; later explicit collection can retry.
+            if (lease->inlineResources->RetirementUncertain() && lease->inlineResources->RetryProof()) {
+                pending = true; ++it; continue; // proven; collect once the proof fence completes
+            }
             if (!lease->inlineResources->RetirementUncertain()) pending = true;
             ++it; continue;
         }

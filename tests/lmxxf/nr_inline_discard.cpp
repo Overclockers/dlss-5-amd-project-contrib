@@ -9,6 +9,7 @@
 #include "OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/dlssnr/backend/LmxxfRecordingOwner.h"
 #include "OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/dlssnr/submission/SplitEligibility.h"
 #include "OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/dlssnr/submission/SubmissionHooks.h"
+#include "queue_faults.h"
 
 template<class T> using Ptr=Microsoft::WRL::ComPtr<T>;
 namespace Own=DlssNr::Backend::LmxxfRecording;
@@ -298,10 +299,55 @@ int main() try {
     admission->ForgetUnstarted(first);
     for(auto& frame:privateFrames)admission->ForgetUnstarted(frame);
     std::puts("INLINE_ADMISSION_OK shared single slot, dual completion, retained replay, private four slots");
-    // Truly unknown game submission is retained, but cannot become actionable
-    // merely by rearming a collection timer every 100 ms.
+    auto drain=[&](ID3D12CommandQueue* q){
+        Ptr<ID3D12Fence> f;Check(device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&f)),"drain fence");
+        Check(q->Signal(f.Get(),1),"drain signal");HANDLE e=CreateEventW(nullptr,FALSE,FALSE,nullptr);
+        Check(f->SetEventOnCompletion(1,e),"drain event");Require(WaitForSingleObject(e,10000)==WAIT_OBJECT_0,"drain wait");CloseHandle(e);
+    };
+    // m5: a failed game-queue completion signal is proven by a later signal of our own fence on that queue.
+    auto proven=std::make_shared<In::Resources>(device.Get(),original.Get(),candidate.Get(),nullptr,8,8,owner->inlinePipelines);
+    proven->BeforeExecute(game.Get(),true);proven->CertifyWithoutNetwork(nullptr,0,E_FAIL,true);
+    auto provenLease=std::make_shared<Own::Lease>(owner,reinterpret_cast<void*>(202),Sub::RecordingIdentity{});
+    provenLease->inlineResources=proven;provenLease->invalidated=true;
+    drain(game.Get());drain(proven->SideQueue());
+    {
+        std::lock_guard lock(Sub::RecordingMutex());
+        Require(!proven->RetirementUncertain(),"failed game signal proven by a later same-queue signal");
+        Require(proven->Complete(),"proof fence completes after the queue drains");
+        Own::Registry().push_back(provenLease);Own::CollectLocked();
+        Require(provenLease->job==nullptr,"proven recording is collected");
+    }
+    std::puts("INLINE_GAME_PROOF_OK failed completion signal proven by a later same-queue signal and collected");
+    // The proof signal itself may fail at first; a later bounded retry still proves completion.
+    auto flaky=new SignalFailQueue(game.Get(),2);Ptr<ID3D12CommandQueue> flakyGame;flakyGame.Attach(flaky);
+    auto retried=std::make_shared<In::Resources>(device.Get(),original.Get(),candidate.Get(),nullptr,8,8,owner->inlinePipelines);
+    retried->BeforeExecute(flakyGame.Get(),true);retried->CertifyWithoutNetwork(nullptr,0,E_FAIL,true);
+    {
+        std::lock_guard lock(Sub::RecordingMutex());
+        Require(retried->RetirementUncertain(),"first proof signal failed");
+        Require(!retried->RetryProof(),"second proof signal failed");
+        Require(retried->RetryProof()&&!retried->RetirementUncertain(),"third signal proves completion");
+    }
+    drain(game.Get());drain(retried->SideQueue());Require(retried->Complete(),"retried proof completes");
+    // Side queue: a failed reset signal is proven by a later side-queue signal once scheduled.
+    auto flakySide=new SignalFailQueue(owner->inlinePipelines->sideQueue.Get(),1);
+    auto sidePipelines=std::make_shared<In::Pipelines>(*owner->inlinePipelines);sidePipelines->sideQueue.Attach(flakySide);
+    auto sideFailed=std::make_shared<In::Resources>(device.Get(),original.Get(),candidate.Get(),nullptr,8,8,sidePipelines);
+    bool threw=false;try{sideFailed->BeforeExecute(game.Get(),true);}catch(const std::exception&){threw=true;}
+    Require(threw&&sideFailed->RetirementUncertain(),"side reset signal failure is uncertain");
+    {
+        std::lock_guard lock(Sub::RecordingMutex());
+        Require(!sideFailed->RetryProof(),"side proof waits until the work is scheduled");
+        sideFailed->CertifyWithoutNetwork(nullptr,0,E_FAIL,false);
+        Require(sideFailed->RetryProof()&&!sideFailed->RetirementUncertain(),"scheduled side work proven by a later side signal");
+    }
+    drain(owner->inlinePipelines->sideQueue.Get());Require(sideFailed->Complete(),"side proof completes");
+    std::puts("INLINE_RETRY_PROOF_OK flaky game and side signals proven by bounded retries");
+    // Truly unprovable: every Signal on the game queue fails. Bounded retries, then abandoned
+    // outside the slot count; the collection timer is not rearmed forever.
+    auto broken=new SignalFailQueue(game.Get());Ptr<ID3D12CommandQueue> brokenGame;brokenGame.Attach(broken);
     auto unknown=std::make_shared<In::Resources>(device.Get(),original.Get(),candidate.Get(),nullptr,8,8,owner->inlinePipelines);
-    unknown->BeforeExecute(game.Get(),true);unknown->CertifyWithoutNetwork(nullptr,0,E_FAIL,true);
+    unknown->BeforeExecute(brokenGame.Get(),true);unknown->CertifyWithoutNetwork(nullptr,0,E_FAIL,true);
     auto retained=std::make_shared<Own::Lease>(owner,reinterpret_cast<void*>(201),Sub::RecordingIdentity{});
     retained->inlineResources=unknown;retained->invalidated=true;
     {
@@ -309,7 +355,19 @@ int main() try {
         Require(!unknown->Complete()&&unknown->RetirementUncertain(),"unknown submission never invents proof");
         Require(!Own::CollectLocked(),"unknown submission does not request permanent timer polling");
         Require(retained->job!=nullptr,"unknown job remains pinned");
+        owner->inlineLimit=5;owner->inlineInFlight.clear();owner->abandonedInline.clear();
+        owner->inlineInFlight.push_back(unknown);
+        for(unsigned n=0;n<In::Resources::kProofAttempts+1;++n)owner->ReclaimInlineLocked();
+        Require(unknown->ProofExhausted(),"proof attempts are bounded");
+        Require(owner->inlineInFlight.empty()&&owner->abandonedInline.size()==1,"unprovable recording leaves the slot count");
+        Require(!owner->InlineAbandonLimit(),"one abandoned recording keeps inline available");
+        for(unsigned n=1;n<Own::SessionOwner::kInlineAhead;++n)owner->abandonedInline.push_back(unknown);
+        Require(owner->InlineAbandonLimit()&&owner->InlineBusy(),"inline stops after the abandonment cap");
+        Require(!owner->AdmitInline(makeResources()),"no admission after the abandonment cap");
+        Require(!unknown->Complete(),"abandoned recording is never released without proof");
+        owner->abandonedInline.clear();owner->inlineLimit=1;
     }
+    std::puts("INLINE_UNPROVABLE_BOUNDED_OK bounded proof attempts, abandoned outside slots, inline capped");
     std::puts("INLINE_UNSUBMITTED_DISCARD_OK 12 Reset/Release, 6 callback enqueue failures, dual completion, turn notification");
     return 0;
 } catch(const std::exception& e) {std::fprintf(stderr,"FAIL %s\n",e.what());return 1;}
