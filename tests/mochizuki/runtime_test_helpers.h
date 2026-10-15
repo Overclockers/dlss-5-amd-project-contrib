@@ -76,6 +76,9 @@ struct Frame {
                 uint32_t v=3u<<30;
                 for(int k=0;k<3;k++)v|=uint32_t(std::round(base*(1.f-.2f*k)*1023))<<(10*k);
                 reinterpret_cast<uint32_t*>(row)[x]=v;
+            } else if(fmt==DXGI_FORMAT_R16G16_FLOAT) {
+                auto* p=reinterpret_cast<uint16_t*>(row)+x*2; // motion-vector fixtures: small vectors
+                p[0]=DirectX::PackedVector::XMConvertFloatToHalf(base*.01f);p[1]=DirectX::PackedVector::XMConvertFloatToHalf(-base*.01f);
             } else {
                 auto* p=reinterpret_cast<uint16_t*>(row)+x*4;
                 for(int k=0;k<3;k++)p[k]=DirectX::PackedVector::XMConvertFloatToHalf(base*(1.f-.2f*k));p[3]=0x3c00;
