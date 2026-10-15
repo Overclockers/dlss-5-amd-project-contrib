@@ -782,15 +782,15 @@ void RenderMenu(Config* config, float menuResScale)
                     bool computeConvert = config->NrInlineComputeConvert.value_or_default();
                     if (MenuUi::Checkbox("Compute-queue colour conversion", &computeConvert))
                         config->NrInlineComputeConvert = computeConvert;
-                    HelpMarker("Default off. Experimental. R11G11B10_FLOAT, RGBA8/BGRA8 (UNORM and sRGB) and RGB10A2 colour"
+                    HelpMarker("Default on. R11G11B10_FLOAT, RGBA8/BGRA8 (UNORM and sRGB) and RGB10A2 colour"
                                "\nframes convert input and write-back on the compute queue instead of graphics blits,"
                                "\nso the inline chain is not split across queues."
-                               "\nNeeds model scale 1; rescaled motion vectors split it unless compute motion rescale is on."
+                               "\nModel scale below 100% also needs compute model downscale; rescaled motion vectors split it unless compute motion rescale is on."
                                "\nRebuilds the network for those formats. INI: NrInlineComputeConvert.");
                     bool nrInlineComputeMotion = config->NrInlineComputeMotion.value_or_default();
                     if (MenuUi::Checkbox("Compute-queue motion rescale", &nrInlineComputeMotion))
                         config->NrInlineComputeMotion = nrInlineComputeMotion;
-                    HelpMarker("Default off. Experimental. With dynamic resolution, motion vectors of another size are"
+                    HelpMarker("Default on. With dynamic resolution, motion vectors of another size are"
                                "\nrescaled by a compute pass (bilinear, like the blit) instead of a graphics blit,"
                                "\nso the inline chain is not split by them. With 2+ layers, every layer also samples the motion"
                                "\nvectors in place (no motion blit). Remakes the frame buffers (and the network with 2+ layers)."
@@ -798,19 +798,19 @@ void RenderMenu(Config* config, float menuResScale)
                     bool nrInlineComputeDownscale = config->NrInlineComputeDownscale.value_or_default();
                     if (MenuUi::Checkbox("Compute-queue model downscale", &nrInlineComputeDownscale))
                         config->NrInlineComputeDownscale = nrInlineComputeDownscale;
-                    HelpMarker("Default off. Experimental. Model scale below 100%: the frame is filtered down by a compute pass"
+                    HelpMarker("Default on. Model scale below 100%: the frame is filtered down by a compute pass"
                                "\n(the same taps as the blit) and the answer written back on compute, so the inline chain"
                                "\nis not split by the downscale. Rebuilds the network when scaled.\nINI: NrInlineComputeDownscale.");
                     bool nrInlineComputeExport = config->NrInlineComputeExport.value_or_default();
                     if (MenuUi::Checkbox("Compute-queue first-pass export", &nrInlineComputeExport))
                         config->NrInlineComputeExport = nrInlineComputeExport;
-                    HelpMarker("Default off. Experimental. Multi-layer NR exports its first layer by a compute pack"
+                    HelpMarker("Default on. Multi-layer NR exports its first layer by a compute pack"
                                "\ninto the frame format instead of a blit, so the inline chain is not split by it."
                                "\nRGBA16F, R11G11B10, RGBA8/BGRA8 UNORM and RGB10A2. Rebuilds the network when exporting.\nINI: NrInlineComputeExport.");
                     bool nrAdaptiveWaitBudget = config->NrAdaptiveWaitBudget.value_or_default();
                     if (MenuUi::Checkbox("Adaptive wait budget", &nrAdaptiveWaitBudget))
                         config->NrAdaptiveWaitBudget = nrAdaptiveWaitBudget;
-                    HelpMarker("Inline (GPU-armed): size the post-claim GPU wait from a measured iterations/ms rate (target ~4 ms); halve after a cap or abort, grow back after 64 clean waits. Off = fixed cap.\nINI: NrAdaptiveWaitBudget.");
+                    HelpMarker("Default off. Inline (GPU-armed): size the post-claim GPU wait from a measured iterations/ms rate (target ~4 ms); halve after a cap or abort, grow back after 64 clean waits. Off = fixed cap.\nINI: NrAdaptiveWaitBudget.");
                     }
                     const bool armedActive = armedApplies && gpuHandoff;
                     ImGui::BeginDisabled(armedActive);

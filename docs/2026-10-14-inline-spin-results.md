@@ -109,8 +109,8 @@
 - 推断原因（来自日志，未单独验证）：E33 颜色是 R11G11B10_FLOAT（DXGI 26 / VkFormat 122），输入转换走图形队列 blit，inline 被拆成「图形队列转换 → 计算队列网络 → 跨队列等待」三段；游戏队列自旋又会饿住网络，所以拆短自旋有用、poll16 让自旋驻留更久反而更差。拆短后仍剩约 3.5 ms handoff，spin 开关调不到。
 - 新输入保护在 E33 每帧正常应用，无超时、无绕过。
 
-## 11. 新选项 NrInlineComputeConvert（默认关）
-- INI：`NrInlineComputeConvert`（`[DlssNr]` 节，默认 false/auto）。菜单：Input → 开 inline 后的 Mochizuki 组里「Compute-queue colour conversion (R11G11B10)」。宿主在 inline 帧上传 `MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_CONVERT`（1<<11）；运行时只在 B10G11R11 网络 key 上记录它（会为 R11G11B10 帧重建一次网络；切 inline/split 不重建）。
+## 11. 新选项 NrInlineComputeConvert（2026-10-15 起默认开）
+- INI：`NrInlineComputeConvert`（`[DlssNr]` 节，默认 true/auto）。菜单：Input → 开 inline 后的 Mochizuki 组里「Compute-queue colour conversion (R11G11B10)」。宿主在 inline 帧上传 `MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_CONVERT`（1<<11）；运行时只在 B10G11R11 网络 key 上记录它（会为 R11G11B10 帧重建一次网络；切 inline/split 不重建）。
 - 作用：B10G11R11 输入像 RGBA16F 一样走已有的 inline 全计算路径：把帧拷到私有同格式图像（仅 sampled，不要求 storage），再用 `runtime_unpack_f16`（texelFetch）转成 RGBA32F，代替图形 blit。写回只接受已有的 direct_out / store_native（游戏格式原样写回，不经 rgba16f 的 pack_f16）；两者都不可用时不启用，并记日志 `B10G11R11 compute input conversion not used: ...`，原 blit 和拒绝原因保留。启用时日志 `B10G11R11 input converted on compute (runtime_unpack_f16)`，帧走全计算时 `inline network: the whole chain on compute family 1`；仍被拒时日志写出剩余原因（模型缩放 <1 的 downscale blit、需要缩放的运动矢量等）。
 - 供应商改动记为 mochizuki-sync 补丁 15（`inline-r11g11b10-compute-convert`）。新增 `hdr_shader` 用例：B10G11R11 的 unpack 结果与驱动 blit 到 RGBA32F 逐位一致（覆盖全部有限码值）。
 - 画质：输入从 R11G11B10 扩到 FP32，无损；写回仍是游戏自己的 R11G11B10 量化。**尚未在 E33 实测**，需要 Model scale = 1。
@@ -129,7 +129,7 @@ Without direct_out/store_native, NrInlineComputeConvert now packs the answer thr
 
 ## 2026-10-15 follow-ups (branch work/nr-spin-gpu-cost)
 
-All options default off; each has an ini key, a menu checkbox and is cleared by the menu resets.
+Items 3-5 and NrInlineComputeConvert default on since 2026-10-15 (validated in E33 and Where Winds Meet, 1 and 2 layers); NrAdaptiveWaitBudget stays off. Each has an ini key, a menu checkbox and is cleared by the menu resets.
 
 | Item | Ini key | Menu label | Effect |
 |---|---|---|---|
@@ -140,4 +140,4 @@ All options default off; each has an ini key, a menu checkbox and is cleared by 
 | 6 | - | - | `run.cmd inline-lifecycle` fixture |
 | C | NrAdaptiveWaitBudget | Adaptive wait budget | Post-claim wait slices follow a GPU-timed iterations/ms EMA (target ~4 ms, 8..256 slices); halve on cap/abort, grow after 64 clean waits |
 
-Known gaps: multi-layer with motion is still segmented (core motion blit). Adaptive budget data is read on retirement only (no CPU wait). The timed span includes early-out dispatches after the capture arrives, so the rate is a slight underestimate (conservative cap).
+Known gaps: multi-layer motion in place needs NrInlineComputeMotion (patch 21). Adaptive budget data is read on retirement only (no CPU wait). The timed span includes early-out dispatches after the capture arrives, so the rate is a slight underestimate (conservative cap).

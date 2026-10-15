@@ -406,14 +406,14 @@ class Config
     CustomOptional<int> NrSpinSlices { 0 };
     CustomOptional<int> NrWatchSlices { 0 };
     CustomOptional<int> NrWatchStartDelay { 0 };
-    // Mochizuki inline: R11G11B10_FLOAT colour converted on the compute queue (whole chain on compute). Default off.
-    CustomOptional<bool> NrInlineComputeConvert { false };
-    // Compute-queue motion rescale. Default off.
-    CustomOptional<bool> NrInlineComputeMotion { false };
-    // Compute-queue model downscale. Default off.
-    CustomOptional<bool> NrInlineComputeDownscale { false };
-    // Compute-queue first-pass export. Default off.
-    CustomOptional<bool> NrInlineComputeExport { false };
+    // Mochizuki inline: listed colour formats converted on the compute queue (whole chain on compute). Default on.
+    CustomOptional<bool> NrInlineComputeConvert { true };
+    // Compute-queue motion rescale. Default on.
+    CustomOptional<bool> NrInlineComputeMotion { true };
+    // Compute-queue model downscale. Default on.
+    CustomOptional<bool> NrInlineComputeDownscale { true };
+    // Compute-queue first-pass export. Default on.
+    CustomOptional<bool> NrInlineComputeExport { true };
     // Adaptive wait budget. Default off.
     CustomOptional<bool> NrAdaptiveWaitBudget { false };
     CustomOptional<bool> NrInline { false }; // Experimental same-list execution for lmxxf/Mochizuki.

@@ -11,22 +11,22 @@
 // Diagnostic: GPU timestamp pairs around the core's linear-input encode and transfer pass
 // (MochizukiNrInfo::gpu_ms_encode_last / gpu_ms_transfer_last). Absent: none are written.
 #define MOCHIZUKI_NR_FRAME_FLAG_STAGE_TIMING (1u << 10)
-// NrInlineComputeConvert (default off): an inline colour frame in one of the listed formats (B10G11R11,
+// NrInlineComputeConvert (host default on): an inline colour frame in one of the listed formats (B10G11R11,
 // RGBA8/BGRA8 UNORM or SRGB, A2B10G10R10 / A2R10G10B10 UNORM) converts its input (copy + runtime_unpack_f16)
 // and its write-back (a compute pack per format) on the compute family instead of graphics blits, so the
 // whole chain can stay on compute. May rebuild the network.
 #define MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_CONVERT (1u << 11)
-// NrInlineComputeMotion (default off): with dynamic resolution, motion vectors of another extent are rescaled onto the
+// NrInlineComputeMotion (host default on): with dynamic resolution, motion vectors of another extent are rescaled onto the
 // subrect by a compute pass (runtime_mv_rescale_*, bilinear like the blit) instead of a LINEAR blit, so such inline
 // frames can keep the whole chain on compute. With more than one layer it also sets RuntimeConfig::motion_in_place_passes:
 // every layer samples the motion vectors in place, with no motion blit. Changing it remakes the frame buffers, and the
 // network when there is more than one layer.
 #define MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_MOTION (1u << 12)
-// NrInlineComputeDownscale (default off): model scale below 1 keeps the frame in its own format and filters it down
+// NrInlineComputeDownscale (host default on): model scale below 1 keeps the frame in its own format and filters it down
 // with runtime_downscale (the blit's own taps), and packs the full-size answer on compute when it is not stored in
 // the frame's format, so such inline frames can keep the whole chain on compute. Rebuilds the network when scaled.
 #define MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_DOWNSCALE (1u << 13)
-// NrInlineComputeExport (default off): the first-pass export (multi-layer NR) packs pass 0 into the frame's format on
+// NrInlineComputeExport (host default on): the first-pass export (multi-layer NR) packs pass 0 into the frame's format on
 // compute (runtime_pack_*) instead of a blit, so such inline frames can keep the whole chain on compute. RGBA16F,
 // R11G11B10, RGBA8/BGRA8 UNORM and RGB10A2; other formats keep the blit. Rebuilds the network when exporting.
 #define MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_EXPORT (1u << 14)
