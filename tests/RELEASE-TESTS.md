@@ -7,11 +7,12 @@
 ## 统一入口与范围
 
 ```cmd
-tests\run-all.cmd --tier ci
+tests\run-all.cmd --tier release
 ```
 
 | tier | 覆盖 | 运行条件 |
 |---|---|---|
+| `release` | 当前 DLL ABI/Shader、关键 host/WARP 冒烟、完整包安装/重装/卸载及配置保留；日常 tag 发包默认 | Windows/MSVC/WARP |
 | `ci` | host/config、shader、mochizuki ABI、lmxxf ABI/C 冒烟/WARP、安装卸载、模块打包、上传回归、同步工具及 Git 二进制往返（本周同输入成功记录可复用） | 无独立 GPU 要求；Windows/MSVC/WARP |
 | `device` | host graphics 与实际 D3D12 列表/proxy 测试 | D3D12 硬件 |
 | `gpu` | mochizuki Vulkan 输出/重放/跨队列/分辨率/取消（自备模型）、lmxxf 实际 HIP、格式/曝光、输出黄金哈希、录制租约、bridge 与故障回归 | AMD GPU，`LMXXF_ASSETS` 指向有效权重目录 |
@@ -20,22 +21,24 @@ tests\run-all.cmd --tier ci
 可组合 `--tier ci,device`，可用 `--out exports/test-run` 指定结果目录。
 `tools/build/build-release-local.cmd` 已跑 `ci,device`，无需在完整构建前再重复运行。
 
-成功的完整 CI 会生成 `runtime-ci.sha256` 并确认测试期间 DLL 未改变。
-失败或 `--skip-sync` 不生成凭证；单跑 ABI 也不生成完整 CI 凭证。
+成功的 release 或完整 ci 都会生成 `runtime-ci.sha256` 并确认测试期间 DLL 未改变。
+失败或 `--skip-sync` 不生成凭证；单跑 ABI 也不生成发布检查凭证。
 `LMXXF_TEST_RUNTIME` 可以指定待测 DLL，发布验证必须核对它的真实路径与哈希。
 不要把分项通过或 `--fast` 编译当成完整发版验证。
+
+日常 release 的具体保留/移出范围见 [发布检查表](../docs/release.md#减少重复验证2026-10-05)。完整 `ci` 的范围保留。测试报告会明确标注 release scope，不声称已跑全量。
 
 ## 何时必须跑
 
 - 日常修改先审最终 diff，按实际风险运行受影响领域的专项；不因目录或文件名触发全套。
-- 发版前对最终产物完整运行一次 `--tier ci`，加适用的 device/GPU 验证；完整构建入口已包含 ci,device，不重复执行。
-- 增删模块：先核对模块契约及消费者，运行相关专项；发版时纳入完整 CI。
+- tag 发包运行 `--tier release`；完整 ci 通过 Actions 手动入口或本地按需运行，不是每次出包前置。加适用的 device/GPU 验证。
+- 增删模块：先核对模块契约及消费者，运行相关专项；必要时选择完整 ci。
 - 仅文档/注释变化：可跳过编译和运行回归，检查命令、路径及链接。
 - 游戏、显卡不可用时明确记 SKIP；不把模拟、WARP 或别的型号测试等同该游戏/硬件实测。
 
 ## 分项定位失败
 
-每个领域的 `run.cmd` 是该领域入口。修复后先重跑受影响专项；最终发版仍需完整 CI 凭证绑定实际 runtime。不要删除断言或跳过失败的领域。
+每个领域的 `run.cmd` 是该领域入口。修复后先重跑受影响专项；最终发版仍需发布检查凭证绑定实际 runtime。不要删除断言或跳过失败的领域。
 
 ```cmd
 tests\host\run.cmd ci

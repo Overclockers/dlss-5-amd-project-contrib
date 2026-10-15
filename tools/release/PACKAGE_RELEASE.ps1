@@ -18,7 +18,7 @@ param(
     [string]$OptiDll = '',
     [string]$DepsRoot = '',
     [string]$SigningThumbprint = '',
-    # Local smoke package only: does not certify full release validation.
+    # Local smoke package only: does not certify the release checks.
     [switch]$LocalTest,
     [switch]$AllowMissingDeps
 )
@@ -90,10 +90,10 @@ if (!(Test-Path -LiteralPath $OptiDll)) {
 $lmxxfDllSrc = Join-Path $root 'exports/lmxxf-runtime/LmxxfNrRuntime.dll'
 $runtimeProof = Join-Path $root 'exports/lmxxf-runtime/runtime-ci.sha256'
 if ($LocalTest) {
-    Write-Warning 'LOCAL TEST PACKAGE: full runtime CI proof is not required; this is not release validation.'
+    Write-Warning 'LOCAL TEST PACKAGE: runtime release-check proof is not required; this is not release validation.'
 } else {
     if (-not (Test-Path -LiteralPath $runtimeProof -PathType Leaf)) {
-        throw 'Missing runtime-ci.sha256. Run the full local release build, or stage the runtime and proof from a successful tests/run-all.cmd --tier ci run.'
+        throw 'Missing runtime-ci.sha256. Stage the runtime and proof from a successful tests/run-all.cmd --tier release (or full ci) run.'
     }
     $testedRuntimeHash = ([IO.File]::ReadAllText($runtimeProof)).Trim()
     if ($testedRuntimeHash -notmatch '^[0-9a-fA-F]{64}$' -or $testedRuntimeHash -ne (Get-Sha256 $lmxxfDllSrc)) {

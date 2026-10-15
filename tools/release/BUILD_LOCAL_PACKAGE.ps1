@@ -1,5 +1,5 @@
 ﻿[CmdletBinding()]
-param([string]$Root, [string]$Version, [switch]$PlanOnly)
+param([string]$Root, [string]$Version, [switch]$PlanOnly, [switch]$Rebuild)
 $ErrorActionPreference = 'Stop'
 function Invoke-LoggedNative {
     param([string]$Executable, [string[]]$Arguments, [string]$Log, [string]$Failure)
@@ -65,7 +65,7 @@ try {
     if ($mochi -and !(Test-Path -LiteralPath (Join-Path $Root 'tools/build/build-mochizuki-runtime.cmd'))) { throw 'Mochizuki build script missing.' }
     $branch = & git -C $Root branch --show-current
     Write-Host "Project: $Root`nBranch: $branch`nVersion: $Version`nDependencies: $deps`nMochizuki: $mochi"
-    Write-Host 'Full host rebuild and runtime builds. Local test package; no full release test suite.'
+    Write-Host "Build mode: $(if ($Rebuild) { 'full rebuild' } else { 'incremental host; verified Mochizuki/Worker reuse; lmxxf rebuilt' }). Local test package; no full release test suite."
     if ($PlanOnly) { exit 0 }
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
     $name = "OptScaler-NR-$Version-local-$stamp"
@@ -82,18 +82,24 @@ setlocal
 call tests\_lib\msvc-env.cmd || exit /b 1
 call tools\build\build-lmxxf-runtime.cmd exports\lmxxf-runtime || exit /b 1
 '@
-        if ($mochi) { $batch += "`r`ncall tools\build\build-mochizuki-runtime.cmd || exit /b 1" }
+        if ($mochi) { $batch += "`r`ncall tools\build\build-mochizuki-runtime.cmd $(if (!$Rebuild) { '--reuse' }) || exit /b 1" }
         $batch += @'
 
 if not exist exports\release-local mkdir exports\release-local
-"%VSINSTALLDIR%MSBuild\Current\Bin\MSBuild.exe" "OptiScaler-DLSSNR-PreSR-Multipass-main\OptiScaler\OptiScaler.vcxproj" /m:4 /t:Rebuild /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v145 /p:VCToolsVersion=14.44.35207 /p:WindowsTargetPlatformVersion=10.0.26100.0 /p:PostBuildEventUseInBuild=false /p:SolutionDir="%CD%/OptiScaler-DLSSNR-PreSR-Multipass-main/" /p:OutDir="%CD%/exports/release-local/" /p:IntDir="%CD%/exports/release-local/obj/" /v:minimal /nologo
+"%VSINSTALLDIR%MSBuild\Current\Bin\MSBuild.exe" "OptiScaler-DLSSNR-PreSR-Multipass-main\OptiScaler\OptiScaler.vcxproj" /m:4 /t:@HOST_TARGET@ /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v145 /p:VCToolsVersion=14.44.35207 /p:WindowsTargetPlatformVersion=10.0.26100.0 /p:PostBuildEventUseInBuild=false /p:SolutionDir="%CD%/OptiScaler-DLSSNR-PreSR-Multipass-main/" /p:OutDir="%CD%/exports/release-local/" /p:IntDir="%CD%/exports/release-local/obj/" /v:minimal /nologo
 if errorlevel 1 exit /b 1
 if not exist exports\release-local\OptiScaler.dll exit /b 1
+if "@HOST_TARGET@"=="Build" if exist exports\release-local\person-model\person-worker.exe (
+  powershell -NoProfile -ExecutionPolicy Bypass -File tools\release\check-person-worker.ps1 -WorkerExe exports\release-local\person-model\person-worker.exe
+  if not errorlevel 1 goto workerReady
+)
 call tools\build\build-person-worker.cmd exports\release-local\person-model
 if errorlevel 1 exit /b 1
+:workerReady
 if not exist exports\release-local\person-model\person-worker.exe exit /b 1
 exit /b 0
 '@
+        $batch = $batch.Replace('@HOST_TARGET@', $(if ($Rebuild) { 'Rebuild' } else { 'Build' }))
         $batchPath = Join-Path $scratch 'build.cmd'
         [IO.File]::WriteAllText($batchPath,($batch -replace "`r?`n","`r`n"),[Text.Encoding]::ASCII)
         Push-Location $Root

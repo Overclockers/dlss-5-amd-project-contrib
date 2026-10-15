@@ -1,6 +1,6 @@
 @echo off
 rem Single entry point for every test area. Each area folder owns exactly one run.cmd.
-rem Usage: tests\run-all.cmd [--tier ci^|device^|gpu^|all] [--out exports\test-run] [--skip-sync] [--keep-going]
+rem Usage: tests\run-all.cmd [--tier release^|ci^|device^|gpu^|all] [--out exports\test-run] [--skip-sync] [--keep-going]
 rem   --tier  ci      what the GitHub runner can do, no GPU: host ci, shader, lmxxf abi + warp,
 rem                   install, sync. Default.
 rem           device  hardware D3D12 adapter: host device (amd_graphics_d3), lmxxf device.
@@ -10,17 +10,20 @@ rem           Several tiers may be combined: --tier ci,device
 rem   sync reuses a matching successful tooling run in the current UTC week; it never reuses runtime tests.
 rem   --skip-sync   skip tests\sync for inner loops; reported as SKIP and disables release proof.
 rem   --keep-going  run every suite and fail at the end instead of stopping at the first failure.
+rem   --tier release  shipping ABI/shader/host/WARP and install smoke; developer-tool/full regression is opt-in.
 rem The runtime is built once into <out>\runtime unless LMXXF_TEST_RUNTIME already names a DLL.
 setlocal EnableExtensions
 cd /d "%~dp0.."
 set "REPO=%CD%"
 set "RUN_CI="
+set "FULL_CI="
 set "RUN_DEVICE="
 set "RUN_GPU="
 set "ANY_TIER="
 set "OUT=exports\test-run"
 set "SKIP_SYNC="
 set "KEEP_GOING="
+set "RELEASE_CHECKS="
 
 :parse
 if "%~1"=="" goto parsed
@@ -57,19 +60,29 @@ shift
 goto tiers
 
 :AddTier
-if /i "%~1"=="ci" (set "RUN_CI=1" & set "ANY_TIER=1" & exit /b 0)
+if /i "%~1"=="release" (set "RUN_CI=1" & set "RELEASE_CHECKS=1" & set "ANY_TIER=1" & exit /b 0)
+if /i "%~1"=="ci" (set "RUN_CI=1" & set "FULL_CI=1" & set "ANY_TIER=1" & exit /b 0)
 if /i "%~1"=="device" (set "RUN_DEVICE=1" & set "ANY_TIER=1" & exit /b 0)
 if /i "%~1"=="gpu" (set "RUN_GPU=1" & set "ANY_TIER=1" & exit /b 0)
-if /i "%~1"=="all" (set "RUN_CI=1" & set "RUN_DEVICE=1" & set "RUN_GPU=1" & set "ANY_TIER=1" & exit /b 0)
+if /i "%~1"=="all" (set "RUN_CI=1" & set "FULL_CI=1" & set "RUN_DEVICE=1" & set "RUN_GPU=1" & set "ANY_TIER=1" & exit /b 0)
 echo Unknown tier: %~1
 exit /b 1
 
 :usage
-echo usage: tests\run-all.cmd [--tier ci^|device^|gpu^|all] [--out exports\test-run] [--skip-sync] [--keep-going]
+echo usage: tests\run-all.cmd [--tier release^|ci^|device^|gpu^|all] [--out exports\test-run] [--skip-sync] [--keep-going]
 exit /b 2
 
 :parsed
 if not defined ANY_TIER set "RUN_CI=1"
+if defined FULL_CI set "RELEASE_CHECKS="
+set "HOST_TIER=ci"
+set "WARP_TIER=warp"
+set "INSTALL_TIER="
+if defined RELEASE_CHECKS (
+  set "HOST_TIER=release"
+  set "WARP_TIER=release"
+  set "INSTALL_TIER=release"
+)
 for %%I in ("%OUT%") do set "OUT=%%~fI"
 if not exist "%OUT%" mkdir "%OUT%"
 set "SUMMARY=%OUT%\summary.txt"
@@ -89,6 +102,7 @@ if defined LMXXF_TEST_RUNTIME if exist "%LMXXF_TEST_RUNTIME%" (
   goto afterRuntime
 )
 echo === build: LmxxfNrRuntime.dll ===
+call :Start
 call "%REPO%\tools\build\build-lmxxf-runtime.cmd" "%OUT%\runtime"
 call :Result "runtime build" || goto done
 set "LMXXF_TEST_RUNTIME=%OUT%\runtime\LmxxfNrRuntime.dll"
@@ -99,6 +113,7 @@ if not defined RUNTIME_HASH exit /b 1
 :afterRuntimeHash
 
 if not defined RUN_CI goto afterMochizuki
+call :Start
 if not exist exports\mochizuki-runtime\build-manifest.json (
   call tools\build\build-mochizuki-runtime.cmd || exit /b 1
 )
@@ -109,42 +124,56 @@ call :Result "mochizuki abi" || goto done
 
 if not defined RUN_CI goto afterCi
 echo === ci: host ===
-call "%REPO%\tests\host\run.cmd" ci "%OUT%\host"
-call :Result "host ci" || goto done
+call :Start
+call "%REPO%\tests\host\run.cmd" %HOST_TIER% "%OUT%\host"
+call :Result "host %HOST_TIER%" || goto done
 echo === ci: shader ===
+call :Start
 call "%REPO%\tests\shader\run.cmd" "%OUT%\shader"
 call :Result "shader" || goto done
 echo === ci: lmxxf abi ===
+call :Start
 call "%REPO%\tests\lmxxf\run.cmd" abi "%OUT%\lmxxf"
 call :Result "lmxxf abi" || goto done
 echo === ci: lmxxf warp ===
-call "%REPO%\tests\lmxxf\run.cmd" warp "%OUT%\lmxxf"
-call :Result "lmxxf warp" || goto done
+call :Start
+call "%REPO%\tests\lmxxf\run.cmd" %WARP_TIER% "%OUT%\lmxxf"
+call :Result "lmxxf %WARP_TIER%" || goto done
 echo === ci: install ===
-call "%REPO%\tests\install\run.cmd"
+call :Start
+call "%REPO%\tests\install\run.cmd" %INSTALL_TIER%
 call :Result "install" || goto done
+if defined RELEASE_CHECKS (
+  call :Record INFO "release scope; full installer and developer-tool regression not requested"
+  goto afterCi
+)
 if defined SKIP_SYNC (
   call :Record SKIP "sync (--skip-sync)"
   goto afterCi
 )
 echo === ci: sync ===
+call :Start
 call "%REPO%\tests\sync\run.cmd"
 call :Result "sync" || goto done
 :afterCi
 
 if not defined RUN_DEVICE goto afterDevice
 echo === device: host ===
+call :Start
 call "%REPO%\tests\host\run.cmd" device "%OUT%\host"
 call :Result "host device" || goto done
 echo === device: lmxxf ===
+call :Start
 call "%REPO%\tests\lmxxf\run.cmd" device "%OUT%\lmxxf"
 call :Result "lmxxf device" || goto done
 :afterDevice
 
 if not defined RUN_GPU goto afterGpu
+call :Start
 call tests\mochizuki\run.cmd gpu
 call :Result "mochizuki gpu" || goto done
 echo === gpu: lmxxf ===
+call :Start
 call "%REPO%\tests\lmxxf\run.cmd" gpu "%OUT%\lmxxf"
 call :Result "lmxxf gpu" || goto done
 :afterGpu
@@ -167,7 +196,9 @@ exit /b 0
 
 rem :Result <suite> - records the caller's errorlevel. Fails (exit 1) only when the run must stop.
 :Result
-if "%errorlevel%"=="0" (
+set "SUITE_EXIT=%errorlevel%"
+powershell -NoProfile -Command "Write-Host ('SUITE %~1 seconds=' + [Math]::Round(([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()-[long]$env:SUITE_STARTED)/1000,3) + ' exit=%SUITE_EXIT%')"
+if "%SUITE_EXIT%"=="0" (
   call :Record PASS "%~1"
   exit /b 0
 )
@@ -179,4 +210,8 @@ exit /b 1
 :Record
 echo %~1  %~2
 >>"%SUMMARY%" echo %~1  %~2
+exit /b 0
+
+:Start
+for /f %%T in ('powershell -NoProfile -Command "[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()"') do set "SUITE_STARTED=%%T"
 exit /b 0

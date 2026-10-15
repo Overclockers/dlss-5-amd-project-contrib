@@ -1,6 +1,6 @@
 @echo off
 rem Installer, uninstaller and packaging entrypoints. No GPU; isolated temp folders only.
-rem Usage: tests\install\run.cmd
+rem Usage: tests\install\run.cmd [release]  (default: full regression; release: two smoke cases)
 rem   test_installer_exit.py   Setup/Uninstall launchers under Windows PowerShell 5.1
 rem   test_module_packages.py  PACKAGE_RELEASE / installer / stage on synthetic module bundles
 rem   amd_uninstall.ps1        uninstaller regression (Windows PowerShell 5.1)
@@ -8,6 +8,7 @@ setlocal EnableExtensions
 cd /d "%~dp0..\.."
 if not defined AMD_TEST_PYTHON set "AMD_TEST_PYTHON=python"
 set "PS51=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+if /i "%~1"=="release" goto release
 "%PS51%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests\install\package-signing.ps1 || goto fail
 "%PS51%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests\install\person-worker-package.ps1 || goto fail
 "%PS51%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests\install\plugin-paths.ps1 || goto fail
@@ -18,6 +19,7 @@ set "PS51=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 "%AMD_TEST_PYTHON%" -B tests\install\test_release_upload.py || goto fail
 "%AMD_TEST_PYTHON%" -B tests\install\test_release_notes.py || goto fail
 "%AMD_TEST_PYTHON%" -B tests\install\test_runtime_ci_proof.py || goto fail
+"%AMD_TEST_PYTHON%" -B tests\install\test_ci_workers.py || goto fail
 
 rem Local build launcher tests run with the cached tooling suite (tests\sync).
 
@@ -27,3 +29,11 @@ exit /b 0
 :fail
 echo install: FAIL
 exit /b 1
+
+:release
+rem One complete archive installation/uninstallation and a real overwrite/preferences path.
+rem The production packager separately checks signatures, all files and hashes on the actual ZIP.
+"%AMD_TEST_PYTHON%" -B tests\install\test_module_packages.py ModulePackageTests.test_valid_actual_archive_can_install || goto fail
+"%AMD_TEST_PYTHON%" -B tests\install\test_installer_exit.py InstallerExitTests.test_kept_ini_preserves_canonical_preferences_over_legacy || goto fail
+echo install release: PASS
+exit /b 0

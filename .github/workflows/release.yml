@@ -24,15 +24,11 @@ on:
   push:
     tags:
       - 'v*'
+  # Manual runs execute full regression only; publishing needs one tag run.
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Product version; leave empty to read VERSION'
-        required: false
-        default: ''
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   PLATFORM_TOOLSET: v145
@@ -47,6 +43,9 @@ env:
 
 jobs:
   build:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    permissions:
+      contents: write
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -58,19 +57,12 @@ jobs:
       - name: Resolve version
         id: ver
         shell: pwsh
-        env:
-          REQUESTED_VERSION: ${{ inputs.version }}
         run: |
           $ErrorActionPreference = 'Stop'
           $v = (Get-Content -LiteralPath VERSION -Raw).Trim()
-          if ($env:GITHUB_REF_TYPE -eq 'tag') {
-            $v = $env:GITHUB_REF_NAME -replace '^v', ''
-          } elseif ($env:REQUESTED_VERSION) {
-            $v = $env:REQUESTED_VERSION
-          }
-          if ($v -notmatch '^[0-9A-Za-z._-]+$') { throw "Refusing odd version string: $v" }
+          if ($v -notmatch '^[0-9A-Za-z._-]+$') { throw 'Invalid committed VERSION' }
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -cne "v$v") { throw 'Tag must match committed VERSION' }
           "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          Write-Host "resolved version: $v"
 
       - name: Prepare versioned release notes
         shell: pwsh
@@ -194,17 +186,14 @@ jobs:
           powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tools/release/check-module-contract.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Compute build and tooling cache keys
+      - name: Compute build cache key
         id: cache_keys
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $mochi = python -B tools/build/mochizuki-manifest.py --cache-key
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $sync = python -B tools/lmxxf-sync/test-cache.py key
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "mochi=$mochi" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "sync=$sync" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Restore verified Mochizuki build
         uses: actions/cache@v5
@@ -221,39 +210,17 @@ jobs:
             exports/mochizuki-runtime/model-tools
           key: mochi-${{ runner.os }}-${{ steps.cache_keys.outputs.mochi }}
 
-      - name: Restore tooling test receipt
-        uses: actions/cache@v5
-        with:
-          path: exports/test-cache/sync.json
-          key: tooling-${{ runner.os }}-${{ steps.cache_keys.outputs.sync }}
-
       - name: Build or verify Mochizuki
         shell: pwsh
         run: |
           cmd /d /c tools\build\build-mochizuki-runtime.cmd --reuse
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Build host and run CI concurrently
-        # A cold run exceeded 25 minutes after passing WARP and the 74/27-case
-        # install/package groups. Keep the complete remaining suites and allow
-        # them to finish before source replay, signing and final ZIP checks.
-        timeout-minutes: 40
+      - name: Build host and run release checks concurrently
+        timeout-minutes: 25
         shell: pwsh
         run: |
           ./tools/build/build-ci.ps1
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Replay Mochizuki upstream pin
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $pin = (Get-Content tools/mochizuki-sync/manifest.json -Raw | ConvertFrom-Json).commit
-          $upstream = Join-Path $env:RUNNER_TEMP 'mochizuki-source-check'
-          git init $upstream
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git -C $upstream fetch --depth=1 https://github.com/mochizuki0323/DLSSNR-AMD.git $pin
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -B tools/mochizuki-sync/check.py --upstream $upstream
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Create ephemeral package signing certificate
@@ -264,7 +231,17 @@ jobs:
           $cert = Get-PackageSigningCertificate -Ephemeral
           "PACKAGE_SIGNING_THUMBPRINT=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Fetch person segmentation assets
+      - name: Restore public person assets
+        uses: actions/cache@v5
+        with:
+          path: |
+            assets/person-model/onnxruntime.dll
+            assets/person-model/pphumanseg.onnx
+            assets/person-model/yolo11n-seg.onnx
+            assets/person-model/yunet.onnx
+          key: person-assets-${{ runner.os }}-py312-${{ hashFiles('tools/release/prepare-person-assets.ps1') }}
+
+      - name: Prepare person assets (CRT refreshed each run)
         shell: pwsh
         run: |
           ./tools/release/prepare-person-assets.ps1
@@ -336,15 +313,6 @@ jobs:
             }
           }
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v6
-        with:
-          name: OptScaler(NR)
-          path: |
-            dist/OptScaler-NR-${{ steps.ver.outputs.version }}.zip
-            dist/OptScaler-NR-${{ steps.ver.outputs.version }}/SHA256SUMS.txt
-          if-no-files-found: error
-
       - name: Upload validation logs
         if: always()
         uses: actions/upload-artifact@v6
@@ -379,3 +347,54 @@ jobs:
         run: |
           python -B .github/scripts/publish_release_asset.py --tag "$env:RELEASE_TAG" --asset "dist/OptScaler-NR-$env:RELEASE_VERSION.zip"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  regression:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Set up pinned compiler
+        uses: TheMrMilchmann/setup-msvc-dev@v4.1.0
+        with:
+          arch: x64
+          toolset: ${{ env.MSVC_VERSION }}
+          sdk: ${{ env.WINDOWS_SDK_VERSION }}
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v3
+      - name: Build and run full regression
+        shell: pwsh
+        run: |
+          cmd /d /c tools\build\build-mochizuki-runtime.cmd --reuse
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./tools/build/build-ci.ps1 -FullRegression
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Replay Mochizuki upstream pin
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pin = (Get-Content tools/mochizuki-sync/manifest.json -Raw | ConvertFrom-Json).commit
+          $upstream = Join-Path $env:RUNNER_TEMP 'mochizuki-source-check'
+          git init $upstream
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git -C $upstream fetch --depth=1 https://github.com/mochizuki0323/DLSSNR-AMD.git $pin
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B tools/mochizuki-sync/check.py --upstream $upstream
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload validation logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: validation-logs
+          path: |
+            exports/release-ci/*.log
+            exports/release-ci/tests/summary.txt
+          if-no-files-found: ignore

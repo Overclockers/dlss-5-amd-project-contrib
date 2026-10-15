@@ -38,6 +38,7 @@ set "CXX=cl /nologo /std:c++20 /EHsc /W4 /utf-8"
 set "D3D=d3d12.lib dxgi.lib dxguid.lib uuid.lib"
 if /i "%TIER%"=="abi" goto abi
 if /i "%TIER%"=="warp" goto warp
+if /i "%TIER%"=="release" goto release
 if /i "%TIER%"=="device" goto device
 if /i "%TIER%"=="early-unity" goto early-unity
 if /i "%TIER%"=="gpu" goto gpu
@@ -66,6 +67,11 @@ copy /Y "%LMXXF_TEST_RUNTIME%" "%OUT%\LmxxfNrRuntime.dll" >nul || goto fail
 "%AMD_TEST_PYTHON%" -B tests\lmxxf\test_runtime_validation.py || goto fail
 goto pass
 
+:release
+call :RunSplitState || goto fail
+call :RunInlineDiscard || goto fail
+goto warpSmoke
+
 :warp
 call :RunSplitState || goto fail
 call :RunInlineFixture warp || goto fail
@@ -85,6 +91,7 @@ call :RunDiagLifetime || goto fail
 call tests\lmxxf\shader-compiler.cmd "%OUT%\shader-compiler" || goto fail
 %CXX% /I"%INC%" tests\lmxxf\lmxxf_recording_lifecycle.cpp /Fe"%OUT%\lmxxf_recording_lifecycle.exe" /Fo"%OUT%\lmxxf_recording_lifecycle.obj" /link %D3D% "%DETOURS%" || goto fail
 "%OUT%\lmxxf_recording_lifecycle.exe" || goto fail
+:warpSmoke
 %CXX% /I"%INC%" tests\lmxxf\lmxxf_same_frame_boundary.cpp /Fe"%OUT%\lmxxf_same_frame_boundary.exe" /Fo"%OUT%\lmxxf_same_frame_boundary.obj" /link %D3D% d3dcompiler.lib "%DETOURS%" || goto fail
 "%OUT%\lmxxf_same_frame_boundary.exe" || goto fail
 %CXX% tests\lmxxf\lmxxf_color_probe.cpp /Fe"%OUT%\lmxxf_color_probe.exe" /Fo"%OUT%\lmxxf_color_probe.obj" /link d3d12.lib dxgi.lib dxguid.lib || goto fail

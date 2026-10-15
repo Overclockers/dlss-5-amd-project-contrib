@@ -46,9 +46,9 @@ class RuntimeProofTests(unittest.TestCase):
         (self.mochizuki / 'dlssnr-amd/shaders/test.spv').write_bytes(b'non-executable shader fixture')
         runpy.run_path(str(self.root / 'tools/build/mochizuki-manifest.py'))['write'](self.mochizuki)
 
-    def run_entrypoint(self, *args):
+    def run_entrypoint(self, *args, tier='ci'):
         return subprocess.run(
-            ['cmd', '/d', '/c', 'tests\\run-all.cmd', '--tier', 'ci',
+            ['cmd', '/d', '/c', 'tests\\run-all.cmd', '--tier', tier,
              '--out', 'exports\\proof', *args],
             cwd=self.root, env=self.env, capture_output=True, timeout=45)
 
@@ -57,6 +57,19 @@ class RuntimeProofTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.proof.read_text().strip().lower(),
                          hashlib.sha256(self.runtime.read_bytes()).hexdigest())
+
+    def test_release_scope_checks_all_required_suites_and_never_runs_sync(self):
+        (self.root / 'tests/sync/run.cmd').write_text('@exit /b 7\n')
+        for area in ('host', 'install'):
+            (self.root / 'tests' / area / 'run.cmd').write_text(
+                '@if "%~1"=="release" exit /b 0\n@exit /b 7\n')
+        result = self.run_entrypoint(tier='release')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.proof.read_text().strip().lower(), hashlib.sha256(self.runtime.read_bytes()).hexdigest())
+        (self.root / 'tests/install/run.cmd').write_text('@exit /b 7\n')
+        result = self.run_entrypoint(tier='release')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.proof.exists())
 
     def test_failure_invalidates_previous_proof(self):
         (self.root / 'tests/sync/run.cmd').write_text('@exit /b 7\n')

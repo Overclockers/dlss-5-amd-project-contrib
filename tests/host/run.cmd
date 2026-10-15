@@ -1,6 +1,6 @@
 @echo off
 rem Host-contract tests. Every *.cpp in tests\host belongs to exactly one tier below.
-rem Usage: tests\host\run.cmd [ci^|device^|all] [out-dir]
+rem Usage: tests\host\run.cmd [release^|ci^|device^|all] [out-dir]
 rem   ci     : CPU only, no GPU. nr_backend_selector, amd_submission_state, amd_graphics_{snapshot,
 rem            tracker,restore,restore_dx12,invocation,native_hooks}, amd_runtime_host_load (+ its
 rem            generated fixture PE), amd_retirement_diagnostics, and hip_load.ps1 (amd_hip_load +
@@ -28,7 +28,8 @@ set "CXX=cl /nologo /std:c++20 /EHsc /W4"
 if /i "%TIER%"=="ci" goto ci
 if /i "%TIER%"=="all" goto ci
 if /i "%TIER%"=="device" goto device
-echo usage: tests\host\run.cmd [ci^|device^|all] [out-dir]
+if /i "%TIER%"=="release" goto release
+echo usage: tests\host\run.cmd [release^|ci^|device^|all] [out-dir]
 exit /b 2
 
 :ci
@@ -116,3 +117,13 @@ exit /b 0
 :fail
 echo host %TIER%: FAIL
 exit /b 1
+
+:release
+rem Stable shipping contracts; full diagnostic/UI/loader fixtures stay in ci.
+for %%T in (nr_backend_selector nr_recording_admission amd_submission_state nr_session_lifecycle) do (
+  %CXX% /utf-8 /I"%INC%" tests\host\%%T.cpp /Fe"%OUT%\%%T.exe" /Fo"%OUT%\%%T.obj" /link "%DETOURS%" dxguid.lib || goto fail
+  "%OUT%\%%T.exe" || goto fail
+)
+"%AMD_TEST_PYTHON%" -B tests\host\test_config_priority.py || goto fail
+echo host release: PASS
+exit /b 0

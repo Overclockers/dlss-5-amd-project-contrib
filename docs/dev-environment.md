@@ -29,12 +29,13 @@
 测试按领域分目录，每个领域一个 `run.cmd`，统一入口：
 
 ```
-tests\run-all.cmd --tier ci|device|gpu|all [--out 目录] [--skip-sync] [--keep-going]
+tests\run-all.cmd --tier release|ci|device|gpu|all [--out 目录] [--skip-sync] [--keep-going]
 ```
 
 | 层 | 需要 | 内容 |
 |---|---|---|
-| ci | 无 GPU（CI 跑这一层） | `tests/host`、`tests/shader`、`tests/lmxxf` 的 abi 与 WARP 用例、`tests/install`、`tests/sync` |
+| release | 无 GPU（日常 tag 发包） | ABI/Shader、关键 host/WARP、安装冒烟；详见发布文档 |
+| ci | 无 GPU（手动完整回归） | `tests/host`、`tests/shader`、`tests/lmxxf` 的 abi 与 WARP 用例、`tests/install`、`tests/sync` |
 | device | 硬件 D3D12 | `tests/host` 的 D3D 场景、`tests/lmxxf` 的 list split / List1 / create-execute / evaluate-cut |
 | gpu | AMD GPU + `LMXXF_ASSETS`（权重目录） | `tests/lmxxf/lmxxf_nr_gpu`（各输出哈希模式）、`lmxxf_bridge_zero_gpu` |
 
@@ -100,7 +101,7 @@ tests\run-all.cmd --tier ci|device|gpu|all [--out 目录] [--skip-sync] [--keep-
 - `tools/install/mochizuki-python.ps1`：Setup 与独立模型工具共用的 Python 3.10+ 探测；缺失或不可用时提示到 Windows 商店搜索 Python 安装。
 - `tests/mochizuki/run.cmd abi|gpu`：无 GPU ABI 与实际 D3D12/Vulkan 生命周期回归。
 
-- `tools/build/build-ci.ps1`：Actions的宿主/CI并行入口，需已配置MSVC环境与pwsh。
+- `tools/build/build-ci.ps1`：Actions 的宿主/检查并行入口；默认精简 release，加 `-FullRegression` 跑完整 ci。需已配置 MSVC 环境与 pwsh。
 - `tools/lmxxf-sync/test-cache.py`：同步工具回归的内容/环境/UTC周成功记录；通过tests/sync/run.cmd使用。
 
 Mochizuki 0.0.5 additionally builds RenoDX shaders with pinned Slang 2026.19

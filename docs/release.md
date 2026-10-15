@@ -1,10 +1,10 @@
 # 发版
 
-本页是发版流程的唯一入口（2026-10-09 优化更新），统一维护构建、契约核验、本地试包、远端预验证、GitHub Actions 权威发布与故障处理。
+本页是发版流程的唯一入口（2026-10-15 精简更新），统一维护构建、契约核验、本地试包、精简发布检查、GitHub Actions 自动发布与故障处理。
 
-发版采用**“本地轻量自测与契约核验 + 远端 GitHub Actions 权威全量 CI”**的高效分工模式：
-- **本地端（核心自测）**：仅执行秒级模块契约核查、产物新鲜度检查与核心宿主/ABI 测试（几秒至十几秒）；若需实机试玩，直接使用一键本地出包脚本。无需在本地开发机耗时数分钟模拟跑完 70+ 项系统安装器与全套卸载回归。
-- **远端 GitHub Actions（权威发包）**：在干净的云端 runner 环境中执行完整发版 CI（涵盖完整 ABI、Shader 矩阵、70+ 项真实安装/升级/卸载/多进程模块包回归、代码签名与强绑定哈希生成），作为正式发布的唯一权威门禁。
+发版采用**“本地轻量自测与契约核验 + tag 触发一次 GitHub Actions 构建与发布检查”**的高效分工模式：
+- **本地端（核心自测）**：按改动运行模块契约核查、产物新鲜度检查与宿主/ABI 专项；若需实机试玩，直接使用一键本地出包脚本。无需在本地开发机耗时数分钟模拟跑完 70+ 项系统安装器与全套卸载回归。
+- **远端 GitHub Actions（权威发包）**：在干净的云端 runner 环境中执行发布检查（实际 DLL ABI、Shader、关键 host/WARP 冒烟、安装/升级/卸载冒烟、代码签名与最终 ZIP 校验），作为正式发布的唯一权威门禁。
 
 无卡回归测试（安装、卸载、模块包、runtime 校验、sync）细节见 [tests/RELEASE-TESTS.md](../tests/RELEASE-TESTS.md)。本页是打包前后要核对的规则。`PACKAGE_RELEASE.ps1` 检查模块契约并做新鲜度门禁（`tools/release/check-release-freshness.ps1`：打包用的 DLL 或 `.hsaco` 比源码旧就中止）。
 
@@ -12,19 +12,21 @@
 
 - 版本串来自仓库根的 `VERSION`；`PACKAGE_RELEASE.ps1` 未显式给 `-Version` 时读它，并把 `VERSION` 放进包里。
 - 日常发版只更新三语 README 的标题版本号，保留其 Release 更新日志入口，不再向 README 添加逐版更新摘要。中英文更新日志统一维护在 `docs/release-notes/<VERSION>.md`，workflow 按解析后的版本读取；缺失或为空则中止；安装说明等长期文档仅在功能用法确有变化时更新。
-- 当前产品名为 **OptScaler(NR)**。品牌仅用于安装/卸载窗口、README、包名等产品展示：窗口显示 `OptScaler(NR) <版本>`，正式 ZIP 为 `OptScaler-NR-<版本>.zip`，Actions artifact 名为 `OptScaler(NR)`。ZIP 使用连字符，避免 GitHub 上传附件时将括号改为点号、导致按文件名核验失败。同步修改名称时检查打包、上传和下载路径。`OptiScaler.dll` / INI、旧日志名、源码目录及注册表位置保持兼容，旧安装记录仍可识别，新记录写入 `project=OptScaler(NR)`。
+- 当前产品名为 **OptScaler(NR)**。品牌仅用于安装/卸载窗口、README、包名等产品展示：窗口显示 `OptScaler(NR) <版本>`，正式 ZIP 为 `OptScaler-NR-<版本>.zip`，直接作为 GitHub Release 附件上传。ZIP 使用连字符，避免 GitHub 上传附件时将括号改为点号、导致按文件名核验失败。同步修改名称时检查打包、上传和下载路径。`OptiScaler.dll` / INI、旧日志名、源码目录及注册表位置保持兼容，旧安装记录仍可识别，新记录写入 `project=OptScaler(NR)`。
 - **tag 与 GitHub Release 标题固定为 `v<版本>`**（例如 `v1.10.2`），不添加品牌或其他描述；workflow 的发布标题直接使用 `github.ref_name`。CI 在 tag 名含 `-alpha`、`-beta` 或 `-rc` 时发成 prerelease，否则是正式版（Latest）。只认这三个后缀。
 - 1.8.x 时代的形式是 `1.8.x-0.3.y`（本 fork 版本 + 支持的 daniel runtime 版本）；1.9 起双后端，不再带 runtime 后缀。
-- **1.9.0.x 已全部撤包。** 本地遗留的 annotated tag `v1.9.0` 和 `dist/OptiScaler-AMD-PreSR-1.9.0.3.zip` 不要复用，任何新版本都不要再用 `1.9.0.x` 这个号。手动触发留空时读取 `VERSION`，也可显式指定版本。
+- **1.9.0.x 已全部撤包。** 本地遗留的 annotated tag `v1.9.0` 和 `dist/OptiScaler-AMD-PreSR-1.9.0.3.zip` 不要复用，任何新版本都不要再用 `1.9.0.x` 这个号。tag 必须与已提交的 `VERSION` 一致。手动 workflow 只跑完整回归，不出包。
 
-## 一键重编本地测试包
+## 一键本地测试包
 
 双击 `tools/release/BUILD_LOCAL_PACKAGE.cmd`，选择源码工作树目录，再输入如
 `1.9.10.3` 的版本号。也可用参数运行 `BUILD_LOCAL_PACKAGE.ps1 -Root <源码目录>
 -Version 1.9.10.3`；加 `-PlanOnly` 只检查和显示计划，不修改或构建。
 
-脚本使用所选工作树（包括未提交修改），不切分支、不提交、不发布。重新编译 lmxxf
-runtime；分支包含 Mochizuki 时也编译该 runtime 和着色器；宿主使用 MSBuild Rebuild。
+脚本使用所选工作树（包括未提交修改），不切分支、不提交、不发布。默认宿主使用
+MSBuild Build 增量编译，Mochizuki 使用现有 `--reuse` 内容校验，人物 Worker 的源码/
+产物哈希匹配时跳过编译。lmxxf 单文件编译仍每次执行；宿主预构建时间戳仍可能触发
+资源重编和链接，因此不是完全零编译。加 `-Rebuild` 强制全部重编，不新增依赖追踪系统。
 HIP `.hsaco` 使用该分支已提交模块，不另行追更或重编 HIP 实验。Daniel 闭源 DLL 和
 模型仍由安装器原有流程获取，不属于本仓库可编译目标。
 
@@ -59,8 +61,19 @@ HIP `.hsaco` 使用该分支已提交模块，不另行追更或重编 HIP 实�
 ## 减少重复验证（2026-10-05）
 
 日常小修运行受影响领域的专项，不把默认完整构建入口当作每次编辑后的检查。
-发布前在 GitHub Actions 运行 `tests\run-all.cmd --tier ci`：当前 DLL 的 ABI、host/WARP、shader、
-安装升级/卸载、包内容和凭证检查每次执行；GPU/device 按实际改动补充，不被缓存替代。
+日常 tag 发包使用 `tests\run-all.cmd --tier release`：
+
+| 日常保留 | 移到手动完整回归 |
+|---|---|
+| 当前 lmxxf/Mochizuki DLL ABI、Shader 检查 | 完整 host UI/诊断/loader 夹具矩阵 |
+| 后端选择、录制准入、提交状态、会话寿命、配置优先级 | WARP 全场景及辅助编译器/历史/诊断回归 |
+| WARP split-state、inline-discard、同帧边界、像素读回 | 安装/卸载异常矩阵、打包器损坏输入与凭证故障注入 |
+| 完整包安装/重装/卸载链路、覆盖安装保留配置 | 同步工具临时 Git 仓库、本地出包启动器、上传工具自身回归 |
+| 模块契约、源码/产物匹配、签名、实际 ZIP 内容与哈希 | 下载 Mochizuki 上游并重放 pin |
+
+完整测试没有删除：修改对应工具/功能时跑专项；需要全面检查时，在 Actions 手动
+运行 `release` workflow（只跑完整回归，不打包、不发布），或使用本地 `--tier ci`。
+GPU/device 按实际改动补充。日常发包不再以完整开发工具回归为前置条件。
 
 同步工具完整回归与本地试包启动器回归由 `tests\sync\run.cmd` 统一管理。
 只有测试输入内容、Python/PowerShell/Git/Windows/编译环境和当前 UTC 周全部匹配，
@@ -78,12 +91,13 @@ HIP `.hsaco` 使用该分支已提交模块，不另行追更或重编 HIP 实�
 Mochizuki 使用 `build-mochizuki-runtime.cmd --reuse`：源码、生成器、构建脚本、
 Vulkan导入库、MSVC/SDK/Python身份、DLL及全部shader哈希匹配才复用。
 旧清单或任何不匹配均重建；不传 `--reuse` 可强制完整构建。
-本地完整构建入口已启用此选项，一键交互式“重编试包”仍按其承诺强制重编。
+本地一键试包默认启用此选项，`-Rebuild` 强制重编。
 
-Actions按精确键缓存上述Mochizuki产物及工具测试记录，不使用模糊restore key，
-不缓存用户模型、驱动pipeline cache或ABI通过记录。恢复后仍校验实际文件并重跑ABI。
+Actions按精确键缓存Mochizuki产物及公开人物模型/ONNX Runtime（键包含准备脚本；CRT每次刷新），不使用模糊restore key，
+不缓存用户 NR 权重、驱动 pipeline cache 或 ABI 通过记录。Mochizuki 恢复后仍校验文件并重跑 ABI。
+缓存遵循 GitHub 的 ref 可见范围；新 tag 不保证命中其他 tag 的缓存，不把缓存命中计入必达耗时。
 `tools/build/build-ci.ps1` 在同一runner并行执行宿主构建和CI，分别输出
-`exports/release-ci/host.log`、`tests.log`及对应stderr日志；两者完成且成功后才打包。
+`exports/release-ci/host.log`、`tests.log`及对应stderr日志；两者完成且成功后才打包。日志实时输出，套件和 worker 均记录耗时与退出码。
 失败不会进入后续上传/发布。CI仍使用同一次测试的lmxxf DLL和自动生成的哈希凭证。
 
 最终包模块契约、Mochizuki构建清单、源码新鲜度、DLL配套及ZIP逐文件哈希均保留。
@@ -106,24 +120,22 @@ Actions按精确键缓存上述Mochizuki产物及工具测试记录，不使用�
    cmd /c "tests\host\run.cmd ci"
    ```
 4. **（可选）本地试玩打包。**
-   若开发者或测试人员需要在本地实机试玩验证，直接调用本地出包工具（自带 LocalTest，重编 runtime、宿主和人物 Worker 并生成带签名测试 zip，跳过完整安装器场景模拟；耗时取决于机器与缓存）：
+   若需要本地实机试玩，调用本地出包工具（自带 LocalTest，按上述增量/复用规则构建并生成签名测试 zip，不跑完整回归；`-Rebuild` 可强制全编）：
    ```powershell
    pwsh -File tools/release/BUILD_LOCAL_PACKAGE.ps1 -Root . -Version <VERSION>
    ```
    产物输出至 `dist/OptScaler-NR-<VERSION>-local-<时间>.zip`。
-5. **推送分支并触发 GitHub Actions 远端全量预验证。**
-   推送待验证分支到 GitHub。在 GitHub 仓库的 **Actions** 页面，找到 `Release` 工作流，点击 **Run workflow**（`workflow_dispatch` 模式，不创建 tag/Release）。
-   - GitHub Actions 在独立的纯净 Windows 环境中自动跑完包含全部 70+ 项安装回归、模块契约、真实自签名与包校验的完整 CI 流程；
-   - 验证通过后（绿勾），下载该 Run 生成的 Release Artifact，核对 zip 与 `SHA256SUMS.txt`。
-6. **确认发布并创建 tag。**
-   远端 Actions 预验证全绿后，在已验证的提交上创建并推送 tag：
+5. **直接创建并推送 tag，一次完成发布。**
+   将准备好的提交推送到 GitHub，在该提交上创建与 `VERSION` 一致的 tag：
    ```bash
    git tag v<VERSION>
    git push origin v<VERSION>
    ```
-   tag workflow 会自动触发全量构建、复核并发布 GitHub Release，正式挂载 release zip 附件。
-7. **核验线上正式 Release 附件。**
-   以成功 tag run 生成的 zip 为准，核对 GitHub Release 页面上的附件、SHA256 哈希、Release Notes 与版本号一致性。
+   tag workflow 一次完成构建、精简发布检查、签名、打包和自动上传 Release 附件。
+   不需要先手动预验证出包，不搬运另一 run 的 artifact，也不要求手动上传。
+6. **核验线上 Release。**
+   确认 tag run 成功，Release 附件、版本及正文正确。发布上传仍使用原有受控重试，
+   相同附件不会被不同字节悄悄覆盖。
 
 > **注：离线/全本地完整构建后门（旧流程备用）**
 > 若遇断网或特殊离线环境必须完全在本地生成 `runtime-ci.sha256` 凭证并正式打包，可仍按旧流程执行（耗时约 5~8 分钟）：
@@ -260,7 +272,7 @@ GPU的shader优先级回归包装既有HIP专项调用，同样不重复矩阵�
 
 ## CI 与 GitHub Release
 
-- `.github/workflows/release.yml`：推 `v*` tag 或手动触发。先检查工具链/依赖，再运行统一 CI（构建 runtime 并测试）、编宿主、打包、检查 zip、上传 artifact。创建 Release 和上传 Release 附件两步都有 tag 条件；手动触发时选择 tag 仍会发布，预验证必须选择非 tag 分支。
+- `.github/workflows/release.yml`：推 `v*` tag 执行一次构建、精简 release 检查、打包并自动上传 Release；手动触发只执行完整回归，即使选择 tag 也不发布。无需预验证出包或跨 run 搬运产物。
 - 核对线上资产用 **CI 产出的 zip**，不要用本机 `dist/` 冒充。
 - Release 的 tag、CI 构建的 commit（`head_sha`）、正文里的源码链接必须指向同一个提交。
 - 查 GitHub 状态用 REST（`gh api repos/TheAutomatic/dlss-5-amd-project/releases/tags/<tag>`），不要凭一次 GraphQL 失败下结论；`gh` 一律带 `-R TheAutomatic/dlss-5-amd-project`（见 [dev-environment.md](dev-environment.md)）。
@@ -291,7 +303,7 @@ GPU的shader优先级回归包装既有HIP专项调用，同样不重复矩阵�
 
 ## 本地快速试包
 
-用户明确要求快速试包时，可只编译改动的宿主/runtime，使用 `PACKAGE_RELEASE.ps1 -LocalTest -OptiDll <绝对路径> -OutDir dist`。此模式跳过完整 runtime CI 凭证要求，保留源码新鲜度、模块契约、实际 ZIP 和哈希检查，并写入 `LOCAL-TEST.txt` 标记未做完整发版验证。普通打包和 Actions 不传此参数，仍须匹配完整 CI 凭证；本地模式不能作为正式发布通过依据。
+用户明确要求快速试包时，可只编译改动的宿主/runtime，使用 `PACKAGE_RELEASE.ps1 -LocalTest -OptiDll <绝对路径> -OutDir dist`。此模式跳过完整 runtime CI 凭证要求，保留源码新鲜度、模块契约、实际 ZIP 和哈希检查，并写入 `LOCAL-TEST.txt` 标记未做完整发版验证。普通打包和 Actions 不传此参数，仍须匹配发布检查凭证；本地模式不能作为正式发布通过依据。
 
 ## 第三后端构建与打包
 

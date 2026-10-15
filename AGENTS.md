@@ -28,8 +28,9 @@ Routine changes start with code review. Do not run the full suite merely because
 under installer/packaging/sync changed. Use focused tests for concrete ABI, GPU ordering,
 resource lifetime, installer or packaging risks. Text and simple menu edits need no full run.
 Before pushing a release commit, perform local lightweight verification (`tools/release/check-module-contract.ps1`
-and `tests\host\run.cmd ci`). Full release regression suites are authoritatively run in GitHub Actions
-prior to creating the release tag. See docs/release.md for the complete checklist.
+and `tests\host\run.cmd ci`). A release tag runs the focused `release` tier, packages and publishes
+in one GitHub Actions run. Full `ci` regression is opt-in through a manual workflow run, not a
+required prevalidation package. See docs/release.md for the scope and complete checklist.
 
 ## Package compatibility
 

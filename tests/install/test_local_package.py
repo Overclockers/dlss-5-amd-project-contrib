@@ -64,6 +64,14 @@ class LocalPackageTests(unittest.TestCase):
         self.assertEqual(list((self.root / 'exports').glob('*.zip')), [])
         self.assertEqual(list((self.root / 'dist').glob('*.zip')), [])
 
+    def test_generated_batch_selects_incremental_and_forced_build(self):
+        for flags, target in (((), 'Build'), (('-Rebuild',), 'Rebuild')):
+            result = self.run_script('-Version', '1.9.10.3', *flags)
+            self.assertNotEqual(result.returncode, 0)  # Fixture intentionally fails compiler setup.
+            batch = max((self.root / 'work/scratch').glob('local-package-*/build.cmd'), key=lambda p: p.stat().st_mtime)
+            self.assertIn('/t:' + target + ' ', batch.read_text())
+            self.assertNotIn('@HOST_TARGET@', batch.read_text())
+
     def test_mochizuki_requires_builder(self):
         p = self.root / 'OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/dlssnr/backend/mochizuki_runtime/MochizukiNrRuntime.cpp'
         p.parent.mkdir(parents=True)
