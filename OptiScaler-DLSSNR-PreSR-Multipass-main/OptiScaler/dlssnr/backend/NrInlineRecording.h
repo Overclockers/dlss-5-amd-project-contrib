@@ -57,13 +57,13 @@ struct AdaptiveWaitBudget {
     }
     void Timeout() {
         clean.store(0, std::memory_order_relaxed);
-        const UINT now = Slices(), next = std::max(kAdaptiveMinSlices, now / 2);
+        const UINT now = Slices(), next = (std::max)(kAdaptiveMinSlices, now / 2);
         if (next != now) { slices.store(next, std::memory_order_relaxed); Changed(true); }
     }
     void Clean() {
         if (clean.fetch_add(1, std::memory_order_relaxed) + 1 < kAdaptiveCleanToGrow) return;
         clean.store(0, std::memory_order_relaxed);
-        const UINT now = Slices(), cap = Cap(), next = std::min(cap, std::max(now * 2, kAdaptiveMinSlices));
+        const UINT now = Slices(), cap = Cap(), next = (std::min)(cap, (std::max)(now * 2, kAdaptiveMinSlices));
         if (next != now) { slices.store(next, std::memory_order_relaxed); Changed(false); }
     }
     // Counted only (this header stays logger-free for the standalone tests).
