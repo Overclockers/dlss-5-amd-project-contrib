@@ -50,11 +50,31 @@ if(!(Test-Path -LiteralPath (Join-Path $assets 'yolo11n-seg.onnx'))) {
         Copy-Item -LiteralPath (Join-Path $scratch 'yolo11n-seg.onnx') -Destination $assets
     } finally { Pop-Location }
 }
+$crtNames=@('msvcp140.dll','vcruntime140.dll','vcruntime140_1.dll')
 if(!$CrtDir) {
-    if(!$env:VCToolsRedistDir){throw 'Set CrtDir to the installed MSVC x64 redistributable CRT directory.'}
-    $CrtDir=Get-ChildItem -LiteralPath (Join-Path $env:VCToolsRedistDir 'x64') -Directory -Filter 'Microsoft.VC*.CRT' |
-        Sort-Object Name -Descending | Select-Object -First 1 -ExpandProperty FullName
+    # vcvars can point at an installed version directory without its x64 CRT payload.
+    $redistRoots=@()
+    if($env:VCToolsRedistDir) { $redistRoots += $env:VCToolsRedistDir }
+    if($env:VCINSTALLDIR) {
+        $redistBase=Join-Path $env:VCINSTALLDIR 'Redist/MSVC'
+        if(Test-Path -LiteralPath $redistBase -PathType Container) {
+            $redistRoots += @(Get-ChildItem -LiteralPath $redistBase -Directory |
+                Where-Object { $_.Name -match '^\d+\.\d+\.\d+$' } |
+                Sort-Object { [version]$_.Name } -Descending | Select-Object -ExpandProperty FullName)
+        }
+    }
+    foreach($redistRoot in ($redistRoots | Select-Object -Unique)) {
+        $x64=Join-Path $redistRoot 'x64'
+        if(!(Test-Path -LiteralPath $x64 -PathType Container)) { continue }
+        foreach($candidate in (Get-ChildItem -LiteralPath $x64 -Directory -Filter 'Microsoft.VC*.CRT' | Sort-Object Name -Descending)) {
+            $missing=@($crtNames | Where-Object { !(Test-Path -LiteralPath (Join-Path $candidate.FullName $_) -PathType Leaf) })
+            if(!$missing.Count) { $CrtDir=$candidate.FullName; break }
+        }
+        if($CrtDir) { break }
+    }
+    if(!$CrtDir) { throw 'No complete MSVC x64 redistributable CRT found. Install the MSVC x64/x86 build tools or pass -CrtDir with the x64 CRT directory.' }
 }
+Write-Host "Using x64 CRT: $CrtDir"
 foreach($name in @('msvcp140.dll','vcruntime140.dll','vcruntime140_1.dll')) {
     if(!(Test-Path -LiteralPath (Join-Path $CrtDir $name))){throw "Missing x64 redistributable CRT: $name"}
 }
