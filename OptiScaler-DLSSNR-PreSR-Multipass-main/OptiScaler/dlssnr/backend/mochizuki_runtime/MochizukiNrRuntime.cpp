@@ -2036,6 +2036,7 @@ struct NetworkKey
     bool computeConvert = false; // NrInlineComputeConvert on a listed-format key (RuntimeConfig::compute_convert_colour)
     bool computeDownscale = false; // NrInlineComputeDownscale on a key with scale < 1 (RuntimeConfig::compute_downscale)
     bool computeExport = false; // NrInlineComputeExport on a first-pass key (RuntimeConfig::compute_export)
+    bool motionPasses = false; // NrInlineComputeMotion on a multi-pass key (RuntimeConfig::motion_in_place_passes)
     bool operator==(const NetworkKey&) const = default;
     bool SameModel(const NetworkKey& other) const
     {
@@ -2043,7 +2044,7 @@ struct NetworkKey
                scale == other.scale && linear == other.linear && prep == other.prep &&
                compactTransfer == other.compactTransfer && firstPass == other.firstPass && aco == other.aco &&
                computeConvert == other.computeConvert && computeDownscale == other.computeDownscale &&
-               computeExport == other.computeExport;
+               computeExport == other.computeExport && motionPasses == other.motionPasses;
     }
 };
 
@@ -4218,6 +4219,7 @@ struct Session
             config.compute_convert_colour = key.computeConvert;
             config.compute_downscale = key.computeDownscale;
             config.compute_export = key.computeExport;
+            config.motion_in_place_passes = key.motionPasses;
             // The linear path's frame is a proxy made with the soft knee, which the preprocess undoes first.
             config.preprocess_unknee = key.linear;
             nr::TemporalConfig temporal;
@@ -5815,7 +5817,10 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
             const NetworkKey key { g.width, g.height, keyFormat, scale, maxPasses, linear, s->prepWanted,
                                     compactTransfer, g.firstPass, aco, computeConvert,
                                     (info->flags & MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_DOWNSCALE) && scale < 1.f,
-                                    (info->flags & MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_EXPORT) && g.firstPass };
+                                    (info->flags & MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_EXPORT) && g.firstPass,
+                                    // NrInlineComputeMotion with more than one layer: every layer samples the motion
+                                    // vectors in place, so multi-pass needs no motion blit (not tied to the inline flag).
+                                    (info->flags & MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_MOTION) && maxPasses > 1 };
             std::string why;
             s->infoRequestedPasses = passes;
             if (!s->EnsureNetwork(key, g, colour, why, maxPassesSetting == 0, drsMode != 0 && !g.bucketed))

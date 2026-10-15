@@ -792,7 +792,9 @@ void RenderMenu(Config* config, float menuResScale)
                         config->NrInlineComputeMotion = nrInlineComputeMotion;
                     HelpMarker("Default off. Experimental. With dynamic resolution, motion vectors of another size are"
                                "\nrescaled by a compute pass (bilinear, like the blit) instead of a graphics blit,"
-                               "\nso the inline chain is not split by them. Remakes the frame buffers.\nINI: NrInlineComputeMotion.");
+                               "\nso the inline chain is not split by them. With 2+ layers, every layer also samples the motion"
+                               "\nvectors in place (no motion blit). Remakes the frame buffers (and the network with 2+ layers)."
+                               "\nINI: NrInlineComputeMotion.");
                     bool nrInlineComputeDownscale = config->NrInlineComputeDownscale.value_or_default();
                     if (MenuUi::Checkbox("Compute-queue model downscale", &nrInlineComputeDownscale))
                         config->NrInlineComputeDownscale = nrInlineComputeDownscale;

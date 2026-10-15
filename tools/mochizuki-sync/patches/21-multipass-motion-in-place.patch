@@ -1,0 +1,85 @@
+diff --git a/windows/src/core/nr_runtime.cpp b/windows/src/core/nr_runtime.cpp
+index a78fd3f..6180473 100644
+--- a/windows/src/core/nr_runtime.cpp
++++ b/windows/src/core/nr_runtime.cpp
+@@ -655,6 +655,7 @@ struct Runtime::Impl {
+     std::vector<DirectSrc> direct_ring;
+     bool direct_src_failed{}, direct_src_logged{};
+     bool motion_src_failed{}, motion_src_logged{};
++    bool motion_all_passes{};   // RuntimeConfig::motion_in_place_passes with max_passes > 1
+     // Formats whose sampled view filters linearly (the motion sampler is linear).
+     std::map<VkFormat, bool> linear_ok;
+     bool filters_linearly(VkFormat f) {
+@@ -785,12 +786,17 @@ struct Runtime::Impl {
+                 d.post[0] = kernel_set(dev, d.pool, *plain_post, {a, a, w, w, w}, {&surf0, &surf1, &cim});
+                 ok = d.pre[0] && d.post[0];
+             } else {
+-            d.pre[c] = t.hp ? kernel_set(dev, d.pool, t.pre_pp[c], t.pre_buffers, {&cim, &mim, &t.hist(c), &dim, &t.hpass})
+-                            : kernel_set(dev, d.pool, t.pre_pp[c], t.pre_buffers, {&cim, &mim, &t.hist(c), &dim});
+-            d.post[c] = t.hp ? kernel_set(dev, d.pool, t.post_pp[c], t.post_buffers,
+-                                          {&surf0, &t.hist_store[c ^ 1u], &cim, &mim, &t.hist(c), &t.hpass})
+-                             : kernel_set(dev, d.pool, t.post_pp[c], t.post_buffers,
+-                                          {&surf0, &t.hist_store[c ^ 1u], &cim, &mim, &t.hist(c)});
++            // Ping-pong (one pass): this parity's kernels. Multi-pass: the single pre/post pair, whose
++            // second post image is surf1 and whose history is the bound t.history (c is 0).
++            nrvk::Kernel& pre = t.pingpong ? t.pre_pp[c] : t.pre;
++            nrvk::Kernel& post = t.pingpong ? t.post_pp[c] : t.post;
++            nrvk::Context::Image* second = t.pingpong ? &t.hist_store[c ^ 1u] : &s.surf1;
++            d.pre[c] = t.hp ? kernel_set(dev, d.pool, pre, t.pre_buffers, {&cim, &mim, &t.hist(c), &dim, &t.hpass})
++                            : kernel_set(dev, d.pool, pre, t.pre_buffers, {&cim, &mim, &t.hist(c), &dim});
++            d.post[c] = t.hp ? kernel_set(dev, d.pool, post, t.post_buffers,
++                                          {&surf0, second, &cim, &mim, &t.hist(c), &t.hpass})
++                             : kernel_set(dev, d.pool, post, t.post_buffers,
++                                          {&surf0, second, &cim, &mim, &t.hist(c)});
+             ok = d.pre[c] && d.post[c];
+             }
+         }
+@@ -1823,6 +1829,7 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
+             }
+         }
+         t.pingpong = config.max_passes == 1;
++        impl_->motion_all_passes = config.motion_in_place_passes && config.max_passes > 1;
+         if (t.pingpong) {
+             t.history_b = s.ctx.image(mw, mh, t.history.format, true);
+             vkDestroySampler(s.ctx.device, t.history_b.sampler, nullptr);
+@@ -1945,7 +1952,8 @@ const char* Runtime::compute_refusal(bool motion, VkFormat motion_format, VkImag
+     if (!m.compute_downscale && m.transfer != Transfer::Identical && !m.direct_out && !m.store_native && !m.pack_built &&
+         !m.f16_built)
+         return "colour write-back conversion needs a blit";
+-    if (motion && !(NR_DIRECT_MOTION && !m.motion_src_failed && !mask && passes == 1 && m.temporal.pingpong &&
++    if (motion && !(NR_DIRECT_MOTION && !m.motion_src_failed && !mask &&
++                    ((passes == 1 && m.temporal.pingpong) || (!m.temporal.pingpong && m.motion_all_passes)) &&
+                     (motion_usage & VK_IMAGE_USAGE_SAMPLED_BIT) && m.filters_linearly(motion_format)))
+         return "motion vectors need a blit";
+     return nullptr;
+@@ -2164,10 +2172,12 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
+         engine->depth_x == 0 && engine->depth_y == 0 &&
+         engine->depth.width == impl_->temporal.depth.w && engine->depth.height == impl_->temporal.depth.h;
+     // The motion vectors in place: any engine frame with one pass and the
+-    // ping-pong sets, a sampled image and a linearly filterable format.
++    // ping-pong sets (or, with motion_in_place_passes, the multi-pass sets: every
++    // pass reads the same motion), a sampled image and a linearly filterable format.
+     const bool motion_direct =
+-        NR_DIRECT_MOTION && !impl_->motion_src_failed && engine && temporal && !mask && passes == 1 &&
+-        impl_->temporal.pingpong && engine->motion.image &&
++        NR_DIRECT_MOTION && !impl_->motion_src_failed && engine && temporal && !mask &&
++        ((passes == 1 && impl_->temporal.pingpong) || (!impl_->temporal.pingpong && impl_->motion_all_passes)) &&
++        engine->motion.image &&
+         (engine->motion.usage & VK_IMAGE_USAGE_SAMPLED_BIT) && impl_->filters_linearly(engine->motion.format);
+     // (research NR_DIRECT_STORE=1): the post block stores into the frame itself.
+     // With a separate target (storage-capable) the post block stores into it and the
+diff --git a/windows/src/core/nr_runtime.hpp b/windows/src/core/nr_runtime.hpp
+index 8d61342..c5d3349 100644
+--- a/windows/src/core/nr_runtime.hpp
++++ b/windows/src/core/nr_runtime.hpp
+@@ -193,6 +193,10 @@ struct RuntimeConfig {
+     // (first_pass_packed / record_first_pack), so the host can export it without a blit. Formats
+     // without a pack keep first_pass_packed null.
+     bool compute_export = false;
++    // With max_passes > 1: every pass samples the engine motion vectors in place (as one pass does),
++    // through per-recording sets for the multi-pass pre/post kernels, instead of the LINEAR blit into
++    // the estimator field (a graphics-only command). Off: multi-pass blits the motion as before.
++    bool motion_in_place_passes = false;
+     // Optional full-frame RGBA32F of pass 0, recorded before later passes
+     // overwrite it. Requires ordinary multi-pass transfer (no native compose,
+     // no mask, max_passes >= 2). The image lives as long as the runtime.

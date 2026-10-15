@@ -193,6 +193,10 @@ struct RuntimeConfig {
     // (first_pass_packed / record_first_pack), so the host can export it without a blit. Formats
     // without a pack keep first_pass_packed null.
     bool compute_export = false;
+    // With max_passes > 1: every pass samples the engine motion vectors in place (as one pass does),
+    // through per-recording sets for the multi-pass pre/post kernels, instead of the LINEAR blit into
+    // the estimator field (a graphics-only command). Off: multi-pass blits the motion as before.
+    bool motion_in_place_passes = false;
     // Optional full-frame RGBA32F of pass 0, recorded before later passes
     // overwrite it. Requires ordinary multi-pass transfer (no native compose,
     // no mask, max_passes >= 2). The image lives as long as the runtime.

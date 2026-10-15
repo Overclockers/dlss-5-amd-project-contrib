@@ -18,7 +18,9 @@
 #define MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_CONVERT (1u << 11)
 // NrInlineComputeMotion (default off): with dynamic resolution, motion vectors of another extent are rescaled onto the
 // subrect by a compute pass (runtime_mv_rescale_*, bilinear like the blit) instead of a LINEAR blit, so such inline
-// frames can keep the whole chain on compute. Changing it remakes the frame buffers (not the network).
+// frames can keep the whole chain on compute. With more than one layer it also sets RuntimeConfig::motion_in_place_passes:
+// every layer samples the motion vectors in place, with no motion blit. Changing it remakes the frame buffers, and the
+// network when there is more than one layer.
 #define MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_MOTION (1u << 12)
 // NrInlineComputeDownscale (default off): model scale below 1 keeps the frame in its own format and filters it down
 // with runtime_downscale (the blit's own taps), and packs the full-size answer on compute when it is not stored in

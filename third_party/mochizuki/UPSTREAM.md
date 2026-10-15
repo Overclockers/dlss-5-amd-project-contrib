@@ -7,7 +7,7 @@
 - Closure: `windows/src/core`, `windows/shaders`, `windows/build` (recipe, unroll, quad-quant, `arch/rdna4.sh`), `windows/data/aco` records and `shell-aliases.txt`, `linux/shaders`, `linux/build/build_network.py`, `linux/build/arch/rdna4.sh`, and `linux/package/model-tools`. Patch 12 adds weights-only installation extraction; the weight parser, unpackers and model hash lists remain unchanged.
 - Not imported: `windows/src/pe`, official installers, the Vulkan loader, the ReShade add-on, OptiScaler-NR package scripts, DX9/DX10/DX11 hosts, and the INT4 host path.
 
-The source pin and twenty-one feature patches are machine-readable in
+The source pin and twenty-two feature patches are machine-readable in
 [tools/mochizuki-sync/manifest.json](../../tools/mochizuki-sync/manifest.json).
 [Replay verification](../../tools/mochizuki-sync/README.md) reproduces all 173
 closure files (plus the patch-added Plan A and motion-rescale shaders) from the pinned Git objects plus these patches, without overwriting
@@ -112,3 +112,4 @@ No game scene was part of this integration. Official timing numbers are not reus
 
 Patch 16 adds runtime_pack_r11 (B10G11R11 compute write-back via an r11f_g11f_b10f storage image) so NrInlineComputeConvert does not need direct_out/store_native.
 Patch 17 extends the same toggle (RuntimeConfig::compute_convert_colour) to RGBA8/BGRA8 UNORM/sRGB and A2B10G10R10/A2R10G10B10 with runtime_pack_u8_bgra, runtime_pack_u10 and runtime_pack_u10_bgra.
+Patch 21 adds RuntimeConfig::motion_in_place_passes: with max_passes > 1 every pass samples the engine motion vectors in place (per-recording sets for the multi-pass pre/post kernels), so a multi-pass frame needs no motion blit. The host sets it only with NrInlineComputeMotion.

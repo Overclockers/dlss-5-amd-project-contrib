@@ -384,6 +384,14 @@
         "windows/src/core/nr_runtime.cpp",
         "windows/src/core/nr_runtime.hpp"
       ]
+    },
+    {
+      "feature": "multipass-motion-in-place",
+      "path": "patches/21-multipass-motion-in-place.patch",
+      "files": [
+        "windows/src/core/nr_runtime.cpp",
+        "windows/src/core/nr_runtime.hpp"
+      ]
     }
   ],
   "added": [

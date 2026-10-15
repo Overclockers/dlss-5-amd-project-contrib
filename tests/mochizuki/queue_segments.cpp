@@ -33,22 +33,31 @@ int wmain(int argc,wchar_t**argv) try {
     // multi: two layers, no motion. export: two layers with the first-layer export and NrInlineComputeExport, after
     // three split frames (the export is offered from the second served frame on).
     const bool exportMode=argc>3&&wcscmp(argv[3],L"export")==0;
-    const bool multi=exportMode||(argc>3&&wcscmp(argv[3],L"multi")==0);
+    // multimotion: two layers, R11G11B10 colour 256x256 with RG16F motion vectors 512x512 (larger than the colour, no
+    // dynamic resolution), first-layer export; compute convert + motion + export. Every layer samples the motion in
+    // place, so the chain is one compute phase (no motion blit).
+    const bool multiMotion=argc>3&&wcscmp(argv[3],L"multimotion")==0;
+    const bool multi=exportMode||multiMotion||(argc>3&&wcscmp(argv[3],L"multi")==0);
     if(motionMode){
         auto defaults=reinterpret_cast<PFN_MochizukiNrGetControlDefaults>(GetProcAddress(dll,"MochizukiNrGetControlDefaults"));
         auto set=reinterpret_cast<PFN_MochizukiNrSetControls>(GetProcAddress(dll,"MochizukiNrSetControls"));
         MochizukiNrControls controls{sizeof controls};Rc(defaults(&controls));controls.drs_mode=1;Rc(set(context,&controls));
     }
-    Frame mv(device.Get(),128,128);
-    Frame frame(device.Get(),256,256,unorm8?DXGI_FORMAT_R8G8B8A8_UNORM:(r11||scaledR11)?DXGI_FORMAT_R11G11B10_FLOAT:
-                convertMode>=0?convertFormats[convertMode]:DXGI_FORMAT_R16G16B16A16_FLOAT);List upload(device.Get());frame.Upload(upload.cmd.Get());if(motionMode)mv.Upload(upload.cmd.Get());Hr(upload.cmd->Close());Submit(queue.Get(),upload);
+    Frame mv(device.Get(),multiMotion?512:128,multiMotion?512:128,multiMotion?DXGI_FORMAT_R16G16_FLOAT:DXGI_FORMAT_R16G16B16A16_FLOAT);
+    Frame frame(device.Get(),256,256,unorm8?DXGI_FORMAT_R8G8B8A8_UNORM:(r11||scaledR11||multiMotion)?DXGI_FORMAT_R11G11B10_FLOAT:
+                convertMode>=0?convertFormats[convertMode]:DXGI_FORMAT_R16G16B16A16_FLOAT);List upload(device.Get());frame.Upload(upload.cmd.Get());if(motionMode||multiMotion)mv.Upload(upload.cmd.Get());Hr(upload.cmd->Close());Submit(queue.Get(),upload);
     ComPtr<ID3D12Fence> tail;Hr(device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&tail)));
     Hr(queue->Signal(tail.Get(),1));Wait(tail.Get(),1);
     MochizukiNrFrameInfo f{};f.struct_size=sizeof f;f.frame_id=1;f.color=frame.color.Get();f.color_width=f.color_height=256;
     f.color_state=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;f.flags=LMXXF_NR_FRAME_FLAG_STRENGTH|MOCHIZUKI_NR_FRAME_FLAG_INLINE_EXECUTION|(convert?MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_CONVERT:0u);
     f.transfer_strength=f.color_strength=f.model_scale=1;f.passes=1;
     if(multi)f.passes=2;
-    if(exportMode)f.flags|=LMXXF_NR_FRAME_FLAG_FIRST_PASS|MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_EXPORT;
+    if(exportMode||multiMotion)f.flags|=LMXXF_NR_FRAME_FLAG_FIRST_PASS|MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_EXPORT;
+    if(multiMotion){
+        f.motion=mv.color.Get();f.motion_state=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        f.motion_width=f.motion_height=512;f.motion_scale_x=f.motion_scale_y=1;
+        f.flags|=MOCHIZUKI_NR_FRAME_FLAG_TEMPORAL|MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_MOTION|MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_CONVERT;
+    }
     if(scaled){f.model_scale=.5f;f.flags|=MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_DOWNSCALE;}
     if(motionMode){
         f.color_width=240;f.motion=mv.color.Get();f.motion_state=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
@@ -112,7 +121,7 @@ int wmain(int argc,wchar_t**argv) try {
         std::printf("INLINE_LIFECYCLE_OK\n");
         return 0;
     }
-    for(int i=0;exportMode&&i<3;i++){
+    for(int i=0;(exportMode||multiMotion)&&i<3;i++){
         // Split frames (no inline flag, so the phase-failure hook does not apply): complete, certified, collected.
         MochizukiNrFrameInfo sf=f;sf.frame_id=100+i;sf.flags&=~MOCHIZUKI_NR_FRAME_FLAG_INLINE_EXECUTION;
         LmxxfNrJob sj{sizeof sj};const auto until=GetTickCount64()+120000;
@@ -125,7 +134,7 @@ int wmain(int argc,wchar_t**argv) try {
     }
     LmxxfNrJob job{sizeof job};const auto deadline=GetTickCount64()+120000;
     for(;;){auto rc=prepare(context,&f,&job);if(!rc)break;Require(rc==LMXXF_NR_UNAVAILABLE&&GetTickCount64()<deadline,"prepare");Sleep(20);}
-    Require(!exportMode || job.first_pass_output!=nullptr,"the first-layer export was not offered");
+    Require(!(exportMode||multiMotion) || job.first_pass_output!=nullptr,"the first-layer export was not offered");
     List in(device.Get()),out(device.Get());Rc(api.RecordInputs(context,job.handle,in.cmd.Get()));Rc(api.RecordOutputs(context,job.handle,out.cmd.Get()));Hr(in.cmd->Close());Hr(out.cmd->Close());
     Rc(api.BeginRecordingExecution(context,job.handle,queue.Get()));Submit(queue.Get(),in);
     auto rc=api.EnqueueHip(context,job.handle,queue.Get());
@@ -145,6 +154,7 @@ int wmain(int argc,wchar_t**argv) try {
     Require(!r11 || strstr(error,"phase 1/1")!=nullptr,"B10G11R11 inline frame (compute convert) did not run as one compute phase");
     Require(!multi || strstr(error,"phase 1/1")!=nullptr,"two-layer inline frame (with or without compute export) did not run as one compute phase");
     Require(!scaled || strstr(error,"phase 1/1")!=nullptr,"model-scale 0.5 inline frame (compute downscale) did not run as one compute phase");
+    Require(!multiMotion || strstr(error,"phase 1/1")!=nullptr,"two-layer inline frame with larger motion vectors (compute motion) did not run as one compute phase");
     Require(!motionMode || strstr(error,"phase 1/1")!=nullptr,"rescaled-motion inline frame (compute motion) did not run as one compute phase");
     Require(convertMode<0 || strstr(error,"phase 1/1")!=nullptr,"compute-convert inline frame did not run as one compute phase");
     ++fence;Hr(queue->Signal(tail.Get(),fence));Wait(tail.Get(),fence);
