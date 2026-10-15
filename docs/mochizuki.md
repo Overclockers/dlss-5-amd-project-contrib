@@ -31,7 +31,7 @@ integration. See [the integration review](architecture/mochizuki-005-integration
 Ctrl+F11 switches the default/INT4 request without changing ACO. Save Settings
 persists it. The upstream End overlay is not installed; End keeps the host NR toggle.
 
-Under Ins → Mochizuki → Model, enable **INT4 mixed** (`MochizukiInt4Mixed`) or
+Under Ins → Mochizuki, **INT4 mixed** (`MochizukiInt4Mixed`) sits directly below ACO. On the Model page, enable
 **RenoDX processing** (`MochizukiRenoDX`). Mode changes rebuild the network in the
 background; effective status is shown in the menu. INT4 requires ACO and matching
 generated weights. If ACO import is unavailable, the complete default network is
@@ -153,7 +153,7 @@ The NR menu uses a clickable pre-SR flow chart. **Prepare NR input** contains mo
 resolution (WorkingScale), preprocessing and advanced input encoding/white point/DRS. **NR model**
 contains pass count, model response and enabled Pass 2/3, temporal history and prebuild
 capacity. **Apply NR edit** contains the after-the-model correction and the shared intensity and
-stabilizer. Processing order and the ACO checkbox sit above the pages. The model page opens first; page buttons remain available when the chart
+stabilizer. Processing order, ACO and INT4 checkboxes sit above the pages. The model page opens first; page buttons remain available when the chart
 is collapsed. Compatibility and diagnostics remain separate tools below the page.
 Disabling a pass hides its controls without deleting its settings. Model resolution
 displays as a percentage; resolution, pass count and prebuild-pass edits commit on

@@ -478,7 +478,6 @@ static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const 
 {
     static const char* groups[] = {"Model response", "Quality", "Temporal history", "Before the model", "Advanced", "Pass 2", "Pass 3", "After the model", "RenoDX: Neural Rendering", "RenoDX: Network", "RenoDX: Passes", "RenoDX: Pass 2", "RenoDX: Pass 3", "RenoDX: Pass 4 and later", "RenoDX: Composition", "RenoDX: Resolution", "RenoDX: Adjust NR's look", "RenoDX: Encoding", "RenoDX: Guides"};
     static constexpr int order[] = {1, 0, 5, 6, 7, 2, 3, 4, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18};
-    if (page == PipelineUi::Section::Model) MenuUi::TextWrapped("Ctrl+F11 switches the default network and INT4 mixed. ACO preference is unchanged; INT4 requires active ACO. Save Settings to keep the selection.");
     if (config->MochizukiRenoDX.value_or_default()) MenuUi::TextWrapped("RenoDX uses its own model, codec and look settings below. Native settings are preserved. Shared output effects still apply; preprocessing runs inside the RenoDX stage.");
     for (int g : order)
     {
@@ -490,6 +489,7 @@ static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const 
             if (reno && (key == CfgKey::MochizukiModelScale || key == CfgKey::MochizukiWhitePoint ||
                          key == CfgKey::MochizukiLinearInput || key == CfgKey::MochizukiMaxPasses)) return false;
             if (page == PipelineUi::Section::Input && key == CfgKey::MochizukiWhitePoint) return false;
+            if (key == CfgKey::MochizukiInt4Mixed) return false;
             return MochizukiOptionOnPage(key, page);
         };
         const auto passes = config->MochizukiEffectivePasses();
@@ -767,6 +767,13 @@ void RenderMenu(Config* config, float menuResScale)
                 if (choice.shown != choice.session)
                     MenuUi::TextColored(ImVec4(1.f, 0.f, 0.f, 1.f),
                                         "Save Settings, then restart the game.");
+                bool int4 = config->MochizukiInt4Mixed.value_or_default();
+                if (MenuUi::Checkbox("INT4 mixed (ACO)", &int4))
+                {
+                    config->MochizukiInt4Mixed = int4;
+                    AmdBridge::InvalidateHistory();
+                }
+                HelpMarker("Ctrl+F11 switches the default network and INT4 mixed. ACO preference is unchanged; INT4 requires active ACO. Save Settings to keep the selection.");
             }
             ImGui::PushID(static_cast<int>(kind));
             static PipelineUi::Section pages[3] {PipelineUi::Section::Model, PipelineUi::Section::Model, PipelineUi::Section::Model};
