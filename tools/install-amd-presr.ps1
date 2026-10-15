@@ -765,27 +765,161 @@ foreach ($candidate in $modelCandidates) {
     }
 }
 $mochizukiNv = $null
+$mochizukiNvSha = 'e16bcf15e16e13f527491cdf7845b2fe6521a738d8f7c9c721866a8496e1fc8e'
 foreach ($candidate in @((Join-Path $Root 'nvngx_dlssnr.dll'), (Join-Path $game 'nvngx_dlssnr.dll'))) {
     if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-        if ((Get-Sha256 $candidate) -ieq 'e16bcf15e16e13f527491cdf7845b2fe6521a738d8f7c9c721866a8496e1fc8e') {
+        if ((Get-Sha256 $candidate) -ieq $mochizukiNvSha) {
             $mochizukiNv = $candidate; break
         }
         Write-Host "Mochizuki needs nvngx_dlssnr.dll 310.8.0; this DLL is not supported: $candidate" -ForegroundColor Yellow
     }
 }
+# --- Early weights check, before any prompt or game-folder change ---
+# Only checks that already exist are used: Mochizuki INT4 hash pin (model-tools/dlssnr-int4.sha256),
+# Mochizuki model header and nvngx_dlssnr.dll 310.8.0 hash, lmxxf block0 tensor presence, and the
+# danielblnc weights.bin size floor. A Failed entry removes that backend from the install.
+$weightProblems = New-Object System.Collections.Generic.List[object]
+$weightFailed = @{}
+function Add-WeightProblem([string]$Backend, [bool]$Failed, [string[]]$En, [string[]]$Zh) {
+    $script:weightProblems.Add([pscustomobject]@{ Backend = $Backend; Failed = $Failed; En = $En; Zh = $Zh })
+    if ($Failed) { $script:weightFailed[$Backend] = $true }
+}
+function Write-WeightBlock([string[]]$Lines) {
+    Write-Host ''
+    Write-Host ('=' * 78) -ForegroundColor Red
+    foreach ($line in $Lines) { Write-Host $line -ForegroundColor Red }
+    Write-Host ('=' * 78) -ForegroundColor Red
+    Write-Host ''
+}
+function Show-WeightProblems {
+    if ($script:weightProblems.Count -eq 0) { return }
+    $lines = @('WEIGHTS CHECK: problems found / 权重检查发现问题', '')
+    foreach ($p in $script:weightProblems) {
+        $state = if ($p.Failed) { 'FAILED - this backend will not be installed / 校验失败，该后端不会安装' } else { 'warning / 警告' }
+        $lines += "<$($p.Backend): $state>"
+        $lines += $p.En
+        $lines += $p.Zh
+        $lines += ''
+    }
+    Write-WeightBlock $lines
+}
+
+$mochizukiInt4Expected = $null
+$mochizukiInt4Existing = $false
+$mochizukiInt4Checked = $false
+$mochizukiStaleGameModel = $null
+foreach ($candidate in $modelCandidates) {
+    if ((Test-Path -LiteralPath $candidate -PathType Leaf) -and -not (Test-MochizukiModelHeader $candidate)) {
+        Add-WeightProblem 'mochizuki' $false @(
+            "  Wrong file: $candidate (not a Mochizuki model: bad header; kept unchanged)",
+            '  Expected:   a dlssnr.bin made by Mochizuki-Model.bat from nvngx_dlssnr.dll 310.8.0',
+            '  Fix: move this file aside, run Mochizuki-Model.bat, then run Setup again.') @(
+            "  有问题的文件：$candidate（文件头不对，不是 Mochizuki 模型；未改动）",
+            '  期望：由 Mochizuki-Model.bat 从 310.8.0 版 nvngx_dlssnr.dll 提取的 dlssnr.bin',
+            '  解决：把这个文件移走，运行 Mochizuki-Model.bat，然后重新运行 Setup。')
+    }
+}
+foreach ($candidate in @((Join-Path $Root 'nvngx_dlssnr.dll'), (Join-Path $game 'nvngx_dlssnr.dll'))) {
+    if ($canMochizuki -and -not $mochizukiModel -and (Test-Path -LiteralPath $candidate -PathType Leaf) -and
+        $candidate -ne $mochizukiNv -and -not $mochizukiNv) {
+        Add-WeightProblem 'mochizuki' $false @(
+            "  Wrong file: $candidate (unsupported nvngx_dlssnr.dll version)",
+            "  Expected:   nvngx_dlssnr.dll 310.8.0 (SHA-256 $mochizukiNvSha)",
+            '  Fix: replace it with version 310.8.0, run Mochizuki-Model.bat, then run Setup again.') @(
+            "  有问题的文件：$candidate（nvngx_dlssnr.dll 版本不受支持）",
+            "  期望：310.8.0 版 nvngx_dlssnr.dll（SHA-256 $mochizukiNvSha）",
+            '  解决：换成 310.8.0 版，运行 Mochizuki-Model.bat，然后重新运行 Setup。')
+    }
+}
+if ($canMochizuki -and $mochizukiModel -and (Test-Path -LiteralPath (Join-Path $mochizukiAssets 'int4') -PathType Container)) {
+    . $int4Helper
+    $mochizukiInt4Checked = $true
+    try { $mochizukiInt4Expected = Get-MochizukiInt4ExpectedHash $mochizukiTools } catch { Fail $_.Exception.Message }
+    $mismatches = @()
+    $chosenModel = $null
+    foreach ($candidate in @($modelCandidates | Where-Object { Test-MochizukiModelHeader $_ } | Select-Object -Unique)) {
+        try {
+            $mochizukiInt4Candidate = New-MochizukiInt4Candidate -Model $candidate -Data (Join-Path $mochizukiAssets 'int4') `
+                -Tools $mochizukiTools -Existing (Join-Path $game 'dlssnr-amd/dlssnr-int4.bin')
+            $mochizukiInt4Existing = -not $mochizukiInt4Candidate
+            $chosenModel = $candidate
+            break
+        } catch {
+            if (-not $_.Exception.Data['MochizukiInt4Mismatch']) { Fail $_.Exception.Message }
+            $mismatches += $_.Exception
+        }
+    }
+    foreach ($e in $mismatches) {
+        $text = Get-MochizukiInt4MismatchText $e
+        $en = @($text.En); $zh = @($text.Zh)
+        if ($chosenModel) {
+            $en += "  Setup will use the matching model instead: $chosenModel"
+            $zh += "  安装程序将改用版本匹配的模型：$chosenModel"
+            $gameModel = Join-Path $game 'dlssnr-amd/dlssnr.bin'
+            if ($e.Data['Model'] -eq $gameModel -and $chosenModel -ne $gameModel) {
+                $mochizukiStaleGameModel = $gameModel
+                $en += '  The wrong game-folder copy will be renamed to dlssnr.bin.mismatch-<time> when Mochizuki is installed.'
+                $zh += '  安装 Mochizuki 时，游戏目录里这个有问题的文件会被改名为 dlssnr.bin.mismatch-<时间>。'
+            }
+        }
+        Add-WeightProblem 'mochizuki' (-not $chosenModel) $en $zh
+    }
+    $mochizukiModel = $chosenModel
+}
+
+$lmxxfCandidates = @((Join-Path $release 'native-game-tiled-assets'), (Join-Path $Root 'native-game-tiled-assets'),
+    (Join-Path $Root 'DLSS5-AMD\native-game-tiled-assets'), (Join-Path $game 'native-game-tiled-assets'))
+foreach ($candidate in $lmxxfCandidates) {
+    if ((Test-Path -LiteralPath $candidate -PathType Container) -and -not (Test-LmxxfWeights $candidate)) {
+        $en = @("[lmxxf] Wrong folder: $candidate (incomplete: no non-empty block0-ffn.f16 / block0-ffn.f32)",
+                '  Expected:   a complete native-game-tiled-assets folder (no hash pin exists; only block0 presence is checked)')
+        $zh = @("[lmxxf] 有问题的文件夹：$candidate（不完整：缺少非空的 block0-ffn.f16 / block0-ffn.f32）",
+                '  期望：完整的 native-game-tiled-assets 文件夹（没有哈希校验，只检查 block0 是否存在）')
+        if ($lmxxfWeights) {
+            $en += "  Setup will use the complete folder instead: $lmxxfWeights"
+            $zh += "  安装程序将改用完整的文件夹：$lmxxfWeights"
+        }
+        $en += '  Fix: delete this folder and copy a complete native-game-tiled-assets beside Setup.bat, then run Setup again.'
+        $zh += '  解决：删除这个文件夹，把完整的 native-game-tiled-assets 放到 Setup.bat 旁边，然后重新运行 Setup。'
+        # Presence-only check: an incomplete folder is reported but, as before, lmxxf
+        # still installs with MODEL SETUP REQUIRED (no integrity data exists to call it wrong).
+        Add-WeightProblem 'lmxxf' $false $en $zh
+    }
+}
+
+if ($canDaniel -and $weights -and (Get-Item -LiteralPath $weights).Length -lt 1MB) {
+    $size = (Get-Item -LiteralPath $weights).Length
+    Add-WeightProblem 'daniel' $true @(
+        "[daniel] Wrong file: $weights (only $size bytes: truncated or not a weights file)",
+        '  Expected:   dlssnr_on_amd_weights.bin of at least 1 MB (no hash pin exists; the hash is per machine)',
+        '  Fix: delete it, run dlssnr_on_amd_setup.exe with nvngx_dlssnr.dll available, then run Setup again.') @(
+        "[daniel] 有问题的文件：$weights（只有 $size 字节：文件不完整或不是权重文件）",
+        '  期望：至少 1 MB 的 dlssnr_on_amd_weights.bin（没有哈希校验，哈希因机器而异）',
+        '  解决：删除它，在有 nvngx_dlssnr.dll 的情况下运行 dlssnr_on_amd_setup.exe，然后重新运行 Setup。')
+}
+
 Write-Host ''
 Write-Host 'Detected backend files (model presence is not a GPU compatibility test):' -ForegroundColor Cyan
 Write-Host ("  lmxxf: runtime/modules={0}; weights={1}" -f $canLmxxf, $(if ($lmxxfWeights) { $lmxxfWeights } else { 'MISSING - supply native-game-tiled-assets' }))
 Write-Host ("  daniel: runtime/installer={0}; weights={1}; NVIDIA model={2}" -f $canDaniel, $(if ($weights) { $weights } else { 'MISSING' }), $(if ($nv) { $nv } else { 'MISSING' }))
 Write-Host ("  mochizuki: runtime/shaders={0}; model={1}" -f $canMochizuki, $(if ($mochizukiModel) { $mochizukiModel + ' (header recognized; runtime validates contents)' } elseif ($mochizukiNv) { 'can extract from ' + $mochizukiNv } else { 'MISSING - supply nvngx_dlssnr.dll 310.8.0 or dlssnr-amd/dlssnr.bin' }))
 
+Show-WeightProblems
+if ($weightProblems.Count -gt 0 -and -not $NonInteractive) {
+    $null = Read-Host 'Read the red WEIGHTS CHECK block above, then press Enter to continue / 请先阅读上方红色权重检查信息，然后按回车继续'
+}
+function Format-BackendChoice([string]$Kind, [string]$Label) {
+    if ($weightFailed[$Kind]) { return "$Label  [WEIGHTS CHECK FAILED / 权重校验失败]" }
+    return $Label
+}
+
 if ($canMochizuki -or $Backend -ne 'auto') {
     if ($Backend -eq 'auto' -and -not $NonInteractive) {
         $choices = @('Install all available backends')
         $kinds = @('all')
-        if ($canLmxxf) { $choices += 'Install lmxxf only'; $kinds += 'lmxxf' }
-        if ($canDaniel) { $choices += 'Install daniel only'; $kinds += 'daniel' }
-        if ($canMochizuki) { $choices += 'Install mochizuki only (Vulkan / RDNA4)'; $kinds += 'mochizuki' }
+        if ($canLmxxf) { $choices += (Format-BackendChoice 'lmxxf' 'Install lmxxf only'); $kinds += 'lmxxf' }
+        if ($canDaniel) { $choices += (Format-BackendChoice 'daniel' 'Install daniel only'); $kinds += 'daniel' }
+        if ($canMochizuki) { $choices += (Format-BackendChoice 'mochizuki' 'Install mochizuki only (Vulkan / RDNA4)'); $kinds += 'mochizuki' }
         $choice = Ask-Choice 'Choose NR backends to install:' $choices
         $Backend = $kinds[$choice - 1]
     }
@@ -810,8 +944,8 @@ if ($canMochizuki -or $Backend -ne 'auto') {
         $activeBackend = 'lmxxf'
     } else {
         $choice = Ask-Choice "Detected files for both neural rendering backends. Select installation mode:" @(
-            "Install lmxxf backend (using native-game-tiled-assets)",
-            "Install danielblnc backend (using dlssnr_amd_pass / weights.bin)",
+            (Format-BackendChoice 'lmxxf' "Install lmxxf backend (using native-game-tiled-assets)"),
+            (Format-BackendChoice 'daniel' "Install danielblnc backend (using dlssnr_amd_pass / weights.bin)"),
             "Install both backends (coexist in game folder, switch via OptiScaler.ini)"
         )
         switch ($choice) {
@@ -868,6 +1002,27 @@ if ($installMochizuki) {
     } catch { Fail $_.Exception.Message }
 }
 
+# Drop backends whose weights failed the early check. Only failed backends selected => Fail
+# before anything is written to the game folder.
+$selectedBackends = @(@(@('lmxxf', $installLmxxf), @('daniel', $installDaniel), @('mochizuki', $installMochizuki)) |
+    Where-Object { $_[1] } | ForEach-Object { $_[0] })
+$droppedBackends = @($selectedBackends | Where-Object { $weightFailed[$_] })
+if ($droppedBackends.Count -gt 0) {
+    $names = $droppedBackends -join ', '
+    if ($droppedBackends.Count -eq $selectedBackends.Count) {
+        Show-WeightProblems
+        Fail "Weights check failed for: $names. Nothing was installed; the game folder was not changed. See the red WEIGHTS CHECK block above. / 权重校验失败：$names。没有安装任何文件，游戏目录未作改动。请查看上方红色权重检查信息。"
+    }
+    foreach ($kind in $droppedBackends) {
+        Write-Host "Skipping ${kind}: weights check failed (see the red WEIGHTS CHECK block). / 跳过 ${kind}：权重校验失败（见红色权重检查信息）。" -ForegroundColor Red
+        switch ($kind) { 'lmxxf' { $installLmxxf = $false } 'daniel' { $installDaniel = $false } 'mochizuki' { $installMochizuki = $false } }
+    }
+    if ($activeBackend -in $droppedBackends) {
+        $activeBackend = @($selectedBackends | Where-Object { $_ -notin $droppedBackends })[0]
+        Write-Host "Active backend changed to $activeBackend. / 默认后端改为 $activeBackend。" -ForegroundColor Yellow
+    }
+}
+
 # Extract from the user's supported DLL when selected. Python is needed only
 # for extraction; an already extracted model can be installed without Python.
 if ($installMochizuki -and -not $mochizukiModel -and $mochizukiNv) {
@@ -904,11 +1059,10 @@ if ($installMochizuki -and -not $mochizukiModel -and $mochizukiNv) {
     }
 }
 
-# Prepare and validate INT4 weights before anything is written to the game folder:
-# a model that does not match this package fails Setup with the game left unchanged.
-$mochizukiInt4Expected = $null
-$mochizukiInt4Existing = $false
-if ($installMochizuki -and $mochizukiModel -and (Test-Path -LiteralPath (Join-Path $mochizukiAssets 'int4') -PathType Container)) {
+# A model extracted just above was not part of the early weights check: validate it
+# before anything is written to the game folder; a mismatch fails with the game unchanged.
+if ($installMochizuki -and $mochizukiModel -and -not $mochizukiInt4Checked -and
+    (Test-Path -LiteralPath (Join-Path $mochizukiAssets 'int4') -PathType Container)) {
     . $int4Helper
     try {
         $mochizukiInt4Expected = Get-MochizukiInt4ExpectedHash $mochizukiTools
@@ -917,9 +1071,8 @@ if ($installMochizuki -and $mochizukiModel -and (Test-Path -LiteralPath (Join-Pa
         $mochizukiInt4Existing = -not $mochizukiInt4Candidate
     } catch {
         if ($_.Exception.Data['MochizukiInt4Mismatch']) {
-            Write-Host ''
-            foreach ($line in (Get-MochizukiInt4MismatchText $_.Exception)) { Write-Host $line -ForegroundColor Red }
-            Write-Host ''
+            $text = Get-MochizukiInt4MismatchText $_.Exception -NothingInstalled
+            Write-WeightBlock (@($text.En) + @('') + @($text.Zh))
             Fail 'Mochizuki model does not match this package (INT4 check). Nothing was installed. / Mochizuki 模型与安装包版本不一致（INT4 校验），未安装任何文件。'
         }
         Fail $_.Exception.Message
@@ -1450,6 +1603,11 @@ if ($installMochizuki) {
             Install-One $file.FullName (Join-Path 'dlssnr-amd/aco' $relative)
         }
     }
+    if ($mochizukiStaleGameModel -and (Test-Path -LiteralPath $mochizukiStaleGameModel -PathType Leaf)) {
+        $aside = $mochizukiStaleGameModel + '.mismatch-' + (Get-Date -Format 'yyyyMMddHHmmss')
+        Move-Item -LiteralPath $mochizukiStaleGameModel -Destination $aside -ErrorAction Stop
+        Write-Host "Renamed mismatched Mochizuki model: $aside" -ForegroundColor Yellow
+    }
     if ($mochizukiModel) { Install-One $mochizukiModel 'dlssnr-amd/dlssnr.bin' }
     $int4Root = Join-Path $mochizukiAssets 'int4'
     if (Test-Path -LiteralPath $int4Root -PathType Container) {
@@ -1857,6 +2015,13 @@ if (@($installDaniel, $installLmxxf, $installMochizuki | Where-Object { $_ }).Co
 }
 Write-Host ''
 if ($installMochizuki) { Write-Host "Mochizuki runtime and shaders installed; model is supplied separately." }
+if ($weightProblems.Count -gt 0) {
+    Write-Host ''
+    foreach ($p in $weightProblems) {
+        $state = if ($p.Failed) { 'FAILED, not installed / 校验失败，未安装' } else { 'warning / 警告' }
+        Write-Host ("WEIGHTS CHECK {0}: {1} - {2}" -f $p.Backend, $state, ($p.En | Where-Object { $_ -match 'Wrong (file|folder)' } | Select-Object -First 1).Trim()) -ForegroundColor Red
+    }
+}
 $activeModelPending = ($activeBackend -eq 'mochizuki' -and -not (Test-MochizukiModelHeader (Join-Path $game 'dlssnr-amd/dlssnr.bin'))) -or
     ($activeBackend -eq 'lmxxf' -and -not $lmxxfWeights)
 if ($activeModelPending) {

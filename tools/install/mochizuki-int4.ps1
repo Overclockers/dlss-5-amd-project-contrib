@@ -73,26 +73,29 @@ function Install-MochizukiInt4Candidate([string]$Candidate, [string]$Output, [st
     }
 }
 
-# Player-facing text for a mismatch (English, then Chinese).
-function Get-MochizukiInt4MismatchText($Exception) {
+# Player-facing text for a mismatch: English lines, then Chinese lines. With
+# -NothingInstalled the outcome line says the game folder was not changed.
+function Get-MochizukiInt4MismatchText($Exception, [switch]$NothingInstalled) {
     $expected = $Exception.Data['Expected']; $actual = $Exception.Data['Actual']; $model = $Exception.Data['Model']
-    return @(
-        'The Mochizuki model you supplied does not match the version this package expects.',
-        "  Model file: $model (dlssnr.bin, extracted from your nvngx_dlssnr.dll)",
+    $en = @(
+        '[mochizuki] The Mochizuki model you supplied does not match the version this package expects.',
+        "  Wrong file: $model (dlssnr.bin, extracted from your nvngx_dlssnr.dll)",
         "  Expected:   nvngx_dlssnr.dll 310.8.0; INT4 weights SHA-256 $expected",
-        "  Got:        INT4 weights $actual",
-        '  Nothing was installed. The game folder was not changed.',
-        '  Fix: get nvngx_dlssnr.dll version 310.8.0, put it beside Setup.bat, delete the old dlssnr-amd\dlssnr.bin',
-        '       (beside Setup.bat and in the game folder), run Mochizuki-Model.bat, then run Setup again.',
-        '',
-        '你提供的 Mochizuki 模型与本安装包要求的版本不一致。',
-        "  模型文件：$model（dlssnr.bin，由你的 nvngx_dlssnr.dll 提取）",
+        "  Got:        INT4 weights $actual")
+    $zh = @(
+        '[mochizuki] 你提供的 Mochizuki 模型与本安装包要求的版本不一致。',
+        "  有问题的文件：$model（dlssnr.bin，由你的 nvngx_dlssnr.dll 提取）",
         "  期望：nvngx_dlssnr.dll 310.8.0；INT4 权重 SHA-256 $expected",
-        "  实际：INT4 权重 $actual",
-        '  没有安装任何文件，游戏目录未作改动。',
-        '  解决：换用 310.8.0 版本的 nvngx_dlssnr.dll，放到 Setup.bat 旁边，删除旧的 dlssnr-amd\dlssnr.bin',
-        '       （Setup.bat 旁边和游戏目录里的都删），运行 Mochizuki-Model.bat，然后重新运行 Setup。'
-    )
+        "  实际：INT4 权重 $actual")
+    if ($NothingInstalled) {
+        $en += '  Nothing was installed. The game folder was not changed.'
+        $zh += '  没有安装任何文件，游戏目录未作改动。'
+    }
+    $en += @('  Fix: get nvngx_dlssnr.dll version 310.8.0, put it beside Setup.bat, delete the wrong dlssnr.bin above',
+             '       (and any other old dlssnr-amd\dlssnr.bin), run Mochizuki-Model.bat, then run Setup again.')
+    $zh += @('  解决：换用 310.8.0 版本的 nvngx_dlssnr.dll，放到 Setup.bat 旁边，删除上面这个有问题的 dlssnr.bin',
+             '       （以及其他旧的 dlssnr-amd\dlssnr.bin），运行 Mochizuki-Model.bat，然后重新运行 Setup。')
+    return @{ En = $en; Zh = $zh }
 }
 
 # Model-extraction path (Mochizuki-Model.bat): prepare beside the model and commit.

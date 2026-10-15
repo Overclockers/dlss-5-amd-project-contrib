@@ -655,6 +655,71 @@ class InstallerExitTests(unittest.TestCase):
         return {p.relative_to(self.game).as_posix(): p.read_bytes() if p.is_file() else None
                 for p in sorted(self.game.rglob('*'))}
 
+    def test_weights_check_all_skips_failed_mochizuki_and_installs_others(self):
+        self.ready_install()
+        self.ready_mochizuki(model=True)
+        (self.package / 'model-tools/dlssnr-int4.sha256').write_text('ab' * 32 + '\n')
+        code, output = self.run_direct(flags=('-NonInteractive', '-Backend', 'all'))
+        self.assertEqual(code, 0, output)
+        self.assertIn('WEIGHTS CHECK: problems found', output)
+        self.assertIn('<mochizuki: FAILED - this backend will not be installed', output)
+        self.assertIn('Skipping mochizuki: weights check failed', output)
+        self.assertIn('WEIGHTS CHECK mochizuki: FAILED, not installed', output)  # end-of-run summary
+        self.assertLess(output.rindex('WEIGHTS CHECK mochizuki'), output.rindex('Install SUCCEEDED.'))
+        self.assertEqual((self.game / 'dlssnr_amd_pass1.dll').read_bytes(), FAKE_RUNTIME)
+        self.assertFalse((self.game / 'MochizukiNrRuntime.dll').exists(), output)
+        self.assertFalse((self.game / 'dlssnr-amd').exists(), output)
+
+    def test_weights_check_mochizuki_prefers_matching_model_over_stale_game_copy(self):
+        self.ready_mochizuki(model=True)
+        stale = self.game / 'dlssnr-amd/dlssnr.bin'
+        stale.parent.mkdir()
+        stale.write_bytes(b'NRMODEL1' + (599).to_bytes(4, 'little') + b'stale model fixture')
+        converter = self.package / 'model-tools/dlssnr-int4-weights.exe'
+        script = self.package / 'mochizuki-int4.ps1'
+        # Fixture converter output is model-independent; make the stale game copy fail by path.
+        text = script.read_text(encoding='utf-8-sig').replace(
+            "        & $generator $Model $Data $temporary | Out-Host",
+            "        & $generator $Model $Data $temporary | Out-Host\n"
+            "        if ($Model -like '*game with spaces*') { [IO.File]::WriteAllText($temporary, 'stale') }")
+        script.write_text(text, encoding='utf-8-sig')
+        code, output = self.run_direct(flags=('-NonInteractive', '-Backend', 'mochizuki'))
+        self.assertEqual(code, 0, output)
+        self.assertIn('Wrong file: ' + str(stale), output)
+        self.assertIn('Setup will use the matching model instead: ' + str(self.package / 'dlssnr-amd' / 'dlssnr.bin'), output)
+        self.assertIn('<mochizuki: warning', output)
+        self.assertEqual(stale.read_bytes(), (self.package / 'dlssnr-amd/dlssnr.bin').read_bytes())
+        aside = list(stale.parent.glob('dlssnr.bin.mismatch-*'))
+        self.assertEqual(len(aside), 1, output)
+        self.assertTrue(aside[0].read_bytes().endswith(b'stale model fixture'))
+        self.assertEqual((self.game / 'dlssnr-amd/dlssnr-int4.bin').read_bytes(), INT4_PAYLOAD)
+
+    def test_weights_check_truncated_daniel_weights_fail_untouched(self):
+        self.ready_install()
+        (self.package / 'dlssnr_on_amd_weights.bin').write_bytes(bytes(1000))
+        before = self.game_snapshot()
+        for backend in ('daniel', 'all'):
+            with self.subTest(backend=backend):
+                code, output = self.run_direct(flags=('-NonInteractive', '-Backend', backend))
+                self.assertNotEqual(code, 0, output)
+                self.assertIn('[daniel] Wrong file: ' + str(self.package / 'dlssnr_on_amd_weights.bin'), output)
+                self.assertIn('only 1000 bytes', output)
+                self.assertIn('Weights check failed for: daniel. Nothing was installed', output)
+                self.assertEqual(self.game_snapshot(), before, output)
+
+    def test_weights_check_incomplete_lmxxf_folder_warns_red(self):
+        self.ready_lmxxf_dual_arch()
+        weights = self.package / 'native-game-tiled-assets'
+        (weights / 'block0-ffn.f16').unlink()
+        (weights / 'other.bin').write_bytes(b'unrelated')
+        code, output = self.run_direct(flags=('-NonInteractive', '-Backend', 'lmxxf'))
+        self.assertEqual(code, 0, output)
+        self.assertIn('WEIGHTS CHECK: problems found', output)
+        self.assertIn('[lmxxf] Wrong folder: ' + str(weights), output)
+        self.assertIn('<lmxxf: warning', output)
+        self.assertIn('WEIGHTS CHECK lmxxf: warning', output)
+        self.assertIn('MODEL SETUP REQUIRED', output)
+
     def test_mochizuki_int4_mismatch_leaves_game_untouched(self):
         self.ready_mochizuki(model=True)
         (self.game / 'game.exe').write_bytes(b'game executable fixture')
@@ -664,9 +729,11 @@ class InstallerExitTests(unittest.TestCase):
         code, output = self.run_direct(flags=('-NonInteractive', '-Backend', 'mochizuki'))
         self.assertNotEqual(code, 0, output)
         self.assertEqual(self.game_snapshot(), before, output)
-        for text in ('The Mochizuki model you supplied does not match the version this package expects.',
+        for text in ('WEIGHTS CHECK: problems found',
+                     'The Mochizuki model you supplied does not match the version this package expects.',
+                     'Wrong file: ' + str(self.package / 'dlssnr-amd' / 'dlssnr.bin'),
                      'nvngx_dlssnr.dll 310.8.0; INT4 weights SHA-256 ' + 'ab' * 32,
-                     'Nothing was installed. The game folder was not changed.',
+                     'Weights check failed for: mochizuki. Nothing was installed; the game folder was not changed.',
                      'run Mochizuki-Model.bat, then run Setup again.', 'Install FAILED.'):
             self.assertIn(text, output)
         self.assertNotIn('Install SUCCEEDED.', output)
