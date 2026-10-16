@@ -104,6 +104,74 @@ static void Encode(nrvk::Context& ctx, const std::filesystem::path& shaders)
     }
 }
 
+// The encoder keeps the raw frame, but the linear composition reference must
+// match OptiScaler's nonnegative RGB. Small negative HDR samples used to make
+// the luminance-ratio correction amplify a bounded model answer into hot pixels.
+static void NegativeHdrReference(nrvk::Context& ctx, const std::filesystem::path& shaders)
+{
+    constexpr uint32_t w = 19, h = 11;
+    const Pixel sources[] = {
+        { -0.00074625f, -0.00170135f, -0.00724411f, .375f },
+        { .001f, -.004f, .0005f, .25f }, { -.004f, .0005f, .002f, .5f },
+        { .003f, -.00025f, .001f, .75f }, { -.5f, .25f, .125f, .875f },
+        { 0.f, 0.f, 0.f, 0.f }, { .18f, .09f, .045f, 1.f }
+    };
+    for (bool scaled : { false, true })
+    for (float white : { .25f, 1.f, 4.f })
+    for (const Pixel& source : sources)
+    {
+        const uint32_t mw = scaled ? 7 : w, mh = scaled ? 5 : h;
+        std::vector<Pixel> proxy(mw * mh, source);
+        {
+            Resources e(ctx);
+            auto& p = e.Image(mw, mh); auto& k = e.Image(mw, mh);
+            ctx.upload(p, proxy.data(), proxy.size() * sizeof(Pixel));
+            e.kernel.create(ctx, (shaders / "runtime_encode.spv").string(), {}, 16, { &p, &k });
+            struct { uint32_t w, h; float white, knee; } push { mw, mh, white, .75f };
+            e.Run(push, mw, mh);
+            ctx.download(p, proxy.data(), proxy.size() * sizeof(Pixel));
+        }
+        auto model = proxy;
+        for (auto& p : model)
+        {
+            p[0] = std::clamp(p[0] + .015f, 0.f, 1.f);
+            p[1] = std::clamp(p[1] - .005f, 0.f, 1.f);
+            p[2] = std::clamp(p[2] + .01f, 0.f, 1.f);
+        }
+        Resources r(ctx);
+        auto& m = r.Image(mw, mh); auto& s = r.Image(mw, mh, true);
+        auto& k = r.Image(w, h, true); auto& a = r.Image(w, h);
+        ctx.upload(m, model.data(), model.size() * sizeof(Pixel));
+        ctx.upload(s, proxy.data(), proxy.size() * sizeof(Pixel));
+        r.kernel.create(ctx, (shaders / "runtime_transfer.spv").string(), {}, 48, { &m, &s, &k, &a, &a });
+        for (uint32_t mode : { 0u, 1u, 2u })
+        {
+            struct { uint32_t w, h, mw, mh, passthrough; float detail, colour, guard, white;
+                     uint32_t mode, flags; float sigma; }
+                push { w, h, mw, mh, 0, 1.f, 1.f, 2.f, white, mode, 0, 1.f };
+            auto run = [&](bool nonnegative) {
+                Pixel reference = source;
+                if (nonnegative) for (int c = 0; c != 3; ++c) reference[c] = std::max(reference[c], 0.f);
+                std::vector<Pixel> original(w * h, reference), output(w * h);
+                ctx.upload(k, original.data(), original.size() * sizeof(Pixel));
+                r.Run(push, w, h);
+                ctx.download(a, output.data(), output.size() * sizeof(Pixel));
+                return output;
+            };
+            const auto actual = run(false), reference = run(true);
+            Require(actual == reference, "negative HDR reference differs from OptiScaler's nonnegative reference");
+            for (const auto& p : actual)
+            {
+                Require(p[3] == source[3], "negative HDR composition changed alpha");
+                for (int c = 0; c != 3; ++c)
+                    Require(std::isfinite(p[c]) && p[c] >= 0.f && p[c] < 8.f,
+                            "negative HDR composition generated an extreme or invalid colour");
+            }
+        }
+    }
+    std::cout << "PASS negative HDR reference: encoded input, native/scaled, all transfer modes, white points, alpha\n";
+}
+
 static void Transfer(nrvk::Context& ctx, const std::filesystem::path& shaders)
 {
     constexpr uint32_t w = 19, h = 11;
@@ -514,10 +582,16 @@ int main(int argc, char** argv)
     try
     {
         std::cout << std::unitbuf;
-        Require(argc == 2 || (argc == 3 && std::string(argv[2]) == "--fp16-only"),
-                "usage: hdr_shader <shaders/runtime> [--fp16-only]");
+        const bool negativeOnly = argc == 3 && std::string(argv[2]) == "--negative-hdr-only";
+        Require(argc == 2 || negativeOnly || (argc == 3 && std::string(argv[2]) == "--fp16-only"),
+                "usage: hdr_shader <shaders/runtime> [--fp16-only|--negative-hdr-only]");
         ctx.create();
         std::cout << "GPU: " << ctx.gpu_name << '\n';
+        if (negativeOnly) {
+            NegativeHdrReference(ctx, argv[1]);
+            ctx.destroy();
+            return 0;
+        }
         FloatConversions(ctx, argv[1]);
         R11G11B10Unpack(ctx, argv[1]);
         R11G11B10Pack(ctx, argv[1]);
@@ -526,6 +600,7 @@ int main(int argc, char** argv)
         if (argc == 2) {
             Encode(ctx, argv[1]);
             Transfer(ctx, argv[1]);
+            NegativeHdrReference(ctx, argv[1]);
             Composition(ctx, argv[1]);
         }
         ctx.destroy();

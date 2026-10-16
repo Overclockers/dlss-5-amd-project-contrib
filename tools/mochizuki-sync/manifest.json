@@ -783,6 +783,14 @@
         "windows/src/core/nr_runtime.cpp",
         "windows/src/core/nr_runtime.hpp"
       ]
+    },
+    {
+      "feature": "nonnegative-hdr-reference",
+      "path": "patches/24-nonnegative-hdr-reference.patch",
+      "files": [
+        "linux/shaders/passes/runtime_transfer.comp",
+        "windows/shaders/passes/runtime_transfer.comp"
+      ]
     }
   ],
   "added_files": [

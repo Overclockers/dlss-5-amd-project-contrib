@@ -1,7 +1,7 @@
 # Mochizuki source pin and interface patches
 
 The runtime uses official core/shaders at the full SHA in `manifest.json`, plus
-twenty-two explicit feature patches. There are no whole-file preservation overlays.
+twenty-three explicit feature patches. There are no whole-file preservation overlays.
 The host loads our `MochizukiNrRuntime.dll`, which wraps that core; this does not
 claim binary compatibility with an official distributed runtime.
 
@@ -43,6 +43,7 @@ Those tests also run in `run.cmd abi`.
 | 21 compute-downscale | `RuntimeConfig::compute_downscale`: model scale below 1 on the compute family when the frame is kept in its own format (runtime_downscale, the blit's own taps) and the full-size answer is stored natively, copied (RGBA32F) or packed on compute (runtime_pack_f16 / the per-format packs) | Off unless the host sets it (NrInlineComputeDownscale); otherwise the downscale blit and its refusal remain |
 | 22 compute-first-pass-export | `RuntimeConfig::compute_export`: with first_pass_output, a compute pack of pass 0 into the frame's format (`first_pass_packed`, `record_first_pack`; runtime_pack_f16/_r11/_u8/_u8_bgra/_u10/_u10_bgra) | Off unless the host sets it (NrInlineComputeExport); other formats keep the host's blit |
 | 23 multipass-motion-in-place | `RuntimeConfig::motion_in_place_passes`: with max_passes > 1, every pass samples the engine motion vectors in place through per-recording sets for the multi-pass pre/post kernels; no motion blit | Off unless the host sets it (NrInlineComputeMotion with 2+ layers); otherwise multi-pass blits the motion as before |
+| 24 nonnegative-hdr-reference | Compose linear HDR against nonnegative reference RGB, matching OptiScaler before its resolve; retain raw keep and alpha, leave SDR unchanged | Shader regression reproduces finite negative inputs becoming extreme primary colours before this change; covers native/reduced model sizes and all transfer modes. Game acceptance remains separate |
 
 The patches replay sequentially against `manifest.json`'s commit. Patches 02-05
 share header/implementation context, so do not assume their patch files apply

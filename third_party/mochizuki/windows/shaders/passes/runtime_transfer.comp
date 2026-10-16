@@ -230,7 +230,11 @@ void main() {
     const float norm = pass_through ? 1.0 : max(pc.white, 1e-4);
     vec3 proxy = pass_through ? proxy_s : srgb_to_linear(proxy_s);
     vec3 model = pass_through ? model_s : srgb_to_linear(model_s);
-    const vec3 original = original_s.rgb / norm;
+    // Match OptiScaler's nonnegative HDR composition reference. The raw keep
+    // may contain negative scene RGB (also at reduced model scale); feeding
+    // that into the luminance-ratio correction can amplify tiny edits into
+    // extreme primary-colour pixels. Preserve the SDR path and source alpha.
+    const vec3 original = (pass_through ? original_s.rgb : max(original_s.rgb, vec3(0.0))) / norm;
     const float original_luma = dot(original, kLuma);
     float proxy_luma = dot(proxy, kLuma);
 
