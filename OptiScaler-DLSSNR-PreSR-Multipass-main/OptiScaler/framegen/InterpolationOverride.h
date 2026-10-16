@@ -47,6 +47,19 @@ class InterpolationOverride
     InterpolationStatus status;
     std::optional<InterpolationRequest> attempted;
 
+    bool RecordResult(int target, InterpolationApplyResult result)
+    {
+        if (result != InterpolationApplyResult::Success)
+        {
+            status.failed = true;
+            status.requiresReinitialization = result == InterpolationApplyResult::RequiresReinitialization;
+            return false;
+        }
+        status.failed = false;
+        status.applied = target;
+        return true;
+    }
+
   public:
     void Reset(int applied = -1)
     {
@@ -71,15 +84,17 @@ class InterpolationOverride
         if (status.requiresReinitialization || !request.enabled || !request.liveSupported ||
             status.target == status.applied)
             return false;
-        const auto result = apply(status.target);
-        if (result != InterpolationApplyResult::Success)
-        {
-            status.failed = true;
-            status.requiresReinitialization = result == InterpolationApplyResult::RequiresReinitialization;
+        return RecordResult(status.target, apply(status.target));
+    }
+
+    // Dynamic targets share the static path's sticky context-failure contract.
+    template <typename Apply> bool ApplyDynamic(int target, Apply&& apply)
+    {
+        std::lock_guard guard(mutex);
+        if (status.requiresReinitialization)
             return false;
-        }
-        status.applied = status.target;
-        return true;
+        status.target = target;
+        return RecordResult(target, apply(target));
     }
 
     InterpolationStatus Snapshot() const

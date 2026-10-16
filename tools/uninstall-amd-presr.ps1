@@ -204,7 +204,8 @@ $dependencyPaths = @(
     'libxess.dll', 'libxess_dx11.dll', 'libxess_fg.dll', 'libxell.dll',
     'D3D12_OptiScaler\D3D12Core.dll',
     'D3D12_OptiScaler\d3d12SDKLayers.dll',
-    'plugins\OptiPatcher.asi'
+    'plugins\OptiPatcher.asi',
+    'plugins\OptScaler-NR-plugins-README.txt'
 )
 $protectedNames = @(
     'nvngx_dlssnr.dll',
@@ -449,11 +450,13 @@ foreach ($root in $roots) {
     $gameIni = Join-Path $root 'OptiScaler.ini'
     try {
         $pluginDir = Get-PluginsTargetDirectory $root $gameIni
-        $customPluginAsi = Join-Path $pluginDir 'OptiPatcher.asi'
-        if ((Test-Path -LiteralPath $customPluginAsi -PathType Leaf) -and
-            (Test-UninstallPath $customPluginAsi)) {
-            Add-PlannedFile $customPluginAsi 'project-dependency'
-            $customPluginFiles.Add($customPluginAsi)
+        foreach ($pluginOwned in @('OptiPatcher.asi')) {
+            $customPluginFile = Join-Path $pluginDir $pluginOwned
+            if ((Test-Path -LiteralPath $customPluginFile -PathType Leaf) -and
+                (Test-UninstallPath $customPluginFile)) {
+                Add-PlannedFile $customPluginFile 'project-dependency'
+                $customPluginFiles.Add($customPluginFile)
+            }
         }
     } catch {
         $kept.Add("unresolved plugin path in ${gameIni}: $($_.Exception.Message)")
@@ -622,6 +625,7 @@ foreach ($root in $roots) {
         Remove-EmptyDirectory (Join-Path $deps 'dlssnr/design')
         Remove-EmptyDirectory (Join-Path $deps 'dlssnr')
         Remove-EmptyDirectory (Join-Path $deps 'D3D12_OptiScaler')
+        Remove-EmptyDirectory (Join-Path $deps 'plugins')
         Remove-EmptyDirectory $deps
     }
 

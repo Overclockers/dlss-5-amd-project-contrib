@@ -1332,5 +1332,68 @@ class InstallerExitTests(unittest.TestCase):
         self.assertFalse(list(self.game.glob(".lmxxf-stage-*")))
 
 
+    def test_custom_plugins_keep_configs_readme_and_explicit_loader_setting(self):
+        self.ready_install()
+        source = self.package / 'plugins'
+        nested = self.package / 'OptiScaler/plugins'
+        source.mkdir()
+        nested.mkdir(parents=True)
+        (source / 'Custom.asi').write_bytes(b'new custom plugin')
+        for suffix in ('ini', 'json', 'txt'):
+            (source / f'Custom.{suffix}').write_text('package default', encoding='utf-8')
+        (nested / 'Nested.ini').write_text('nested package default', encoding='utf-8')
+        (source / 'Fresh.ini').write_text('initial setting', encoding='utf-8')
+        for directory in (source, nested):
+            (directory / 'README.txt').write_text('legacy package placeholder', encoding='utf-8')
+            (directory / 'OptScaler-NR-plugins-README.txt').write_text('project placeholder', encoding='utf-8')
+        for index, (path, setting, expected) in enumerate((
+            ('auto', None, 'true'), ('mods', 'false', 'false'),
+            (str(self.root / 'shared-plugins'), 'auto', 'true'), ('auto', 'true', 'true'),
+        )):
+            with self.subTest(path=path, setting=setting):
+                game = self.root / f'game-{index}'
+                game.mkdir()
+                target = (game / 'OptiScaler/plugins') if path == 'auto' else (
+                    Path(path) if Path(path).is_absolute() else game / path)
+                target.mkdir(parents=True)
+                (target / 'README.txt').write_text('user document', encoding='utf-8')
+                (target / 'Custom.asi').write_bytes(b'old custom plugin')
+                configs = ['Custom.ini', 'Custom.json', 'Custom.txt', 'Nested.ini']
+                for name in configs:
+                    (target / name).write_text('user setting', encoding='utf-8')
+                ini = '[Plugins]\nPath=' + path + '\n'
+                if setting is not None:
+                    ini += 'LoadAsiPlugins=' + setting + '\n'
+                (self.package / 'OptiScaler.ini').write_text(ini, encoding='utf-8')
+                (game / 'OptiScaler.ini').write_text(ini, encoding='utf-8')
+                for _ in range(2):
+                    code, output = self.run_direct(game=game)
+                    self.assertEqual(code, 0, output)
+                    self.assertEqual((target / 'Custom.asi').read_bytes(), b'new custom plugin')
+                    self.assertEqual((target / 'README.txt').read_text(), 'user document')
+                    for name in configs:
+                        self.assertEqual((target / name).read_text(), 'user setting', name)
+                    self.assertEqual((target / 'Fresh.ini').read_text(), 'initial setting')
+                    actual = (game / 'OptiScaler.ini').read_text(encoding='utf-8-sig')
+                    self.assertRegex(actual, r'LoadAsiPlugins\s*=\s*' + expected)
+                code, output = self.run_direct('Uninstall', game=game)
+                self.assertEqual(code, 0, output)
+                self.assertEqual((target / 'README.txt').read_text(), 'user document')
+                self.assertTrue((target / 'Custom.asi').exists())
+                for name in configs:
+                    self.assertEqual((target / name).read_text(), 'user setting')
+
+    def test_uninstall_preserves_unowned_readme_without_install_record(self):
+        for path in ('OptiScaler/plugins', 'user-mods'):
+            with self.subTest(path=path):
+                target = self.game / path
+                target.mkdir(parents=True, exist_ok=True)
+                (target / 'README.txt').write_text('user document', encoding='utf-8')
+                (self.game / 'OptiScaler.ini').write_text('[Plugins]\nPath=' + path + '\n', encoding='utf-8')
+                code, output = self.run_direct('Uninstall')
+                self.assertEqual(code, 0, output)
+                self.assertEqual((target / 'README.txt').read_text(), 'user document')
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

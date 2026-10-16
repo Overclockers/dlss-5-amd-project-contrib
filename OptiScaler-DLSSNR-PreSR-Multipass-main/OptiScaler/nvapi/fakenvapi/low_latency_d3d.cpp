@@ -9,6 +9,7 @@
 #include "config.h"
 #include <hooks/Reflex_Hooks.h>
 #include <framegen/nvngx/Nvngx_FG.h>
+#include <low_latency/input/input_common.h>
 
 // private
 bool LowLatency::update_low_latency_tech(IUnknown* pDevice)
@@ -230,7 +231,11 @@ NvAPI_Status LowLatency::Sleep(IUnknown* pDevice)
         return ERROR();
 
     if (auto current_tech = currently_active_tech.load())
+    {
+        auto sleepStart = Util::MillisecondsNow();
         current_tech->sleep();
+        InputCommon::record_sleep_ms(Util::MillisecondsNow() - sleepStart);
+    }
 
     return OK();
 }

@@ -250,6 +250,11 @@ inline constexpr const char *AmdUseGameExposure = "AmdUseGameExposure";
 inline constexpr const char *AmdToneChannels = "AmdToneChannels";
 inline constexpr const char *Quality = "Quality";
 inline constexpr const char *XeFGInterpolationCount = "XeFGInterpolationCount";
+inline constexpr const char *kXeFGSection = "XeFG";
+inline constexpr const char *XeFGDynamicMFG = "DynamicMFG";
+inline constexpr const char *XeFGFramerateTargetDMFG = "FramerateTargetDMFG";
+inline constexpr const char *XeFGRoundingDMFG = "RoundingDMFG";
+inline constexpr const char *XeFGDynamicAllow1X = "DynamicAllow1X";
 inline constexpr const char *QueuePriority = "QueuePriority";
 inline constexpr const char *QueuePriorityLegacy = "AmdQueuePriority";
 // AmdInline=1 means daniel Async=0 (same-frame). Write Async on Save.
@@ -263,6 +268,7 @@ inline constexpr const char *const kKnown[] = {
     FpsOverlayColorR, FpsOverlayColorG, FpsOverlayColorB, // [Menu], no runtime env aliases
     "Enabled",
     XeFGInterpolationCount,
+    XeFGDynamicMFG, XeFGFramerateTargetDMFG, XeFGRoundingDMFG, XeFGDynamicAllow1X,
     "RunBeforeSR",
     "ApplyAfterRR",
     "RRPasses",

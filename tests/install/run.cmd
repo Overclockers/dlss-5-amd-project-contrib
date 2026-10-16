@@ -35,5 +35,6 @@ rem One complete archive installation/uninstallation and a real overwrite/prefer
 rem The production packager separately checks signatures, all files and hashes on the actual ZIP.
 "%AMD_TEST_PYTHON%" -B tests\install\test_module_packages.py ModulePackageTests.test_valid_actual_archive_can_install || goto fail
 "%AMD_TEST_PYTHON%" -B tests\install\test_installer_exit.py InstallerExitTests.test_kept_ini_preserves_canonical_preferences_over_legacy || goto fail
+"%AMD_TEST_PYTHON%" -B tests\install\test_installer_exit.py InstallerExitTests.test_custom_plugins_keep_configs_readme_and_explicit_loader_setting InstallerExitTests.test_uninstall_preserves_unowned_readme_without_install_record || goto fail
 echo install release: PASS
 exit /b 0

@@ -328,7 +328,13 @@ void IFGFeature::SetResourceReady(FG_ResourceType type, int index)
     _resourceReady[index].Mark(type);
 }
 
-UINT IFGFeature::GetInterpolatedFrameCount() const { return _framesToInterpolate < 0 ? 1 : _framesToInterpolate; }
+UINT IFGFeature::GetInterpolatedFrameCount() const
+{
+    if (!const_cast<IFGFeature*>(this)->IsActive() || _generationOff)
+        return 0;
+
+    return _framesToInterpolate < 0 ? 1 : _framesToInterpolate;
+}
 
 int IFGFeature::GetMaxInterpolationCount() const { return _maxInterpolationCount; }
 

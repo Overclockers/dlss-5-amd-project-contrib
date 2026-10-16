@@ -1,6 +1,6 @@
 @echo off
 rem Host-contract tests. Every *.cpp in tests\host belongs to exactly one tier below.
-rem Usage: tests\host\run.cmd [release^|ci^|device^|all] [out-dir]
+rem Usage: tests\host\run.cmd [release^|ci^|device^|xefg^|all] [out-dir]
 rem   ci     : CPU only, no GPU. nr_backend_selector, amd_submission_state, amd_graphics_{snapshot,
 rem            tracker,restore,restore_dx12,invocation,native_hooks}, amd_runtime_host_load (+ its
 rem            generated fixture PE), amd_retirement_diagnostics, and hip_load.ps1 (amd_hip_load +
@@ -29,7 +29,8 @@ if /i "%TIER%"=="ci" goto ci
 if /i "%TIER%"=="all" goto ci
 if /i "%TIER%"=="device" goto device
 if /i "%TIER%"=="release" goto release
-echo usage: tests\host\run.cmd [release^|ci^|device^|all] [out-dir]
+if /i "%TIER%"=="xefg" goto Xefg
+echo usage: tests\host\run.cmd [release^|ci^|device^|xefg^|all] [out-dir]
 exit /b 2
 
 :ci
@@ -73,8 +74,7 @@ call "%REPO%\tests\host\menu-localization.cmd" "%OUT%\menu" || goto fail
 "%OUT%\menu_window_layout.exe" || goto fail
 %CXX% /utf-8 tests\host\nr_diagnostic_log.cpp /Fe"%OUT%\nr_diagnostic_log.exe" /Fo"%OUT%\nr_diagnostic_log.obj" || goto fail
 "%OUT%\nr_diagnostic_log.exe" "%OUT%\diagnostic-log" || goto fail
-%CXX% tests\host\nr_multiplier.cpp /Fe"%OUT%\nr_multiplier.exe" /Fo"%OUT%\nr_multiplier.obj" || goto fail
-"%OUT%\nr_multiplier.exe" || goto fail
+call :Xefg || goto fail
 %CXX% /utf-8 /I"%INC%" tests\host\nr_activity_recording.cpp /Fe"%OUT%\nr_activity_recording.exe" /Fo"%OUT%\nr_activity_recording.obj" /link "%DETOURS%" dxguid.lib || goto fail
 "%OUT%\nr_activity_recording.exe" || goto fail
 %CXX% /utf-8 tests\host\amd_model_settings.cpp /Fe"%OUT%\amd_model_settings.exe" /Fo"%OUT%\amd_model_settings.obj" || goto fail
@@ -125,5 +125,13 @@ for %%T in (nr_backend_selector nr_recording_admission amd_submission_state nr_s
   "%OUT%\%%T.exe" || goto fail
 )
 "%AMD_TEST_PYTHON%" -B tests\host\test_config_priority.py || goto fail
+call :Xefg || goto fail
 echo host release: PASS
 exit /b 0
+
+:Xefg
+%CXX% tests\host\nr_multiplier.cpp /Fe"%OUT%\nr_multiplier.exe" /Fo"%OUT%\nr_multiplier.obj" || exit /b 1
+"%OUT%\nr_multiplier.exe" || exit /b 1
+%CXX% tests\host\xefg_dynamic_count.cpp /Fe"%OUT%\xefg_dynamic_count.exe" /Fo"%OUT%\xefg_dynamic_count.obj" || exit /b 1
+"%OUT%\xefg_dynamic_count.exe"
+exit /b %errorlevel%

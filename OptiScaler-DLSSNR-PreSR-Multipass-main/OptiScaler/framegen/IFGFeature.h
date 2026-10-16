@@ -80,6 +80,7 @@ class IFGFeature
     int _framesToInterpolate = -1;
     int _maxInterpolationCount = 1;
     bool _supportsDMFG = false;
+    bool _generationOff = false;
 
     bool _isActive = false;
     UINT64 _targetFrame = 0;

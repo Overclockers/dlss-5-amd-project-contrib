@@ -162,10 +162,10 @@ These options are independent of DLSSNR. Required files are not bundled; obtain 
 
 ---
 
-#### Option 1: Intel XeFG (XeMFG DP4A Unlocker Multi-Frame Generation)
-`XeFGUnlock.asi` originates from the OptiScaler community (the current version only requires `XeFGUnlock.asi`; the ini file is no longer needed).
+#### Option 1: Intel XeFG (Multi-Frame Generation & Dynamic MFG)
+`XeFGUnlock.asi` / `MFGUnlocker.asi` originate from the community (only the `.asi` plugin file is needed; not bundled with this package).
 Thanks to [@Overclockers](https://github.com/Overclockers) for contributing the NR-active independent XeFG frame generation multiplier override feature in PR #3 (allowing a dedicated XeFG interpolation multiplier when NR is active).
-1. Place `XeFGUnlock.asi` into `OptiScaler\plugins\` in the game directory (alongside `libxess_fg.dll`), without the `-loadlate` parameter;
+1. Place your `.asi` unlocker plugin into the pre-created `OptiScaler\plugins\` folder in the game directory (or into the package's `plugins\` folder before running `Setup.bat`, which copies it while preserving existing plugin configuration and explicit loader settings; only a missing or auto loader setting is enabled), without the `-loadlate` parameter;
 2. Configure `OptiScaler.ini` in the game root:
    ```ini
    [Plugins]
@@ -179,8 +179,13 @@ Thanks to [@Overclockers](https://github.com/Overclockers) for contributing the 
 
    [XeFG]
    InterpolationCount=1
+   DynamicMFG=false
+   FramerateTargetDMFG=120
+   RoundingDMFG=0
+   DynamicAllow1X=false
    ```
-   - `InterpolationCount`: `1` for 2x, `2` for 3x, etc.;
+   - `InterpolationCount`: `1` for 2x, `2` for 3x, `3` for 4x, etc. (acts as the maximum multiplier ceiling when `DynamicMFG` is enabled);
+   - `DynamicMFG`: enables Dynamic Multi-Frame Generation (also available in the Ins menu under XeFG), automatically scaling between `1x` and the configured ceiling to hit `FramerateTargetDMFG`;
    - Actual multiplier is subject to hardware capability and plugin unlock limits;
 3. Save settings and restart the game. Note that some games may require enabling **Ignore FG pre-checks** under Frame Generation in the Ins menu to activate properly;
 4. Test with 2x first before increasing multipliers. Press **Page Up** for FPS overlay and **Page Down** for detailed stats.

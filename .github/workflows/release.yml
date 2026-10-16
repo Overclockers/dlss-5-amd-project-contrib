@@ -79,7 +79,7 @@ jobs:
           - **时序模式**：新增低频稳定（Mode 2）与残差增强（Mode 3，强度 0..2），均为手动选择，限超分前单层；默认仍为完整模型历史（Mode 1）。不支持的组合保留设置并跳过历史。
           - **Mochizuki 内联调优**：自动搜索设为 Auto 的自旋选项，显式指定值保持固定；启用自适应等待预算时暂停调优。限制闲置录制池保留的几何副本。
           - **剑星 HDR 闪点修复**：限制普通 HDR 合成参考的负 RGB，避免亮度校正异常放大为红蓝闪点。用户确认 RenoDX 关闭时修复有效；撤回无效的全局 MV 范围修改。负 RGB 场景的细微颜色变化仍需进一步验证。
-          - **XeFG 插件兼容**：调整 XeLL 钩子与首次上下文创建的导出解析，正确透传按地址查询模块的调用；外部插件需自行准备，不随包提供。
+          - **XeFG 动态多帧生成（Dynamic MFG）与插件支持**：接入基于目标帧率（DMFG FPS Target）的 XeFG 动态插帧算法，根据真实原生帧耗时自动在 1x～上限倍率（2x/3x/4x）之间平滑切换；调整 XeLL 钩子与首次上下文创建的导出解析以兼容外部解锁插件；发布包与安装目录现默认预创建 `plugins` 文件夹方便用户自行放入 `.asi` 插件（外部插件需自行准备，不随包提供）。
           - **构建与发布**：固定工具下载包跨工作树复用，修复人物模型导出的长路径问题，发布检查加入时序 Mode 2/3 回归。
 
           **安装与权重**
@@ -104,7 +104,7 @@ jobs:
           - **Temporal modes**: opt-in low-frequency stabilization (Mode 2) and residual enhancement (Mode 3, strength 0..2), limited to single-pass pre-SR. Full model history (Mode 1) remains the default. Unsupported combinations preserve settings and run without history.
           - **Mochizuki inline tuning**: searches spin options set to Auto, preserves fixed values and pauses during adaptive wait budgeting. Idle recording-pool geometry retention is bounded.
           - **Stellar Blade HDR sparkle fix**: clamps negative RGB in the normal HDR composition reference to prevent extreme red/blue amplification. Users confirmed the fix with RenoDX off. The ineffective global MV-extent change was reverted; subtle colour effects on signed HDR input need further evaluation.
-          - **XeFG plugin compatibility**: updated XeLL hooking, first-context export resolution and module lookup by address. External plugins are not bundled.
+          - **XeFG Dynamic MFG and plugin compatibility**: added target-FPS Dynamic Multi-Frame Generation (DMFG) for XeFG to dynamically scale interpolation count between 1x and the configured maximum (2x/3x/4x); updated XeLL hooking, first-context export resolution and module lookup by address; pre-created the `plugins` directory in release packages and installed game folders for user-supplied `.asi` plugins (external plugins are not bundled).
           - **Build and release**: shared pinned downloads across worktrees, shorter person-model export paths and temporal Mode 2/3 checks in the release tier.
 
           **Installation and models**

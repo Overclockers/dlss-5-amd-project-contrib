@@ -609,10 +609,26 @@ if (Test-Path $rtgiSrc) {
 }
 
 # Bundled plugins (OptiPatcher.asi: DLSS spoofing enhancement offline cache)
+# Always create plugins/ and OptiScaler/plugins/ with a project-named README so the folder exists
+# in the ZIP archive for users to drop custom .asi plugins (e.g. MFGUnlocker.asi / XeFGUnlock.asi).
+$pluginDst = Join-Path $stage 'plugins'
+$optiPluginDst = Join-Path $deps 'plugins'
+New-Item -ItemType Directory -Path $pluginDst, $optiPluginDst -Force | Out-Null
+$pluginReadme = @(
+    'OptScaler(NR) - ASI Plugins Directory'
+    '====================================='
+    'Place custom .asi plugins (for example MFGUnlocker.asi or XeFGUnlock.asi) in this folder.'
+    '- Before running Setup.bat: any non-OptiPatcher .asi/.ini files placed in plugins\ will be'
+    '  copied to the game''s active plugins folder (<GameDir>\OptiScaler\plugins by default)'
+    '  Existing plugin configurations and explicit LoadAsiPlugins settings are preserved.'
+    '  A missing or auto LoadAsiPlugins setting is enabled when custom ASI files are copied.'
+    '- After installation: place .asi plugins directly into <GameDir>\OptiScaler\plugins\'
+    '  (or your configured [Plugins] Path in OptiScaler.ini) and set LoadAsiPlugins=true.'
+) -join "`r`n"
+[IO.File]::WriteAllText((Join-Path $pluginDst 'OptScaler-NR-plugins-README.txt'), ($pluginReadme + "`r`n"), [Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText((Join-Path $optiPluginDst 'OptScaler-NR-plugins-README.txt'), ($pluginReadme + "`r`n"), [Text.UTF8Encoding]::new($false))
 $pluginSrc = Join-Path $root 'assets/plugins'
 if (Test-Path -LiteralPath $pluginSrc -PathType Container) {
-    $pluginDst = Join-Path $stage 'plugins'
-    New-Item -ItemType Directory -Path $pluginDst -Force | Out-Null
     Get-ChildItem -LiteralPath $pluginSrc -Filter '*.asi' -File | Copy-Item -Destination $pluginDst -Force
 }
 

@@ -1520,7 +1520,10 @@ if (Test-Path -LiteralPath $ini -PathType Leaf) {
 $deps = Join-Path $release 'OptiScaler'
 if (Test-Path -LiteralPath $deps) {
     Get-ChildItem -LiteralPath $deps -Recurse -File | Where-Object {
-        $_.FullName.Substring($deps.Length) -notmatch '^[\\/]plugins[\\/].*OptiPatcher.*\.asi$'
+        # Custom plugins go through the resolved-path/config-preservation flow below.
+        $relative = $_.FullName.Substring($deps.Length)
+        $relative -notmatch '^[\\/]plugins[\\/]' -or
+            $relative -ieq '\plugins\OptScaler-NR-plugins-README.txt'
     } | ForEach-Object {
         $rel = Join-Path 'OptiScaler' $_.FullName.Substring($deps.Length).TrimStart('\','/')
         Install-One $_.FullName $rel
@@ -1833,6 +1836,50 @@ if ($isInteractiveUser) {
             Write-Host 'Enabled LoadAsiPlugins=true in OptiScaler.ini.' -ForegroundColor Green
         }
     }
+}
+
+# Ensure the resolved plugins directory always exists in the game folder and copy any
+# user-supplied custom .asi / .ini files placed in the package's plugins\ directory before Setup.
+try {
+    $resolvedPluginsDir = Get-PluginsTargetDirectory $game $gameIni
+    if (-not (Test-Path -LiteralPath $resolvedPluginsDir -PathType Container)) {
+        [void][IO.Directory]::CreateDirectory($resolvedPluginsDir)
+    }
+    $gameFullPrefix = [IO.Path]::GetFullPath($game).TrimEnd('\', '/') + '\'
+    $customAsiInstalled = 0
+    foreach ($srcPluginDir in @((Join-Path $release 'plugins'), (Join-Path $release 'OptiScaler\plugins'))) {
+        if (-not (Test-Path -LiteralPath $srcPluginDir -PathType Container)) { continue }
+        if ([IO.Path]::GetFullPath($srcPluginDir).TrimEnd('\', '/') -ieq [IO.Path]::GetFullPath($resolvedPluginsDir).TrimEnd('\', '/')) { continue }
+        Get-ChildItem -LiteralPath $srcPluginDir -File -ErrorAction SilentlyContinue | Where-Object {
+            $_.Name -notmatch '(?i)OptiPatcher.*\.asi$' -and
+                $_.Name -notin @('README.txt', 'OptScaler-NR-plugins-README.txt') -and
+                $_.Extension -in @('.asi', '.ini', '.txt', '.json')
+        } | ForEach-Object {
+            $destFile = Join-Path $resolvedPluginsDir $_.Name
+            if ($_.Extension -ine '.asi' -and (Test-Path -LiteralPath $destFile)) {
+                Write-Host "Keeping existing plugin configuration: $destFile"
+                return
+            }
+            if ([IO.Path]::GetFullPath($destFile).StartsWith($gameFullPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+                $rel = [IO.Path]::GetFullPath($destFile).Substring($gameFullPrefix.Length)
+                Install-One $_.FullName $rel
+            } else {
+                Copy-Item -LiteralPath $_.FullName -Destination $destFile -Force
+            }
+            if ($_.Extension -ieq '.asi') { $customAsiInstalled++ }
+        }
+    }
+    if ($customAsiInstalled -gt 0 -and (Test-Path -LiteralPath $gameIni -PathType Leaf)) {
+        $loadAsi = Get-IniSetting $gameIni 'Plugins' 'LoadAsiPlugins'
+        if ([string]::IsNullOrWhiteSpace($loadAsi) -or $loadAsi -ieq 'auto') {
+            Set-IniSettings $gameIni 'Plugins' ([ordered]@{ 'LoadAsiPlugins' = 'true' })
+            Write-Host "Enabled LoadAsiPlugins=true in OptiScaler.ini ($customAsiInstalled custom ASI plugin(s) installed)." -ForegroundColor Green
+        } else {
+            Write-Host "Keeping explicit LoadAsiPlugins=$loadAsi; custom plugins were copied without changing this setting."
+        }
+    }
+} catch {
+    Write-Host "NOTE: could not initialize plugins folder: $($_.Exception.Message)" -ForegroundColor Yellow
 }
 
 # Uninstaller is copied into the game folder. Double-click it there; it

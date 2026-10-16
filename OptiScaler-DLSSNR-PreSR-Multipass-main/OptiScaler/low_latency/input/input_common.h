@@ -89,6 +89,12 @@ class InputCommon
         activeOutput = InputCommon::activeOutput;
     }
 
+    inline static std::atomic<double> last_sleep_ms = 0.0;
+
+  public:
+    static void record_sleep_ms(double ms) { last_sleep_ms.store(ms, std::memory_order_relaxed); }
+    static double take_sleep_ms() { return last_sleep_ms.exchange(0.0, std::memory_order_relaxed); }
+
     static InputResult mark_present_start(IUnknown* pDevice);
 
     // passthrough when possible, fillout with local frame_reports if not

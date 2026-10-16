@@ -52,7 +52,7 @@ class ReleaseNotesTests(unittest.TestCase):
         version = (REPO / 'VERSION').read_text(encoding='utf-8-sig').strip()
         result = self.run_step(version)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('INT4', self.output.read_text(encoding='utf-8'))
+        self.assertIn(f'### v{version}', self.output.read_text(encoding='utf-8'))
 
     def test_empty_or_wrong_version_fails_before_output(self):
         for body in ('', '### v1.12.0-alpha\n', 'No version heading\n',

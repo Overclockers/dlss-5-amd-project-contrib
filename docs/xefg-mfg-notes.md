@@ -1,6 +1,6 @@
 # XeFG 多帧生成（MFG）宿主兼容与性能说明
 
-本文记录外部 XeFG 多帧生成插件（如 `MFGUnlocker.asi`）在 OptiScaler(NR) 宿主下的兼容机制、`HighResMV` 自动检测行为，以及 AMD 显卡在 4K 输出下的性能开销构成。
+本文记录外部 XeFG 多帧生成插件（如 `MFGUnlocker.asi`）在 OptiScaler(NR) 宿主下的兼容机制、动态多帧生成（Dynamic MFG）、`HighResMV` 自动检测行为，以及 AMD 显卡在 4K 输出下的性能开销构成。
 
 ## 1. 宿主兼容契约（三处关键点）
 
@@ -17,20 +17,65 @@
 3. **`hk_K32_GetModuleHandleExA/W` 过滤 `GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS`**
    - 当 `dwFlags` 含 `GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS` 时，`lpModuleName` 是内存地址而非模块名字符串，直接透传给原函数早退。
 
-## 2. `HighResMV` 的自动检测与落盘机制
+## 2. 动态多帧生成（Dynamic MFG）
 
-`OptiScaler.ini` 中的 `[XeFG] HighResMV` 默认是 `auto`（`false`），但宿主会在运行期根据当前选用的 `FGInput` 自动检测并调用 `Config::SaveXeFG()` 写回 INI：
+在 [XeFG_DynamicCount.h](../OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/framegen/xefg/XeFG_DynamicCount.h) 与 [XeFG_Dx12.cpp](../OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/framegen/xefg/XeFG_Dx12.cpp) 中，宿主实现了基于目标帧率的动态多帧生成控制器：
 
-- **`FGInput = dlssg`（Streamline 输入）**：在 [Streamline_Inputs_Dx12.cpp](../OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/inputs/FG/Streamline_Inputs_Dx12.cpp) 中，若游戏向 Streamline 提交的 `data.motionVectorsDilated == sl::Boolean::eTrue`（即引擎已将运动矢量膨胀到显示分辨率），宿主会自动将 `FGXeFGHighResMV` 设为 `true` 并保存到 `OptiScaler.ini`。即使同一游戏给 Upscaler（`IFeature`）传的是渲染分辨率 `LowResMV: true`，给 DLSS-G 传的也可以是膨胀后的 `HighResMV`。
-- **`FGInput = fsrfg` / `upscaler`**：分别根据 `FG_Flags::DisplayResolutionMVs` 或 `!_initFlags.LowResMV` 自动同步并调用 `SaveXeFG()`。
-- **为什么落盘到 INI**：`XeFG_Dx12::CreateSwapchain` 在启动早期创建交换链时就必须确定 `XEFG_SWAPCHAIN_INIT_FLAG_HIGH_RES_MV`，早于游戏进入场景首次提交帧常量的时机；落盘后下次启动即可在创建交换链时直接使用匹配的标志。
+- **配置项（`[XeFG]`）**：
+  - `DynamicMFG`（菜单：`Dynamic MFG`）：启用动态多帧生成（默认 `false`）。
+  - `FramerateTargetDMFG`（菜单：`DMFG FPS Target`）：目标显示帧率（菜单 0～360 FPS，默认 `0`；0 跟随 FPS 限制，无限制时取略低于屏幕刷新率的目标）。
+  - `RoundingDMFG`（菜单：`DMFG Rounding`）：倍率取整策略（`0` = Floor 向下取整，`1` = Nearest 就近取整（默认），`2` = Ceiling 向上取整）。
+  - `DynamicAllow1X`（菜单：`Allow 1X`）：允许控制器按目标容差降为 1X（调用 XeFG SetEnabled 关闭插帧；默认允许，取消后下限为 2X）。
+- **与 `Interpolation Count` 协同**：用户设置的 `Interpolation Count`（或 `[DlssNr] XeFGInterpolationCount` 覆盖项）作为动态调节的**最高倍率上限（ceiling）**，控制器在 `[minCount, maxTargetCount]` 范围内平滑增减插帧数量，并在动态切换时跳过 `WAR_xefgRequestFGToggle` 重建闪烁。
 
-## 3. 4K 多帧生成的性能边界
+## 3. `HighResMV` 的自动检测、落盘与首次启动重启生效机制
 
-用户报告 RX 9070 XT 在 1080p 渲染、4K 输出时，不开 FG 的基础帧为 60+ fps，XeFG 2X 约 48 fps，4X 约 30 fps；同场景 pre-SR Mochizuki NR 的菜单计时约 6 ms。这是用户观察，尚缺对应构建 SHA、完整配置和同会话 GPU 逐段计时，不作为可复现的性能基线。
+`OptiScaler.ini` 中的 `[XeFG] HighResMV` 默认是 `auto`（`false`），但宿主会在进入游戏场景后根据当前选用的输入源自动检测并调用 `Config::SaveXeFG()` 写回 INI：
 
-NR 在渲染分辨率处理，插帧需要处理输出分辨率；4K 的像素数为 1080p 的四倍，多帧生成还会增加 GPU 工作。以上可解释开销可能增加，但不能直接推出耗时按像素数或插入帧数线性累加。
+- **`FGInput = dlssg`（Streamline 输入）**：在 [Streamline_Inputs_Dx12.cpp](../OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/inputs/FG/Streamline_Inputs_Dx12.cpp) 中，若游戏向 Streamline 提交的 `data.motionVectorsDilated == sl::Boolean::eTrue`（即引擎已将运动矢量膨胀到显示分辨率），宿主会自动将 `FGXeFGHighResMV` 设为 `true` 并保存到 `OptiScaler.ini`。
+- **`FGInput = fsrfg` / `upscaler`**：分别在 [FSR3_Dx12_FG.cpp](../OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/inputs/FG/FSR3_Dx12_FG.cpp)、[FfxApi_Dx12_FG.cpp](../OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/inputs/FG/FfxApi_Dx12_FG.cpp) 或 [IFeature.cpp](../OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/upscalers/IFeature.cpp) 中根据 `FG_Flags::DisplayResolutionMVs` / `!_initFlags.LowResMV` 自动同步并调用 `SaveXeFG()`。
+- **为什么落盘到 INI 且首次开启后必须重启游戏**：
+  - `XeFG_Dx12::CreateSwapchain` 在游戏启动早期创建交换链时就必须确定 `XEFG_SWAPCHAIN_INIT_FLAG_HIGH_RES_MV`（见 [XeFG_Dx12.cpp](../OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/framegen/xefg/XeFG_Dx12.cpp) 第 399–400 行），早于进入场景首次初始化超分/帧生成常量的时机。
+  - 若启动时 `OptiScaler.ini` 中尚未写入 `HighResMV=true`（首次运行默认 `false`），交换链会以低分辨率运动矢量模式创建；进入场景后宿主虽自动检出并写入 `HighResMV=true`，但该标志必须在**重启游戏重建交换链**后才会真正生效（对应菜单提示 [menu_common.cpp](../OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/menu/menu_common.cpp) `"Restart the game to apply correct XeFG settings!"`）。
 
-AMD 上所选 XeFG/外部插件实际使用的内核、是否调用矩阵指令、光流与生成阶段各占多少时间，均须用匹配版本的模块和 GPU 捕获确认。不能仅凭非 NVIDIA 路径标志，断言整个管线只能使用 DP4a、无法使用 WMMA，或把基础帧下降全部归因于某一条指令路径。
+## 4. 4K 多帧生成实测对比与首次未重启掉帧归因（纠正历史错误结论）
 
-后续对比应固定宿主/插件/DLL 版本、场景、输出分辨率、HighResMV、同步/限帧与 NR 设置，记录基础帧和显示帧、GPU 阶段耗时与画质。未完成这些测量前，不宣称该开销必然正常，也不承诺另一 FG 后端一定更快。
+在《燕云十六声》（`yysls`，RX 9070 XT，渲染 `1920x1080` → 输出 `3840x2160`，pre-SR Mochizuki NR `passes=1`）下的同场景受控对比实测表明：
+
+### 4.1 `XeFGUnlock.asi`（38 KB）与 `MFGUnlocker-3.asi`（6.9 MB）性能完全一致
+
+在 OptiScaler 宿主模式（`optiScalerRoute: "plugin"`）下，无论加载社区版 `XeFGUnlock.asi`（38 KB）还是 dashdogy `MFGUnlocker-3.asi`（`v1.5.1-beta.3`，6.9 MB），插件均只在首次创建上下文时将 `libxess_fg.dll` / `libxell.dll` 的最大插帧数解锁为 `5`（`Max supported interpolations: 5`），随后的每帧插帧与 Present 均交由 OptiScaler 宿主直接调用原生 `libxess_fg.dll`。在 `XeFG.HighResMV: true` 已生效的同场景测试中，两者的帧率与单次插帧开销几乎完全相同：
+
+| 状态档位 | `XeFGUnlock.asi`（38 KB） | `MFGUnlocker-3.asi`（6.9 MB） | 实测结论 |
+| :--- | :--- | :--- | :--- |
+| **FG 关闭 (1X)** | **61.5 FPS** (`16.26 ms/帧`) | **62.5 FPS** (`16.00 ms/帧`) | 基准帧率一致 |
+| **XeFG 2X (`InterpolationCount=1`)** | **51.9 FPS** (`19.27 ms/帧`，`+3.01 ms`) | **52.1 FPS** (`19.20 ms/帧`，`+3.20 ms`) | 单帧插帧开销约 `3.1 ms` |
+| **XeFG 4X (`InterpolationCount=3`)** | **41.5 FPS** (`24.06 ms/帧`，`+7.80 ms`) | **43.1 FPS** (`23.18 ms/帧`，`+7.18 ms`) | **3 次插帧总开销 `7.2 ~ 7.8 ms`（平均每生成 1 帧仅耗 `2.4 ~ 2.6 ms`）**，显示输出 **166 ~ 172 FPS** |
+| **`NrFrameDiag` Present 阻塞 (`gw_present_wall_ms`)** | 中位数 `1.18 ms`（P90 `1.56 ms`） | 中位数 `0.79 ms`（P90 `1.00 ms`） | 4X 下 `Δpresent_serial / Δnr_frame = 4.0`，主线程阻塞约 `1 ms` |
+
+### 4.2 首次测试 4X 掉至 27 FPS（`36.6 ms/帧`）的真实根因
+
+此前单次日志（`14:37` 会话）中出现 4X 基础帧降至 `27.3 FPS`（`36.6 ms/帧`，较 FG 关闭 `+20.6 ms`，平均每生成 1 帧耗 `6.87 ms`），**并非**两个解锁插件存在性能差距，也**并非** RX 9070 XT 在 4K 下运行 XeFG 4X 的固有开销需要 5～6 ms/帧（特此废止此前将掉帧归因于插件差异或 4K DP4a 固有成本的错误推断）：
+
+1. `14:36:58` 首次启动时，`OptiScaler.ini` 中尚无 `XeFG.HighResMV=true`（默认为 `false`）。
+2. `14:37:16` `XeFG_Dx12::CreateSwapchain` 在**未携带 `XEFG_SWAPCHAIN_INIT_FLAG_HIGH_RES_MV`** 的状态下创建了 XeFG 交换链。
+3. `14:39:11` 进入场景后，`IFeature::SetInitParameters` 检测到高分辨率运动矢量并通过 `Config::SaveXeFG()` 将 `HighResMV=true` 保存进 `OptiScaler.ini`，但当次会话未重启游戏，导致 XeFG 全程在 `HighResMV=false` 的错配状态下运行，单次插帧耗时从正常的 `2.4 ~ 2.6 ms` 暴涨至 `6.87 ms`。
+4. 随后重启游戏的所有测试会话（`18:54`、`19:25`、`19:30`）在启动时均已读取 `[I] XeFG.HighResMV: true`，交换链以正确的 `XEFG_SWAPCHAIN_INIT_FLAG_HIGH_RES_MV` 初始化，两款插件在 4X 下均稳定达到 **41.5 ~ 43.1 FPS** 基础帧（**166 ~ 172 FPS** 显示帧）。
+
+### 4.3 关于 `RTXMFG-Universal.status.json` 退出状态的说明
+
+使用 `MFGUnlocker.asi` 时，游戏退出后生成的 `RTXMFG-Universal.status.json` 可能显示 `xessInitialized: false`、`xessFramesPresented: 0`。原因有二：
+1. 在 `optiScalerRoute: "plugin"` 模式下，插件仅在 `CreateContext` 时对 `libxess_fg.dll` / `libxell.dll` 执行一次性解锁，后续每帧调用直接透传给宿主和原生 DLL，插件自身不接管每帧 Present 计数；
+2. 部分游戏（如《燕云十六声》）在进程退出瞬间会触发一次收尾设备初始化并重写该状态文件。
+
+因此判断解锁与多帧生成是否生效，应以 `OptiScaler.log` 中的 `XeFG_Dx12::CreateSwapchain Max supported interpolations: 5`、`UpdateInterpolationCount` 以及 `NrFrameDiag.log` 中 `present_serial` 相对 `nr_frame` 的倍率步进为准。
+
+## 安装文件归属与动态切换边界
+
+- 包内插件说明使用专名 `OptScaler-NR-plugins-README.txt`，仅安装到项目私有依赖目录；旧的通用 `README.txt` 不作为自定义文件分发，卸载也不按此通用名称认领用户文件。
+- 用户提供的 ASI 可更新覆盖；同名 INI/JSON/TXT 已存在时保留，缺失时才写入初始配置。依赖树里的自定义插件也统一走此路径，避免默认插件目录先被覆盖。
+- 复制 ASI 不覆盖显式的 `LoadAsiPlugins=true/false`；缺失、空值或 `auto` 才自动开启。用户主动选择安装 OptiPatcher 的原有交互流程保持不变。
+- 动态倍率和静态倍率共享 API 失败状态。参数拒绝保留原已应用倍率；其他错误锁定为需重建并立即停用、结束当前 dispatch，新交换链初始化前不再调用改倍率或激活。
+- 倍率上下限改变或当前实际倍率越界时取消旧试验；所有控制器返回值都受当前边界约束。关闭 Allow 1X 后，旧试升失败不能把倍率回退到 1X。
+
+回归包含真实 PowerShell 安装/卸载夹具（默认、相对自定义、游戏目录外绝对路径，重复安装、用户配置和 README 保留），以及动态倍率失败锁定/恢复和试验中修改上下限的 CPU 测试。它们不代替 XeFG 插件游戏实测。

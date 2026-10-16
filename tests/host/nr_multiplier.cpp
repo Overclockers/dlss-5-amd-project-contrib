@@ -103,6 +103,24 @@ int main()
     request.nrOverride = -1;
     assert(!ResolveInterpolation(request).overridden);
 
+    // Dynamic changes must latch the same context failures as static overrides.
+    controller.Reset(2);
+    assert(!controller.ApplyDynamic(3, reject));
+    assert(controller.Snapshot().failed && !controller.Snapshot().requiresReinitialization);
+    assert(controller.Snapshot().applied == 2);
+    assert(controller.ApplyDynamic(3, apply));
+    assert(!controller.Snapshot().failed && controller.Snapshot().applied == 3);
+    assert(!controller.ApplyDynamic(4, fatal));
+    assert(controller.Snapshot().failed && controller.Snapshot().requiresReinitialization);
+    assert(controller.Snapshot().applied == 3);
+    const int dynamicFatalCalls = calls;
+    assert(!controller.ApplyDynamic(2, apply));
+    assert(!controller.Update(request, apply));
+    assert(calls == dynamicFatalCalls);
+    controller.Reset(2); // New swap-chain initialization clears the failure latch.
+    assert(controller.ApplyDynamic(4, apply));
+    assert(!controller.Snapshot().requiresReinitialization && controller.Snapshot().applied == 4);
+
     DlssNr::NrSessionActivity activity;
     assert(!activity.IsRunning());
     const auto first = activity.Token();

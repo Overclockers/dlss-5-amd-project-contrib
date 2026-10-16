@@ -161,10 +161,10 @@ Estas opciones son independientes de DLSSNR. Los archivos requeridos no están i
 
 ---
 
-#### Opción 1: Intel XeFG (Generación de fotogramas múltiples XeMFG DP4A Unlocker)
-`XeFGUnlock.asi` proviene de la comunidad de OptiScaler (la versión actual solo requiere `XeFGUnlock.asi`; el archivo ini ya no es necesario).
+#### Opción 1: Intel XeFG (Generación de fotogramas múltiples y Dynamic MFG)
+`XeFGUnlock.asi` / `MFGUnlocker.asi` provienen de la comunidad (solo se requiere el archivo `.asi`; no se incluye en este paquete).
 Agradecimientos a [@Overclockers](https://github.com/Overclockers) por contribuir en PR #3 con la función de anulación de multiplicador XeFG independiente al activar NR (permite configurar un multiplicador de interpolación XeFG dedicado cuando NR está activo).
-1. Coloque `XeFGUnlock.asi` en `OptiScaler\plugins\` dentro del directorio del juego (junto a `libxess_fg.dll`), sin el parámetro `-loadlate`;
+1. Coloque su plugin `.asi` en la carpeta precreada `OptiScaler\plugins\` dentro del directorio del juego (o en la carpeta `plugins\` del paquete antes de ejecutar `Setup.bat`, lo que lo copiará conservando la configuración existente y las opciones explícitas; la carga solo se activa si falta la opción o está en auto), sin el parámetro `-loadlate`;
 2. Configure `OptiScaler.ini` en la raíz del juego:
    ```ini
    [Plugins]
@@ -178,8 +178,13 @@ Agradecimientos a [@Overclockers](https://github.com/Overclockers) por contribui
 
    [XeFG]
    InterpolationCount=1
+   DynamicMFG=false
+   FramerateTargetDMFG=120
+   RoundingDMFG=0
+   DynamicAllow1X=false
    ```
-   - `InterpolationCount`: `1` para 2x, `2` para 3x, etc.;
+   - `InterpolationCount`: `1` para 2x, `2` para 3x, `3` para 4x, etc. (actúa como límite máximo cuando `DynamicMFG` está activo);
+   - `DynamicMFG`: activa la generación dinámica de fotogramas múltiples (también disponible en el menú Ins bajo XeFG), ajustando automáticamente el multiplicador hacia `FramerateTargetDMFG`;
    - La tasa real está sujeta a la capacidad del hardware y a los límites del plugin;
 3. Guarde la configuración y reinicie el juego. Tenga en cuenta que algunos juegos pueden requerir habilitar **Ignorar comprobaciones previas de FG (Ignore FG pre-checks)** en el menú Ins para activarse correctamente;
 4. Pruebe primero con 2x antes de aumentar el multiplicador. Presione **Re Pág (Page Up)** para la superposición de FPS y **Av Pág (Page Down)** para estadísticas detalladas.

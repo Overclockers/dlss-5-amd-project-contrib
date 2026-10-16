@@ -162,10 +162,10 @@ UI升级、NR强度及人脸保护等多重更新，详见 [Release 页](https:/
 
 ---
 
-#### 方案 1：Intel XeFG（XeMFG DP4A Unlocker 多倍插帧）
-`XeFGUnlock.asi` 来源于 OptiScaler 社区（当前版本仅需 `XeFGUnlock.asi`，不再需要 ini 文件）。
+#### 方案 1：Intel XeFG（多倍插帧与动态多帧生成 Dynamic MFG）
+`XeFGUnlock.asi` / `MFGUnlocker.asi` 来源于社区（当前版本仅需 `.asi` 插件文件，不随本包分发）。
 感谢 [@Overclockers](https://github.com/Overclockers) 在 PR #3 中为本项目贡献的 NR 激活时独立 XeFG 插帧倍率覆盖功能（支持在 NR 激活时独立设置专用的 XeFG 插帧倍率）。
-1. 将 `XeFGUnlock.asi` 放入游戏目录的 `OptiScaler\plugins\` 子目录中（与 `libxess_fg.dll` 同级），不要加 `-loadlate` 参数；
+1. 将自行准备的 `.asi` 解锁插件直接放入游戏目录已预建的 `OptiScaler\plugins\` 子目录中（或在运行 `Setup.bat` 前放入解压包的 `plugins\` 目录，安装器会自动拷贝，保留已有插件配置和显式加载开关；仅在开关缺失或为 `auto` 时开启），不要加 `-loadlate` 参数；
 2. 修改游戏根目录下的 **`OptiScaler.ini`**（非 plugins 内部的 ini）：
    ```ini
    [Plugins]
@@ -179,8 +179,13 @@ UI升级、NR强度及人脸保护等多重更新，详见 [Release 页](https:/
 
    [XeFG]
    InterpolationCount=1
+   DynamicMFG=false
+   FramerateTargetDMFG=120
+   RoundingDMFG=0
+   DynamicAllow1X=false
    ```
-   - `InterpolationCount`：`1` 代表 2x 插帧，`2` 代表 3x 插帧，以此类推；
+   - `InterpolationCount`：`1` 代表 2x 插帧，`2` 代表 3x 插帧，`3` 代表 4x 插帧，以此类推（开启 `DynamicMFG` 时作为动态插帧的最高倍率上限）；
+   - `DynamicMFG`：动态多帧生成开关（也可在 Ins 菜单 XeFG 区域勾选 **Dynamic MFG / 动态多帧生成**），根据真实原生帧耗时与目标帧率（`FramerateTargetDMFG`）在 `1x`～上限倍率之间自动平滑切换；
    - 实际倍率受硬件能力及插件解锁上限约束；
 3. 保存 OptiScaler 设置并重启游戏生效；部分游戏可能需要在 Ins 菜单的帧生成（Frame Generation）设置中开启**忽略前置检查（Ignore FG pre-checks）**方可正常激活；
 4. 建议先以 2x 模式跑通，确认无异常后再调高倍率；游戏中可通过 **Page Up** 呼出帧率面板，按 **Page Down** 切换详情观察插帧状态。
