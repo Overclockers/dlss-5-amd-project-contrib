@@ -45,6 +45,11 @@ bool XeFG_Dx12::CreateSwapchainContext(ID3D12Device* device)
 
     auto createResult = false;
 
+    // InitXeFG caches this export before ASI plugins load. MFG Unlocker finishes
+    // its hooks on the first kernel32 GetProcAddress of this name.
+    if (HMODULE xefg = XeFGProxy::Module())
+        GetProcAddress(xefg, "xefgSwapChainD3D12CreateContext");
+
 #ifndef DONT_USE_XMX
     ScopedSkipSpoofingGlobal skipSpoofingGlobal {};
 #endif // !DONT_USE_XMX

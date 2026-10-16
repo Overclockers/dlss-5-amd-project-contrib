@@ -192,6 +192,10 @@ HMODULE WINAPI KernelHooks::hk_K32_GetModuleHandleW(LPCWSTR lpModuleName)
 VALIDATE_HOOK(hk_K32_GetModuleHandleExA, Kernel32Proxy::PFN_GetModuleHandleExA)
 BOOL WINAPI KernelHooks::hk_K32_GetModuleHandleExA(DWORD dwFlags, LPCSTR lpModuleName, HMODULE* phModule)
 {
+    // FROM_ADDRESS passes a code address in lpModuleName, not a string.
+    if ((dwFlags & GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS) != 0)
+        return o_K32_GetModuleHandleExA(dwFlags, lpModuleName, phModule);
+
     if (lpModuleName && dwFlags == 0 && strcmp("libxell.dll", lpModuleName) == 0 && phModule)
     {
         *phModule = dllModule;
@@ -204,6 +208,10 @@ BOOL WINAPI KernelHooks::hk_K32_GetModuleHandleExA(DWORD dwFlags, LPCSTR lpModul
 VALIDATE_HOOK(hk_K32_GetModuleHandleExW, Kernel32Proxy::PFN_GetModuleHandleExW)
 BOOL WINAPI KernelHooks::hk_K32_GetModuleHandleExW(DWORD dwFlags, LPCWSTR lpModuleName, HMODULE* phModule)
 {
+    // FROM_ADDRESS passes a code address in lpModuleName, not a string.
+    if ((dwFlags & GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS) != 0)
+        return o_K32_GetModuleHandleExW(dwFlags, lpModuleName, phModule);
+
     if (lpModuleName && dwFlags == GET_MODULE_HANDLE_EX_FLAG_PIN && lstrcmpW(L"nvapi64.dll", lpModuleName) == 0 &&
         phModule)
     {

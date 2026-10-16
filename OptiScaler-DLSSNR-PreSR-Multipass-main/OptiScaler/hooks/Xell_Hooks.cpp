@@ -10,6 +10,11 @@
 
 bool XellHooks::Hook()
 {
+#ifndef LOW_LATENCY_INPUTS
+    // Detouring libxell's exports makes MFG Unlocker set hostLatency and skip
+    // its frame-count unlock. XeLLProxy already calls the real exports.
+    return true;
+#else
     if (!XeLLProxy::InitXeLL())
         return false;
 
@@ -43,6 +48,7 @@ bool XellHooks::Hook()
     DetourTransactionCommit();
 
     return true;
+#endif
 }
 
 void XellHooks::setOurContext(xell_context_handle_t context) { ourContext = context; }
