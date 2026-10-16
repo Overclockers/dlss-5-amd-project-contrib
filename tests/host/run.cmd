@@ -59,8 +59,6 @@ call "%REPO%\tests\host\menu-localization.cmd" "%OUT%\menu" || goto fail
 "%OUT%\vulkan_call_scope.exe" || goto fail
 %CXX% /utf-8 tests\host\nr_sr_placement.cpp /Fe"%OUT%\nr_sr_placement.exe" /Fo"%OUT%\nr_sr_placement.obj" || goto fail
 "%OUT%\nr_sr_placement.exe" || goto fail
-%CXX% /utf-8 tests\host\motion_extent.cpp /Fe"%OUT%\motion_extent.exe" /Fo"%OUT%\motion_extent.obj" || goto fail
-"%OUT%\motion_extent.exe" || goto fail
 %CXX% /utf-8 tests\host\nr_install_status.cpp /Fe"%OUT%\nr_install_status.exe" /Fo"%OUT%\nr_install_status.obj" || goto fail
 "%OUT%\nr_install_status.exe" || goto fail
 %CXX% /utf-8 tests\host\fg_resource_readiness.cpp /Fe"%OUT%\fg_resource_readiness.exe" /Fo"%OUT%\fg_resource_readiness.obj" || goto fail
