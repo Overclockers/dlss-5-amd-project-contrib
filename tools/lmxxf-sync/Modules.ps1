@@ -12,6 +12,15 @@ function Get-FileSha256Hex([string]$filePath) {
     }
 }
 
+function Get-SourceSha256Hex([string]$filePath) {
+    # Git may normalize source text during commit/checkout. Match the audit's
+    # UTF-8/LF identity while retaining raw byte hashes for compiled objects.
+    $payload = [Text.Encoding]::UTF8.GetBytes([IO.File]::ReadAllText($filePath).Replace("`r`n", "`n"))
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return (-join ($sha.ComputeHash($payload) | ForEach-Object { $_.ToString('x2') })) }
+    finally { $sha.Dispose() }
+}
+
 function Get-TreeFingerprint([string]$dir, [string[]]$filters = @('*.hsaco')) {
     if (-not (Test-Path -LiteralPath $dir -PathType Container)) { return 'missing' }
     $resolvedDir = (Resolve-Path -LiteralPath $dir).Path.TrimEnd('\', '/')
@@ -42,13 +51,11 @@ function Get-TreeFingerprint([string]$dir, [string[]]$filters = @('*.hsaco')) {
     try {
         foreach ($file in $files) {
             $payload = [IO.File]::ReadAllBytes($file.FullName)
-            # A UTF-8 BOM is required for non-ASCII PowerShell on Windows 5.1, but it
-            # does not change a build recipe. Normalize only this encoding marker;
-            # every other script byte, HIP source byte and binary byte still counts.
-            if ($file.RelPath.EndsWith('.ps1') -and $payload.Length -ge 3 -and
-                $payload[0] -eq 0xef -and $payload[1] -eq 0xbb -and $payload[2] -eq 0xbf) {
-                if ($payload.Length -gt 3) { $payload = [byte[]]$payload[3..($payload.Length - 1)] }
-                else { $payload = [byte[]]::new(0) }
+            # Normalize only known text inputs. In particular, never decode an
+            # HSACO: a CRLF sequence in an object is part of its byte identity.
+            if ([IO.Path]::GetExtension($file.RelPath) -in @('.ps1', '.hip', '.inc', '.cpp', '.h') -or
+                [IO.Path]::GetFileName($file.RelPath) -ieq 'SHA256SUMS') {
+                $payload = [Text.Encoding]::UTF8.GetBytes([IO.File]::ReadAllText($file.FullName).Replace("`r`n", "`n"))
             }
             $nameBytes = [Text.Encoding]::UTF8.GetBytes($file.RelPath + ':' + $payload.Length + ':')
             $ms.Write($nameBytes, 0, $nameBytes.Length)

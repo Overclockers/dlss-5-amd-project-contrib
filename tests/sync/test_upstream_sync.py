@@ -403,15 +403,16 @@ class SyncTests(Fixture):
         write(script, ". '" + str(self.config / 'Modules.ps1').replace("'", "''") + "'\n"
               + "(Get-TreeFingerprint '" + str(self.vendor / 'hip').replace("'", "''")
               + "' @('*.hip','*.inc','build-modules.ps1','rtc_compile.cpp')) + ':' + "
-              + "(Get-FileSha256Hex '" + str(self.config / 'module-defines.json').replace("'", "''") + "')"
-              + ''.join(" + ':" + header + ":' + (Get-FileSha256Hex '"
+              + "(Get-SourceSha256Hex '" + str(self.config / 'module-defines.json').replace("'", "''") + "')"
+              + ''.join(" + ':" + header + ":' + (Get-SourceSha256Hex '"
                         + str(self.vendor / header).replace("'", "''") + "')"
                         for header in audit.read_json(self.config / 'manifest.json').get('module_headers', [])) + "\n")
         fp = subprocess.check_output([PS, '-NoProfile', '-File', str(script)], text=True).strip()
         state = audit.read_json(state_path)
         state['recipes_verified'] = fp
         write(state_path, json.dumps(state))
-        self.assertEqual(self.sync(allow_stale=False).returncode, 0)
+        verified = self.sync(allow_stale=False)
+        self.assertEqual(verified.returncode, 0, verified.stdout)
         self.pin_before = (self.vendor / 'UPSTREAM.md').read_bytes()
 
     def test_include_change_requires_modules_after_a_verified_baseline(self):
@@ -976,6 +977,46 @@ class AuditCliTests(Fixture):
         write(path, path.read_text(encoding='utf-8') + '\n// changed local integration\n')
         result = subprocess.run(command, capture_output=True, text=True)
         self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+
+
+@unittest.skipUnless(PS, 'PowerShell is required')
+class ModuleFingerprintTests(unittest.TestCase):
+    def test_checkout_text_normalization_preserves_binary_identity(self):
+        scratch = ROOT / 'work/scratch'
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=scratch) as temporary:
+            tree = Path(temporary)
+            source = tree / 'kernel.inc'
+            recipe = tree / 'build.ps1'
+            sums = tree / 'SHA256SUMS'
+            binary = tree / 'kernel.hsaco'
+            source.write_bytes(b'// source\n')
+            recipe.write_bytes(b'# recipe\n')
+            sums.write_bytes(b'1234 *kernel.hsaco\n')
+            binary.write_bytes(b'object\r\nbytes')
+
+            def fingerprint():
+                helper = (ROOT / 'tools/lmxxf-sync/Modules.ps1').as_posix().replace("'", "''")
+                directory = tree.as_posix().replace("'", "''")
+                command = (f". '{helper}'; Get-TreeFingerprint '{directory}' "
+                           "@('*.inc','*.ps1','*.hsaco','SHA256SUMS'); "
+                           f"Get-SourceSha256Hex '{directory}/kernel.inc'")
+                result = subprocess.run([PS, '-NoProfile', '-Command', command],
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                return result.stdout.splitlines()
+
+            baseline = fingerprint()
+            source.write_bytes(b'\xef\xbb\xbf// source\r\n')
+            recipe.write_bytes(b'\xef\xbb\xbf# recipe\r\n')
+            sums.write_bytes(b'1234 *kernel.hsaco\r\n')
+            self.assertEqual(fingerprint(), baseline)
+            binary.write_bytes(b'object\nbytes')
+            changed_binary = fingerprint()
+            self.assertNotEqual(changed_binary[0], baseline[0])
+            self.assertEqual(changed_binary[1], baseline[1])
+            source.write_bytes(b'// changed source\n')
+            self.assertNotEqual(fingerprint()[1], baseline[1])
 
 
 if __name__ == '__main__':

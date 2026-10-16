@@ -70,6 +70,7 @@ goto pass
 :release
 call :RunSplitState || goto fail
 call :RunInlineDiscard || goto fail
+call :RunNativeTemporal || goto fail
 goto warpSmoke
 
 :warp
@@ -80,8 +81,7 @@ call :RunDiagLifetime || goto fail
 "%OUT%\lmxxf_wrapped_command_list.exe" || goto fail
 %CXX% tests\lmxxf\lmxxf_temporal_control.cpp /Fe"%OUT%\lmxxf_temporal_control.exe" /Fo"%OUT%\lmxxf_temporal_control.obj" /link %D3D% d3dcompiler.lib || goto fail
 "%OUT%\lmxxf_temporal_control.exe" || goto fail
-%CXX% tests\lmxxf\lmxxf_native_temporal.cpp /Fe"%OUT%\lmxxf_native_temporal.exe" /Fo"%OUT%\lmxxf_native_temporal.obj" /link %D3D% d3dcompiler.lib || goto fail
-"%OUT%\lmxxf_native_temporal.exe" || goto fail
+call :RunNativeTemporal || goto fail
 %CXX% /I"%INC%" tests\lmxxf\lmxxf_legacy_root_capture.cpp /Fe"%OUT%\lmxxf_legacy_root_capture.exe" /Fo"%OUT%\lmxxf_legacy_root_capture.obj" /link %D3D% "%DETOURS%" || goto fail
 "%OUT%\lmxxf_legacy_root_capture.exe" || goto fail
 %CXX% tests\lmxxf\lmxxf_recording_timing.cpp /Fe"%OUT%\lmxxf_recording_timing.exe" /Fo"%OUT%\lmxxf_recording_timing.obj" /link %D3D% || goto fail
@@ -308,3 +308,8 @@ findstr /c:"output_hash=%EXPECT% " "%OUT%\nr_gpu_hash.txt" >nul || (
   exit /b 1
 )
 exit /b 0
+
+:RunNativeTemporal
+%CXX% tests\lmxxf\lmxxf_native_temporal.cpp /Fe"%OUT%\lmxxf_native_temporal.exe" /Fo"%OUT%\lmxxf_native_temporal.obj" /link %D3D% d3dcompiler.lib || exit /b 1
+"%OUT%\lmxxf_native_temporal.exe"
+exit /b %errorlevel%

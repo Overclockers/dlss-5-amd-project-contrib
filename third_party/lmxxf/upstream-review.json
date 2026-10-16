@@ -2,19 +2,19 @@
   "schema": 1,
   "from_commit": "48a41fccb89300cd6636b16bc7b86010384c4cc1",
   "to_commit": "3a1be68c35dbac7d7edeb2073723e82076bb1a39",
-  "snapshot": "5e5a47e1c8fb12c6969d425f11908e7b377712ba5037bd55c40128fab9c146be",
+  "snapshot": "ade2c20e1a816f1f8076860ea168789a26432f73e8e16331fc8c136a42ea4f97",
   "reviewer": "Kenny + Codex",
   "summary": "Full 0.4.2 upstream integration (48a41fcc -> 3a1be68c): synced HIP/runtime sources and Temporal Mode 2/3 headers, wired Mode 2 (low-frequency stabilization) and Mode 3 (single-pass residual enhancement + strength 0..2) into LmxxfNrRuntime/LmxxfBackend/Config/Menu/INI on the caller recording command list, rebuilt all 80 gfx1200/gfx1201 .hsaco modules (including 12 LLVM 23.1.2 wave1/wave2 modules and new c512-m32-deep/compact QKV/W16/inter-byte layouts), and verified module contract, WARP, Temporal Mode 2/3, and RX 9070 XT GPU execution.",
   "validation": "Dual-architecture 80-module rebuild (12 LLVM 23.1.2 prebuilt + 68 COMGR across gfx1200/gfx1201) from 3a1be68c, LmxxfNrRuntime.dll and OptiScaler.dll Release x64 builds, check-module-contract.ps1 (40 per arch / 80 dual), lmxxf ABI/WARP/native_temporal (Modes 0/2/3 + enhance strength 0..2), test_config_priority.py, and RX 9070 XT GPU fixed-frame oracle passed. Exact hashes and results in docs/lmxxf-042-consumer-review.md.",
   "decisions": [
     {
       "id": "integration",
-      "fingerprint": "e46bd0aadcb6946b823f3938361108847257c6d075acbc3f01a2ccc2c728fe63",
+      "fingerprint": "fbbbde2dfdf94fac8d2754c0e5798e6c4f90b154e74ef59cc9f9c24991415e74",
       "classification": "production",
       "decision": "deferred",
       "reason": "0.4.2 upstream sources (3a1be68c), all 80 gfx1200/gfx1201 HIP modules (including 12 LLVM 23.1.2 prebuilts), and Temporal Mode 2/3 + Enhance Strength 0..2 are integrated and verified. Project-level in-game/long-run and submit_pulse deferrals remain tracked.",
       "evidence": "docs/lmxxf-042-consumer-review.md; docs/decisions.md; docs/lmxxf-inline-slots.md",
-      "validation": "Dual-architecture 80-module rebuild (12 LLVM 23.1.2 prebuilt + 68 COMGR across gfx1200/gfx1201) from 3a1be68c, LmxxfNrRuntime.dll and OptiScaler.dll Release x64 builds, check-module-contract.ps1 (40 per arch / 80 dual), lmxxf ABI/WARP/native_temporal (Modes 0/2/3 + enhance strength 0..2), test_config_priority.py, and RX 9070 XT GPU fixed-frame oracle passed. Exact hashes and results in docs/lmxxf-042-consumer-review.md.",
+      "validation": "Dual-architecture 80-module rebuild (12 LLVM 23.1.2 prebuilt + 68 COMGR across gfx1200/gfx1201) from 3a1be68c, LmxxfNrRuntime.dll and OptiScaler.dll Release x64 builds, check-module-contract.ps1 (40 per arch / 80 dual), lmxxf ABI/WARP/native_temporal (Modes 0/2/3 + enhance strength 0..2), test_config_priority.py, and RX 9070 XT GPU fixed-frame oracle passed. Exact hashes and results in docs/lmxxf-042-consumer-review.md. Follow-up release review: canonical UTF-8/LF text fingerprints tested under Windows PowerShell 5.1 and PowerShell 7; raw HSACO byte changes remain detectable. The 80-module rebuild matches the previously committed object bytes; release-tier native temporal WARP and full host ci pass.",
       "next_step": "Cold-start Crimson Desert with a matching ABI6 complete package, NrInline and LmxxfAllowEnhancedBarriers; compare split and 1-5 slots in the same scene/session, checking pixels, displayed pacing, queries/layouts and long-run VRAM/retained recordings. Exercise varying external exposure/motion/depth, more model/pass/numeric/extent combinations and other adapters/drivers. Preserve person-partition semantic-mask and first-pass acceptance deferrals. Rebuild full Mochizuki source/shader package before release; authoritative release regression remains GitHub Actions. Trace sustained Mochizuki FLOAT graphics/compute segments with concurrent game waits; reproduce same-format full-compute/forced-segment differences. Validate any fix without losing HDR/FLOAT precision, temporal behavior or first-pass exports; complete native/ACO forward/reverse and paced performance matrices before claiming its inline performance accepted. GPU-armed capture-proof research is stopped by user decision; resume only when requested, within the documented 90-minute/2-hour limit, with <=3% throughput gap and proven failure-path input/history safety. Preserve all other existing deferrals."
     },
     {
@@ -31075,6 +31075,16 @@
       "reason": "Not in build-modules.ps1 recipe defines, not an implicit recipe candidate, and not a source #define 1.",
       "evidence": "docs/lmxxf-042-consumer-review.md#保持关闭",
       "validation": "",
+      "next_step": ""
+    },
+    {
+      "id": "modules:external",
+      "fingerprint": "55bbf5ffca04d3447bc9cb75a332a457ffc9c3bb92769f2ab7e3ef1b965dd8d1",
+      "classification": "production",
+      "decision": "integrated",
+      "reason": "Reuse only the dual-architecture output actually rebuilt in this checkout from pinned 3a1be68c during release review; it is not an unrelated external module package.",
+      "evidence": "docs/lmxxf-042-consumer-review.md#发布前来源复核；tools/lmxxf-sync/Modules.ps1；third_party/lmxxf/modules/*/modules.json",
+      "validation": "Rebuilt 68 COMGR objects and validated 12 LLVM 23.1.2 prebuilts against generated-source hashes, recorded defines and compiler commands. All 80 object SHA256 values match the pre-review committed binaries. Leaf/root checksums and module metadata validate; Normal sync completed runtime compilation under the standard MSVC/SDK environment and marked reviewed with matching recomputed recipe/module fingerprints. No validation waivers used.",
       "next_step": ""
     }
   ]

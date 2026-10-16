@@ -212,9 +212,9 @@ try {
     $dstModules = Join-Path $vendorRoot 'modules'
     $hipFilters = @('*.hip', '*.inc', 'build-modules.ps1', 'rtc_compile.cpp')
     function Get-RecipeFingerprint {
-        $fp = (Get-TreeFingerprint $dstHip $hipFilters) + ':' + (Get-FileSha256Hex (Join-Path $configRoot 'module-defines.json'))
+        $fp = (Get-TreeFingerprint $dstHip $hipFilters) + ':' + (Get-SourceSha256Hex (Join-Path $configRoot 'module-defines.json'))
         foreach ($path in $manifest.module_headers) {
-            $fp += ':' + $path + ':' + (Get-FileSha256Hex (Join-Path $vendorRoot $path))
+            $fp += ':' + $path + ':' + (Get-SourceSha256Hex (Join-Path $vendorRoot $path))
         }
         $fp
     }
