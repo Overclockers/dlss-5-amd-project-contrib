@@ -226,11 +226,11 @@ for %%M in ("" "--resize" "--queue-mismatch" "--rgb9e5" "--reject-formats" "--ex
 %CXX% /I"%RT_INC%" /I"OptiScaler-DLSSNR-PreSR-Multipass-main\OptiScaler\include" tests\lmxxf\lmxxf_recording_runtime_gpu.cpp /Fe"%OUT%\lmxxf_recording_runtime_gpu.exe" /Fo"%OUT%\lmxxf_recording_runtime_gpu.obj" /link d3d12.lib dxgi.lib dxguid.lib "OptiScaler-DLSSNR-PreSR-Multipass-main\OptiScaler\library\detours\detours.lib" || goto fail
 "%OUT%\lmxxf_recording_runtime_gpu.exe" "%LMXXF_TEST_RUNTIME%" "%MODS%" || goto fail
 rem Output-hash baselines: fixed pattern, 1920x1080, seed 1 (RX 9070 XT, this weights set).
-rem Re-baselined 2026-09-29 for c0a6196 FMA/fusion stack (see docs/lmxxf-039-consumer-review.md).
-call :Hash fe40c904da05472e --output-hash || goto fail
-call :Hash 79233836b6257864 --auto-exposure || goto fail
-call :Hash 79233836b6257864 --auto-exposure --scale16 || goto fail
-call :Hash 8ba14ef2db0dddfe --r10g10b10a2 || goto fail
+rem Re-baselined 2026-10-16 for 3a1be68c 0.4.2 W16/inter-byte/compact-QKV stack (see docs/lmxxf-042-consumer-review.md).
+call :Hash f05d0177e0a82a9a --output-hash || goto fail
+call :Hash b849c8ff3d30e462 --auto-exposure || goto fail
+call :Hash b849c8ff3d30e462 --auto-exposure --scale16 || goto fail
+call :Hash 10d1507268da9a75 --r10g10b10a2 || goto fail
 cl /nologo /std:c++17 /EHsc /W4 /utf-8 /DNOMINMAX /D_WIN32_WINNT=0x0A00 /I"%REPO%\third_party\lmxxf\Development\HIP" /I"%REPO%\third_party\lmxxf\src" tests\lmxxf\lmxxf_bridge_recording_gpu.cpp /Fe"%OUT%\lmxxf_bridge_recording_gpu.exe" /Fo"%OUT%\lmxxf_bridge_recording_gpu.obj" /link d3d12.lib dxgi.lib user32.lib || goto fail
 "%OUT%\lmxxf_bridge_recording_gpu.exe" "%LMXXF_ASSETS%" "%MODS%" || goto fail
 "%OUT%\lmxxf_bridge_recording_gpu.exe" "%LMXXF_ASSETS%" "%MODS%" --adaptive-reset || goto fail

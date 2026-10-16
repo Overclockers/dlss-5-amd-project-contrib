@@ -92,6 +92,87 @@ static void CheckDispatchCoverage(Gpu& g,unsigned w,unsigned h,unsigned ph,bool 
     }
     g.NoErrors();std::printf("native temporal dispatch coverage PASS %ux%u processing=%ux%u direct=%d\n",w,h,w,ph,int(direct));
 }
+static void CheckLowFrequencyMode2AndMode3(Gpu& g)
+{
+    constexpr unsigned w=16,h=16,ph=16,n=w*ph;
+    auto motion=g.Texture(w,h,DXGI_FORMAT_R32G32_FLOAT);
+    std::vector<float> zeroMotion(n*2,0.0f);
+    g.Upload(motion.Get(),zeroMotion);
+    auto raw=g.Buffer(UINT64(n)*16),output=g.Buffer(UINT64(n)*16);
+
+    std::vector<float> rawPixels(size_t(n)*4,0.25f);
+    for(unsigned i=0;i<n;++i) rawPixels[i*4+3]=1.0f;
+    g.Upload(raw.Get(),rawPixels);
+
+    LmxxfNativeTemporal::LowFrequency lowFreq;
+    lowFreq.Create(g.device.Get(),w,h,ph);
+    auto binding=lowFreq.Binding(g.device.Get(),motion.Get());
+    LmxxfRuntime::TemporalControl control;
+    control.Create(g.device.Get());
+    std::vector<std::shared_ptr<LmxxfRuntime::RecordingCompletion>> jobs,chain;
+
+    // Mode 2: low-frequency stabilization (enhance = 0)
+    std::vector<float> frame0(size_t(n)*3,0.35f);
+    std::vector<float> frame1(size_t(n)*3,0.40f);
+    g.Upload(output.Get(),frame0);
+
+    LmxxfNativeTemporal::LowFrequencyParameters p2{};
+    p2.width=w; p2.height=h; p2.processingHeight=ph;
+    p2.past=0; p2.motionWidth=w; p2.motionHeight=h;
+    p2.motion=1; p2.enhance=0; p2.scaleX=1.0f; p2.scaleY=1.0f;
+    p2.memory=0.88f; p2.strength=0.0f;
+
+    const auto runLowFreq=[&](const LmxxfNativeTemporal::LowFrequencyParameters& params){
+        control.Submit(g.device.Get(),g.queue.Get(),&params,sizeof(params),jobs,chain);
+        g.Run([&](auto*cmd){lowFreq.RecordOutputs(cmd,raw.Get(),output.Get(),ReadState,motion.Get(),ReadState,binding.Get(),control.Address());});
+    };
+
+    runLowFreq(p2);
+    const auto mode2Prime=g.Read(output.Get());
+    for(unsigned i=0;i<n*3;++i) {
+        Require(std::abs(mode2Prime[i]-frame0[i])<1e-6f,"mode 2 priming leaves output unchanged");
+    }
+
+    p2.past=1;
+    g.Upload(output.Get(),frame1);
+    runLowFreq(p2);
+    const auto mode2Out=g.Read(output.Get());
+    const unsigned center=(h/2)*w+(w/2);
+    for(unsigned c=0;c<3;++c) {
+        Require(mode2Out[center*3+c]>0.35f && mode2Out[center*3+c]<0.40f,"mode 2 active stabilizes interior low-frequency step change");
+    }
+
+    // Mode 3: single-pass residual enhancement (enhance = 1)
+    std::vector<float> enhFrame0(size_t(n)*3);
+    std::vector<float> enhFrame1(size_t(n)*3);
+    for(unsigned i=0;i<n;++i) {
+        const float v0 = 0.35f + ((i % 2 == 0) ? 0.04f : -0.04f);
+        const float v1 = 0.37f + ((i % 2 == 0) ? 0.05f : -0.05f);
+        for(unsigned c=0;c<3;++c) {
+            enhFrame0[i*3+c]=v0;
+            enhFrame1[i*3+c]=v1;
+        }
+    }
+    LmxxfNativeTemporal::LowFrequencyParameters p3 = p2;
+    p3.past=0; p3.enhance=1; p3.memory=0.72f; p3.strength=0.0f;
+    g.Upload(output.Get(),enhFrame0);
+    runLowFreq(p3);
+    const auto mode3Zero=g.Read(output.Get());
+    for(unsigned i=0;i<n*3;++i) {
+        Require(std::abs(mode3Zero[i]-enhFrame0[i])<1e-5f,"mode 3 zero strength leaves output unchanged");
+    }
+
+    p3.past=1; p3.strength=1.2f;
+    g.Upload(output.Get(),enhFrame1);
+    runLowFreq(p3);
+    const auto mode3Strong=g.Read(output.Get());
+    bool anyDiff=false;
+    for(unsigned i=0;i<n*3;++i) {
+        if(std::abs(mode3Strong[i]-enhFrame1[i])>1e-4f) anyDiff=true;
+    }
+    Require(anyDiff,"mode 3 positive strength applies temporal residual enhancement");
+    std::printf("native temporal mode 2/3 PASS: priming, stabilization, enhance strength\n");
+}
 int main(int argc,char** argv)try
 {
     Require(argc==1||(argc==2&&std::strcmp(argv[1],"--hardware")==0),"usage: lmxxf_native_temporal [--hardware]");
@@ -158,5 +239,6 @@ int main(int argc,char** argv)try
     CheckDispatchCoverage(g,65,3,4,true);
     CheckDispatchCoverage(g,3456,1440,1472,true); // Free-resolution 3440x1440 input.
     CheckDispatchCoverage(g,3840,2160,2176,true);
-    g.NoErrors();std::printf("native temporal %s PASS: distinct pre/post motion, 5tap, edges, reversed depth, post model feedback, zero recovery/reset/fit, dispatch coverage\n",argc==2?"GPU":"WARP");return 0;
+    CheckLowFrequencyMode2AndMode3(g);
+    g.NoErrors();std::printf("native temporal %s PASS: distinct pre/post motion, 5tap, edges, reversed depth, post model feedback, zero recovery/reset/fit, dispatch coverage, mode 2/3\n",argc==2?"GPU":"WARP");return 0;
 }catch(const std::exception&e){std::fprintf(stderr,"FAIL: %s\n",e.what());return 1;}

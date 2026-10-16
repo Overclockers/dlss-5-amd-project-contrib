@@ -32,6 +32,6 @@
                     "gfx1200",
                     "gfx1201"
                 ],
-    "upstream_commit":  "48a41fccb89300cd6636b16bc7b86010384c4cc1",
+    "upstream_commit":  "3a1be68c35dbac7d7edeb2073723e82076bb1a39",
     "compiler":  "System32 amd_comgr_3.dll via hip/rtc_compile.exe (no HIP SDK); 12 upstream LLVM23 prebuilt modules (per-module provenance in modules.json)"
 }

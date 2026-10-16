@@ -689,7 +689,11 @@ ID3D12Resource* LmxxfBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, const
     logical->Release();
     const bool inlineMode = Config::Instance()->NrInline.value_or_default();
     InlineRecording::StateScope inlineState;
-    const bool inlineGuides = Config::Instance()->LmxxfModelHistory.value_or_default();
+    const uint32_t temporalMode = Config::Instance()->LmxxfTemporalMode.has_value()
+                                      ? Config::Instance()->LmxxfTemporalMode.value()
+                                      : (Config::Instance()->LmxxfModelHistory.value_or_default() ? 1u : 0u);
+    const bool inlineMotion = (temporalMode == 1u) || (temporalMode != 0u && frame.temporalInputsValid);
+    const bool inlineDepth = (temporalMode == 1u);
     if (ineligible && !inlineMode)
     {
         char status[128] {};
@@ -709,12 +713,12 @@ ID3D12Resource* LmxxfBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, const
     }
     // Both submission modes normalize only the inputs consumed by the runtime.
     // In split mode the scope restores the game bindings/layouts on the continuation.
-    if (FAILED(inlineState.Begin(cmd, frame, inlineGuides, inlineGuides,
+    if (FAILED(inlineState.Begin(cmd, frame, inlineMotion, inlineDepth,
                                 IsUsableExposureTexture(frame.exposure), !inlineMode))) {
         SetStatus((std::string("lmxxf: input state unavailable: ") + inlineState.Reason() + " (NO NR)").c_str());
         static unsigned rejectedInput = 0;
         if (++rejectedInput <= 5 || rejectedInput % 1000 == 0)
-            inlineState.TraceFailure("lmxxf", frameId, cmd, frame, inlineGuides, inlineGuides,
+            inlineState.TraceFailure("lmxxf", frameId, cmd, frame, inlineMotion, inlineDepth,
                                      IsUsableExposureTexture(frame.exposure));
         return nullptr;
     }
@@ -770,7 +774,7 @@ ID3D12Resource* LmxxfBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, const
     fi.motion_height=frame.motionHeight?frame.motionHeight:fi.color_height;
     fi.motion_scale_x=frame.motionScaleX;fi.motion_scale_y=frame.motionScaleY;
     fi.jitter_x=frame.jitterX;fi.jitter_y=frame.jitterY;
-    fi.temporal_flags=(Config::Instance()->LmxxfModelHistory.value_or_default()?LMXXF_NR_TEMPORAL_MODEL_HISTORY:0u)|
+    fi.temporal_flags=((temporalMode != 0u)?LMXXF_NR_TEMPORAL_MODEL_HISTORY:0u)|
         (frame.reset?LMXXF_NR_TEMPORAL_RESET:0u)|(frame.motionJittered?LMXXF_NR_TEMPORAL_MV_JITTERED:0u)|
         (frame.depthInverted?LMXXF_NR_TEMPORAL_DEPTH_INVERTED:0u)|(frame.temporalInputsValid?LMXXF_NR_TEMPORAL_INPUTS_VALID:0u);
 

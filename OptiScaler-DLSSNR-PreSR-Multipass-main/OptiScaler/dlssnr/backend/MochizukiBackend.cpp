@@ -454,6 +454,7 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
             inlineResources->spinPollDelay = pd == 16 || pd == 64 ? UINT(pd) : 0u;
             inlineResources->spinSlices = slA == 256 || slA == 1024 ? UINT(slA) : 0u;
             inlineResources->measureActive = armed && p->owner->autoSpin.ShouldMeasure();
+            inlineResources->measureGpuStamps = armed && p->owner->autoSpin.ShouldMeasureGpuStamps();
             inlineResources->autoSpinEpoch = p->owner->autoSpin.CurrentEpoch();
 
             FrameDiag::Begin(inlineResources->diag, "mochizuki", frameId, frame.color_width, frame.color_height, OPTI_VERSION);

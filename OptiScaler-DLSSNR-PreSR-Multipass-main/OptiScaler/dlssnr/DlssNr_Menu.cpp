@@ -1131,6 +1131,12 @@ void RenderMenu(Config* config, float menuResScale)
             };
             auto resetVit = [&]() {
                 resetOption(config->LmxxfModelHistory);
+                resetOption(config->LmxxfTemporalMode);
+                CfgKey::PutEnvString(CfgKey::TemporalMode, std::to_string(config->LmxxfTemporalMode.value_or_default()).c_str());
+                resetOption(config->LmxxfTemporalEnhanceStrength);
+                char strengthBuf[32];
+                snprintf(strengthBuf, sizeof strengthBuf, "%g", config->LmxxfTemporalEnhanceStrength.value_or_default());
+                CfgKey::PutEnvString(CfgKey::TemporalEnhanceStrength, strengthBuf);
                 resetOption(config->LmxxfVitProjN64);
                 CfgKey::PutEnvAlias(CfgKey::VitProjN64, config->LmxxfVitProjN64.value_or_default());
                 resetOption(config->LmxxfVitStream);
@@ -1488,17 +1494,41 @@ void RenderMenu(Config* config, float menuResScale)
                                "\nEnabling ViT byte stream turns off adaptive reuse."
                                "\nApplies on the next network rebuild.");
                 }
-                bool history = config->LmxxfModelHistory.value_or_default();
-                if (MenuUi::Checkbox("Temporal history (anti-flicker)", &history)) {
-                    config->LmxxfModelHistory = history;
+                int temporalMode = config->LmxxfTemporalMode.has_value()
+                                       ? static_cast<int>(*config->LmxxfTemporalMode)
+                                       : (config->LmxxfModelHistory.value_or_default() ? 1 : 0);
+                if (temporalMode < 0 || temporalMode > 3)
+                    temporalMode = 1;
+                if (MenuUi::Combo("Temporal mode", &temporalMode,
+                                  "Off\0Full model history (Mode 1)\0Low-frequency (Mode 2)\0Residual enhance (Mode 3)\0"))
+                {
+                    config->LmxxfTemporalMode = static_cast<uint32_t>(temporalMode);
+                    config->LmxxfModelHistory = (temporalMode != 0);
+                    char modeBuf[8];
+                    snprintf(modeBuf, sizeof modeBuf, "%d", temporalMode);
+                    CfgKey::PutEnvString(CfgKey::TemporalMode, modeBuf);
                     AmdBridge::InvalidateHistory();
                 }
-                HelpMarker("Reprojects the previous model output and uses the model's temporal blend."
-                           "\nMay reduce brightness flicker, but can add ghosting, soften moving detail and increase GPU cost."
-                           "\nSupports 1-3 passes before upscaling with valid motion/depth guides.\nPredicted pass 3 uses the last real pass's temporal weight."
-                           "\nTemporarily disables ViT adaptive reuse to avoid flicker; your reuse settings are retained."
-                           "\nUnsupported combinations keep your settings and run without history. Default: on.");
-                const bool historyBlocksReuse = history;
+                HelpMarker("Selects the lmxxf temporal history path:"
+                           "\n- Off (0): Single-frame inference without temporal history."
+                           "\n- Full model history (1, default): Reprojects previous model output with depth/motion warp and model temporal blend (1-3 passes before SR)."
+                           "\n- Low-frequency (2): Motion-guided low-frequency temporal stabilization on single-pass output before SR."
+                           "\n- Residual enhance (3): Motion-guided single-pass residual temporal enhancement before SR."
+                           "\nActive temporal modes temporarily disable ViT adaptive reuse to avoid flicker; your reuse settings are retained."
+                           "\nUnsupported combinations keep your settings and run without history.");
+                if (temporalMode == 3)
+                {
+                    float enhanceStrength = config->LmxxfTemporalEnhanceStrength.value_or_default();
+                    if (MenuUi::SliderFloat("Enhance strength", &enhanceStrength, 0.0f, 2.0f, "%.2f"))
+                    {
+                        config->LmxxfTemporalEnhanceStrength = enhanceStrength;
+                        char strengthBuf[32];
+                        snprintf(strengthBuf, sizeof strengthBuf, "%g", enhanceStrength);
+                        CfgKey::PutEnvString(CfgKey::TemporalEnhanceStrength, strengthBuf);
+                    }
+                    HelpMarker("Residual temporal enhancement gain for Mode 3 (0.00..2.00, default 1.00).");
+                }
+                const bool historyBlocksReuse = (temporalMode != 0);
                 bool adapt = !historyBlocksReuse && config->LmxxfVitAdaptive.value_or_default();
                 ImGui::BeginDisabled(historyBlocksReuse);
                 if (MenuUi::Checkbox("ViT adaptive reuse", &adapt))

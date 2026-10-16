@@ -255,7 +255,7 @@ if (!(Test-Path $iniSrc)) { throw "Missing $iniSrc" }
 $ini = Get-Content -LiteralPath $iniSrc -Raw -Encoding UTF8
 $mochizukiDefaults = ([regex]::Matches($ini, '(?m)(?:^;[^\r\n]*\r?\n)*^Mochizuki\w+=[^\r\n]*') | ForEach-Object { $_.Value }) -join "`n"
 if (-not $mochizukiDefaults) { throw 'Mochizuki defaults missing from the source ini template.' }
-$lmxxfHistoryDefaults = [regex]::Match($ini, '(?m)(?:^;[^\r\n]*\r?\n)*^LmxxfModelHistory=[^\r\n]*').Value
+$lmxxfHistoryDefaults = ([regex]::Matches($ini, '(?m)(?:^;[^\r\n]*\r?\n)*^(?:LmxxfModelHistory|DLSS5_TEMPORAL_MODE|DLSS5_TEMPORAL_ENHANCE_STRENGTH)=[^\r\n]*') | ForEach-Object { $_.Value }) -join "`n"
 if (-not $lmxxfHistoryDefaults) { throw 'Native history default/comments missing from the source ini template.' }
 $ini = $ini -replace '(?m)^Dx12Upscaler=.*$', 'Dx12Upscaler=ffx'
 $ini = $ini -replace '(?m)^LogToFile=.*$', 'LogToFile=true'

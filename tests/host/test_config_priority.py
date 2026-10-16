@@ -301,9 +301,26 @@ int main() {
         self.assertRegex(ini, r"(?m)^NrSpinPollDelay=auto$")
         self.assertRegex(ini, r"(?m)^NrSpinSlices=auto$")
 
+    def test_temporal_mode_and_enhance_strength_contract(self):
+        product = ROOT / "OptiScaler-DLSSNR-PreSR-Multipass-main"
+        header = (product / "OptiScaler/Config.h").read_text(encoding="utf-8")
+        ini = (product / "OptiScaler.ini").read_text(encoding="utf-8")
+        self.assertIn('TemporalMode = "DLSS5_TEMPORAL_MODE"', KEYS)
+        self.assertIn('TemporalEnhanceStrength = "DLSS5_TEMPORAL_ENHANCE_STRENGTH"', KEYS)
+        self.assertIn("    TemporalMode,", KEYS.split("kKnown[]", 1)[1])
+        self.assertIn("    TemporalEnhanceStrength,", KEYS.split("kKnown[]", 1)[1])
+        self.assertIn("CustomOptional<uint32_t> LmxxfTemporalMode { 1u };", header)
+        self.assertIn("CustomOptional<float> LmxxfTemporalEnhanceStrength { 1.0f };", header)
+        self.assertIn("PutEnvString(CfgKey::TemporalMode", CONFIG)
+        self.assertIn("PutEnvString(CfgKey::TemporalEnhanceStrength", CONFIG)
+        self.assertIn("ini.SetValue(CfgKey::kSection, CfgKey::TemporalMode", CONFIG)
+        self.assertIn("ini.SetValue(CfgKey::kSection, CfgKey::TemporalEnhanceStrength", CONFIG)
+        self.assertRegex(ini, r"(?m)^DLSS5_TEMPORAL_MODE=1$")
+        self.assertRegex(ini, r"(?m)^DLSS5_TEMPORAL_ENHANCE_STRENGTH=1\.0$")
+
     def test_menu_labels_are_not_ini_keys(self):
         # Display strings must not appear as SetValue / CfgKey string literals.
-        for label in ("High resolution", "Network tier", "Wave-owned attention", "ViT adaptive reuse", "Inline auto-tuning", "Spin poll delay", "Game wait dispatches"):
+        for label in ("High resolution", "Network tier", "Wave-owned attention", "ViT adaptive reuse", "Inline auto-tuning", "Spin poll delay", "Game wait dispatches", "Temporal mode", "Enhance strength"):
             self.assertNotIn(f'"{label}"', CONFIG)
             self.assertNotIn(f'"{label}"', KEYS)
 

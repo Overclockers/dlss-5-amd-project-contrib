@@ -215,6 +215,8 @@ inline constexpr const char *MochizukiPass3AutomaticMask = "MochizukiPass3Automa
 inline constexpr const char *NetworkHeight = "DLSS5_NETWORK_HEIGHT";
 inline constexpr const char *Network1080Rows = "DLSS5_NETWORK_1080_ROWS";
 inline constexpr const char *LmxxfModelHistory = "LmxxfModelHistory";
+inline constexpr const char *TemporalMode = "DLSS5_TEMPORAL_MODE";
+inline constexpr const char *TemporalEnhanceStrength = "DLSS5_TEMPORAL_ENHANCE_STRENGTH";
 inline constexpr const char *LmxxfStyle = "DLSS5_STYLE";
 inline constexpr const char *FormatFallback = "DLSS5_FORMAT_FALLBACK";
 inline constexpr const char *SkipBlocks = "DLSS5_SKIP_BLOCKS";
@@ -523,6 +525,8 @@ inline constexpr const char *const kKnown[] = {
     MultiPassSkipBlocks,
     Network1080Rows,
     LmxxfModelHistory,
+    TemporalMode,
+    TemporalEnhanceStrength,
     LmxxfStyle,
     FormatFallback,
     SkipBlocks,

@@ -1,6 +1,7 @@
 #pragma once
 #include "TemporalSupport.h"
 #include "../../../../../third_party/lmxxf/src/native_shader_cache.h"
+#include "../../../../../third_party/lmxxf/src/native_low_frequency_shader.h"
 #include <wrl/client.h>
 #include <vector>
 
@@ -288,4 +289,150 @@ public:
     ID3D12Resource *Warped() const { return preWarp; }
     ID3D12Resource *PostWarped() const { return postWarp; }
 };
+
+struct LowFrequencyParameters
+{
+    UINT width{}, height{}, processingHeight{}, past{};
+    UINT motionWidth{1}, motionHeight{1}, motion{}, enhance{};
+    float scaleX{}, scaleY{}, memory{0.85f}, strength{1.0f};
+    UINT reserved[4]{};
+};
+static_assert(sizeof(LowFrequencyParameters)==64);
+
+class LowFrequency
+{
+    ID3D12Resource *difference{}, *observed{}, *observationGuide{};
+    ID3D12Resource *priorBand{}, *priorGuide{}, *nextBand{}, *nextGuide{};
+    ID3D12RootSignature *root{};
+    ID3D12PipelineState *extract{}, *observe{}, *update{};
+    ID3D12DescriptorHeap *nullMotionHeap{};
+    UINT width{}, height{}, processingHeight{};
+
+    static ID3D12Resource *Buffer(ID3D12Device *device, UINT64 bytes)
+    {
+        D3D12_HEAP_PROPERTIES hp{}; hp.Type=D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER; desc.Width=bytes; desc.Height=1;
+        desc.DepthOrArraySize=desc.MipLevels=1; desc.SampleDesc.Count=1;
+        desc.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR; desc.Flags=D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        ID3D12Resource *r=nullptr;
+        Check(device->CreateCommittedResource(&hp,D3D12_HEAP_FLAG_NONE,&desc,
+              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,nullptr,IID_PPV_ARGS(&r)),"low-frequency buffer");
+        return r;
+    }
+    void Bind(ID3D12GraphicsCommandList *cmd, ID3D12Resource *raw, ID3D12Resource *output, ID3D12DescriptorHeap *heap, D3D12_GPU_VIRTUAL_ADDRESS control)
+    {
+        ID3D12DescriptorHeap *bindHeap = heap ? heap : nullMotionHeap;
+        cmd->SetDescriptorHeaps(1,&bindHeap);
+        cmd->SetComputeRootSignature(root);
+        cmd->SetComputeRootDescriptorTable(0,bindHeap->GetGPUDescriptorHandleForHeapStart());
+        ID3D12Resource *srvs[]={raw,difference,observed,observationGuide,priorBand,priorGuide};
+        for(UINT i=0;i<6;++i) cmd->SetComputeRootShaderResourceView(1+i,srvs[i]->GetGPUVirtualAddress());
+        ID3D12Resource *uavs[]={difference,observed,observationGuide,nextBand,nextGuide,output};
+        for(UINT i=0;i<6;++i) cmd->SetComputeRootUnorderedAccessView(7+i,uavs[i]->GetGPUVirtualAddress());
+        cmd->SetComputeRootConstantBufferView(13,control);
+    }
+public:
+    LowFrequency()=default;
+    LowFrequency(const LowFrequency&)=delete;
+    ~LowFrequency()
+    {
+        for(auto *r:{difference,observed,observationGuide,priorBand,priorGuide,nextBand,nextGuide}) if(r) r->Release();
+        if(nullMotionHeap) nullMotionHeap->Release();
+        if(root) root->Release();
+        for(auto *p:{extract,observe,update}) if(p) p->Release();
+    }
+    bool Matches(UINT w,UINT h,UINT ph) const { return width==w && height==h && processingHeight==ph; }
+    void Create(ID3D12Device *device, UINT w, UINT h, UINT ph, NativeShaderCompiler* compiler=nullptr)
+    {
+        if(root||difference||!device||!w||!h||ph<h||UINT64(ph)>=UINT64(h)*2||UINT64(w)*ph>UINT_MAX/16)
+            throw std::runtime_error("low-frequency initialization/geometry contract");
+        width=w; height=h; processingHeight=ph;
+        const UINT64 n=UINT64(w)*h, coarse=UINT64((w+1)/2)*((h+1)/2);
+        difference=Buffer(device,n*16);
+        observed=Buffer(device,coarse*8);
+        observationGuide=Buffer(device,coarse*8);
+        priorBand=Buffer(device,n*8);
+        priorGuide=Buffer(device,n*8);
+        nextBand=Buffer(device,n*8);
+        nextGuide=Buffer(device,n*8);
+        D3D12_DESCRIPTOR_HEAP_DESC hd{D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,1,D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,0};
+        Check(device->CreateDescriptorHeap(&hd,IID_PPV_ARGS(&nullMotionHeap)),"low-frequency null heap");
+        D3D12_SHADER_RESOURCE_VIEW_DESC sv{};
+        sv.Format=DXGI_FORMAT_R32G32_FLOAT;
+        sv.ViewDimension=D3D12_SRV_DIMENSION_TEXTURE2D;
+        sv.Shader4ComponentMapping=D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        sv.Texture2D.MipLevels=1;
+        device->CreateShaderResourceView(nullptr,&sv,nullMotionHeap->GetCPUDescriptorHandleForHeapStart());
+        D3D12_DESCRIPTOR_RANGE range{D3D12_DESCRIPTOR_RANGE_TYPE_SRV,1,0,0,0};
+        D3D12_ROOT_PARAMETER params[14]{};
+        params[0].ParameterType=D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; params[0].DescriptorTable={1,&range};
+        for(UINT i=0;i<6;++i) {
+            params[1+i].ParameterType=D3D12_ROOT_PARAMETER_TYPE_SRV; params[1+i].Descriptor.ShaderRegister=1+i;
+            params[7+i].ParameterType=D3D12_ROOT_PARAMETER_TYPE_UAV; params[7+i].Descriptor.ShaderRegister=i;
+        }
+        params[13].ParameterType=D3D12_ROOT_PARAMETER_TYPE_CBV; params[13].Descriptor.ShaderRegister=0;
+        D3D12_ROOT_SIGNATURE_DESC desc{}; desc.NumParameters=14; desc.pParameters=params;
+        ID3DBlob *blob=nullptr,*error=nullptr;
+        HRESULT hr=D3D12SerializeRootSignature(&desc,D3D_ROOT_SIGNATURE_VERSION_1,&blob,&error);
+        if(error) error->Release(); Check(hr,"low-frequency root serialize");
+        hr=device->CreateRootSignature(0,blob->GetBufferPointer(),blob->GetBufferSize(),IID_PPV_ARGS(&root));
+        blob->Release(); Check(hr,"low-frequency root create");
+        const char* entries[]={"Extract","Observe","Update"};
+        ID3D12PipelineState** targets[]={&extract,&observe,&update};
+        for(unsigned i=0;i<3;++i)
+        {
+            blob=nullptr; error=nullptr;
+            hr=NativeCompileShaderBlob(NativeLowFrequencyShader,sizeof(NativeLowFrequencyShader)-1,"IndependentLowFrequency",nullptr,nullptr,
+                                       entries[i],&blob,&error,"cs_5_0",D3DCOMPILE_OPTIMIZATION_LEVEL3,compiler);
+            std::string diagnostic;
+            if(error) {diagnostic.assign(static_cast<const char*>(error->GetBufferPointer()),error->GetBufferSize()); error->Release();}
+            if(FAILED(hr)) throw std::runtime_error("low-frequency shader: "+diagnostic);
+            D3D12_COMPUTE_PIPELINE_STATE_DESC pso{}; pso.pRootSignature=root;
+            pso.CS={blob->GetBufferPointer(),blob->GetBufferSize()};
+            hr=device->CreateComputePipelineState(&pso,IID_PPV_ARGS(targets[i]));
+            blob->Release(); Check(hr,"low-frequency pipeline");
+        }
+    }
+    static Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> Binding(ID3D12Device* device,ID3D12Resource* motion)
+    {
+        if(!motion) return {};
+        Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> heap;
+        D3D12_DESCRIPTOR_HEAP_DESC hd{D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,1,D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,0};
+        Check(device->CreateDescriptorHeap(&hd,IID_PPV_ARGS(&heap)),"low-frequency motion binding");
+        auto handle=heap->GetCPUDescriptorHandleForHeapStart();
+        D3D12_SHADER_RESOURCE_VIEW_DESC sv{}; sv.ViewDimension=D3D12_SRV_DIMENSION_TEXTURE2D;
+        sv.Shader4ComponentMapping=D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; sv.Texture2D.MipLevels=1;
+        sv.Format=MotionFormat(motion->GetDesc().Format);device->CreateShaderResourceView(motion,&sv,handle);
+        return heap;
+    }
+    ID3D12DescriptorHeap* NullBinding() const { return nullMotionHeap; }
+    void RecordOutputs(ID3D12GraphicsCommandList *cmd,ID3D12Resource *raw,ID3D12Resource *output,
+                       D3D12_RESOURCE_STATES rawRest,ID3D12Resource *motion,D3D12_RESOURCE_STATES motionRest,
+                       ID3D12DescriptorHeap* heap,D3D12_GPU_VIRTUAL_ADDRESS control)
+    {
+        Transition(cmd,raw,rawRest,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        if(motion) Transition(cmd,motion,motionRest,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,0);
+        Transition(cmd,output,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        Transition(cmd,difference,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        Bind(cmd,raw,output,heap,control);
+        cmd->SetPipelineState(extract); cmd->Dispatch((width+7)/8,(height+7)/8,1);
+        Transition(cmd,difference,D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        for(auto *r:{observed,observationGuide}) Transition(cmd,r,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        cmd->SetPipelineState(observe); cmd->Dispatch(((width+1)/2+7)/8,((height+1)/2+7)/8,1);
+        for(auto *r:{observed,observationGuide}) Transition(cmd,r,D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        for(auto *r:{nextBand,nextGuide}) Transition(cmd,r,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        cmd->SetPipelineState(update); cmd->Dispatch((width+7)/8,(height+7)/8,1);
+        Transition(cmd,output,D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        for(auto *r:{nextBand,nextGuide}) Transition(cmd,r,D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_COPY_SOURCE);
+        for(auto *r:{priorBand,priorGuide}) Transition(cmd,r,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_DEST);
+        cmd->CopyResource(priorBand,nextBand);
+        cmd->CopyResource(priorGuide,nextGuide);
+        for(auto *r:{nextBand,nextGuide}) Transition(cmd,r,D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        for(auto *r:{priorBand,priorGuide}) Transition(cmd,r,D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        if(motion) Transition(cmd,motion,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,motionRest,0);
+        Transition(cmd,raw,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,rawRest);
+    }
+};
 }
+

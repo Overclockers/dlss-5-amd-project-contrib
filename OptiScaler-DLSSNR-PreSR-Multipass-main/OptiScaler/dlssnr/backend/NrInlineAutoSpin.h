@@ -322,6 +322,11 @@ public:
                state_ == State::Confirming || state_ == State::Locked;
     }
 
+    bool ShouldMeasureGpuStamps() const
+    {
+        return state_ == State::Exploring || state_ == State::Confirming;
+    }
+
     uint64_t CurrentEpoch() const { return epoch_; }
 
     Candidate CurrentCandidate() const { return activeCandidate_; }
@@ -363,7 +368,6 @@ public:
     {
         if (!ShouldMeasure()) return;
         if (sample.epoch != epoch_) return;
-        if (extentUnsettled_) return;
 
         // Mixed-candidate or replay contamination check during active windows.
         if (sample.replayed || sample.candidate != activeCandidate_)

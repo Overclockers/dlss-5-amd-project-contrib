@@ -1,9 +1,9 @@
-## 2026-10-16 — lmxxf 3a1be68 只跟已打开的配方，回收只剪多余几何
+## 2026-10-16 — lmxxf 3a1be68 完整同步（80 模块重编 + Temporal Mode 2/3），回收只剪多余几何
 
-- **决定**：vendor 源码停在锁定的 `3a1be68`，但不把上游默认关闭或已停止的实验打开。`DLSS5_TEMPORAL_MODE` 保持关闭，不接入 Mode 2/3。W16 / `HIP_VIT_INTER_BYTE` 只存在于已同步的头和配方里；旧模块没有对应导出时继续走 `HasFn` 回退。本机没有 LLVM 23.1.2 预编译目录，模块二进制不在这次更新。
-- **决定**：Mochizuki 闲置录制池只保留当前几何和上一个几何。`PollReleases` 对共享录制表只扫描一次。
+- **决定**：将 `lmxxf` 完整推进至 `3a1be68c35dbac7d7edeb2073723e82076bb1a39`。使用 WSL LLVM 23.1.2 预编译 12 个 wave1/wave2 模块并配合 COMGR 重编全部 80 个 `gfx1200`/`gfx1201` `.hsaco` 模块，使 W16（`HIP_C512_W16=2`、`HIP_C512_FFN_W16=1`、`HIP_C32_W16=1`、`HIP_VIT_W16=7`）、`HIP_VIT_INTER_BYTE=15`、`HIP_BYTE_F_ADD0=1` 与紧凑 QKV 布局在运行时正式生效。同时在调用方录制命令列表上接入 Temporal Mode 2（低频时间稳定）与 Mode 3（单遍残差增强 + 强度 0..2），由宿主统一枚举 `LmxxfTemporalMode`（默认 1 即完整模型历史，Mode 2/3 显式可选）与 `LmxxfTemporalEnhanceStrength`（默认 1.0）管理；Mode 0/1 零低频额外开销，Mode 2/3 仅在 `MultiPass() == 1` 时启用（层数不为 1 时状态设为 `low-freq-requires-mp1` 并跳过历史）。上游已停止的实验与 addon Mode 1 保持不接入。
+- **决定**：Mochizuki 闲置录制池只保留当前几何和上一个几何，使用单调生成序号识别最旧几何。`PollReleases` 对共享录制表只扫描一次。
 - **不改**：Daniel 回收、lmxxf 共享 import 池、可重放的未 Reset 列表、Mochizuki 核心时间戳。
-- **落在**：[消费审阅](lmxxf-042-consumer-review.md)、[开销与回收](2026-10-16-cost-and-retirement.md)、`third_party/lmxxf/upstream-review.json`。完成 pin 仍是 `48a41fcc`，同步状态保持 pending，直到模块重编和审阅脚本一起通过。
+- **落在**：[消费审阅](lmxxf-042-consumer-review.md)、[开销与回收](2026-10-16-cost-and-retirement.md)、`third_party/lmxxf/upstream-review.json`、`third_party/lmxxf/UPSTREAM.md`、`third_party/lmxxf/sync-state.json`（状态 `reviewed`）。
 
 ## 2026-10-16 — 普通 HDR 合成使用非负参考 RGB
 

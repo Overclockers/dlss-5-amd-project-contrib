@@ -360,7 +360,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             {
                 const int sl = *NrSpinSlices;
                 if (sl == 64)
-                    NrSpinSlices.set_from_config(0);
+                    NrSpinSlices = 0;
                 else if (sl != 0 && sl != 256 && sl != 1024)
                 {
                     LOG_WARN("Invalid NrSpinSlices={} in INI; falling back to auto", sl);
@@ -587,6 +587,31 @@ bool Config::Reload(std::filesystem::path iniPath)
             MochizukiProxyFallbackEnabled.set_from_config(readBool(CfgKey::kSection, CfgKey::MochizukiProxyFallbackEnabled));
             MochizukiWhitePointSource.set_from_config(readUInt(CfgKey::kSection, CfgKey::MochizukiWhitePointSource));
             LmxxfModelHistory.set_from_config(readBool(CfgKey::kSection, CfgKey::LmxxfModelHistory));
+            {
+                auto mode = readUInt(CfgKey::kSection, CfgKey::TemporalMode);
+                if (mode && *mode > 3u)
+                {
+                    LOG_WARN("DlssNr.{} must be 0..3; using 1", CfgKey::TemporalMode);
+                    mode = 1u;
+                }
+                if (!mode.has_value() && LmxxfModelHistory.has_value())
+                    mode = *LmxxfModelHistory ? 1u : 0u;
+                LmxxfTemporalMode.set_from_config(mode);
+                if (mode.has_value())
+                    LmxxfModelHistory.set_from_config(*mode != 0u);
+                CfgKey::PutEnvString(CfgKey::TemporalMode, std::to_string(LmxxfTemporalMode.value_or_default()).c_str());
+
+                auto strength = readFloat(CfgKey::kSection, CfgKey::TemporalEnhanceStrength);
+                if (strength && (*strength < 0.0f || *strength > 2.0f || !std::isfinite(*strength)))
+                {
+                    LOG_WARN("DlssNr.{} must be 0..2; using 1.0", CfgKey::TemporalEnhanceStrength);
+                    strength = 1.0f;
+                }
+                LmxxfTemporalEnhanceStrength.set_from_config(strength);
+                char strengthBuf[32];
+                snprintf(strengthBuf, sizeof strengthBuf, "%g", LmxxfTemporalEnhanceStrength.value_or_default());
+                CfgKey::PutEnvString(CfgKey::TemporalEnhanceStrength, strengthBuf);
+            }
             MochizukiHistoryStrength.set_from_config(readFloat(CfgKey::kSection, CfgKey::MochizukiHistoryStrength));
             MochizukiPreprocess.set_from_config(readBool(CfgKey::kSection, CfgKey::MochizukiPreprocess));
             MochizukiPreprocessExposure.set_from_config(readUInt(CfgKey::kSection, CfgKey::MochizukiPreprocessExposure));
@@ -1967,6 +1992,8 @@ bool Config::SaveIni()
     ini.SetValue(CfgKey::kSection, CfgKey::MochizukiProxyFallbackEnabled, GetBoolValue(Instance()->MochizukiProxyFallbackEnabled.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::MochizukiWhitePointSource, GetIntValue(Instance()->MochizukiWhitePointSource.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::LmxxfModelHistory, GetBoolValue(Instance()->LmxxfModelHistory.value_for_config()).c_str());
+    ini.SetValue(CfgKey::kSection, CfgKey::TemporalMode, GetIntValue(Instance()->LmxxfTemporalMode.value_for_config()).c_str());
+    ini.SetValue(CfgKey::kSection, CfgKey::TemporalEnhanceStrength, GetFloatValue(Instance()->LmxxfTemporalEnhanceStrength.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::MochizukiHistoryStrength, GetFloatValue(Instance()->MochizukiHistoryStrength.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::MochizukiPreprocess, GetBoolValue(Instance()->MochizukiPreprocess.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::MochizukiPreprocessExposure, GetIntValue(Instance()->MochizukiPreprocessExposure.value_for_config()).c_str());

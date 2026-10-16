@@ -512,11 +512,12 @@ cbuffer Size : register(b0) { uint width; uint height; }
     std::shared_ptr<FrameDiag::GpuStamps> gameStamps, sideStamps;
     Ptr<ID3D12CommandQueue> gameQueue;
     bool measureActive = false;
+    bool measureGpuStamps = false;
     uint64_t autoSpinEpoch = 0;
     uint64_t submitPresentSerial = 0;
     uint32_t submitExecutions = 0;
     void DiagStamp(ID3D12GraphicsCommandList* list, UINT point) {
-        if (!diag.active && !measureActive) return;
+        if (!diag.active && !measureGpuStamps) return;
         if (!gameStamps) gameStamps = FrameDiag::GpuStamps::Acquire(device.Get(), FrameDiag::kGpuStampCount);
         if (!gameStamps) return;
         gameStamps->Stamp(list, point);
@@ -533,7 +534,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
     void HarvestAutoSpinGpuMs(double& outGpuWaitMs, double& outGpuSpanMs) const noexcept {
         outGpuWaitMs = -1.0;
         outGpuSpanMs = -1.0;
-        if (!measureActive || !gameStamps || !gameQueue || !Complete() || DeviceLost()) return;
+        if (!measureGpuStamps || !gameStamps || !gameQueue || !Complete() || DeviceLost()) return;
         const uint64_t freq = FrameDiag::CachedQueueTimestampFreq(gameQueue.Get());
         if (!freq) return;
         UINT64 ticks[FrameDiag::kGpuStampCount] {};
@@ -597,7 +598,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
         Barrier(list, decision.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         decisionReadable = true;
         DiagStamp(list, FrameDiag::kGpuDone);
-        if ((diag.active || measureActive) && gameStamps) gameStamps->Resolve(list); // predication already cleared
+        if ((diag.active || measureGpuStamps) && gameStamps) gameStamps->Resolve(list); // predication already cleared
     }
     bool Started() const { return started; }
     // NrInlineReuse: a retired recording may serve a later frame with identical inputs.
@@ -609,7 +610,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
     void PrepareReuse() {
         captureEvents.clear(); started = false; decisionReadable = false; uncertain = noNetwork = false;
         diag = {}; captureBackoff = 0; gpuArmed = false; spinPollDelay = spinSlices = watchSlices = watchStartDelay = 0; adaptiveBudget = false; activityToken = 0; reused = true;
-        measureActive = false; autoSpinEpoch = 0; submitPresentSerial = 0; submitExecutions = 0;
+        measureActive = false; measureGpuStamps = false; autoSpinEpoch = 0; submitPresentSerial = 0; submitExecutions = 0;
         inputGated = armedOutcomeReadable = false;
     }
     bool RetirementUncertain() const { return uncertain || sideUncertain; }

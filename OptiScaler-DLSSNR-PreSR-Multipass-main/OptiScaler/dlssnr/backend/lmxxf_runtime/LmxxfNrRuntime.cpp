@@ -21,6 +21,7 @@
 #include "native_network_geometry.h"
 #include "native_config_layers.h"
 #include "native_rgb_texture.h"
+#include "native_temporal_mode.h"
 #include "hip_d3d12_bridge.h"
 #undef HIP_PROBE_RUNTIME_MODULE
 #include "LmxxfRecordingLease.h"
@@ -1059,8 +1060,10 @@ struct RecordingChain
     std::vector<std::shared_ptr<LmxxfRuntime::RecordingCompletion>> completions;
     bool unconfirmed = false;
     std::unique_ptr<LmxxfNativeTemporal::History> history;
+    std::unique_ptr<LmxxfNativeTemporal::LowFrequency> lowFreq;
     LmxxfRuntime::TemporalControl control;
     bool historyValid=false;
+    uint32_t historyKind=0;
     uint32_t nextSeed=0;
     uint64_t epoch=0,tick=0;
     LmxxfNrFrameInfo previous{};
@@ -1072,8 +1075,9 @@ struct RecordingJob : Job
 {
     LmxxfNrFrameInfo historyInfo{};
     LmxxfNativeTemporal::Parameters historyParams{};
+    LmxxfNativeTemporal::LowFrequencyParameters lowFreqParams{};
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> historyBinding;
-    bool temporal=false,historyEnqueued=false;
+    bool temporal=false,lowFreq=false,lowFreqEnhance=false,historyEnqueued=false;
     uint64_t historyEpoch=0;
     uint64_t executionId = 0;
     std::shared_ptr<LmxxfRuntime::RecordingGpuTiming> gpuTiming;
@@ -1677,11 +1681,80 @@ int32_t PrepareSession(void *context)
     });
 }
 
+NativeTemporalMode ParseRuntimeTemporalMode(bool requestFlag)
+{
+    if (!requestFlag) return NativeTemporalMode::Off;
+    try
+    {
+        const char* env = std::getenv(CfgKey::TemporalMode);
+        return NativeParseTemporalMode(env && *env ? std::optional<std::string>(env) : std::nullopt, true);
+    }
+    catch (...)
+    {
+        return NativeTemporalMode::FastHistory;
+    }
+}
+
+float ParseRuntimeTemporalEnhanceStrength()
+{
+    try
+    {
+        const char* env = std::getenv(CfgKey::TemporalEnhanceStrength);
+        return NativeParseTemporalEnhancementStrength(env && *env ? std::optional<std::string>(env) : std::nullopt);
+    }
+    catch (...)
+    {
+        return 1.0f;
+    }
+}
+
 void PrepareHistory(Session* s,const LmxxfNrFrameInfo* info,RecordingJob& j)
 {
     auto disable=[&](const char* why){s->historyStatus=why;};
-    if(!(info->temporal_flags&LMXXF_NR_TEMPORAL_MODEL_HISTORY)){disable("off");return;}
+    const NativeTemporalMode mode=ParseRuntimeTemporalMode((info->temporal_flags&LMXXF_NR_TEMPORAL_MODEL_HISTORY)!=0);
+    if(mode==NativeTemporalMode::Off){disable("off");return;}
     if(j.codec_passthrough||j.hip_passthrough||(j.debug_view&0xFu)){disable("diagnostic-view");return;}
+    if(mode==NativeTemporalMode::LowFrequency||mode==NativeTemporalMode::Enhance){
+        if(s->bridge->MultiPass()!=1){disable("low-freq-requires-mp1");return;}
+        ID3D12Resource* motion=nullptr;
+        if((info->temporal_flags&LMXXF_NR_TEMPORAL_INPUTS_VALID)&&
+           !(info->temporal_flags&LMXXF_NR_TEMPORAL_MV_JITTERED)&&
+           info->motion&&info->motion!=j.color&&
+           info->motion_width&&info->motion_height&&
+           std::isfinite(info->motion_scale_x)&&std::isfinite(info->motion_scale_y)){
+            auto* cand=static_cast<ID3D12Resource*>(info->motion);
+            auto md=cand->GetDesc();
+            if(!LmxxfTemporal::TextureIssue(md)&&
+               LmxxfTemporal::MotionFormat(md.Format)!=DXGI_FORMAT_UNKNOWN&&
+               info->motion_width<=md.Width&&info->motion_height<=md.Height){
+                ID3D12Device* dev=nullptr;
+                HRESULT hr=cand->GetDevice(IID_PPV_ARGS(&dev));
+                bool same=SUCCEEDED(hr)&&dev&&NativeSameDevice(dev,s->device);
+                if(dev)dev->Release();
+                if(same)motion=cand;
+            }
+        }
+        auto ng=NativeCurrentNetworkGeometry();auto& chain=*j.chain;
+        if(!chain.lowFreq||!chain.lowFreq->Matches(ng.valid_width,ng.valid_height,ng.processing_height)){
+            auto lf=std::make_unique<LmxxfNativeTemporal::LowFrequency>();
+            lf->Create(s->device,ng.valid_width,ng.valid_height,ng.processing_height,LmxxfCompiler());
+            chain.lowFreq=std::move(lf);
+        }
+        if(!chain.control.Resource())chain.control.Create(s->device);
+        j.historyBinding=LmxxfNativeTemporal::LowFrequency::Binding(s->device,motion);
+        if(motion)j.pins.Add(motion);
+        j.historyInfo=*info;j.historyInfo.motion=motion;
+        auto& lp=j.lowFreqParams;
+        lp.width=ng.valid_width;lp.height=ng.valid_height;lp.processingHeight=ng.processing_height;
+        lp.motionWidth=motion?info->motion_width:1u;lp.motionHeight=motion?info->motion_height:1u;
+        lp.motion=motion?1u:0u;lp.enhance=(mode==NativeTemporalMode::Enhance)?1u:0u;
+        lp.scaleX=motion?(info->motion_scale_x/float(info->motion_width))*float(ng.valid_width):0.f;
+        lp.scaleY=motion?(info->motion_scale_y/float(info->motion_height))*float(ng.valid_height):0.f;
+        lp.strength=ParseRuntimeTemporalEnhanceStrength();
+        j.lowFreq=true;j.lowFreqEnhance=(mode==NativeTemporalMode::Enhance);
+        s->historyStatus="ready";
+        return;
+    }
     if(!s->bridge->PostAuxiliary().resource){disable("unsupported-post-layout");return;}
     if(!(info->temporal_flags&LMXXF_NR_TEMPORAL_INPUTS_VALID)){disable("unknown-motion-contract");return;}
     auto* motion=static_cast<ID3D12Resource*>(info->motion);auto* depth=static_cast<ID3D12Resource*>(info->depth);
@@ -1702,7 +1775,8 @@ void PrepareHistory(Session* s,const LmxxfNrFrameInfo* info,RecordingJob& j)
     if(!chain.history){
         auto history=std::make_unique<LmxxfNativeTemporal::History>();
         history->Create(s->device,ng.valid_width,ng.valid_height,ng.processing_height,s->bridge->DirectHistory(),LmxxfCompiler());
-        chain.control.Create(s->device);chain.history=std::move(history);
+        if(!chain.control.Resource())chain.control.Create(s->device);
+        chain.history=std::move(history);
     }
     j.historyBinding=LmxxfNativeTemporal::History::Binding(s->device,motion,depth);
     j.pins.Add(motion);j.pins.Add(depth);j.historyInfo=*info;
@@ -1719,26 +1793,38 @@ void PrepareHistory(Session* s,const LmxxfNrFrameInfo* info,RecordingJob& j)
 void BeginHistory(Session* s,RecordingJob& j,ID3D12CommandQueue* queue)
 {
     j.historyEnqueued=false;
-    if(!j.temporal){s->lastHistoryChain.reset();return;}
+    if(!j.temporal&&!j.lowFreq){s->lastHistoryChain.reset();return;}
     auto& h=*j.chain;const auto& a=j.historyInfo;const auto& b=h.previous;
-    const uint32_t stable=LMXXF_NR_TEMPORAL_MV_JITTERED|LMXXF_NR_TEMPORAL_DEPTH_INVERTED;
-    bool use=h.historyValid&&s->lastHistoryChain.lock()==j.chain&&h.epoch==s->historyEpoch&&
-        a.frame_id&&b.frame_id!=UINT64_MAX&&a.frame_id==b.frame_id+1&&GetTickCount64()-h.tick<=500&&
+    const uint32_t currentKind=j.temporal?1u:(j.lowFreqEnhance?3u:2u);
+    const uint32_t stable=j.lowFreq?LMXXF_NR_TEMPORAL_MV_JITTERED:(LMXXF_NR_TEMPORAL_MV_JITTERED|LMXXF_NR_TEMPORAL_DEPTH_INVERTED);
+    const uint64_t elapsedMs=GetTickCount64()-h.tick;
+    bool use=h.historyValid&&h.historyKind==currentKind&&s->lastHistoryChain.lock()==j.chain&&h.epoch==s->historyEpoch&&
+        a.frame_id&&b.frame_id!=UINT64_MAX&&a.frame_id==b.frame_id+1&&elapsedMs<=500&&
         !(a.temporal_flags&LMXXF_NR_TEMPORAL_RESET)&&h.nextSeed!=UINT32_MAX&&
         a.color_width==b.color_width&&a.color_height==b.color_height&&a.model_scale==b.model_scale&&
         a.motion_width==b.motion_width&&a.motion_height==b.motion_height&&
         a.motion_scale_x==b.motion_scale_x&&a.motion_scale_y==b.motion_scale_y&&
+        (a.motion!=nullptr)==(b.motion!=nullptr)&&
         (a.temporal_flags&stable)==(b.temporal_flags&stable)&&a.paper_white==b.paper_white&&a.exposure_scale==b.exposure_scale;
-    auto& p=j.historyParams;p.useHistory=use?1:0;p.jitterX=p.jitterY=0;
-    if(use&&!(a.temporal_flags&LMXXF_NR_TEMPORAL_MV_JITTERED)){
-        p.jitterX=(b.jitter_x-a.jitter_x)/float(a.color_width);p.jitterY=(b.jitter_y-a.jitter_y)/float(a.color_height);
-    }
-    j.seed=use?h.nextSeed:0;j.historyEpoch=s->historyEpoch;
+    j.historyEpoch=s->historyEpoch;
     h.historyValid=false;s->lastHistoryChain=j.chain;
     // This submission exists independently of the game producer. Retain the
     // entire job/chain on any uncertain completion, including Begin failure.
     j.unconfirmed=h.unconfirmed=true;
-    h.control.Submit(s->device,queue,&p,sizeof(p),j.completions,h.completions);
+    if(j.lowFreq){
+        auto& lp=j.lowFreqParams;lp.past=use?1u:0u;
+        const double seconds=use?std::clamp(double(elapsedMs)*1e-3,1.0/240.0,0.25):0.0;
+        lp.memory=use?float(std::exp(-seconds/0.08)):0.f;
+        j.seed=1;
+        h.control.Submit(s->device,queue,&lp,sizeof(lp),j.completions,h.completions);
+    }else{
+        auto& p=j.historyParams;p.useHistory=use?1:0;p.jitterX=p.jitterY=0;
+        if(use&&!(a.temporal_flags&LMXXF_NR_TEMPORAL_MV_JITTERED)){
+            p.jitterX=(b.jitter_x-a.jitter_x)/float(a.color_width);p.jitterY=(b.jitter_y-a.jitter_y)/float(a.color_height);
+        }
+        j.seed=use?h.nextSeed:0;
+        h.control.Submit(s->device,queue,&p,sizeof(p),j.completions,h.completions);
+    }
     j.unconfirmed=h.unconfirmed=false;
 }
 
@@ -1871,8 +1957,12 @@ int32_t PrepareFrame(void *context, const LmxxfNrFrameInfo *info, LmxxfNrJob *jo
         }
         if(info->temporal_flags & ~31u)return Fail(LMXXF_NR_INVALID_ARGUMENT,"unknown temporal flags");
         if(!session->recordingLeases)session->historyStatus=(info->temporal_flags&LMXXF_NR_TEMPORAL_MODEL_HISTORY)?"unsupported-lifecycle":"off";
-        const bool requestHistory=(info->temporal_flags & LMXXF_NR_TEMPORAL_MODEL_HISTORY)!=0 && session->recordingLeases;
-        requestedOptions += requestHistory ? "history=1;" : "history=0;";
+        const NativeTemporalMode requestedTemporalMode = session->recordingLeases
+            ? ParseRuntimeTemporalMode((info->temporal_flags & LMXXF_NR_TEMPORAL_MODEL_HISTORY) != 0)
+            : NativeTemporalMode::Off;
+        const bool requestModelHistory = requestedTemporalMode == NativeTemporalMode::FastHistory;
+        const bool requestAnyTemporal = requestedTemporalMode != NativeTemporalMode::Off;
+        requestedOptions += requestModelHistory ? "history=1;" : "history=0;";
         const bool requestFirst = (info->flags & LMXXF_NR_FRAME_FLAG_FIRST_PASS) && session->recordingLeases &&
             !(info->flags & (LMXXF_NR_FRAME_FLAG_CODEC_PASSTHROUGH | LMXXF_NR_FRAME_FLAG_HIP_PASSTHROUGH));
         requestedOptions += requestFirst ? "first=1;" : "first=0;";
@@ -1896,14 +1986,14 @@ int32_t PrepareFrame(void *context, const LmxxfNrFrameInfo *info, LmxxfNrJob *jo
             session->bridge->RequestDirectInput();
             session->bridge->RequestReleaseMarkers();
             if (requestFirst) session->bridge->RequestFirstPassOutput();
-            if (requestHistory &&
+            if (requestModelHistory &&
                 hip_reference::WaveOwnedCompatible(opt) && opt.post_merge_fold && opt.post_head_fused)
             {
                 session->bridge->RequestDirectHistory();
                 session->bridge->RequestPostAuxiliary(LmxxfNativePostWeights());
             }
             session->bridge->Create(session->queue, opt, {});
-            session->bridge->SetAdaptiveReuseAllowed(!requestHistory);
+            session->bridge->SetAdaptiveReuseAllowed(!requestAnyTemporal);
             if (session->recordingLeases) session->bridge->EnableRecordingLeases();
             if (session->inlineQueue) session->bridge->EnableSideQueueSubmission();
             ++session->bridgeCreates;
@@ -2198,14 +2288,14 @@ int32_t PrepareFrame(void *context, const LmxxfNrFrameInfo *info, LmxxfNrJob *jo
                 session->bridge->RequestDirectInput();
                 session->bridge->RequestReleaseMarkers();
             if (requestFirst) session->bridge->RequestFirstPassOutput();
-                if (requestHistory &&
+                if (requestModelHistory &&
                     hip_reference::WaveOwnedCompatible(opt) && opt.post_merge_fold && opt.post_head_fused)
                 {
                     session->bridge->RequestDirectHistory();
                     session->bridge->RequestPostAuxiliary(LmxxfNativePostWeights());
                 }
                 session->bridge->Create(session->queue, opt, {});
-                session->bridge->SetAdaptiveReuseAllowed(!requestHistory);
+                session->bridge->SetAdaptiveReuseAllowed(!requestAnyTemporal);
                 if (session->recordingLeases) session->bridge->EnableRecordingLeases();
                 if (session->inlineQueue) session->bridge->EnableSideQueueSubmission();
                 ++session->bridgeCreates;
@@ -2348,6 +2438,8 @@ int32_t PrepareFrame(void *context, const LmxxfNrFrameInfo *info, LmxxfNrJob *jo
             session->rebuildTiming.Record(ms);
             session->performance.Record(NR_CPU_REBUILD, ms, GetTickCount64(), info->frame_id);
         }
+        if (session->bridge)
+            session->bridge->SetAdaptiveReuseAllowed(!requestAnyTemporal);
         if (info->flags & LMXXF_NR_FRAME_FLAG_HIP_PASSTHROUGH)
             session->bridge->PrepareHipPassthrough();
         session->job = {};
@@ -2399,6 +2491,14 @@ int32_t PrepareFrame(void *context, const LmxxfNrFrameInfo *info, LmxxfNrJob *jo
                     capturedInfo.depth = f.CaptureInput(session->device, static_cast<ID3D12Resource*>(info->depth),
                         static_cast<D3D12_RESOURCE_STATES>(info->depth_state));
                     capturedInfo.motion_state = capturedInfo.depth_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+                } else if (lease->lowFreq) {
+                    if (lease->historyInfo.motion) {
+                        capturedInfo.motion = f.CaptureInput(session->device, static_cast<ID3D12Resource*>(lease->historyInfo.motion),
+                            static_cast<D3D12_RESOURCE_STATES>(info->motion_state));
+                        capturedInfo.motion_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+                    } else {
+                        capturedInfo.motion = nullptr;
+                    }
                 }
                 auto* result = session->decode->BufferOutput() ? session->decodeDisplay : session->decode->Output();
                 LmxxfRuntime::InlineFrame::Texture(session->device, result, f.output);
@@ -2414,6 +2514,10 @@ int32_t PrepareFrame(void *context, const LmxxfNrFrameInfo *info, LmxxfNrJob *jo
                 lease->historyInfo = capturedInfo;
                 lease->historyBinding = LmxxfNativeTemporal::History::Binding(session->device,
                     static_cast<ID3D12Resource*>(capturedInfo.motion), static_cast<ID3D12Resource*>(capturedInfo.depth));
+            } else if (lease->lowFreq && lease->inlineFrame) {
+                lease->historyInfo = capturedInfo;
+                lease->historyBinding = LmxxfNativeTemporal::LowFrequency::Binding(session->device,
+                    static_cast<ID3D12Resource*>(capturedInfo.motion));
             }
             // Capture dependencies before recording any command, including failure paths.
             session->encode->PinRecording(lease->pins.objects);
@@ -2639,7 +2743,7 @@ int32_t EnqueueHip(void *context, void *job, void *command_queue)
                     bridge->EnqueueHipPassthroughAfterProducer(static_cast<ID3D12CommandQueue*>(command_queue));
                 }
                 else bridge->EnqueueAfterProducer(static_cast<ID3D12CommandQueue*>(command_queue), j->seed, lease->temporal);
-                lease->historyEnqueued=lease->temporal;
+                lease->historyEnqueued=(lease->temporal||lease->lowFreq);
             }
             if (lease->inlineFrame) {
                 auto& f = *lease->inlineFrame;
@@ -2777,6 +2881,12 @@ int32_t RecordOutputs(void *context, void *job, void *command_list)
                 chain.history->RecordOutputs(list,session->rgbInput->PostBase(),session->bridge->Output(),
                     static_cast<ID3D12Resource*>(fi.depth),static_cast<D3D12_RESOURCE_STATES>(fi.depth_state),
                     t->historyParams,t->historyBinding.Get(),chain.control.Address());
+            }else if(t->lowFreq){
+                auto& chain=*t->chain;auto& fi=t->historyInfo;
+                const D3D12_RESOURCE_STATES rawRest=session->bridge->DirectInput()?D3D12_RESOURCE_STATE_COMMON:D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+                chain.lowFreq->RecordOutputs(list,session->rgbInput->PostBase(),session->bridge->Output(),
+                    rawRest,static_cast<ID3D12Resource*>(fi.motion),static_cast<D3D12_RESOURCE_STATES>(fi.motion_state),
+                    t->historyBinding.Get(),chain.control.Address());
             }}
             session->rgbTex->Record(list);
             if (session->firstPass)
@@ -3017,11 +3127,19 @@ int32_t EndRecordingExecution(void* context, void* job, void* actualQueue,
             j->bridgeDeferred = false;
         }
         if (producer) j->unconfirmed = j->chain->unconfirmed = false;
-        if(j->temporal){
+        if(j->temporal||j->lowFreq){
             auto& h=*j->chain;
             h.historyValid=producer&&consumer&&j->historyEnqueued;
-            if(h.historyValid){h.previous=j->historyInfo;h.epoch=j->historyEpoch;h.tick=GetTickCount64();h.nextSeed=j->seed+1;}
-            session->historyStatus=h.historyValid?(j->historyParams.useHistory?"active":"priming"):"reset-after-discard";
+            if(h.historyValid){
+                h.previous=j->historyInfo;h.epoch=j->historyEpoch;h.tick=GetTickCount64();
+                h.historyKind=j->temporal?1u:(j->lowFreqEnhance?3u:2u);
+                h.nextSeed=j->temporal?(j->seed+1):1u;
+            }
+            if(j->lowFreq){
+                session->historyStatus=h.historyValid?(j->lowFreqEnhance?(j->lowFreqParams.past?"enhance-active":"enhance-priming"):(j->lowFreqParams.past?"low-freq-active":"low-freq-priming")):"reset-after-discard";
+            }else{
+                session->historyStatus=h.historyValid?(j->historyParams.useHistory?"active":"priming"):"reset-after-discard";
+            }
         }
         SetError("");
         return static_cast<int32_t>(LMXXF_NR_OK);

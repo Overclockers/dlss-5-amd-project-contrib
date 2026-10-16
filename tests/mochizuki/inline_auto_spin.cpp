@@ -250,6 +250,7 @@ void TestFullSearchConfirmAndLockByPresentImprovement()
 
     // All candidates explored; (0,256) beat baseline by 5% (>= 1.5%), so enter Confirming!
     assert(ctrl.GetStatus().state == State::Confirming);
+    assert(ctrl.ShouldMeasureGpuStamps());
     assert(ctrl.GetStatus().phase == PhaseKind::ConfirmWinnerB);
     assert((ctrl.CurrentCandidate() == Candidate{0, 256}));
 
@@ -262,6 +263,8 @@ void TestFullSearchConfirmAndLockByPresentImprovement()
     // ConfirmBaselineA: 24 cooldown + 180 measure @ 10.0 ms
     FeedSteadyWindow(ctrl, Controller::kSwitchCooldownFrames + Controller::kConfirmWindowFrames, 10.0, 1.0, 3.0);
     assert(ctrl.GetStatus().state == State::Locked);
+    assert(ctrl.ShouldMeasure());
+    assert(!ctrl.ShouldMeasureGpuStamps());
     assert((ctrl.CurrentCandidate() == Candidate{0, 256}));
     assert((ctrl.GetStatus().bestCandidate == Candidate{0, 256}));
 }
@@ -492,12 +495,20 @@ void TestIdentityFillInAndExtentHold()
     ctrl.UpdateConfigAndWorkload(cfg, wl);
     assert(ctrl.CurrentEpoch() == epoch);
 
+    assert(ctrl.ShouldMeasure());
+    assert(!ctrl.ShouldMeasureGpuStamps());
+
     wl.width = 2560;
     wl.height = 1440;
     for (uint32_t i = 0; i < Controller::kStabilizeWarmupFrames; ++i)
         ctrl.UpdateConfigAndWorkload(cfg, wl);
     assert(ctrl.GetStatus().state == State::Stabilizing);
     assert(ctrl.CurrentEpoch() != epoch);
+
+    FeedSteadyWindow(ctrl, Controller::kStabilizeWarmupFrames, 20.0);
+    assert(ctrl.GetStatus().state == State::Exploring);
+    assert(ctrl.ShouldMeasure());
+    assert(ctrl.ShouldMeasureGpuStamps());
 }
 
 void TestPresentSampleRingSwapchainFiltering()

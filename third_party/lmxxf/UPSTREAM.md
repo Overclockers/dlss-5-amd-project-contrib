@@ -1,7 +1,7 @@
 # lmxxf runtime source revision
 
 - Upstream: https://github.com/lmxxf/dlss5-on-amd-9070xt-porting
-- Commit: `48a41fccb89300cd6636b16bc7b86010384c4cc1` (synced 2026-10-07)
+- Commit: `3a1be68c35dbac7d7edeb2073723e82076bb1a39` (synced 2026-10-16)
 - License: MIT, Copyright (c) 2026 Kien (`LICENSE`)
 - `hip_api.h` also carries the AMD HIP runtime API MIT notice from ROCm 7.1.1.
 

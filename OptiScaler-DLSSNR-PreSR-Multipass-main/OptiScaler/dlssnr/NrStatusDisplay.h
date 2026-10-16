@@ -15,6 +15,7 @@ inline std::string HistoryIssueText(std::string_view reason)
     static constexpr struct { std::string_view reason; const char* text; } issues[] = {
         {"diagnostic-view", "Diagnostic view is enabled"},
         {"unsupported-passes", "Only one NR pass is supported"},
+        {"low-freq-requires-mp1", "Low-frequency temporal modes require 1 pass"},
         {"unsupported-post-layout", "The current model layout is unsupported"},
         {"unknown-motion-contract", "Motion vector metadata is unavailable"},
         {"missing-guides", "Motion vectors or depth are unavailable"},
@@ -49,6 +50,8 @@ inline NrStatusSummary SummarizeNrStatus(std::string_view detail, bool running)
                 auto value = runtime.substr(history + 9);
                 value = value.substr(0, value.find(' '));
                 if (value != "off" && value != "ready" && value != "active" && value != "priming" &&
+                    value != "low-freq-active" && value != "low-freq-priming" &&
+                    value != "enhance-active" && value != "enhance-priming" &&
                     value != "reset-after-discard" && value != "reset-requested")
                     result.historyIssue = HistoryIssueText(value);
             }
