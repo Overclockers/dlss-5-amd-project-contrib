@@ -43,6 +43,7 @@ inline constexpr const char *LmxxfInlineSlots = "LmxxfInlineSlots";
 inline constexpr const char *NrCaptureBackoff = "NrCaptureBackoff";
 inline constexpr const char *NrInlineReuse = "NrInlineReuse";
 inline constexpr const char *NrGpuHandoff = "NrGpuHandoff";
+inline constexpr const char *NrInlineAutoSpin = "NrInlineAutoSpin";
 inline constexpr const char *NrSpinPollDelay = "NrSpinPollDelay";
 inline constexpr const char *NrSpinSlices = "NrSpinSlices";
 inline constexpr const char *NrWatchSlices = "NrWatchSlices";
@@ -500,6 +501,7 @@ inline constexpr const char *const kKnown[] = {
     NrCaptureBackoff,
     NrInlineReuse,
     NrGpuHandoff,
+    NrInlineAutoSpin,
     NrSpinPollDelay,
     NrSpinSlices,
     NrWatchSlices,

@@ -13,7 +13,7 @@ diff --git a/Development/HIP/hip_d3d12_bridge.h b/Development/HIP/hip_d3d12_brid
 @@ -393,7 +393,7 @@
   // The caller must CommitDeferredBegin on that same job, and must not call it for the job that already owns recording_active.
   bool BeginRecordedExecution(ID3D12CommandQueue*actual,bool temporal=false){
-   if(!recording_leases||recording_submission_unconfirmed)throw std::runtime_error("recording execution unavailable");
+   RequireHistory(temporal);if(!recording_leases||recording_submission_unconfirmed)throw std::runtime_error("recording execution unavailable");
 -  if(!actual||actual->GetDesc().Type!=queue->GetDesc().Type)throw std::runtime_error("recording queue type mismatch");
 +  if(!actual||(actual->GetDesc().Type!=queue->GetDesc().Type&&!(recording_leases&&side_queue_submission&&(actual->GetDesc().Type==D3D12_COMMAND_LIST_TYPE_DIRECT||actual->GetDesc().Type==D3D12_COMMAND_LIST_TYPE_COMPUTE))))throw std::runtime_error("recording queue type mismatch");
    ID3D12Device*owner{};Check(actual->GetDevice(IID_PPV_ARGS(&owner)),"recording queue device");

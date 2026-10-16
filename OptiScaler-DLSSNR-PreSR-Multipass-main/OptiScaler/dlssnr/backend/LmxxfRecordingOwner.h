@@ -3,6 +3,7 @@
 #include "../NrSessionActivity.h"
 #include "lmxxf_runtime/LmxxfNrApi.h"
 #include "NrInlineRecording.h"
+#include "NrInlineAutoSpin.h"
 #include "../NrFrameDiag.h"
 #include <algorithm>
 #include <deque>
@@ -92,6 +93,26 @@ struct SessionOwner
     uint64_t inlineApplied = 0, inlineTimeouts = 0, inlineAborted = 0, inlineBypassed = 0;
     uint64_t inlineAdmitted = 0, inlineTurnWaits = 0;
     std::atomic<uint64_t> liveRecordings {0};
+    InlineAutoSpin::Controller autoSpin {};
+    ID3D12CommandQueue* lastInlineGameQueue = nullptr;
+    uint64_t lastConsumedPresentSerial = 0;
+    double ConsumePresentIntervalMs(uint64_t submitPresentSerial) noexcept {
+        auto& ring = FrameDiag::AutoSpinPresentRing();
+        FrameDiag::PresentSampleEntry entry {};
+        if (submitPresentSerial > 0 && submitPresentSerial + 1 > lastConsumedPresentSerial &&
+            ring.TryGet(submitPresentSerial + 1, entry))
+        {
+            lastConsumedPresentSerial = entry.serial;
+            return entry.intervalMs;
+        }
+        const uint64_t cur = ring.CurrentSerial();
+        if (cur > lastConsumedPresentSerial && ring.TryGet(cur, entry))
+        {
+            lastConsumedPresentSerial = entry.serial;
+            return entry.intervalMs;
+        }
+        return 0.0;
+    }
     void ReclaimInlineLocked() {
         void* side = nullptr;
         uint64_t spun = 0;
@@ -121,11 +142,13 @@ struct SessionOwner
                 deviceLostLogged = true;
                 LOG_WARN("NR inline: device removed; releasing inline resources without fence proof");
             }
-            if (!pending->Succeeded()) {
+            const bool succeeded = pending->Succeeded();
+            const bool aborted = pending->WasAborted();
+            if (!succeeded) {
                 // Legacy armed misses reset at reclaim, not before ahead enqueues. This does not certify
                 // subsequent history safety; see docs/architecture/nr-capture-proof-deferral.md.
                 activity.Reset(); api.ResetHistory(context);
-                if (pending->WasAborted()) ++inlineAborted;
+                if (aborted) ++inlineAborted;
                 else {
                     ++inlineTimeouts;
                     if (inlineTimeouts <= 5 || inlineTimeouts % 1200 == 0)
@@ -135,20 +158,48 @@ struct SessionOwner
                 ++inlineApplied;
                 if (!failed) activity.Succeeded(pending->activityToken);
             }
+            if (pending->measureActive && !pending->DeviceLost()) {
+                UINT seen = succeeded ? 1u : 0u;
+                UINT gate = 1u;
+                UINT claimAborted = 0u;
+                UINT claimIters = 0u;
+                if (pending->GpuArmed()) {
+                    pending->ArmedOutcome(seen, gate);
+                    pending->ClaimWaitStats(claimAborted, claimIters);
+                }
+                double gpuWaitMs = -1.0;
+                double gpuSpanMs = -1.0;
+                pending->HarvestAutoSpinGpuMs(gpuWaitMs, gpuSpanMs);
+                InlineAutoSpin::SampleInput sample {};
+                sample.epoch = pending->autoSpinEpoch;
+                sample.candidate = { static_cast<int>(pending->spinPollDelay),
+                                     pending->spinSlices ? static_cast<int>(pending->spinSlices) : 64 };
+                sample.presentIntervalMs = ConsumePresentIntervalMs(pending->submitPresentSerial);
+                sample.gpuWaitMs = gpuWaitMs;
+                sample.gpuFrameSpanMs = gpuSpanMs;
+                sample.inlineSubmitted = true;
+                sample.captureMissed = !succeeded || (pending->GpuArmed() && (!seen || gate != 1u));
+                sample.spinCapped = !succeeded || aborted || (claimAborted != 0u);
+                sample.historyReset = !succeeded;
+                sample.replayed = pending->submitExecutions != 1u;
+                autoSpin.OnSample(sample);
+                FrameDiag::AutoSpinPresentRing().SetActive(autoSpin.ShouldMeasure());
+            }
+            pending->HarvestClaim();
             if (pending->diag.active) {
                 pending->diag.qpcGameWaitExit = pending->diag.qpcOutputDone = FrameDiag::Qpc();
                 if (diagCoreGpuMs)
                     pending->diag.coreGpuMs = diagCoreGpuMs(context, &pending->diag.encodeGpuMs, &pending->diag.transferGpuMs);
                 pending->diag.activeSlots = unsigned(inlineInFlight.size());
-                pending->diag.spinCount = pending->WasAborted() ? 0 : pending->LastSpinCount();
-                pending->diag.historyReset = !pending->Succeeded() && !pending->WasAborted();
-                pending->diag.outcome = pending->Succeeded() ? "apply"
-                    : (pending->WasAborted() ? "abort" : "timeout");
+                pending->diag.spinCount = aborted ? 0 : pending->LastSpinCount();
+                pending->diag.historyReset = !succeeded && !aborted;
+                pending->diag.outcome = succeeded ? "apply"
+                    : (aborted ? "abort" : "timeout");
                 pending->DiagEmitAsync();
                 pending->diag = {};
             }
             side = pending->SideQueue();
-            spun = pending->WasAborted() ? 0 : pending->LastSpinCount();
+            spun = aborted ? 0 : pending->LastSpinCount();
             it = inlineInFlight.erase(it);
         }
         if (!abandonedInline.empty() && abandonedInline.front() && abandonedInline.front()->DeviceLost()) {
@@ -167,6 +218,15 @@ struct SessionOwner
     }
     void InlineBypassed() {
         ++inlineBypassed;
+        if (autoSpin.ShouldMeasure()) {
+            InlineAutoSpin::SampleInput sample {};
+            sample.epoch = autoSpin.CurrentEpoch();
+            sample.candidate = autoSpin.CurrentCandidate();
+            sample.presentIntervalMs = ConsumePresentIntervalMs(0);
+            sample.inlineSubmitted = false;
+            autoSpin.OnSample(sample);
+            FrameDiag::AutoSpinPresentRing().SetActive(autoSpin.ShouldMeasure());
+        }
         if (inlineBypassed > 5 && inlineBypassed % 1200 != 0) return;
         size_t unstarted = 0;
         for (const auto& pending : inlineInFlight)
@@ -337,6 +397,9 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
             }
             inlineEnqueueFinished = executionReported = false;
             inlineResources->activityToken = activityToken;
+            ++inlineResources->submitExecutions;
+            inlineResources->submitPresentSerial = FrameDiag::AutoSpinPresentRing().CurrentSerial();
+            owner->lastInlineGameQueue = e.queue;
         }
         const int32_t rc = owner->api.BeginRecordingExecution(owner->context, job, e.queue);
         if (rc != LMXXF_NR_OK) owner->RecordFailure("BeginRecordingExecution", rc, e.queue);

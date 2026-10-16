@@ -1,3 +1,10 @@
+## 2026-10-16 — lmxxf 3a1be68 只跟已打开的配方，回收只剪多余几何
+
+- **决定**：vendor 源码停在锁定的 `3a1be68`，但不把上游默认关闭或已停止的实验打开。`DLSS5_TEMPORAL_MODE` 保持关闭，不接入 Mode 2/3。W16 / `HIP_VIT_INTER_BYTE` 只存在于已同步的头和配方里；旧模块没有对应导出时继续走 `HasFn` 回退。本机没有 LLVM 23.1.2 预编译目录，模块二进制不在这次更新。
+- **决定**：Mochizuki 闲置录制池只保留当前几何和上一个几何。`PollReleases` 对共享录制表只扫描一次。
+- **不改**：Daniel 回收、lmxxf 共享 import 池、可重放的未 Reset 列表、Mochizuki 核心时间戳。
+- **落在**：[消费审阅](lmxxf-042-consumer-review.md)、[开销与回收](2026-10-16-cost-and-retirement.md)、`third_party/lmxxf/upstream-review.json`。完成 pin 仍是 `48a41fcc`，同步状态保持 pending，直到模块重编和审阅脚本一起通过。
+
 ## 2026-10-16 — 普通 HDR 合成使用非负参考 RGB
 
 **决定与实现**：普通 Mochizuki HDR 合成先将参与亮度比计算的原图参考 RGB 夹到非负，与 OptiScaler 原版 encode/resolve 的参考语义一致。修复提交 `eb64e5a5`，记录在 Mochizuki 补丁 24；Windows/Linux 的 `runtime_transfer.comp` 同步修改，不更新上游 pin，不改用户开关偏好。处理放在 transfer 边界，同时覆盖原尺寸与缩小模型；原始输入和 keep、alpha、SDR、RenoDX、白点、高光保护、网络及历史处理保持原有行为。

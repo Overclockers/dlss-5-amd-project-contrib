@@ -325,4 +325,100 @@ inline void AsyncEmit(Counters c, std::shared_ptr<GpuStamps> game, ID3D12Command
         if (self) FreeLibrary(self);
     }
 }
+
+struct PresentSampleEntry
+{
+    uint64_t serial = 0;
+    uintptr_t swapchainId = 0;
+    double intervalMs = 0.0; // > 0 when valid single-swapchain consecutive present interval
+};
+
+struct PresentSampleRing
+{
+    static constexpr size_t kCapacity = 64;
+    std::atomic<bool> active { false };
+    std::mutex mutex;
+    const void* primarySwapchain = nullptr;
+    int64_t lastPresentQpc = 0;
+    uint64_t serial = 0;
+    PresentSampleEntry entries[kCapacity] {};
+
+    void SetActive(bool on) noexcept
+    {
+        active.store(on, std::memory_order_release);
+    }
+
+    void OnPresent(const void* swapchain) noexcept
+    {
+        if (!active.load(std::memory_order_acquire)) return;
+        const int64_t now = Qpc();
+        const int64_t f = QpcFrequency();
+        std::lock_guard lock(mutex);
+        // Keep one primary swapchain unless it goes silent for >250 ms.
+        if (primarySwapchain != nullptr && primarySwapchain != swapchain &&
+            lastPresentQpc != 0 && f > 0 && (now - lastPresentQpc) < f / 4)
+        {
+            return;
+        }
+        const bool switched = (primarySwapchain != nullptr && primarySwapchain != swapchain);
+        primarySwapchain = swapchain;
+        const uint64_t s = ++serial;
+        double intervalMs = 0.0;
+        if (!switched && lastPresentQpc != 0 && now > lastPresentQpc && f > 0)
+        {
+            intervalMs = static_cast<double>(now - lastPresentQpc) * 1000.0 / static_cast<double>(f);
+        }
+        lastPresentQpc = now;
+        entries[s % kCapacity] = { s, reinterpret_cast<uintptr_t>(swapchain), intervalMs };
+    }
+
+    uint64_t CurrentSerial() const noexcept
+    {
+        std::lock_guard lock(const_cast<std::mutex&>(mutex));
+        return serial;
+    }
+
+    uintptr_t CurrentSwapchainId() const noexcept
+    {
+        std::lock_guard lock(const_cast<std::mutex&>(mutex));
+        return reinterpret_cast<uintptr_t>(primarySwapchain);
+    }
+
+    // Look up the present interval for a given present serial (typically submitPresentSerial + 1, or latest).
+    bool TryGet(uint64_t targetSerial, PresentSampleEntry& out) const noexcept
+    {
+        if (targetSerial == 0) return false;
+        std::lock_guard lock(const_cast<std::mutex&>(mutex));
+        const auto& e = entries[targetSerial % kCapacity];
+        if (e.serial != targetSerial) return false;
+        out = e;
+        return true;
+    }
+};
+
+inline PresentSampleRing& AutoSpinPresentRing() noexcept
+{
+    static PresentSampleRing ring;
+    return ring;
+}
+
+inline uint64_t CachedQueueTimestampFreq(ID3D12CommandQueue* q) noexcept
+{
+    if (!q) return 0;
+    struct CacheEntry { ID3D12CommandQueue* q = nullptr; uint64_t freq = 0; };
+    static std::mutex m;
+    static CacheEntry cache[8] {};
+    static size_t next = 0;
+    std::lock_guard lock(m);
+    for (const auto& c : cache)
+    {
+        if (c.q == q && c.freq != 0) return c.freq;
+    }
+    UINT64 freq = 0;
+    if (FAILED(q->GetTimestampFrequency(&freq)) || freq == 0) return 0;
+    cache[next % 8] = { q, freq };
+    ++next;
+    return freq;
+}
+
 } // namespace DlssNr::FrameDiag

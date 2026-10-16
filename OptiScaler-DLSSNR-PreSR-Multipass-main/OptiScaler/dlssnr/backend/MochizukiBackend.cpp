@@ -402,26 +402,60 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     std::shared_ptr<InlineRecording::Resources> inlineResources;
     if (inlineMode) {
         try {
-            const bool reuse = Config::Instance()->NrInlineReuse.value_or_default();
+            const auto* c = Config::Instance();
+            const bool reuse = c->NrInlineReuse.value_or_default();
             if (!reuse) p->owner->inlinePool.clear();
             inlineResources = InlineRecording::AcquireResources(reuse ? &p->owner->inlinePool : nullptr, p->device.Get(), input.colour,
                 static_cast<ID3D12Resource*>(job.private_output), static_cast<ID3D12Resource*>(job.first_pass_output),
                 frame.color_width, frame.color_height, p->owner->inlinePipelines);
             p->owner->inlinePipelines = inlineResources->PipelineCache();
-            inlineResources->captureBackoff = Config::Instance()->NrCaptureBackoff.value_or_default();
-            inlineResources->gpuArmed = Config::Instance()->NrGpuHandoff.value_or_default();
-            {   // Spin experiments; only validated values are accepted (8 or fewer slices / delay >= 256 hitched offline).
-                const auto* c = Config::Instance();
-                // Spin options apply only with GPU-armed handoff (menu grays them otherwise).
-                const bool armed = inlineResources->gpuArmed;
-                const int pd = armed ? c->NrSpinPollDelay.value_or_default() : 0, sl = c->NrSpinSlices.value_or_default();
-                const int wsl = c->NrWatchSlices.value_or_default(), wsd = c->NrWatchStartDelay.value_or_default();
-                const int slA = armed ? sl : 0;
-                inlineResources->spinPollDelay = pd == 16 || pd == 64 ? UINT(pd) : 0u;
-                inlineResources->spinSlices = slA == 256 || slA == 1024 ? UINT(slA) : 0u;
-                inlineResources->watchSlices = wsl == 256 || wsl == 1024 ? UINT(wsl) : 0u;
-                inlineResources->watchStartDelay = wsd >= 1 && wsd <= 8 ? UINT(wsd) : 0u;
-                inlineResources->adaptiveBudget = armed && c->NrAdaptiveWaitBudget.value_or_default(); }
+            inlineResources->captureBackoff = c->NrCaptureBackoff.value_or_default();
+            inlineResources->gpuArmed = c->NrGpuHandoff.value_or_default();
+            const bool armed = inlineResources->gpuArmed;
+            const int wsl = c->NrWatchSlices.value_or_default(), wsd = c->NrWatchStartDelay.value_or_default();
+            inlineResources->watchSlices = wsl == 256 || wsl == 1024 ? UINT(wsl) : 0u;
+            inlineResources->watchStartDelay = wsd >= 1 && wsd <= 8 ? UINT(wsd) : 0u;
+            inlineResources->adaptiveBudget = armed && c->NrAdaptiveWaitBudget.value_or_default();
+
+            InlineAutoSpin::RuntimeConfigInput autoCfg {};
+            autoCfg.inlineEnabled = true;
+            autoCfg.isMochizuki = true;
+            autoCfg.gpuHandoff = armed;
+            autoCfg.autoSpinEnabled = c->NrInlineAutoSpin.value_or_default();
+            autoCfg.adaptiveWaitBudget = inlineResources->adaptiveBudget;
+            if (c->NrSpinPollDelay.has_value()) autoCfg.fixedPollDelay = c->NrSpinPollDelay.value();
+            if (c->NrSpinSlices.has_value()) autoCfg.fixedSlices = c->NrSpinSlices.value();
+
+            InlineAutoSpin::WorkloadSignature workloadSig {};
+            workloadSig.sessionId = reinterpret_cast<uintptr_t>(p->owner.get());
+            // The record queue is not the queue that executes this frame. 0 stays
+            // unknown until BeforeExecute latches the real one. The present ring
+            // is still inactive on this call, so a zero swapchain is also unknown.
+            workloadSig.gameQueueId = reinterpret_cast<uintptr_t>(p->owner->lastInlineGameQueue);
+            {
+                const auto& ring = FrameDiag::AutoSpinPresentRing();
+                workloadSig.swapchainId = ring.CurrentSerial() > 0 ? ring.CurrentSwapchainId() : 0;
+            }
+            workloadSig.width = frame.color_width;
+            workloadSig.height = frame.color_height;
+            workloadSig.format = static_cast<uint32_t>(desc.Format);
+            workloadSig.passes = static_cast<int32_t>(frame.passes);
+            workloadSig.networkFlags = frame.flags & ~MOCHIZUKI_NR_FRAME_FLAG_STAGE_TIMING;
+            workloadSig.inlineReuse = reuse;
+            workloadSig.watchSlices = static_cast<int>(inlineResources->watchSlices);
+            workloadSig.watchStartDelay = static_cast<int>(inlineResources->watchStartDelay);
+
+            p->owner->autoSpin.UpdateConfigAndWorkload(autoCfg, workloadSig);
+            FrameDiag::AutoSpinPresentRing().SetActive(p->owner->autoSpin.ShouldMeasure());
+
+            const auto cand = p->owner->autoSpin.CurrentCandidate();
+            const int pd = armed ? cand.pollDelay : 0;
+            const int slA = armed ? cand.SlicesIniValue() : 0;
+            inlineResources->spinPollDelay = pd == 16 || pd == 64 ? UINT(pd) : 0u;
+            inlineResources->spinSlices = slA == 256 || slA == 1024 ? UINT(slA) : 0u;
+            inlineResources->measureActive = armed && p->owner->autoSpin.ShouldMeasure();
+            inlineResources->autoSpinEpoch = p->owner->autoSpin.CurrentEpoch();
+
             FrameDiag::Begin(inlineResources->diag, "mochizuki", frameId, frame.color_width, frame.color_height, OPTI_VERSION);
             inlineResources->diag.spinPollDelay = inlineResources->spinPollDelay; inlineResources->diag.spinSlices = inlineResources->spinSlices;
             inlineResources->diag.watchSlices = inlineResources->watchSlices; inlineResources->diag.watchStartDelay = inlineResources->watchStartDelay;
@@ -434,6 +468,12 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
             p->api.InvalidateRecording(p->owner->context, job.handle); p->api.CollectRecording(p->owner->context, job.handle);
             p->Status(std::string("mochizuki: inline unavailable: ") + error.what()); return nullptr;
         }
+    } else {
+        InlineAutoSpin::RuntimeConfigInput autoCfg {};
+        autoCfg.inlineEnabled = false;
+        autoCfg.isMochizuki = true;
+        p->owner->autoSpin.UpdateConfigAndWorkload(autoCfg, {});
+        FrameDiag::AutoSpinPresentRing().SetActive(false);
     }
     auto lease = LmxxfRecording::Attach(p->owner, job.handle, logical.Get(), inlineResources);
     if (!lease) { p->Status("mochizuki: this recording already owns NR work"); return nullptr; }
@@ -494,10 +534,15 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     return inlineResources ? inlineResources->OutputTexture() : static_cast<ID3D12Resource*>(job.private_output);
 }
 void MochizukiBackend::Submitted(ID3D12CommandQueue*, UINT, ID3D12CommandList* const*) { LmxxfRecording::Collect(); }
-bool MochizukiBackend::PollRelease() { LmxxfRecording::Collect(); return true; }
+bool MochizukiBackend::PollRelease()
+{
+    // AmdBridge::PollReleases walks the shared registry once for every backend.
+    return true;
+}
 void MochizukiBackend::ReleaseSession()
 {
     std::lock_guard lifetime(Submission::RecordingMutex());
+    FrameDiag::AutoSpinPresentRing().SetActive(false);
     p->owner.reset(); p->failed = false; p->retryAt = p->infoAt = 0;
     p->tracedRecordings = 0;
     LmxxfRecording::Collect();
@@ -527,4 +572,37 @@ bool MochizukiBackend::IsRunning() const
 NrTimingSnapshot MochizukiBackend::Timing() const { std::lock_guard lock(p->mutex); return p->timing; }
 MochizukiNrInfo MochizukiBackend::TimingDetails() const { std::lock_guard lock(p->mutex); return p->details; }
 MochizukiNrBuildProgress MochizukiBackend::BuildProgress() const { std::lock_guard lock(p->mutex); return p->progress; }
+InlineAutoSpin::StatusSnapshot MochizukiBackend::InlineAutoSpinStatus() const
+{
+    std::lock_guard lifetime(Submission::RecordingMutex());
+    const auto* c = Config::Instance();
+    InlineAutoSpin::RuntimeConfigInput autoCfg {};
+    autoCfg.inlineEnabled = c->NrInline.value_or_default();
+    autoCfg.isMochizuki = true;
+    autoCfg.gpuHandoff = c->NrGpuHandoff.value_or_default();
+    autoCfg.autoSpinEnabled = c->NrInlineAutoSpin.value_or_default();
+    autoCfg.adaptiveWaitBudget = autoCfg.gpuHandoff && c->NrAdaptiveWaitBudget.value_or_default();
+    if (c->NrSpinPollDelay.has_value()) autoCfg.fixedPollDelay = c->NrSpinPollDelay.value();
+    if (c->NrSpinSlices.has_value()) autoCfg.fixedSlices = c->NrSpinSlices.value();
+
+    if (p->owner)
+    {
+        // Sync config changes immediately so the menu reflects live checkbox/combo edits even if paused.
+        p->owner->autoSpin.UpdateConfigAndWorkload(autoCfg, {});
+        FrameDiag::AutoSpinPresentRing().SetActive(p->owner->autoSpin.ShouldMeasure());
+        return p->owner->autoSpin.GetStatus();
+    }
+    InlineAutoSpin::Controller temp {};
+    temp.UpdateConfigAndWorkload(autoCfg, {});
+    return temp.GetStatus();
+}
+void MochizukiBackend::RequestInlineAutoSpinReeval()
+{
+    std::lock_guard lifetime(Submission::RecordingMutex());
+    if (p->owner)
+    {
+        p->owner->autoSpin.RequestReevaluate();
+        FrameDiag::AutoSpinPresentRing().SetActive(p->owner->autoSpin.ShouldMeasure());
+    }
+}
 }

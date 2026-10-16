@@ -344,8 +344,29 @@ bool Config::Reload(std::filesystem::path iniPath)
             NrCaptureBackoff.set_from_config(readInt(CfgKey::kSection, CfgKey::NrCaptureBackoff));
             NrInlineReuse.set_from_config(readBool(CfgKey::kSection, CfgKey::NrInlineReuse));
             NrGpuHandoff.set_from_config(readBool(CfgKey::kSection, CfgKey::NrGpuHandoff));
+            NrInlineAutoSpin.set_from_config(readBool(CfgKey::kSection, CfgKey::NrInlineAutoSpin));
             NrSpinPollDelay.set_from_config(readInt(CfgKey::kSection, CfgKey::NrSpinPollDelay));
+            if (NrSpinPollDelay.has_value())
+            {
+                const int pd = *NrSpinPollDelay;
+                if (pd != 0 && pd != 16 && pd != 64)
+                {
+                    LOG_WARN("Invalid NrSpinPollDelay={} in INI; falling back to auto", pd);
+                    NrSpinPollDelay.reset();
+                }
+            }
             NrSpinSlices.set_from_config(readInt(CfgKey::kSection, CfgKey::NrSpinSlices));
+            if (NrSpinSlices.has_value())
+            {
+                const int sl = *NrSpinSlices;
+                if (sl == 64)
+                    NrSpinSlices.set_from_config(0);
+                else if (sl != 0 && sl != 256 && sl != 1024)
+                {
+                    LOG_WARN("Invalid NrSpinSlices={} in INI; falling back to auto", sl);
+                    NrSpinSlices.reset();
+                }
+            }
             NrWatchSlices.set_from_config(readInt(CfgKey::kSection, CfgKey::NrWatchSlices));
             NrWatchStartDelay.set_from_config(readInt(CfgKey::kSection, CfgKey::NrWatchStartDelay));
             NrInlineComputeConvert.set_from_config(readBool(CfgKey::kSection, CfgKey::NrInlineComputeConvert));
@@ -2021,6 +2042,7 @@ bool Config::SaveIni()
     ini.SetValue(CfgKey::kSection, CfgKey::NrCaptureBackoff, GetIntValue(Instance()->NrCaptureBackoff.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::NrInlineReuse, GetBoolValue(Instance()->NrInlineReuse.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::NrGpuHandoff, GetBoolValue(Instance()->NrGpuHandoff.value_for_config()).c_str());
+    ini.SetValue(CfgKey::kSection, CfgKey::NrInlineAutoSpin, GetBoolValue(Instance()->NrInlineAutoSpin.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::NrSpinPollDelay, GetIntValue(Instance()->NrSpinPollDelay.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::NrSpinSlices, GetIntValue(Instance()->NrSpinSlices.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::NrWatchSlices, GetIntValue(Instance()->NrWatchSlices.value_for_config()).c_str());

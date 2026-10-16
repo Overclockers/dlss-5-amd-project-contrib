@@ -404,8 +404,9 @@ class Config
     // Reuse retired inline recordings (same inputs) instead of creating D3D12 objects every frame. Default off.
     CustomOptional<bool> NrInlineReuse { false };
     CustomOptional<bool> NrGpuHandoff { true };
-    CustomOptional<int> NrSpinPollDelay { 16 };
-    CustomOptional<int> NrSpinSlices { 0 };
+    CustomOptional<bool> NrInlineAutoSpin { true };
+    CustomOptional<int, SoftDefault> NrSpinPollDelay { 16 };
+    CustomOptional<int, SoftDefault> NrSpinSlices { 0 };
     CustomOptional<int> NrWatchSlices { 0 };
     CustomOptional<int> NrWatchStartDelay { 0 };
     // Mochizuki inline: listed colour formats converted on the compute queue (whole chain on compute). Default on.

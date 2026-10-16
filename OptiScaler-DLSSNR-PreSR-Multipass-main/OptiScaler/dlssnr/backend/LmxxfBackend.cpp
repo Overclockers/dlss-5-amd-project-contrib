@@ -632,7 +632,7 @@ ID3D12Resource* LmxxfBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, const
     auto frame = incoming;
     if(first)*first=nullptr;
     std::lock_guard recordLock(LmxxfCut::LifecycleMutex());
-    if (!PollRelease()) return nullptr;
+    LmxxfRecording::Collect();
     // Latched proxy fallback: lists are unevenly wrapped, so NR would alternate with
     // the original colour. Stay off rather than flicker.
     if (proxyFallback) return nullptr;
@@ -1237,7 +1237,7 @@ void LmxxfBackend::ReleaseSession()
 
 bool LmxxfBackend::PollRelease()
 {
-    LmxxfRecording::Collect();
+    // AmdBridge::PollReleases walks the shared registry once for every backend.
     return true;
 }
 

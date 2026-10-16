@@ -508,11 +508,15 @@ cbuffer Size : register(b0) { uint width; uint height; }
     bool WasAborted() const { return noNetwork; }
     ID3D12Resource* OutputTexture() const { return output.texture.Get(); }
     ID3D12Resource* FirstTexture() const { return first.texture.Get(); }
-    // NrFrameDiag GPU stamps (game queue + side queue). Created lazily, only when diag is on.
+    // NrFrameDiag GPU stamps (game queue + side queue). Created lazily, only when diag or auto-spin measurement is on.
     std::shared_ptr<FrameDiag::GpuStamps> gameStamps, sideStamps;
     Ptr<ID3D12CommandQueue> gameQueue;
+    bool measureActive = false;
+    uint64_t autoSpinEpoch = 0;
+    uint64_t submitPresentSerial = 0;
+    uint32_t submitExecutions = 0;
     void DiagStamp(ID3D12GraphicsCommandList* list, UINT point) {
-        if (!diag.active) return;
+        if (!diag.active && !measureActive) return;
         if (!gameStamps) gameStamps = FrameDiag::GpuStamps::Acquire(device.Get(), FrameDiag::kGpuStampCount);
         if (!gameStamps) return;
         gameStamps->Stamp(list, point);
@@ -524,6 +528,24 @@ cbuffer Size : register(b0) { uint width; uint height; }
         FrameDiag::AsyncEmit(diag, gameStamps, gameQueue.Get(),
                              noNetwork ? nullptr : sideStamps, side.Get());
         // The native game list retains these query addresses and may replay until invalidated.
+    }
+    // Read same-queue GPU timestamp deltas (ms) for InlineAutoSpin without GetClockCalibration.
+    void HarvestAutoSpinGpuMs(double& outGpuWaitMs, double& outGpuSpanMs) const noexcept {
+        outGpuWaitMs = -1.0;
+        outGpuSpanMs = -1.0;
+        if (!measureActive || !gameStamps || !gameQueue || !Complete() || DeviceLost()) return;
+        const uint64_t freq = FrameDiag::CachedQueueTimestampFreq(gameQueue.Get());
+        if (!freq) return;
+        UINT64 ticks[FrameDiag::kGpuStampCount] {};
+        gameStamps->Snapshot(ticks, FrameDiag::kGpuStampCount);
+        const uint64_t tCapBegin = ticks[FrameDiag::kGpuCapBegin];
+        const uint64_t tCapEnd = ticks[FrameDiag::kGpuCapEnd];
+        const uint64_t tResume = ticks[FrameDiag::kGpuResume];
+        const uint64_t tDone = ticks[FrameDiag::kGpuDone];
+        if (tCapEnd != 0 && tResume > tCapEnd)
+            outGpuWaitMs = static_cast<double>(tResume - tCapEnd) * 1000.0 / static_cast<double>(freq);
+        if (tCapBegin != 0 && tDone > tCapBegin)
+            outGpuSpanMs = static_cast<double>(tDone - tCapBegin) * 1000.0 / static_cast<double>(freq);
     }
     // Fault-injection (tests only): ALU-only game-queue delay dispatches before the input gate.
     UINT testInputDelay = 0;
@@ -575,7 +597,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
         Barrier(list, decision.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         decisionReadable = true;
         DiagStamp(list, FrameDiag::kGpuDone);
-        if (diag.active && gameStamps) gameStamps->Resolve(list); // predication already cleared
+        if ((diag.active || measureActive) && gameStamps) gameStamps->Resolve(list); // predication already cleared
     }
     bool Started() const { return started; }
     // NrInlineReuse: a retired recording may serve a later frame with identical inputs.
@@ -587,6 +609,7 @@ cbuffer Size : register(b0) { uint width; uint height; }
     void PrepareReuse() {
         captureEvents.clear(); started = false; decisionReadable = false; uncertain = noNetwork = false;
         diag = {}; captureBackoff = 0; gpuArmed = false; spinPollDelay = spinSlices = watchSlices = watchStartDelay = 0; adaptiveBudget = false; activityToken = 0; reused = true;
+        measureActive = false; autoSpinEpoch = 0; submitPresentSerial = 0; submitExecutions = 0;
         inputGated = armedOutcomeReadable = false;
     }
     bool RetirementUncertain() const { return uncertain || sideUncertain; }

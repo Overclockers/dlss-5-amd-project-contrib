@@ -187,6 +187,7 @@ int main() {
                 "NrCaptureBackoff",  # Host-owned inline capture polling policy.
                 "NrInlineReuse",  # Host-owned inline recording reuse.
                 "NrGpuHandoff",  # Host-owned GPU-armed inline handoff.
+                "NrInlineAutoSpin",  # Host-owned inline auto-spin controller switch.
                 "NrSpinPollDelay",  # Host-owned inline spin experiment.
                 "NrSpinSlices",  # Host-owned inline spin experiment.
                 "NrWatchSlices",  # Host-owned inline spin experiment.
@@ -283,9 +284,26 @@ int main() {
         self.assertIn("FitLargeLegacy", CONFIG)
         self.assertNotIn('SetValue(CfgKey::kSection, CfgKey::FitLargeLegacy', CONFIG)
 
+    def test_inline_auto_spin_and_soft_default_axes_contract(self):
+        product = ROOT / "OptiScaler-DLSSNR-PreSR-Multipass-main"
+        header = (product / "OptiScaler/Config.h").read_text(encoding="utf-8")
+        ini = (product / "OptiScaler.ini").read_text(encoding="utf-8")
+        self.assertIn('NrInlineAutoSpin = "NrInlineAutoSpin"', KEYS)
+        self.assertIn("    NrInlineAutoSpin,", KEYS.split("kKnown[]", 1)[1])
+        self.assertIn("CustomOptional<bool> NrInlineAutoSpin { true };", header)
+        self.assertIn("CustomOptional<int, SoftDefault> NrSpinPollDelay { 16 };", header)
+        self.assertIn("CustomOptional<int, SoftDefault> NrSpinSlices { 0 };", header)
+        self.assertIn("NrInlineAutoSpin.set_from_config(readBool(CfgKey::kSection, CfgKey::NrInlineAutoSpin))", CONFIG)
+        self.assertIn("ini.SetValue(CfgKey::kSection, CfgKey::NrInlineAutoSpin, GetBoolValue(Instance()->NrInlineAutoSpin.value_for_config()).c_str())", CONFIG)
+        self.assertIn("NrSpinPollDelay.reset();", CONFIG)
+        self.assertIn("NrSpinSlices.reset();", CONFIG)
+        self.assertRegex(ini, r"(?m)^NrInlineAutoSpin=auto$")
+        self.assertRegex(ini, r"(?m)^NrSpinPollDelay=auto$")
+        self.assertRegex(ini, r"(?m)^NrSpinSlices=auto$")
+
     def test_menu_labels_are_not_ini_keys(self):
         # Display strings must not appear as SetValue / CfgKey string literals.
-        for label in ("High resolution", "Network tier", "Wave-owned attention", "ViT adaptive reuse"):
+        for label in ("High resolution", "Network tier", "Wave-owned attention", "ViT adaptive reuse", "Inline auto-tuning", "Spin poll delay", "Game wait dispatches"):
             self.assertNotIn(f'"{label}"', CONFIG)
             self.assertNotIn(f'"{label}"', KEYS)
 

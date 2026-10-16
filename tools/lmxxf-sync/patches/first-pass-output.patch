@@ -69,8 +69,8 @@
   size_t zero_upload_bytes{};bool clear_submission_unconfirmed{};
   /* Direct input (2026-09-28): the host producer writes the network input straight into the shared buffer (UAV) and leaves it in
      COMMON; RecordInput then skips the 35 MB D3D12 copy. Requested before Create; the bytes the network reads are unchanged. */
-- bool direct_input{},direct_history{};std::vector<float> post_auxiliary_row;
-+ bool direct_input{},direct_history{},first_output_requested{};std::vector<float> post_auxiliary_row;
+- bool direct_input{},direct_history{},never_history{};unsigned shared_created{},shared_imported{},shared_pool_hits{};std::vector<float> post_auxiliary_row;
++ bool direct_input{},direct_history{},never_history{},first_output_requested{};unsigned shared_created{},shared_imported{},shared_pool_hits{};std::vector<float> post_auxiliary_row;
   using PassthroughCopyFn=int(*)(void*,size_t,const void*,size_t,size_t,size_t,int,Handle);
   PassthroughCopyFn passthrough_copy{};void*passthrough_rgb{};unsigned long long passthrough_queued{};
   Handle release_mark{};bool release_marker_requested{};unsigned long long release_marks{},release_mark_failures{};
@@ -85,7 +85,7 @@
   void Create(ID3D12CommandQueue*q,Options options,const std::vector<float>&noise){
 @@ -226,6 +226,7 @@
    if(!post_auxiliary_row.empty()&&!network->NativeHistorySupported())throw std::runtime_error("auxiliary post unsupported network");
-   Share(input,pixels*16,direct_input);Share(history,pixels*16,direct_history);Share(output,pixels*(post_auxiliary_row.empty()?12:20),true);
+   Share(input,pixels*16,direct_input);if(!never_history)Share(history,pixels*16,direct_history);Share(output,pixels*(post_auxiliary_row.empty()?12:20),true);
    if(!post_auxiliary_row.empty())network->EnableNativePostHistory(post_auxiliary_row,{static_cast<char*>(output.mapped)+pixels*12,pixels*8,network->W,network->H,8});
 +  if(first_output_requested){Share(first_output,pixels*12);network->EnableFirstPassOutput(first_output.mapped,pixels*12);}
    Check(device->CreateFence(0,D3D12_FENCE_FLAG_SHARED,IID_PPV_ARGS(&fence)),"shared fence");Check(device->CreateSharedHandle(fence,nullptr,GENERIC_ALL,nullptr,&fence_handle),"fence handle");hip_probe::SemaphoreDesc sd{};sd.type=4;sd.handle.win32.handle=fence_handle;api.Check(api.hipImportExternalSemaphore(&semaphore,&sd),"import fence");event=CreateEventW(nullptr,FALSE,FALSE,nullptr);if(!event)throw std::runtime_error("bridge completion event");if(const char*v=std::getenv("DLSS5_HIP_SPAN_PROBE"))span_probe=!strcmp(v,"1");if(span_probe){api.Check(api.hipEventCreate(&span_begin),"span begin event");api.Check(api.hipEventCreate(&span_end),"span end event");fprintf(stderr,"hip_span probe enabled\n");}if(release_marker_requested)api.Check(api.hipEventCreate(&release_mark),"release marker event");network->SetNoise(noise);

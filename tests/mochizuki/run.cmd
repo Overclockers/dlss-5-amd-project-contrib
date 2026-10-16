@@ -22,8 +22,12 @@ if /i "%~1"=="source-pin" (
 call tests\_lib\msvc-env.cmd || exit /b 1
 if not exist exports\mochizuki-tests mkdir exports\mochizuki-tests
 if /i "%~1"=="exposure-recording" goto exposurerecording
+if /i "%~1"=="inline-auto-spin" goto inlineautospin
+if /i "%~1"=="pool-trim" goto pooltrim
 if /i "%~1"=="abi" call :acounit || exit /b 1
 if /i "%~1"=="abi" call :exposurerecording || exit /b 1
+if /i "%~1"=="abi" call :inlineautospin || exit /b 1
+if /i "%~1"=="abi" call :pooltrim || exit /b 1
 if /i "%~1"=="aco-unit" goto acounit
 if /i "%~1"=="windows005" goto windows005
 if /i "%~1"=="inline" goto inline
@@ -73,6 +77,16 @@ exit /b %errorlevel%
 :exposurerecording
 cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /I OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler tests/mochizuki/exposure_recording.cpp /Foexports/mochizuki-tests/exposure_recording.obj /Feexports/mochizuki-tests/exposure_recording.exe /link d3d12.lib dxgi.lib d3dcompiler.lib || exit /b 1
 exports\mochizuki-tests\exposure_recording.exe
+exit /b %errorlevel%
+
+:inlineautospin
+cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /I OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler tests/mochizuki/inline_auto_spin.cpp /Foexports/mochizuki-tests/inline_auto_spin.obj /Feexports/mochizuki-tests/inline_auto_spin.exe /link d3d12.lib dxgi.lib || exit /b 1
+exports\mochizuki-tests\inline_auto_spin.exe
+exit /b %errorlevel%
+
+:pooltrim
+cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /I OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler tests/mochizuki/recording_pool_trim.cpp /Foexports/mochizuki-tests/recording_pool_trim.obj /Feexports/mochizuki-tests/recording_pool_trim.exe || exit /b 1
+exports\mochizuki-tests\recording_pool_trim.exe
 exit /b %errorlevel%
 
 :passswitch

@@ -26,9 +26,10 @@ inline bool GameWaitEnabled()
     return cfg && cfg->NrFrameDiag.value_or_default() && cfg->NrGameWaitDiag.value_or_default();
 }
 
-inline void NotePresent(void* /*swapchain*/) noexcept
+inline void NotePresent(void* swapchain) noexcept
 {
     GameWait::PresentBegin(GameWaitEnabled());
+    AutoSpinPresentRing().OnPresent(swapchain);
     if (!Enabled()) return;
     PresentSerialAtom().fetch_add(1, std::memory_order_relaxed);
 }

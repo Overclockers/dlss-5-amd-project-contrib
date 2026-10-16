@@ -10,6 +10,7 @@
 #include "../person/PersonPartition.h"
 #include "../PostSr.h"
 #include "../backend/LmxxfBackend.h"
+#include "../backend/LmxxfRecordingOwner.h"
 #include "../backend/MochizukiBackend.h"
 #include "../backend/Selector.h"
 #include "../backend/LmxxfEvaluateCut.h"
@@ -1023,6 +1024,9 @@ void PollReleases()
     DlssNr::PostSr::Poll();
     DlssNr::Effects::Poll();
     DlssNr::Person::Poll();
+    // lmxxf and Mochizuki used to each walk the same recording registry.
+    // One walk still sees a completion that lands before the next poll.
+    DlssNr::Backend::LmxxfRecording::Collect();
     if (auto b = g_daniel.load(std::memory_order_acquire)) b->PollRelease();
     if (auto b = g_lmxxf.load(std::memory_order_acquire)) b->PollRelease();
     if (auto b = g_mochizuki.load(std::memory_order_acquire)) b->PollRelease();
@@ -1090,6 +1094,33 @@ MochizukiNrBuildProgress BuildProgress()
         g_activeKind.load(std::memory_order_acquire) != int(DlssNr::Backend::Kind::Mochizuki)) return {};
     if (auto* host = g_mochizuki.load(std::memory_order_acquire)) return host->BuildProgress();
     return {};
+}
+DlssNr::Backend::InlineAutoSpin::StatusSnapshot MochizukiInlineAutoSpinStatus()
+{
+    const auto* c = Config::Instance();
+    const bool isMochi = DlssNr::Backend::ActiveKindFromConfig() == DlssNr::Backend::Kind::Mochizuki;
+    if (c->DlssNrEnabled.value_or_default() && isMochi)
+    {
+        if (auto* host = g_mochizuki.load(std::memory_order_acquire))
+            return host->InlineAutoSpinStatus();
+    }
+    DlssNr::Backend::InlineAutoSpin::RuntimeConfigInput autoCfg {};
+    autoCfg.inlineEnabled = c->DlssNrEnabled.value_or_default() && c->NrInline.value_or_default();
+    autoCfg.isMochizuki = isMochi;
+    autoCfg.gpuHandoff = c->NrGpuHandoff.value_or_default();
+    autoCfg.autoSpinEnabled = c->NrInlineAutoSpin.value_or_default();
+    autoCfg.adaptiveWaitBudget = autoCfg.gpuHandoff && c->NrAdaptiveWaitBudget.value_or_default();
+    if (c->NrSpinPollDelay.has_value()) autoCfg.fixedPollDelay = c->NrSpinPollDelay.value();
+    if (c->NrSpinSlices.has_value()) autoCfg.fixedSlices = c->NrSpinSlices.value();
+    DlssNr::Backend::InlineAutoSpin::Controller temp {};
+    temp.UpdateConfigAndWorkload(autoCfg, {});
+    return temp.GetStatus();
+}
+void RequestMochizukiInlineAutoSpinReeval()
+{
+    if (!Config::Instance()->DlssNrEnabled.value_or_default()) return;
+    if (auto* host = g_mochizuki.load(std::memory_order_acquire))
+        host->RequestInlineAutoSpinReeval();
 }
 std::string PersonStatus() { return DlssNr::Person::Status(); }
 std::string EffectsStatus() { return DlssNr::Effects::Status(); }

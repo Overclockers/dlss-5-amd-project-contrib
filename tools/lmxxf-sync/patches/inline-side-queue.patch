@@ -19,7 +19,7 @@ index b33c3119..af545ec7 100644
 +  if(fence_handle)CloseHandle(fence_handle);if(event)CloseHandle(event);if(recording_consumer_fence)recording_consumer_fence->Release();if(fence)fence->Release();if(queue)queue->Release();if(device)device->Release();
   }
   void Create(ID3D12CommandQueue*q,Options options,const std::vector<float>&noise){
-   if(network||queue||!q)throw std::runtime_error("bridge already initialized/invalid queue");if(q->GetDesc().Type!=D3D12_COMMAND_LIST_TYPE_DIRECT&&q->GetDesc().Type!=D3D12_COMMAND_LIST_TYPE_COMPUTE)throw std::runtime_error("bridge requires DIRECT or COMPUTE queue");queue=q;queue->AddRef();Check(q->GetDevice(IID_PPV_ARGS(&device)),"queue device");pixels=size_t(options.width)*options.height;
+   if(never_history&&(direct_history||!post_auxiliary_row.empty()||options.experimental_temporal))throw std::runtime_error("never-history initialization conflict");
 @@ -280,7 +282,13 @@ probe.Check(probe.hipSetDevice(chosen),"select device");size_t total=0;if(probe.
  #endif
  private:

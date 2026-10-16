@@ -1,5 +1,6 @@
 #pragma once
 #include "Host.h"
+#include "NrInlineAutoSpin.h"
 #include "mochizuki_runtime/MochizukiNrControls.h"
 #include <filesystem>
 #include <memory>
@@ -29,6 +30,8 @@ public:
     NrTimingSnapshot Timing() const override;
     MochizukiNrBuildProgress BuildProgress() const;
     MochizukiNrInfo TimingDetails() const;
+    InlineAutoSpin::StatusSnapshot InlineAutoSpinStatus() const;
+    void RequestInlineAutoSpinReeval();
     bool GraphicsRestartNeeded(UINT) const override { return false; }
 };
 }

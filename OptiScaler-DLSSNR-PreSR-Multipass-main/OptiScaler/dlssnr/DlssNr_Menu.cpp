@@ -67,6 +67,7 @@ static void ResetSharedNrDefaults(Config* config)
     config->NrCaptureBackoff.reset();
     config->NrInlineReuse.reset();
     config->NrGpuHandoff.reset();
+    config->NrInlineAutoSpin.reset();
     config->NrSpinPollDelay.reset();
     config->NrSpinSlices.reset();
     config->NrWatchSlices.reset();
@@ -76,6 +77,7 @@ static void ResetSharedNrDefaults(Config* config)
     config->NrInlineComputeDownscale.reset();
     config->NrInlineComputeExport.reset();
     config->NrAdaptiveWaitBudget.reset();
+    AmdBridge::RequestMochizukiInlineAutoSpinReeval();
 }
 
 // The "(?)" marker every control carries, matching the rest of the menu.
@@ -844,18 +846,98 @@ void RenderMenu(Config* config, float menuResScale)
                     ImGui::Indent();
                     ImGui::BeginDisabled(!gpuHandoff);
                     if (MenuUi::TreeNode("Inline spin experiments##nr")) {
+                        bool autoSpin = config->NrInlineAutoSpin.value_or_default();
+                        if (MenuUi::Checkbox("Inline auto-tuning##nr", &autoSpin))
+                            config->NrInlineAutoSpin = autoSpin;
+                        HelpMarker("Default on. Jointly selects Spin poll delay and Game wait dispatches from the validated 9-candidate whitelist."
+                                   "\nAxes set to Auto are searched; explicitly fixed axes stay pinned. INI: NrInlineAutoSpin.");
+                        const auto spinStatus = AmdBridge::MochizukiInlineAutoSpinStatus();
+                        {
+                            const char* stateLabel = "Inactive";
+                            switch (spinStatus.state)
+                            {
+                            case Backend::InlineAutoSpin::State::Inactive: stateLabel = "Inactive"; break;
+                            case Backend::InlineAutoSpin::State::Suspended: stateLabel = "Suspended"; break;
+                            case Backend::InlineAutoSpin::State::Stabilizing: stateLabel = "Stabilizing"; break;
+                            case Backend::InlineAutoSpin::State::Exploring: stateLabel = "Exploring"; break;
+                            case Backend::InlineAutoSpin::State::Confirming: stateLabel = "Confirming"; break;
+                            case Backend::InlineAutoSpin::State::Locked: stateLabel = "Locked"; break;
+                            }
+                            MenuUi::TextWrapped("Auto-spin status: %s | Effective: poll %d, wait %d",
+                                                MenuLocale::Translate(stateLabel),
+                                                spinStatus.activeCandidate.pollDelay,
+                                                spinStatus.activeCandidate.slices);
+                            if (spinStatus.state == Backend::InlineAutoSpin::State::Suspended)
+                            {
+                                const char* reasonLabel = "None";
+                                switch (spinStatus.reason)
+                                {
+                                case Backend::InlineAutoSpin::SuspendReason::AdaptiveWaitBudgetActive:
+                                    reasonLabel = "Adaptive wait budget is enabled";
+                                    break;
+                                case Backend::InlineAutoSpin::SuspendReason::AutoSpinDisabled:
+                                    reasonLabel = "Inline auto-tuning is off";
+                                    break;
+                                case Backend::InlineAutoSpin::SuspendReason::BothAxesFixed:
+                                    reasonLabel = "Manual fixed values on both axes";
+                                    break;
+                                default:
+                                    break;
+                                }
+                                MenuUi::TextDisabled("%s", MenuLocale::Translate(reasonLabel));
+                            }
+                        }
+                        {
+                            const int delays[] = {0, 16, 64};
+                            const char* delayNames[] = {"Auto", "Off", "16 (default)", "64"};
+                            int delayIdx = 0;
+                            if (config->NrSpinPollDelay.has_value())
+                            {
+                                const int v = *config->NrSpinPollDelay;
+                                for (int i = 0; i < 3; ++i)
+                                    if (delays[i] == v) delayIdx = i + 1;
+                            }
+                            if (MenuUi::Combo("Spin poll delay##nr", &delayIdx, delayNames, 4))
+                            {
+                                if (delayIdx == 0) config->NrSpinPollDelay.reset();
+                                else config->NrSpinPollDelay = delays[delayIdx - 1];
+                            }
+                        }
+                        HelpMarker("ALU work between GPU flag polls (game wait and side watch). Auto lets inline auto-tuning choose; when auto-tuning is off, Auto uses 16."
+                                   "\nApplies to the next frame. INI: NrSpinPollDelay.");
+                        {
+                            const int sliceVals[] = {0, 256, 1024};
+                            const char* sliceNames[] = {"Auto", "64 (default)", "256", "1024"};
+                            int sliceIdx = 0;
+                            if (config->NrSpinSlices.has_value())
+                            {
+                                const int v = (*config->NrSpinSlices == 64) ? 0 : *config->NrSpinSlices;
+                                for (int i = 0; i < 3; ++i)
+                                    if (sliceVals[i] == v) sliceIdx = i + 1;
+                            }
+                            if (MenuUi::Combo("Game wait dispatches##nr", &sliceIdx, sliceNames, 4))
+                            {
+                                if (sliceIdx == 0) config->NrSpinSlices.reset();
+                                else config->NrSpinSlices = sliceVals[sliceIdx - 1];
+                            }
+                        }
+                        HelpMarker("Experimental. Splits the game-queue inline wait into shorter GPU dispatches (same timeout). Auto lets inline auto-tuning choose; when auto-tuning is off, Auto uses 64."
+                                   "\nApplies to the next frame. INI: NrSpinSlices.");
+                        if (MenuUi::SmallButton("Both Auto##nr"))
+                        {
+                            config->NrSpinPollDelay.reset();
+                            config->NrSpinSlices.reset();
+                        }
+                        ImGui::SameLine();
+                        if (MenuUi::SmallButton("Re-evaluate##nr"))
+                        {
+                            AmdBridge::RequestMochizukiInlineAutoSpinReeval();
+                        }
                         auto pick = [](const char* label, CustomOptional<int>& opt, const int* values, const char* const* names, int n) {
                             int idx = 0; for (int i = 0; i < n; ++i) if (values[i] == opt.value_or_default()) idx = i;
                             if (MenuUi::Combo(label, &idx, names, n)) opt = values[idx];
                         };
-                        const int delays[] = {0, 16, 64}; const char* delayNames[] = {"Off", "16 (default)", "64"};
-                        pick("Spin poll delay##nr", config->NrSpinPollDelay, delays, delayNames, 3);
-                        HelpMarker("ALU work between GPU flag polls (game wait and side watch). Default 16 (best in-game result)."
-                                   "\nApplies to the next frame. INI: NrSpinPollDelay.");
                         const int slices[] = {0, 256, 1024}; const char* sliceNames[] = {"64 (default)", "256", "1024"};
-                        pick("Game wait dispatches##nr", config->NrSpinSlices, slices, sliceNames, 3);
-                        HelpMarker("Experimental. Splits the game-queue inline wait into shorter GPU dispatches (same timeout)."
-                                   "\nApplies to the next frame. INI: NrSpinSlices.");
                         pick("Side watch dispatches##nr", config->NrWatchSlices, slices, sliceNames, 3);
                         HelpMarker("Experimental. Splits the side-queue capture watch into shorter dispatches."
                                    "\nApplies to the next frame. INI: NrWatchSlices.");
@@ -1002,6 +1084,7 @@ void RenderMenu(Config* config, float menuResScale)
                     resetOption(config->NrCaptureBackoff);
                     resetOption(config->NrInlineReuse);
                     resetOption(config->NrGpuHandoff);
+                    resetOption(config->NrInlineAutoSpin);
                     resetOption(config->NrSpinPollDelay);
                     resetOption(config->NrSpinSlices);
                     resetOption(config->NrWatchSlices);
@@ -1011,6 +1094,7 @@ void RenderMenu(Config* config, float menuResScale)
                     resetOption(config->NrInlineComputeDownscale);
                     resetOption(config->NrInlineComputeExport);
                     resetOption(config->NrAdaptiveWaitBudget);
+                    AmdBridge::RequestMochizukiInlineAutoSpinReeval();
                     SetAllowEnhancedBarriers(config->AllowEnhancedBarriersEffective());
                     resetOption(config->LmxxfEarlyExeWrap);
                     resetOption(config->LmxxfEarlyAnyModuleWrap);

@@ -33,6 +33,7 @@
 #define MOCHIZUKI_NR_RUNTIME_EXPORTS
 #include "MochizukiNrApi.h"
 #include "RecordingDeviceIdentity.h"
+#include "RecordingPoolTrim.h"
 #include <unordered_map>
 #include <wrl/client.h>
 
@@ -2371,6 +2372,10 @@ struct Session
     std::unordered_map<void*, std::unique_ptr<Recording>> recordings;
     static constexpr uint32_t kRecordingSlots = 4;
     std::vector<FrameBuffers> recordingPool;
+    Geometry poolHot {};
+    Geometry poolPrevious {};
+    bool poolHavePrevious = false;
+    uint32_t poolTrimReleases = 0;
     uint32_t recordingBuffersOutstanding = 0;
 
     uint32_t RecipeCount() const { return static_cast<uint32_t>(recordings.size()); }
@@ -3676,11 +3681,46 @@ struct Session
         geometry = b.geometry;
     }
 
+    void NotePoolGeometry()
+    {
+        if (!geometry.width) return;
+        if (!poolHot.width) { poolHot = geometry; return; }
+        if (poolHot == geometry) return;
+        poolPrevious = poolHot;
+        poolHavePrevious = true;
+        poolHot = geometry;
+    }
+
+    // Drop idle copies that are neither the live geometry nor the one before it.
+    // A resolution that bounces between two sizes keeps both. A third size does not
+    // stay until session teardown. In-flight sets are outstanding, not in the pool.
+    void TrimIdleRecordingPool()
+    {
+        NotePoolGeometry();
+        if (!poolHot.width || recordingPool.empty()) return;
+        const auto drop = DlssNr::Backend::IdlePoolDropIndices(
+            recordingPool.size(), poolHot, poolHavePrevious, poolPrevious,
+            [&](size_t i) -> const Geometry& { return recordingPool[i].geometry; },
+            [](const Geometry& a, const Geometry& b) { return a == b; });
+        if (drop.empty()) return;
+        for (size_t n = drop.size(); n-- > 0;)
+        {
+            const size_t i = drop[n];
+            recordingPool[i].Release(vk.device);
+            recordingPool.erase(recordingPool.begin() + static_cast<std::ptrdiff_t>(i));
+        }
+        poolTrimReleases += static_cast<uint32_t>(drop.size());
+        nr::logf("[mochizuki] idle recording pool dropped %u entries outside the current and previous geometry (pool=%u outstanding=%u total_dropped=%u)",
+                 static_cast<unsigned>(drop.size()), static_cast<unsigned>(recordingPool.size()),
+                 recordingBuffersOutstanding, poolTrimReleases);
+    }
+
     // A physical set for one in-flight recording. The session template stays installed
     // so EnsureNetwork can keep building; BoundRecording swaps this set in for Record/Enqueue.
     bool CheckoutRecordingBuffers(FrameBuffers& out)
     {
         if (!geometry.width) return false;
+        TrimIdleRecordingPool();
         auto take = [&](FrameBuffers& slot)
         {
             out = std::move(slot);
@@ -3712,10 +3752,14 @@ struct Session
     void RecycleRecordingBuffers(FrameBuffers& b)
     {
         if (recordingBuffersOutstanding) --recordingBuffersOutstanding;
+        TrimIdleRecordingPool();
         const bool live = static_cast<bool>(b.allocation) || b.result || b.input.resource;
         if (!live) return;
         const bool same = b.geometry == geometry && SameDesc(b.resultDesc, bufferResultDesc);
-        if (!same || recordingPool.size() >= kRecordingSlots)
+        // A buffer checked out before the latest resize is the previous hot geometry.
+        // Keep it so a bounce back does not allocate again. Any older size was already trimmed.
+        const bool previousHot = poolHavePrevious && b.geometry == poolPrevious;
+        if ((!same && !previousHot) || recordingPool.size() >= kRecordingSlots)
         {
             b.Release(vk.device);
             return;

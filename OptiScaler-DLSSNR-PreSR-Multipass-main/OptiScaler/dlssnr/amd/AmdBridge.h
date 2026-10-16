@@ -4,6 +4,7 @@
 #include <string>
 #include "../NrPerformance.h"
 #include "../SrOutputExtent.h"
+#include "../backend/NrInlineAutoSpin.h"
 #include "../backend/mochizuki_runtime/MochizukiNrControls.h"
 namespace DlssNr::AmdBridge
 {
@@ -29,6 +30,8 @@ std::string Status();
 NrTimingSnapshot Timing();
 MochizukiNrBuildProgress BuildProgress();
 MochizukiNrInfo MochizukiTimingDetails();
+DlssNr::Backend::InlineAutoSpin::StatusSnapshot MochizukiInlineAutoSpinStatus();
+void RequestMochizukiInlineAutoSpinReeval();
 std::string EffectsStatus();
 std::string PersonStatus();
 bool GraphicsRestartNeeded(UINT activePasses);
