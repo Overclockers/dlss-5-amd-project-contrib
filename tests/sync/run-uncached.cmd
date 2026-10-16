@@ -11,6 +11,7 @@ if not defined AMD_TEST_PYTHON set "AMD_TEST_PYTHON=python"
 "%AMD_TEST_PYTHON%" -B tests\install\test_local_package.py || goto fail
 "%AMD_TEST_PYTHON%" -B tests\sync\test_suite_cache.py || goto fail
 "%AMD_TEST_PYTHON%" -B tests\sync\test_local_release_exit.py || goto fail
+"%AMD_TEST_PYTHON%" -B tests\sync\test_mochizuki_dependencies.py || goto fail
 echo sync: PASS
 exit /b 0
 

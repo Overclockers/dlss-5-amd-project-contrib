@@ -36,6 +36,11 @@ HIP `.hsaco` 使用该分支已提交模块，不另行追更或重编 HIP 实�
 脚本必须在已配置编译工具、Python 与子模块的开发机运行。MSBuild 参数与
 `build-release-local.cmd` 使用相同的固定工具链，升级工具链时须同时更新这两个入口。
 
+Vulkan Headers、glslang 和 Slang 的固定版本下载包会自动保存在
+`%USERPROFILE%\.cache\OptScalerNR\build-dependencies\`，供同一用户的各工作树复用。
+已有 `exports/mochizuki-toolchain` 下载包会在使用时自动补入共享缓存；清理 `exports`
+不会再导致同版本重复下载。二进制工具包仍按固定 SHA256 校验，不用其他版本替代。
+
 输出为所选工作树 `dist/OptScaler-NR-<版本>-local-<时间>.zip`，避免覆盖旧包；
 日志在 `exports/local-build-<时间>/`。成功后 VERSION 保留输入版本；失败恢复原 VERSION，
 停止后续打包。使用 LocalTest，不自动跑完整发版测试；已有产物新鲜度、依赖和 ZIP 校验

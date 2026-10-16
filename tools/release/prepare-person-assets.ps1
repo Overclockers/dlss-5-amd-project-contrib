@@ -1,4 +1,4 @@
-# Prepare optional model dependencies for a clean release runner. Never writes a game directory.
+﻿# Prepare optional model dependencies for a clean release runner. Never writes a game directory.
 [CmdletBinding()]
 param([string]$CrtDir='')
 $ErrorActionPreference='Stop'
@@ -42,13 +42,38 @@ if(!(Test-Path -LiteralPath $face)) {
 }
 if(!(Test-Path -LiteralPath (Join-Path $assets 'yolo11n-seg.onnx'))) {
     Push-Location $scratch
+    # Store Python installs into a long user site-packages. Torch's vendored license
+    # tree then exceeds MAX_PATH (WinError 206). A drive-root target stays short enough.
+    $pyTarget = Join-Path $env:SystemDrive ('yp' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $pyTargetCreated = $false
+    $oldPythonPath = $env:PYTHONPATH
+    $oldNoUserSite = $env:PYTHONNOUSERSITE
     try {
-        python -m pip install ultralytics==8.3.215 onnx==1.19.1
+        New-Item -ItemType Directory -Path $pyTarget | Out-Null
+        $pyTargetCreated = $true
+        $env:PYTHONPATH = $pyTarget
+        $env:PYTHONNOUSERSITE = '1'
+        python -m pip install --disable-pip-version-check --no-warn-script-location --target $pyTarget ultralytics==8.3.215 onnx==1.19.1
         if($LASTEXITCODE -ne 0){throw 'Unable to install the fixed YOLO export dependencies.'}
         python -c "from ultralytics import YOLO; YOLO('yolo11n-seg.pt').export(format='onnx', imgsz=640, opset=17, simplify=False, dynamic=False, half=False)"
         if($LASTEXITCODE -ne 0){throw 'Person model export failed.'}
         Copy-Item -LiteralPath (Join-Path $scratch 'yolo11n-seg.onnx') -Destination $assets
-    } finally { Pop-Location }
+    } finally {
+        Pop-Location
+        if($null -eq $oldPythonPath) { Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue } else { $env:PYTHONPATH = $oldPythonPath }
+        if($null -eq $oldNoUserSite) { Remove-Item Env:PYTHONNOUSERSITE -ErrorAction SilentlyContinue } else { $env:PYTHONNOUSERSITE = $oldNoUserSite }
+        if($pyTargetCreated -and (Test-Path -LiteralPath $pyTarget)) {
+            $resolvedTarget = (Resolve-Path -LiteralPath $pyTarget).Path
+            $expectedTarget = [IO.Path]::GetFullPath($pyTarget)
+            if($resolvedTarget -ine $expectedTarget -or
+               (Split-Path -Parent $resolvedTarget) -ine ([IO.Path]::GetPathRoot($expectedTarget)) -or
+               (Split-Path -Leaf $resolvedTarget) -notmatch '^yp[0-9a-f]{8}$' -or
+               ((Get-Item -LiteralPath $resolvedTarget).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                throw 'Refusing to remove an unexpected Python export directory.'
+            }
+            Remove-Item -LiteralPath $resolvedTarget -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 $crtNames=@('msvcp140.dll','vcruntime140.dll','vcruntime140_1.dll')
 if(!$CrtDir) {

@@ -1,21 +1,59 @@
 """Pinned build-only dependencies; no Vulkan SDK installation or machine changes."""
 import hashlib
+import os
 from pathlib import Path
+import tempfile
 import urllib.request
 import zipfile
 
 HEADER_PIN = 'e3b1eec08173d6b825cd3ac88c885a63b621504a'
 GLSLANG_SHA = '06b71298b750268c127f2ee7ae0ef7525e2068120c6c8a3a08b2f58ca6f325ce'
 
+def shared_archive(url, name):
+    # Build output may be purged or live in another worktree. Keep downloads
+    # independently of exports, keyed by the complete pinned upstream URL.
+    # Use the user profile rather than LocalAppData: Store Python virtualizes
+    # LocalAppData file IO, which can break atomic archive replacement.
+    return Path.home() / '.cache/OptScalerNR/build-dependencies' / hashlib.sha256(url.encode()).hexdigest() / name
+
+
+def atomic_write(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as output:
+            temporary = Path(output.name)
+            output.write(data)
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 def fetch(url, path, expected=None):
-    if not path.is_file():
+    shared = shared_archive(url, path.name)
+    for candidate in (path, shared):
+        if not candidate.is_file():
+            continue
+        data = candidate.read_bytes()
+        if expected and hashlib.sha256(data).hexdigest() != expected:
+            raise RuntimeError('Cached build dependency SHA256 mismatch: ' + str(candidate))
+        if candidate == shared:
+            atomic_write(path, data)
+        elif not shared.is_file():
+            atomic_write(shared, data)
+        print('BUILD_DEPENDENCY_REUSED ' + str(candidate), flush=True)
+        return
+    try:
         with urllib.request.urlopen(url, timeout=120) as response:
             data = response.read()
-        if expected and hashlib.sha256(data).hexdigest() != expected:
-            raise RuntimeError('Build dependency SHA256 mismatch: ' + url)
-        path.write_bytes(data)
-    if expected and hashlib.sha256(path.read_bytes()).hexdigest() != expected:
-        raise RuntimeError('Cached build dependency SHA256 mismatch: ' + str(path))
+    except OSError as error:
+        raise RuntimeError(f'Build dependency download failed: {url}. '
+                           f'Place the pinned archive at {path} or {shared}, then retry. {error}') from error
+    if expected and hashlib.sha256(data).hexdigest() != expected:
+        raise RuntimeError('Build dependency SHA256 mismatch: ' + url)
+    atomic_write(shared, data)
+    atomic_write(path, data)
 
 def unpack(path, target):
     target = target.resolve()
