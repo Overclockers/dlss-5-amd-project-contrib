@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.Serialization;
@@ -75,9 +76,17 @@ namespace OptScalerNR.Launcher
 
     public static class JsonUtil
     {
+        static DataContractJsonSerializer Serializer(Type type)
+        {
+            return new DataContractJsonSerializer(type, new DataContractJsonSerializerSettings
+            {
+                UseSimpleDictionaryFormat = true
+            });
+        }
+
         public static string Write<T>(T value)
         {
-            var ser = new DataContractJsonSerializer(typeof(T));
+            var ser = Serializer(typeof(T));
             using (var ms = new MemoryStream())
             {
                 ser.WriteObject(ms, value);
@@ -87,7 +96,7 @@ namespace OptScalerNR.Launcher
 
         public static T Read<T>(string json)
         {
-            var ser = new DataContractJsonSerializer(typeof(T));
+            var ser = Serializer(typeof(T));
             using (var ms = new MemoryStream(Encoding.UTF8.GetBytes(json)))
                 return (T)ser.ReadObject(ms);
         }

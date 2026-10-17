@@ -18,7 +18,7 @@ namespace OptScalerNR.Launcher
         bool _done;
 
         public event Action<string, string> EventReceived;
-        public event Action<LauncherResult, int> Completed;
+        public event Action<WorkerSession, LauncherResult, int> Completed;
 
         public bool IsRunning { get { return _process != null && !_process.HasExited; } }
         public bool CanKill { get; private set; }
@@ -85,7 +85,7 @@ namespace OptScalerNR.Launcher
             var code = _process.ExitCode;
             if (code == 0 && !string.Equals(result.Status, "success", StringComparison.OrdinalIgnoreCase))
                 result.Status = result.Status ?? "failed";
-            Completed(result, code);
+            if (Completed != null) Completed(this, result, code);
         }
 
         void DrainEvents()

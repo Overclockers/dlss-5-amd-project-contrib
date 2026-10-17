@@ -120,6 +120,31 @@ class LauncherWorkerTests(unittest.TestCase):
         self.assertEqual(code, 0, events)
         self.assertEqual(result["resolvedProxy"], "dxgi.dll")
 
+    def test_inspect_path_with_spaces(self):
+        d = Path(tempfile.mkdtemp(prefix="launcher space-"))
+        folder = d / "Clair Obscur- Expedition 33"
+        folder.mkdir()
+        exe = folder / "game.exe"
+        shutil.copy2(Path(os.environ["SystemRoot"]) / "System32/whoami.exe", exe)
+        code, result, events = self.invoke(WORKER, "inspect", exe)
+        self.assertEqual(code, 0, events)
+        self.assertEqual(Path(result["effectiveGameDir"]), folder)
+
+    def test_foreign_proxy_key_value_array_is_accepted(self):
+        d = Path(tempfile.mkdtemp(prefix="launcher-kv-"))
+        exe = d / "game.exe"
+        shutil.copy2(Path(os.environ["SystemRoot"]) / "System32/whoami.exe", exe)
+        (d / "dxgi.dll").write_bytes(b"not-optiscaler")
+        code, result, events = self.invoke(
+            WORKER,
+            "install",
+            exe,
+            {"foreignProxy": [{"Key": "dxgi.dll", "Value": "backup"}]},
+        )
+        self.assertNotEqual(code, 2, events + str(result))
+        ids = [x.get("id") for x in result.get("requiredDecisions") or []]
+        self.assertNotIn("foreignProxy", ids)
+
     def test_foreign_proxy_needs_input(self):
         d = Path(tempfile.mkdtemp(prefix="launcher-foreign-"))
         exe = d / "game.exe"

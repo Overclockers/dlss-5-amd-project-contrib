@@ -22,6 +22,7 @@ namespace OptScalerNR.Launcher
         Mutex _targetMutex;
         string _lastInspected;
         LauncherResult _inspect;
+        string _pendingAction;
         ComboBox _lang;
         TextBlock _title;
         readonly string _settingsDir;
@@ -248,16 +249,37 @@ namespace OptScalerNR.Launcher
         {
             var path = (_exePath.Text ?? "").Trim();
             if (path.Length == 0 || !File.Exists(path)) return;
-            if (string.Equals(path, _lastInspected, StringComparison.OrdinalIgnoreCase) && _session != null && _session.IsRunning)
+            if (string.Equals(path, _lastInspected, StringComparison.OrdinalIgnoreCase)
+                && _inspect != null
+                && string.Equals(_inspect.Status, "success", StringComparison.OrdinalIgnoreCase))
+                return;
+            if (_session != null && _session.IsRunning
+                && string.Equals(path, _lastInspected, StringComparison.OrdinalIgnoreCase))
                 return;
             Run("inspect");
+        }
+
+        void Detach(WorkerSession session)
+        {
+            if (session == null) return;
+            session.EventReceived -= OnEvent;
+            session.Completed -= OnCompleted;
+            session.Dispose();
         }
 
         void Run(string action)
         {
             if (_session != null && _session.IsRunning)
             {
-                if (action == "inspect") _session.CancelInspect();
+                if (action == "inspect" && _session.CanKill)
+                {
+                    var old = _session;
+                    old.EventReceived -= OnEvent;
+                    old.Completed -= OnCompleted;
+                    old.CancelInspect();
+                    Detach(old);
+                    if (ReferenceEquals(_session, old)) _session = null;
+                }
                 else
                 {
                     MessageBox.Show(_window, "An install or uninstall is already running.", _window.Title);
@@ -289,6 +311,7 @@ namespace OptScalerNR.Launcher
             SetBusy(true, action != "inspect");
             _logView.Clear();
             _progress.IsIndeterminate = true;
+            _pendingAction = action;
             _lastInspected = exe;
             _decisions.ExistingIni = _keepIni.IsChecked == true ? "keep" : "overwrite";
             var req = new LauncherRequest
@@ -350,33 +373,42 @@ namespace OptScalerNR.Launcher
             }));
         }
 
-        void OnCompleted(LauncherResult result, int code)
+        void OnCompleted(WorkerSession source, LauncherResult result, int code)
         {
             _window.Dispatcher.BeginInvoke(new Action(() =>
             {
+                if (!ReferenceEquals(_session, source))
+                {
+                    Detach(source);
+                    return;
+                }
                 _progress.IsIndeterminate = false;
                 SetBusy(false, false);
                 if (result == null)
-                {
                     _status.Text = "Worker failed (exit " + code + ").";
-                    return;
-                }
-                if (string.Equals(result.Status, "success", StringComparison.OrdinalIgnoreCase) && code != 0)
+                else if (string.Equals(result.Status, "success", StringComparison.OrdinalIgnoreCase) && code != 0)
                     _status.Text = "Worker exit " + code + " does not match status " + result.Status;
                 else
                     _status.Text = result.Status + (string.IsNullOrEmpty(result.Error) ? "" : (": " + result.Error));
                 ApplyInspect(result);
-                if (string.Equals(result.Status, "needsInput", StringComparison.OrdinalIgnoreCase))
-                    AskDecisions(result);
                 AppendLog(_status.Text);
-                if (_session != null) { _session.Dispose(); _session = null; }
-                ReleaseLock();
+                var retry = false;
+                if (result != null && string.Equals(result.Status, "needsInput", StringComparison.OrdinalIgnoreCase))
+                    retry = AskDecisions(result);
+                var current = ReferenceEquals(_session, source);
+                Detach(source);
+                if (current) _session = null;
+                if (_session == null) ReleaseLock();
             }));
         }
 
         void ApplyInspect(LauncherResult result)
         {
-            _inspect = result;
+            if (result == null) return;
+            var inspectOk = string.Equals(_pendingAction, "inspect", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(result.Status, "success", StringComparison.OrdinalIgnoreCase);
+            if (inspectOk || (result.Candidates != null && result.Candidates.Length > 0 && _inspect == null))
+                _inspect = result;
             if (result.Candidates != null && result.Candidates.Length > 0)
             {
                 var lines = new System.Text.StringBuilder();
@@ -393,42 +425,57 @@ namespace OptScalerNR.Launcher
             }
             if (result.Notes != null)
                 foreach (var n in result.Notes) AppendLog(n);
-            var ok = result != null && result.Status == "success";
-            _install.IsEnabled = ok;
-            _update.IsEnabled = ok;
-            _uninstall.IsEnabled = ok;
+            EnableActions(_inspect != null);
         }
 
-        void AskDecisions(LauncherResult result)
+        bool AskDecisions(LauncherResult result)
         {
-            if (result.RequiredDecisions == null) return;
+            if (result.RequiredDecisions == null) return false;
             foreach (var d in result.RequiredDecisions)
             {
                 if (d.Id == "foreignProxy" && d.Options != null && d.Options.Length > 0)
                 {
-                    var pick = MessageBox.Show(_window, d.Prompt + "\n\nOK = backup, Cancel = keep (or close to abort).",
+                    var pick = MessageBox.Show(_window,
+                        d.Prompt + "\n\nYes = backup, No = keep, Cancel = abort.",
                         _window.Title, MessageBoxButton.YesNoCancel, MessageBoxImage.Warning);
                     if (_decisions.ForeignProxy == null)
                         _decisions.ForeignProxy = new System.Collections.Generic.Dictionary<string, string>();
                     if (pick == MessageBoxResult.Yes) _decisions.ForeignProxy[d.File] = "backup";
                     else if (pick == MessageBoxResult.No) _decisions.ForeignProxy[d.File] = "keep";
-                    else { _status.Text = "Cancelled."; return; }
+                    else
+                    {
+                        _status.Text = "Cancelled.";
+                        EnableActions(_inspect != null);
+                        return false;
+                    }
                 }
                 else if (d.Id == "reinspect")
                 {
                     Run("inspect");
-                    return;
+                    return true;
+                }
+                else
+                {
+                    _status.Text = "Cancelled.";
+                    EnableActions(_inspect != null);
+                    return false;
                 }
             }
-            Run("install");
+            Run(string.IsNullOrEmpty(_pendingAction) ? "install" : _pendingAction);
+            return true;
+        }
+
+        void EnableActions(bool ready)
+        {
+            _install.IsEnabled = ready;
+            _update.IsEnabled = ready;
+            _uninstall.IsEnabled = ready;
         }
 
         void SetBusy(bool busy, bool writing)
         {
             _browse.IsEnabled = !busy;
-            _install.IsEnabled = !busy && _inspect != null;
-            _update.IsEnabled = !busy && _inspect != null;
-            _uninstall.IsEnabled = !busy && _inspect != null;
+            EnableActions(!busy && _inspect != null);
             _proxy.IsEnabled = !busy;
             _backend.IsEnabled = !busy;
         }
@@ -444,7 +491,11 @@ namespace OptScalerNR.Launcher
             if (_session != null && _session.IsRunning)
             {
                 if (_session.CanKill)
+                {
                     _session.CancelInspect();
+                    Detach(_session);
+                    _session = null;
+                }
                 else
                 {
                     var r = MessageBox.Show(_window,

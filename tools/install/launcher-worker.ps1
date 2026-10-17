@@ -138,19 +138,30 @@ if (-not $install) {
     Fail-Result 'failed' 'Complete package required: setup scripts are missing. Unzip the full package again.' 1
 }
 
+function ConvertTo-ForeignProxyMap($raw) {
+    $map = @{}
+    if ($null -eq $raw) { return $map }
+    $items = @($raw)
+    if ($items.Count -gt 0 -and $null -ne $items[0].PSObject.Properties['Key']) {
+        foreach ($row in $items) {
+            if ($row.Key) { $map[[string]$row.Key] = [string]$row.Value }
+        }
+        return $map
+    }
+    foreach ($p in $raw.PSObject.Properties) {
+        $map[[string]$p.Name] = [string]$p.Value
+    }
+    return $map
+}
+
 $dec = $req.explicitDecisions
 if ($req.action -ne 'uninstall') {
     if ($probe.conflicts.Count -gt 0) {
-        $map = $null
-        if ($dec -and $dec.foreignProxy) { $map = $dec.foreignProxy }
+        $map = @{}
+        if ($dec -and $dec.foreignProxy) { $map = ConvertTo-ForeignProxyMap $dec.foreignProxy }
         foreach ($c in $probe.conflicts) {
             $name = $c.name
-            $has = $false
-            if ($map) {
-                $prop = $map.PSObject.Properties[$name]
-                if (-not $prop) { $prop = $map.PSObject.Properties[$name.ToLowerInvariant()] }
-                $has = [bool]$prop
-            }
+            $has = $map.ContainsKey($name) -or $map.ContainsKey($name.ToLowerInvariant())
             if (-not $has) {
                 $script:needed += @{
                     id = 'foreignProxy'
@@ -171,13 +182,10 @@ Write-Event 'validate' 're-checking paths and locks'
 $ps51 = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $stdoutLog = Join-Path ([IO.Path]::GetDirectoryName($ResultJson)) 'setup.stdout.log'
 $stderrLog = Join-Path ([IO.Path]::GetDirectoryName($ResultJson)) 'setup.stderr.log'
-$arg = @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File', $install)
+$dj = $null
 if ($req.action -eq 'uninstall') {
-    $arg += @('-GameDir', $script:gameDir, '-NonInteractive', '-NoPause')
     Write-Event 'install' 'starting uninstall'
 } else {
-    $arg += @('-GameDir', $script:gameDir, '-Proxy', $script:resolved, '-NoPause', '-NonInteractive')
-    if ($backend -and $backend -ne 'auto') { $arg += @('-Backend', $backend) }
     $dj = Join-Path ([IO.Path]::GetDirectoryName($ResultJson)) 'decisions.json'
     $payload = @{
         existingInstall = 'overwrite'
@@ -186,18 +194,28 @@ if ($req.action -eq 'uninstall') {
         shortFileContinue = 'abort'
         optiPatcher = 'skip'
     }
-    if ($req.action -eq 'update') { $payload.existingInstall = 'overwrite' }
     if ($dec) {
         foreach ($name in @('existingInstall','existingIni','missingMochizukiModel','shortFileContinue','optiPatcher','foreignProxy')) {
-            if ($dec.PSObject.Properties[$name] -and $null -ne $dec.$name) { $payload[$name] = $dec.$name }
+            if ($dec.PSObject.Properties[$name] -and $null -ne $dec.$name) {
+                if ($name -eq 'foreignProxy') { $payload[$name] = ConvertTo-ForeignProxyMap $dec.$name }
+                else { $payload[$name] = $dec.$name }
+            }
         }
     }
     ($payload | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath $dj -Encoding UTF8
-    $arg += @('-DecisionJson', $dj)
     Write-Event 'install' "starting $($req.action)"
 }
-$p = Start-Process -FilePath $ps51 -ArgumentList $arg -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog
-$code = $p.ExitCode
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+if ($req.action -eq 'uninstall') {
+    & $ps51 -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $install -GameDir $script:gameDir -NonInteractive -NoPause 1>$stdoutLog 2>$stderrLog
+} elseif ($backend -and $backend -ne 'auto') {
+    & $ps51 -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $install -GameDir $script:gameDir -Proxy $script:resolved -NoPause -NonInteractive -Backend $backend -DecisionJson $dj 1>$stdoutLog 2>$stderrLog
+} else {
+    & $ps51 -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $install -GameDir $script:gameDir -Proxy $script:resolved -NoPause -NonInteractive -DecisionJson $dj 1>$stdoutLog 2>$stderrLog
+}
+$code = $LASTEXITCODE
+$ErrorActionPreference = $prevEap
 if (Test-Path -LiteralPath $stdoutLog) {
     Get-Content -LiteralPath $stdoutLog -ErrorAction SilentlyContinue | ForEach-Object { Write-Event 'log' $_ }
 }

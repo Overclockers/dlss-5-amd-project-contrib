@@ -1444,9 +1444,17 @@ foreach ($f in $found) {
     } else {
         $fp = $null
         if ($launcherDecisions -and $launcherDecisions.foreignProxy) {
-            $fp = $launcherDecisions.foreignProxy.PSObject.Properties[$f.Name]
-            if (-not $fp) { $fp = $launcherDecisions.foreignProxy.PSObject.Properties[$f.Name.ToLowerInvariant()] }
-            if ($fp) { $fp = [string]$fp.Value }
+            $rawFp = $launcherDecisions.foreignProxy
+            $fpRows = @($rawFp)
+            if ($fpRows.Count -gt 0 -and $null -ne $fpRows[0].PSObject.Properties['Key']) {
+                foreach ($row in $fpRows) {
+                    if ([string]$row.Key -ieq $f.Name) { $fp = [string]$row.Value; break }
+                }
+            } else {
+                $prop = $rawFp.PSObject.Properties[$f.Name]
+                if (-not $prop) { $prop = $rawFp.PSObject.Properties[$f.Name.ToLowerInvariant()] }
+                if ($prop) { $fp = [string]$prop.Value }
+            }
         }
         if ($fp) {
             switch ($fp) {
