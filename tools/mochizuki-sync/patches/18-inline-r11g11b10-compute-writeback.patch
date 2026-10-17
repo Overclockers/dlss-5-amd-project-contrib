@@ -1,8 +1,6 @@
-diff --git a/linux/build/build_network.py b/linux/build/build_network.py
-index 278eeef1..1d50d50b 100644
 --- a/linux/build/build_network.py
 +++ b/linux/build/build_network.py
-@@ -33,6 +33,7 @@ RUNTIME = ['runtime_alpha', 'runtime_encode', 'runtime_transfer', 'runtime_upsca
+@@ -33,6 +33,7 @@
  RUNTIME_VARIANTS = {'runtime_transfer_store': ('runtime_transfer', ['NR_STORE_NATIVE']),
                      'runtime_pack_u8': ('runtime_alpha', ['NR_PACK_U8']),
                      'runtime_pack_f16': ('runtime_alpha', ['NR_PACK_F16']),
@@ -10,8 +8,6 @@ index 278eeef1..1d50d50b 100644
                      'runtime_unpack_f16': ('runtime_alpha', ['NR_UNPACK_F16']),
                      'runtime_planA_convert_r11g11b10': ('runtime_planA_convert', ['PLAN_A_DST_FORMAT=r11f_g11f_b10f', 'PLAN_A_DST_MAX=65024.0']),
                      'runtime_planA_convert_rgba16f': ('runtime_planA_convert', ['PLAN_A_DST_FORMAT=rgba16f', 'PLAN_A_DST_MAX=65504.0']),
-diff --git a/linux/shaders/passes/runtime_alpha.comp b/linux/shaders/passes/runtime_alpha.comp
-index d3f90d8f..d14eb673 100644
 --- a/linux/shaders/passes/runtime_alpha.comp
 +++ b/linux/shaders/passes/runtime_alpha.comp
 @@ -1,5 +1,5 @@
@@ -21,7 +17,7 @@ index d3f90d8f..d14eb673 100644
  // Equal-extent nearest conversion; no tone mapping, clamp or UNORM quantization.
  layout(local_size_x=8, local_size_y=8) in;
  #ifdef NR_UNPACK_F16
-@@ -7,17 +7,30 @@ layout(set=0,binding=0) uniform sampler2D source;
+@@ -7,7 +7,12 @@
  layout(set=0,binding=1,rgba32f) uniform writeonly image2D result;
  #else
  layout(set=0,binding=0,rgba32f) uniform readonly image2D source;
@@ -30,33 +26,29 @@ index d3f90d8f..d14eb673 100644
 +layout(set=0,binding=1,r11f_g11f_b10f) uniform writeonly image2D result;
 +#else
  layout(set=0,binding=1,rgba16f) uniform writeonly image2D result;
- #endif
 +#endif
+ #endif
  layout(push_constant) uniform Push { uint width, height; } pc;
  void main() {
-     ivec2 xy=ivec2(gl_GlobalInvocationID.xy);
-     if (xy.x>=pc.width || xy.y>=pc.height) return;
+@@ -16,7 +21,15 @@
  #ifdef NR_UNPACK_F16
      imageStore(result,xy,texelFetch(source,xy,0));
-+#else
+ #else
 +#ifdef NR_PACK_R11
 +    // Match the format-converting blit / planA unconvert: NaN->0, clamp to the largest finite (65024).
 +    vec4 texel=imageLoad(source,xy);
 +    texel=mix(texel,vec4(0.0),isnan(texel));
 +    texel=clamp(texel,vec4(0.0),vec4(65024.0));
 +    imageStore(result,xy,texel);
- #else
++#else
      imageStore(result,xy,imageLoad(source,xy));
- #endif
 +#endif
+ #endif
  }
  #elif defined(NR_PACK_U8)
- // Inline compute-family write-back for an R8G8B8A8_UNORM frame (runtime_pack_u8.spv).
-diff --git a/windows/build/build_network.py b/windows/build/build_network.py
-index e64be532..3d1a6cc0 100644
 --- a/windows/build/build_network.py
 +++ b/windows/build/build_network.py
-@@ -38,6 +38,7 @@ RUNTIME = ['runtime_alpha', 'runtime_encode', 'runtime_transfer', 'runtime_upsca
+@@ -38,6 +38,7 @@
  RUNTIME_VARIANTS = {'runtime_transfer_store': ('runtime_transfer', ['NR_STORE_NATIVE']),
                      'runtime_pack_u8': ('runtime_alpha', ['NR_PACK_U8']),
                      'runtime_pack_f16': ('runtime_alpha', ['NR_PACK_F16']),
@@ -64,8 +56,6 @@ index e64be532..3d1a6cc0 100644
                      'runtime_unpack_f16': ('runtime_alpha', ['NR_UNPACK_F16']),
                      'runtime_planA_convert_r11g11b10': ('runtime_planA_convert', ['PLAN_A_DST_FORMAT=r11f_g11f_b10f', 'PLAN_A_DST_MAX=65024.0']),
                      'runtime_planA_convert_rgba16f': ('runtime_planA_convert', ['PLAN_A_DST_FORMAT=rgba16f', 'PLAN_A_DST_MAX=65504.0']),
-diff --git a/windows/shaders/passes/runtime_alpha.comp b/windows/shaders/passes/runtime_alpha.comp
-index d3f90d8f..d14eb673 100644
 --- a/windows/shaders/passes/runtime_alpha.comp
 +++ b/windows/shaders/passes/runtime_alpha.comp
 @@ -1,5 +1,5 @@
@@ -75,7 +65,7 @@ index d3f90d8f..d14eb673 100644
  // Equal-extent nearest conversion; no tone mapping, clamp or UNORM quantization.
  layout(local_size_x=8, local_size_y=8) in;
  #ifdef NR_UNPACK_F16
-@@ -7,17 +7,30 @@ layout(set=0,binding=0) uniform sampler2D source;
+@@ -7,7 +7,12 @@
  layout(set=0,binding=1,rgba32f) uniform writeonly image2D result;
  #else
  layout(set=0,binding=0,rgba32f) uniform readonly image2D source;
@@ -84,33 +74,29 @@ index d3f90d8f..d14eb673 100644
 +layout(set=0,binding=1,r11f_g11f_b10f) uniform writeonly image2D result;
 +#else
  layout(set=0,binding=1,rgba16f) uniform writeonly image2D result;
- #endif
 +#endif
+ #endif
  layout(push_constant) uniform Push { uint width, height; } pc;
  void main() {
-     ivec2 xy=ivec2(gl_GlobalInvocationID.xy);
-     if (xy.x>=pc.width || xy.y>=pc.height) return;
+@@ -16,7 +21,15 @@
  #ifdef NR_UNPACK_F16
      imageStore(result,xy,texelFetch(source,xy,0));
-+#else
+ #else
 +#ifdef NR_PACK_R11
 +    // Match the format-converting blit / planA unconvert: NaN->0, clamp to the largest finite (65024).
 +    vec4 texel=imageLoad(source,xy);
 +    texel=mix(texel,vec4(0.0),isnan(texel));
 +    texel=clamp(texel,vec4(0.0),vec4(65024.0));
 +    imageStore(result,xy,texel);
- #else
++#else
      imageStore(result,xy,imageLoad(source,xy));
- #endif
 +#endif
+ #endif
  }
  #elif defined(NR_PACK_U8)
- // Inline compute-family write-back for an R8G8B8A8_UNORM frame (runtime_pack_u8.spv).
-diff --git a/windows/src/core/nr_runtime.cpp b/windows/src/core/nr_runtime.cpp
-index d5468d2b..3c74def0 100644
 --- a/windows/src/core/nr_runtime.cpp
 +++ b/windows/src/core/nr_runtime.cpp
-@@ -1498,12 +1498,21 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
+@@ -1635,12 +1635,21 @@
      const bool f16_colour = config.colour_format == VK_FORMAT_R16G16B16A16_SFLOAT;
      const bool r11_colour = config.compute_convert_r11g11b10 &&
          config.colour_format == VK_FORMAT_B10G11R11_UFLOAT_PACK32;
@@ -135,7 +121,7 @@ index d5468d2b..3c74def0 100644
          std::filesystem::exists(adapters / "runtime_unpack_f16.spv") &&
          (!f16_colour || std::filesystem::exists(adapters / "runtime_pack_f16.spv"))) {
          if (!impl_->direct_in) {
-@@ -1515,15 +1524,15 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
+@@ -1652,15 +1661,15 @@
              impl_->unpack_f16.create(s.ctx, (adapters / "runtime_unpack_f16.spv").string(), {}, 8,
                                      {&sampled, &input});
          }
@@ -154,11 +140,9 @@ index d5468d2b..3c74def0 100644
      }
      if (!impl_->graphics_family && compute_refusal(false, VK_FORMAT_UNDEFINED, 0, 1))
          throw std::invalid_argument("NR colour format conversion requires a graphics-capable queue");
-diff --git a/windows/src/core/nr_runtime.hpp b/windows/src/core/nr_runtime.hpp
-index 969ef970..e81441bd 100644
 --- a/windows/src/core/nr_runtime.hpp
 +++ b/windows/src/core/nr_runtime.hpp
-@@ -182,8 +182,8 @@ struct RuntimeConfig {
+@@ -198,8 +198,8 @@
      bool separate_answer = false;
      // Default off. A B10G11R11 colour frame also takes the compute input conversion
      // (copy into a private same-format image + runtime_unpack_f16, texelFetch) instead

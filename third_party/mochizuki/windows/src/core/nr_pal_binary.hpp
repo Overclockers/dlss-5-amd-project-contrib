@@ -1,4 +1,4 @@
-// CPU-only gfx1201 PAL code-object adapter. No Vulkan or driver dependency.
+// CPU-only gfx1200/gfx1201 PAL code-object adapter. No Vulkan or driver dependency.
 #pragma once
 #include <algorithm>
 #include <array>
@@ -126,7 +126,7 @@ struct Record {
         require(!(r.rsrc2&~uint32_t(0x00ff9fbe)) && !(r.rsrc3&~uint32_t(0xff0)) &&
                 r.user==((r.rsrc2>>1)&31),"unsupported scratch/config");
         require(r.exec && r.exec<=sz && r.exec%4==0 && r.wg && r.wg<=1024 && r.push_bytes<=128,"adapter resource limits");
-        // gfx1201 rounds the shader's LDS use up to a 1 KiB allocation.
+        // GFX12 rounds the shader's LDS use up to a 1 KiB allocation.
         require(((r.shared+1023u)&~1023u)==(((r.rsrc2>>15)&511)*512),"adapter LDS allocation mismatch");
         std::vector<bool> used(r.user,false);
         auto take=[&](int reg) {require(reg>=0 && uint32_t(reg)<r.user && !used[reg],"overlapping adapter arguments");used[reg]=true;};
@@ -194,8 +194,10 @@ struct Elf {
     Bytes header;std::vector<Section> sections;std::vector<Bytes> data;std::vector<std::string> names;
     explicit Elf(const Bytes& b) {
         range(b,0,64);
+        // e_flags: RDNA4 only - gfx1200 (0x48, RX 9060 series) or gfx1201 (0x4e, RX 9070 series, Radeon AI PRO R9700).
+        const auto mach=read<uint32_t>(b,48);
         require(std::memcmp(b.data(),"\x7f" "ELF",4)==0 && b[4]==2 && b[5]==1 && b[7]==65 &&
-                read<uint16_t>(b,16)==1 && read<uint16_t>(b,18)==224 && read<uint32_t>(b,48)==0x4e &&
+                read<uint16_t>(b,16)==1 && read<uint16_t>(b,18)==224 && (mach==0x48 || mach==0x4e) &&
                 read<uint64_t>(b,32)==0 && read<uint16_t>(b,56)==0 && read<uint16_t>(b,58)==64,"unsupported PAL ELF");
         auto count=read<uint16_t>(b,60),str=read<uint16_t>(b,62); auto at=read<uint64_t>(b,40);
         require(count>0 && count<256 && str<count,"ELF section count");range(b,at,size_t(count)*64);

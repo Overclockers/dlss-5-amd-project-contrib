@@ -36,6 +36,7 @@ int wmain(int argc, wchar_t** argv) try {
         LmxxfNrCreateInfo ci {sizeof ci, device.Get(), queue.Get(), argv[2], LMXXF_NR_CREATE_FLAG_RECORDING_LEASES};
         Rc(api.Create(&ci, &context));
         MochizukiNrControls controls {sizeof controls}; Rc(defaults(&controls));
+        controls.network_model = 0; // This fixture exercises the original-model INT4 corpus.
         controls.aco_mode = aco; Rc(set(context, &controls)); Rc(api.PrepareSession(context));
         std::vector<std::unique_ptr<Held>> held;
         uint64_t frameId = 0;

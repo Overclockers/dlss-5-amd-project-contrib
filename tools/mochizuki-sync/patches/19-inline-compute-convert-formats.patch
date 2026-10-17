@@ -1,8 +1,6 @@
-diff --git a/linux/build/build_network.py b/linux/build/build_network.py
-index 1d50d50b..258ba76c 100644
 --- a/linux/build/build_network.py
 +++ b/linux/build/build_network.py
-@@ -34,6 +34,9 @@ RUNTIME_VARIANTS = {'runtime_transfer_store': ('runtime_transfer', ['NR_STORE_NA
+@@ -34,6 +34,9 @@
                      'runtime_pack_u8': ('runtime_alpha', ['NR_PACK_U8']),
                      'runtime_pack_f16': ('runtime_alpha', ['NR_PACK_F16']),
                      'runtime_pack_r11': ('runtime_alpha', ['NR_PACK_R11']),
@@ -12,11 +10,9 @@ index 1d50d50b..258ba76c 100644
                      'runtime_unpack_f16': ('runtime_alpha', ['NR_UNPACK_F16']),
                      'runtime_planA_convert_r11g11b10': ('runtime_planA_convert', ['PLAN_A_DST_FORMAT=r11f_g11f_b10f', 'PLAN_A_DST_MAX=65024.0']),
                      'runtime_planA_convert_rgba16f': ('runtime_planA_convert', ['PLAN_A_DST_FORMAT=rgba16f', 'PLAN_A_DST_MAX=65504.0']),
-diff --git a/linux/shaders/passes/runtime_alpha.comp b/linux/shaders/passes/runtime_alpha.comp
-index d14eb673..e062add3 100644
 --- a/linux/shaders/passes/runtime_alpha.comp
 +++ b/linux/shaders/passes/runtime_alpha.comp
-@@ -32,11 +32,14 @@ void main() {
+@@ -32,11 +32,14 @@
  #endif
  #endif
  }
@@ -36,7 +32,7 @@ index d14eb673..e062add3 100644
  layout(local_size_x=8, local_size_y=8) in;
  layout(set=0,binding=0,rgba32f) uniform readonly image2D answer;
  layout(set=0,binding=1,r32ui) uniform writeonly uimage2D packed;
-@@ -44,10 +47,22 @@ layout(push_constant) uniform Push { uint width, height; } pc;
+@@ -44,10 +47,22 @@
  void main() {
      ivec2 xy=ivec2(gl_GlobalInvocationID.xy);
      if (xy.x>=pc.width || xy.y>=pc.height) return;
@@ -60,11 +56,9 @@ index d14eb673..e062add3 100644
  }
  #else
  // Preserve caller alpha. Float output keeps NR RGB; 8-bit output uses the same
-diff --git a/windows/build/build_network.py b/windows/build/build_network.py
-index 3d1a6cc0..4e1ebde0 100644
 --- a/windows/build/build_network.py
 +++ b/windows/build/build_network.py
-@@ -39,6 +39,9 @@ RUNTIME_VARIANTS = {'runtime_transfer_store': ('runtime_transfer', ['NR_STORE_NA
+@@ -39,6 +39,9 @@
                      'runtime_pack_u8': ('runtime_alpha', ['NR_PACK_U8']),
                      'runtime_pack_f16': ('runtime_alpha', ['NR_PACK_F16']),
                      'runtime_pack_r11': ('runtime_alpha', ['NR_PACK_R11']),
@@ -74,11 +68,9 @@ index 3d1a6cc0..4e1ebde0 100644
                      'runtime_unpack_f16': ('runtime_alpha', ['NR_UNPACK_F16']),
                      'runtime_planA_convert_r11g11b10': ('runtime_planA_convert', ['PLAN_A_DST_FORMAT=r11f_g11f_b10f', 'PLAN_A_DST_MAX=65024.0']),
                      'runtime_planA_convert_rgba16f': ('runtime_planA_convert', ['PLAN_A_DST_FORMAT=rgba16f', 'PLAN_A_DST_MAX=65504.0']),
-diff --git a/windows/shaders/passes/runtime_alpha.comp b/windows/shaders/passes/runtime_alpha.comp
-index d14eb673..e062add3 100644
 --- a/windows/shaders/passes/runtime_alpha.comp
 +++ b/windows/shaders/passes/runtime_alpha.comp
-@@ -32,11 +32,14 @@ void main() {
+@@ -32,11 +32,14 @@
  #endif
  #endif
  }
@@ -98,7 +90,7 @@ index d14eb673..e062add3 100644
  layout(local_size_x=8, local_size_y=8) in;
  layout(set=0,binding=0,rgba32f) uniform readonly image2D answer;
  layout(set=0,binding=1,r32ui) uniform writeonly uimage2D packed;
-@@ -44,10 +47,22 @@ layout(push_constant) uniform Push { uint width, height; } pc;
+@@ -44,10 +47,22 @@
  void main() {
      ivec2 xy=ivec2(gl_GlobalInvocationID.xy);
      if (xy.x>=pc.width || xy.y>=pc.height) return;
@@ -122,11 +114,9 @@ index d14eb673..e062add3 100644
  }
  #else
  // Preserve caller alpha. Float output keeps NR RGB; 8-bit output uses the same
-diff --git a/windows/src/core/nr_runtime.cpp b/windows/src/core/nr_runtime.cpp
-index 3c74def0..32730435 100644
 --- a/windows/src/core/nr_runtime.cpp
 +++ b/windows/src/core/nr_runtime.cpp
-@@ -335,6 +335,7 @@ struct Runtime::Impl {
+@@ -345,6 +345,7 @@
      nrvk::Kernel unpack_f16, pack_f16;
      nrvk::Context::Image input_f16{}, output_f16{};
      bool f16_built{};
@@ -134,7 +124,7 @@ index 3c74def0..32730435 100644
      bool compute_recording{}, graphics_family{true};
      void graphics_only(const char* what) const {
          if (compute_recording)
-@@ -1492,47 +1493,67 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
+@@ -1629,47 +1630,67 @@
      }
      // Optional compute conversions preserve FP16/HDR values. Private images keep
      // descriptors stable across caller recordings; only copies touch caller images.
@@ -151,6 +141,12 @@ index 3c74def0..32730435 100644
 -        VkFormatProperties rp{}; vkGetPhysicalDeviceFormatProperties(host.physical, VK_FORMAT_B10G11R11_UFLOAT_PACK32, &rp);
 -        const VkFormatFeatureFlags need = VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT | VK_FORMAT_FEATURE_TRANSFER_SRC_BIT;
 -        r11_pack = (rp.optimalTilingFeatures & need) == need && std::filesystem::exists(adapters / "runtime_pack_r11.spv");
+-    }
+-    const bool r11_store = impl_->direct_out || impl_->store_native || r11_pack;
+-    if (r11_colour && (impl_->scaled || !r11_store))
+-        nr::logf("[nr] B10G11R11 compute input conversion not used: %s",
+-                 impl_->scaled ? "model scale below 1 needs a downscale blit"
+-                               : "the write-back has no compute store for this format (no B10G11R11 storage image)");
 +    // compute_convert_colour: the same input conversion for the listed formats (texelFetch of the
 +    // sampled frame copy is the blit's own conversion; an *_SRGB frame is copied into its UNORM
 +    // twin, as the blit path does, so the network still sees the encoded values). Write-back is
@@ -189,12 +185,7 @@ index 3c74def0..32730435 100644
 +                                : !input_ok ? "the frame format cannot be sampled for the compute input"
 +                                            : "the write-back has no compute store for this format";
 +        nr::logf("[nr] colour format %u compute conversion not used: %s", unsigned(cfmt), impl_->convert_refusal);
-     }
--    const bool r11_store = impl_->direct_out || impl_->store_native || r11_pack;
--    if (r11_colour && (impl_->scaled || !r11_store))
--        nr::logf("[nr] B10G11R11 compute input conversion not used: %s",
--                 impl_->scaled ? "model scale below 1 needs a downscale blit"
--                               : "the write-back has no compute store for this format (no B10G11R11 storage image)");
++    }
      if ((host.secondary_family != VK_QUEUE_FAMILY_IGNORED || !impl_->graphics_family) &&
 -        !impl_->scaled && (f16_colour || (r11_colour && r11_store)) &&
 +        !impl_->scaled && (f16_colour || (listed_colour && colour_store && input_ok)) &&
@@ -229,7 +220,7 @@ index 3c74def0..32730435 100644
      }
      if (!impl_->graphics_family && compute_refusal(false, VK_FORMAT_UNDEFINED, 0, 1))
          throw std::invalid_argument("NR colour format conversion requires a graphics-capable queue");
-@@ -2186,7 +2207,7 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
+@@ -2344,7 +2365,7 @@
          // the conversion the blit used to.
          vkCmdCopyImage(cmd, frame.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                         colour_dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
@@ -238,7 +229,7 @@ index 3c74def0..32730435 100644
          barrier(cmd,encoded.handle,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                  VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT,
                  VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT);
-@@ -2201,8 +2222,8 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
+@@ -2359,8 +2380,8 @@
          barrier(cmd,encoded.handle,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,
                  VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT,
                  VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT|VK_ACCESS_TRANSFER_WRITE_BIT);
@@ -249,7 +240,7 @@ index 3c74def0..32730435 100644
          // around, so the blit's own format conversion is the whole of it.
          if (impl_->compute_recording && impl_->f16_built) {
              auto image = impl_->input_f16.handle;
-@@ -2805,7 +2826,7 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
+@@ -2968,7 +2989,7 @@
              // Already the frame's bits (an *_SRGB frame takes its UNORM twin's).
              vkCmdCopyImage(cmd, out, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                             wb, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
@@ -258,11 +249,9 @@ index 3c74def0..32730435 100644
              barrier(cmd,encoded.handle,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                      VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT,
                      VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT);
-diff --git a/windows/src/core/nr_runtime.hpp b/windows/src/core/nr_runtime.hpp
-index e81441bd..bf28d2cb 100644
 --- a/windows/src/core/nr_runtime.hpp
 +++ b/windows/src/core/nr_runtime.hpp
-@@ -180,11 +180,10 @@ struct RuntimeConfig {
+@@ -196,11 +196,10 @@
      // separate_answer: do not use store_native; keep a distinct answer image.
      bool compact_transfer = false;
      bool separate_answer = false;

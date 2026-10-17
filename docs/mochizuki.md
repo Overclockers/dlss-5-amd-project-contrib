@@ -19,12 +19,22 @@ completion-based resource release. Its build-progress display and execution-hist
 handling are described below. Exact reused components, source pins, licenses and
 local changes are in [the source record](../third_party/mochizuki/UPSTREAM.md).
 
-The vendored core follows official Windows source `8a70f7f418294ff1e306b66893456e5319ff8205`
-(0.0.5-win-preview, 2026-10-14). INT4 mixed and RenoDX processing are integrated
+The vendored core follows official Windows source `191b97b54175d50c7ec5992b54322dd3eb0ef8ac`
+(0.0.6-win-preview-alpha, 2026-10-17). The 310.9.16 model is the default; the
+310.8.0 original remains selectable. INT4 mixed and RenoDX processing are integrated
 through this host's existing Ins menu and `[DlssNr]` settings. ACO defaults on;
 INT4 mixed and RenoDX default off. The official DX9/DX10/DX11 hosts, ReShade,
 Present hooks, End menu and screenshot capture are outside this Windows D3D12
-integration. See [the integration review](architecture/mochizuki-005-integration.md).
+integration. See [the integration review](architecture/mochizuki-006-integration.md).
+
+Ins → Mochizuki → **Network model** selects **310.9.16 (new)** or
+**310.8.0 (original)**. `[DlssNr] MochizukiNetworkModel=1` selects the new model;
+`0` selects the original. Save Settings to persist the choice. Switching builds
+the selected network in the background; the menu reports the installed model.
+Both work with native compilation, ACO and RenoDX. The new model needs
+`dlssnr-amd/dlssnr-small.bin`; without it, the original model runs with a log/status
+message. INT4 requires the original model and active ACO. Switching models retains
+the INT4 preference; Ctrl+F11 changes that preference without changing the model.
 
 ## INT4 mixed and RenoDX
 
@@ -59,18 +69,22 @@ variables cannot replace the selected model or picture options.
    network, runtime and temporal shaders), `dlssnr-amd/int4/`, RenoDX shaders and the INT4 model tools. The runtime and those assets must match the host in that package.
    ACO is on by default (`MochizukiAcoMode=true`); a change applies on the next game start.
    A missing or rejected bundle, or a device/driver without ACO, keeps the driver's compiler.
-3. Supply your own `nvngx_dlssnr.dll` **310.8.0**. Its SHA-256 is
-   `e16bcf15e16e13f527491cdf7845b2fe6521a738d8f7c9c721866a8496e1fc8e`.
+3. Supply your own `nvngx_dlssnr.dll` **310.9.16** (SHA-256
+   `2bc19bc09a7b89dd44f73e2ac0108fcc586e2154bdd0830f242f4f040e28789f`)
+   to extract both models. **310.8.0** (SHA-256
+   `e16bcf15e16e13f527491cdf7845b2fe6521a738d8f7c9c721866a8496e1fc8e`)
+   provides only the original model.
    The DLL and extracted weights are **not included** in our package.
 4. With Python 3.10 or newer installed, put that DLL beside `Setup.bat` and run
    `Setup.bat` to select Mochizuki and extract the detected model.
    `Mochizuki-Model.bat` remains available separately; you can drag a DLL/ZIP onto it.
    Extraction only reads data and validates every model entry; it does not load the DLL.
-   The result is `dlssnr-amd/dlssnr.bin`. A model extracted with the official tools is
-   also usable at this path. Setup and the standalone model tool derive
+   The results are `dlssnr-amd/dlssnr.bin` (original) and, with 310.9.16,
+   `dlssnr-amd/dlssnr-small.bin` (new). Models extracted with the official tools
+   are also usable at these paths. Setup and the standalone model tool derive
    `dlssnr-int4.bin` from it, verify the upstream SHA-256, and only then replace
-   an outdated INT4 model. Valid existing INT4 weights are reused. Neither model
-   is shipped in the package; uninstall preserves both.
+   an outdated INT4 model. Valid existing INT4 weights are reused. All three model
+   packs are supplied locally; uninstall preserves them.
    If no working Python 3.10+ is found, Setup and the standalone model tool explain
    how to open Microsoft Store (Windows Store), search for **Python**, and install
    version 3.10 or newer. Close and reopen the installer afterward. They also try
@@ -103,9 +117,10 @@ weight parser emits the manifest, weight container and layer payloads, without
 scanning CUDA ELF modules or writing DLL/cubin copies. The vendor shell installer
 uses the same mode. Developer analysis remains available through `inspect_nr.py`
 (inventory) or `--extract` (DLL, weights and cubins). No extraction code loads the DLL.
-The source SHA256, 599-entry model list, per-entry SHA256 verification and packed
-model format are unchanged; the product installer still replaces the destination
-only after verification succeeds. Patch 12 records the vendor extension.
+The source SHA256 pins, 599-entry original and 255-entry new model lists, per-entry
+SHA256 verification and packed format follow upstream. Both requested models
+validate before the product installer replaces either destination. Patch 12
+records the weights-only vendor extension.
 `tests\mochizuki\run.cmd model` covers mode separation, skipped scanning, DLL/ZIP,
 malformed weights, path safety and failed-source preservation without a GPU.
 

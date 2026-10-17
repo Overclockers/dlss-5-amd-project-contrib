@@ -39,7 +39,7 @@ if ($MyInvocation.InvocationName -ne '.') {
     & $python -X utf8 $extractor $Source $Output
     $result = $LASTEXITCODE
     if ($result -ne 0) {
-        Write-Host 'Model extraction failed. Python was found; see the error above and check nvngx_dlssnr.dll 310.8.0. See docs/mochizuki.md.' -ForegroundColor Yellow
+        Write-Host 'Model extraction failed. Python was found; see the error above and check nvngx_dlssnr.dll 310.9.16 / 310.8.0. See docs/mochizuki.md.' -ForegroundColor Yellow
     }
     if ($result -eq 0) {
         try {

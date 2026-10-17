@@ -1,8 +1,6 @@
-diff --git a/windows/src/core/nr_runtime.cpp b/windows/src/core/nr_runtime.cpp
-index 6383508..a78fd3f 100644
 --- a/windows/src/core/nr_runtime.cpp
 +++ b/windows/src/core/nr_runtime.cpp
-@@ -348,6 +348,7 @@ struct Runtime::Impl {
+@@ -358,6 +358,7 @@
      // original kept here for the decode. Only when RuntimeConfig::linear_input.
      nrvk::Kernel encode, transfer_pass, first_transfer;
      nrvk::Context::Image keep{}, first_full{};
@@ -10,7 +8,7 @@ index 6383508..a78fd3f 100644
      bool linear{};
      // Preprocess (RuntimeConfig::preprocess): runtime_prep.comp's meter,
      // forward and back modes, the frame as it came in (`prep_keep`, model
-@@ -1028,6 +1029,8 @@ struct Runtime::Impl {
+@@ -1051,6 +1052,8 @@
          if (transfer_pass.device) transfer_pass.destroy();
          if (first_transfer.device) first_transfer.destroy();
          if (first_full.handle) session.ctx.destroy(first_full);
@@ -19,7 +17,7 @@ index 6383508..a78fd3f 100644
          if (prep_k.device) prep_k.destroy();
          if (prep_back_k.device) prep_back_k.destroy();
          if (transfer_prep.device) transfer_prep.destroy();
-@@ -1625,6 +1628,30 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
+@@ -1763,6 +1766,30 @@
              s.ctx.transition(impl_->first_full, VK_IMAGE_LAYOUT_GENERAL);
              impl_->first_transfer.create(s.ctx, (adapters / "runtime_transfer.spv").string(), {}, sizeof(TransferPush),
                                           {&s.surf0, shown, keep, &impl_->first_full, up_r});
@@ -50,7 +48,7 @@ index 6383508..a78fd3f 100644
          }
      }
      if (config.preprocess && !mask_config.width) {
-@@ -2966,6 +2993,26 @@ float Runtime::last_transfer_ms() const { return impl_->transfer_ms; }
+@@ -3129,6 +3156,26 @@
  float Runtime::last_network_ms() const { return impl_->network_ms; }
  float Runtime::last_other_ms() const { return impl_->other_ms; }
  VkImage Runtime::first_pass_output() const { return impl_->first_full.handle; }
@@ -77,11 +75,9 @@ index 6383508..a78fd3f 100644
  std::pair<float, float> Runtime::preprocess_meter() const {
      const float* s = static_cast<const float*>(impl_->prep_state.mapped);
      if (!s || s[1] != 1.0f) return {NAN, NAN};
-diff --git a/windows/src/core/nr_runtime.hpp b/windows/src/core/nr_runtime.hpp
-index 79f7abf..8d61342 100644
 --- a/windows/src/core/nr_runtime.hpp
 +++ b/windows/src/core/nr_runtime.hpp
-@@ -189,6 +189,10 @@ struct RuntimeConfig {
+@@ -205,6 +205,10 @@
      // compute pack (runtime_pack_*) when it is not stored in the frame's format. Off: the scaled path
      // refuses compute recording as before.
      bool compute_downscale = false;
@@ -92,7 +88,7 @@ index 79f7abf..8d61342 100644
      // Optional full-frame RGBA32F of pass 0, recorded before later passes
      // overwrite it. Requires ordinary multi-pass transfer (no native compose,
      // no mask, max_passes >= 2). The image lives as long as the runtime.
-@@ -488,6 +492,12 @@ public:
+@@ -517,6 +521,12 @@
      // Owned by the runtime. Valid until the runtime is destroyed, including while
      // a recording that writes it is still executing.
      VkImage first_pass_output() const;

@@ -42,6 +42,8 @@ MZ_F(MochizukiPass3LocalStructure, 1.f, 0.f, 2.f, 6, "Structure", controls.pass[
 MZ_F(MochizukiPass3SkinStructure, -1.f, -1.f, 2.f, 6, "Skin structure", controls.pass[1].skin_structure)
 MZ_B(MochizukiPass3AutomaticMask, true, 0, 1, 6, "Automatic character mask", controls.pass[1].automatic_mask)
 
+MZ_U(MochizukiNetworkModel, 1u, 0, 1, 1, "Network model", controls.network_model)
+
 // Windows 0.0.5 options; INI keys own the complete runtime settings.
 MZ_B(MochizukiInt4Mixed, false, 0, 1, 1, "INT4 mixed (ACO)", controls.int4_mixed)
 MZ_B(MochizukiRenoDX, false, 0, 1, 1, "RenoDX processing", controls.renodx_enabled)

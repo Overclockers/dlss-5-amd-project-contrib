@@ -79,7 +79,9 @@ Vulkan Headers、glslang 和 Slang 的固定版本下载包会自动保存在
 | 模块契约、源码/产物匹配、签名、实际 ZIP 内容与哈希 | 下载 Mochizuki 上游并重放 pin |
 
 完整测试没有删除：修改对应工具/功能时跑专项；需要全面检查时，在 Actions 手动
-运行 `release` workflow（只跑完整回归，不打包、不发布），或使用本地 `--tier ci`。
+运行 `release` workflow，默认只跑完整回归。选中 `test_package` 时，在同一运行中
+执行完整回归、构建、签名和 ZIP 核验，并上传保留 14 天的测试包 artifact；不创建
+tag 或 Release。测试 ZIP 版本带 run 编号和源码短 SHA。也可使用本地 `--tier ci`。
 GPU/device 按实际改动补充。日常发包不再以完整开发工具回归为前置条件。
 
 同步工具完整回归与本地试包启动器回归由 `tests\sync\run.cmd` 统一管理。

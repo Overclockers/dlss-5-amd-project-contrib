@@ -295,6 +295,16 @@ static bool RebuildSlider(const char* label, float* value, float low, float high
 
 static bool MochizukiIntegerControl(const char* label, std::string_view key, int* value, int low, int high)
 {
+    if (key == CfgKey::MochizukiNetworkModel) {
+        static const char* models[] = {"310.8.0 (original)", "310.9.16 (new)"};
+        *value = std::clamp(*value, 0, 1);
+        const bool changed = MenuUi::Combo(label, value, models, 2);
+        HelpMarker("Select the model to run. Changes rebuild the network in the background."
+                   "\n310.9.16 requires dlssnr-small.bin; without it the original model runs."
+                   "\nINT4 mixed is available only with 310.8.0 and active ACO; its saved preference is retained."
+                   "\nINI: [DlssNr] MochizukiNetworkModel=0 (original) / 1 (new). Save Settings to keep the selection.");
+        return changed;
+    }
     if (key == CfgKey::MochizukiPasses || key == CfgKey::MochizukiMaxPasses) {
         float pending = static_cast<float>(*value);
         if (!RebuildSlider(label, &pending, static_cast<float>(low), static_cast<float>(high), true)) return false;
@@ -491,7 +501,7 @@ static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const 
             if (reno && (key == CfgKey::MochizukiModelScale || key == CfgKey::MochizukiWhitePoint ||
                          key == CfgKey::MochizukiLinearInput || key == CfgKey::MochizukiMaxPasses)) return false;
             if (page == PipelineUi::Section::Input && key == CfgKey::MochizukiWhitePoint) return false;
-            if (key == CfgKey::MochizukiInt4Mixed) return false;
+            if (key == CfgKey::MochizukiInt4Mixed || key == CfgKey::MochizukiNetworkModel) return false;
             return MochizukiOptionOnPage(key, page);
         };
         const auto passes = config->MochizukiEffectivePasses();
@@ -603,8 +613,13 @@ static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const 
             MenuUi::TextWrapped("Inline path: segmented (%s)", timing.inline_path_why[0] ? timing.inline_path_why : "?");
         if (timing.aco_requested)
             MenuUi::TextWrapped("ACO requested, effective %u. %s", timing.aco_effective, timing.aco_fallback);
+        if (timing.frame_w) {
+            MenuUi::TextWrapped("Active model: %s", timing.network_effective ? "310.9.16" : "310.8.0");
+            if (timing.network_requested != timing.network_effective)
+                MenuUi::TextWrapped("Requested model is pending or unavailable. Install dlssnr-small.bin from your 310.9.16 DLL to use the new model.");
+        }
         if (timing.int4_requested)
-            MenuUi::TextWrapped(timing.int4_effective ? "INT4 mixed active" : "INT4 mixed requested; running the original network. Check ACO and install the complete package to prepare INT4 weights.");
+            MenuUi::TextWrapped(timing.int4_effective ? "INT4 mixed active" : "INT4 mixed inactive; select 310.8.0, enable ACO and prepare matching INT4 weights.");
         if (timing.renodx_effective) MenuUi::TextWrapped("RenoDX processing active; GPU timing shows the network only");
         MenuUi::TextWrapped("Completed-sample means. Network includes fused temporal shaders; Other covers core input, history copies and composition. Bridge copies, shared effects and whole-frame latency are excluded.");
         bool logging = config->NrTimingLog.value_or_default();
@@ -769,13 +784,18 @@ void RenderMenu(Config* config, float menuResScale)
                 if (choice.shown != choice.session)
                     MenuUi::TextColored(ImVec4(1.f, 0.f, 0.f, 1.f),
                                         "Save Settings, then restart the game.");
+                int model = int(config->MochizukiNetworkModel.value_or_default());
+                if (MochizukiIntegerControl("Network model", CfgKey::MochizukiNetworkModel, &model, 0, 1)) {
+                    config->MochizukiNetworkModel = uint32_t(model);
+                    AmdBridge::InvalidateHistory();
+                }
                 bool int4 = config->MochizukiInt4Mixed.value_or_default();
                 if (MenuUi::Checkbox("INT4 mixed (ACO)", &int4))
                 {
                     config->MochizukiInt4Mixed = int4;
                     AmdBridge::InvalidateHistory();
                 }
-                HelpMarker("Ctrl+F11 switches the default network and INT4 mixed. ACO preference is unchanged; INT4 requires active ACO. Save Settings to keep the selection.");
+                HelpMarker("Ctrl+F11 switches the INT4 request. INT4 requires the 310.8.0 model and active ACO; model and ACO preferences are retained. Save Settings to keep the selection.");
             }
             ImGui::PushID(static_cast<int>(kind));
             static PipelineUi::Section pages[3] {PipelineUi::Section::Model, PipelineUi::Section::Model, PipelineUi::Section::Model};

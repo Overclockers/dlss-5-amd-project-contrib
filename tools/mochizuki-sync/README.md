@@ -11,7 +11,7 @@ tests\mochizuki\run.cmd source-pin
 ```
 
 The first command reads **Git objects at the pin**, replays the patch series in
-a temporary directory under `exports/`, and compares 563 upstream files and six patch-created shaders (Plan A convert/unconvert and motion rescale) with
+a temporary directory under `exports/`, and compares 568 upstream files and six patch-created shaders (Plan A convert/unconvert and motion rescale) with
 vendor. It rejects missing/extra source paths, patch conflicts and unrecorded
 vendor edits. It normalizes text CRLF only; machine-code records remain opaque.
 It does not fetch, change vendor, advance the pin, build, package or publish.

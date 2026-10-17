@@ -1,6 +1,6 @@
 --- a/windows/src/core/nr_runtime.cpp
 +++ b/windows/src/core/nr_runtime.cpp
-@@ -495,7 +495,7 @@
+@@ -499,7 +499,7 @@
          if (!timing_ok || timings_recorded <= kTimingSlots) return;
          const uint32_t oldest = timing_slot;   // the next to be overwritten
          const uint32_t n = 2 + 2 * slot_passes[oldest];
@@ -9,7 +9,7 @@
          if (n > sizeof stamps / sizeof stamps[0]) return;
          if (vkGetQueryPoolResults(session.ctx.device, timing, oldest * timing_stride, n, n * sizeof(uint64_t), stamps,
                                    sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) != VK_SUCCESS)
-@@ -1177,8 +1177,8 @@
+@@ -1181,8 +1181,8 @@
      };
      if (!std::isfinite(config.model_scale) || config.model_scale <= 0.f || config.model_scale > 1.f)
          throw std::invalid_argument("model_scale must be in (0, 1]");

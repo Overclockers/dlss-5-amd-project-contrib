@@ -807,7 +807,7 @@ if (-not $keepBackups) {
             $backupPrefix = [IO.Path]::GetFullPath($b).TrimEnd('\') + '\'
             foreach ($file in Get-ChildItem -LiteralPath $b -Recurse -File -Force -ErrorAction Stop) {
                 $relative = $file.FullName.Substring($backupPrefix.Length)
-                if ($file.Name -in @('dlssnr.bin', 'dlssnr_on_amd_weights.bin', 'nvngx_dlssnr.dll') -or
+                if ($file.Name -in @('dlssnr.bin', 'dlssnr-small.bin', 'dlssnr_on_amd_weights.bin', 'nvngx_dlssnr.dll') -or
                     @($relative.Split('\')) -contains 'native-game-tiled-assets') {
                     $kept.Add("model inside backup: $($file.FullName)")
                     continue

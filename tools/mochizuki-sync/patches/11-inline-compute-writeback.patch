@@ -84,8 +84,8 @@
 +#endif
 --- a/windows/src/core/nr_runtime.cpp
 +++ b/windows/src/core/nr_runtime.cpp
-@@ -335,6 +335,14 @@
- struct Runtime::Impl {
+@@ -339,6 +339,14 @@
+     float post_blend_scale = kPostBlendScale;   // this network's blend_scale
      NrSession session;
      nrvk::Kernel alpha, mask_pre, mask_resolve;
 +    // Compute write-back for an R8G8B8A8_UNORM frame (runtime_pack_u8.spv), used
@@ -99,7 +99,7 @@
      // The linear-light path: the proxy is made in place on tex_in and the
      // original kept here for the decode. Only when RuntimeConfig::linear_input.
      nrvk::Kernel encode, transfer_pass, first_transfer;
-@@ -1001,6 +1009,8 @@
+@@ -1005,6 +1013,8 @@
          }
          if (depth_copy.device) depth_copy.destroy();
          if (alpha.device) alpha.destroy();
@@ -108,7 +108,7 @@
          if (encode.device) encode.destroy();
          if (transfer_pass.device) transfer_pass.destroy();
          if (first_transfer.device) first_transfer.destroy();
-@@ -1225,8 +1235,9 @@
+@@ -1259,8 +1269,9 @@
      vkGetPhysicalDeviceQueueFamilyProperties(host.physical, &count, props.data());
      if (host.queue_family >= count || !(props[host.queue_family].queueFlags & VK_QUEUE_COMPUTE_BIT))
          throw std::invalid_argument("NR host queue must support compute");
@@ -120,7 +120,7 @@
      std::string why;
      if (!s.ctx.adopt(host.instance, host.physical, host.device, host.queue, host.queue_family, &why))
          throw std::runtime_error("NR device unsupported: " + why);
-@@ -1539,6 +1550,22 @@
+@@ -1574,6 +1585,22 @@
                                          : (config.max_passes > 1 ? &impl_->shown_keep : &s.tex_in);
      if (!impl_->store_native && !impl_->compact_rgba)
          impl_->alpha.create(s.ctx, (adapters / "runtime_alpha.spv").string(), {}, 12, {answer, frame_alpha});
@@ -143,7 +143,7 @@
      if (config.linear_input) {
          impl_->linear = true;
          impl_->white_point = config.white_point;
-@@ -1875,6 +1902,21 @@
+@@ -1911,6 +1938,21 @@
  
  void Runtime::set_network_segments(std::function<VkCommandBuffer(VkCommandBuffer, bool)> callback) {
      impl_->network_segments = std::move(callback);
@@ -165,7 +165,7 @@
  }
  void Runtime::set_white_point(float v) {
      if (impl_->linear) impl_->white_point = v > 1e-4f ? v : 1e-4f;
-@@ -2197,6 +2239,7 @@
+@@ -2233,6 +2275,7 @@
          barrier(cmd,encoded.handle,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                  VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,
                  VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT);
@@ -173,7 +173,7 @@
          vkCmdBlitImage(cmd,encoded.handle,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                         colour_dst,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&blit,VK_FILTER_NEAREST);
          barrier(cmd,encoded.handle,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,
-@@ -2205,6 +2248,7 @@
+@@ -2241,6 +2284,7 @@
      } else if (impl_->transfer == Transfer::DirectBlit) {
          // FP16 / 16-bit UNORM / 10-bit packed: no sRGB transfer function to route
          // around, so the blit's own format conversion is the whole of it.
@@ -181,7 +181,7 @@
          vkCmdBlitImage(cmd, frame.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                         colour_dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
      } else {
-@@ -2226,6 +2270,7 @@
+@@ -2262,6 +2306,7 @@
          down.srcSubresource = down.dstSubresource = region.srcSubresource;
          down.srcOffsets[1] = {int32_t(frame.width), int32_t(frame.height), 1};
          down.dstOffsets[1] = {int32_t(nw), int32_t(nh), 1};
@@ -189,7 +189,7 @@
          vkCmdBlitImage(cmd, impl_->keep_full.handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                         s.tex_in.handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &down, impl_->downscale_filter);
          barrier(cmd, impl_->keep_full.handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
-@@ -2381,6 +2426,7 @@
+@@ -2417,6 +2462,7 @@
              mv.srcOffsets[1] = {int32_t(engine->motion_x + engine->motion.width),
                                  int32_t(engine->motion_y + engine->motion.height), 1};
              mv.dstOffsets[1] = {int32_t(t.lw[0]), int32_t(t.lh[0]), 1};
@@ -197,7 +197,7 @@
              vkCmdBlitImage(cmd, engine->motion.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                             t.flow[0].handle, VK_IMAGE_LAYOUT_GENERAL, 1, &mv, VK_FILTER_LINEAR);
              barrier(cmd, t.flow[0].handle, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
-@@ -2448,6 +2494,7 @@
+@@ -2484,6 +2530,7 @@
                  // a depth that is on neither surface, which is precisely the
                  // edge this tap exists to get right. Vulkan also forbids linear
                  // filtering on a depth aspect.
@@ -205,7 +205,7 @@
                  vkCmdBlitImage(cmd, engine->depth.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                 t.depth.handle, VK_IMAGE_LAYOUT_GENERAL, 1, &d, VK_FILTER_NEAREST);
                  barrier(cmd, t.depth.handle, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
-@@ -2784,6 +2831,7 @@
+@@ -2820,6 +2867,7 @@
              barrier(cmd,encoded.handle,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                      VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT,
                      VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT);
@@ -213,7 +213,7 @@
              vkCmdBlitImage(cmd,out,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                             encoded.handle,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&blit,VK_FILTER_NEAREST);
              barrier(cmd,encoded.handle,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-@@ -2794,7 +2842,27 @@
+@@ -2830,7 +2878,27 @@
              barrier(cmd,encoded.handle,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,
                      VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT,
                      VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT|VK_ACCESS_TRANSFER_WRITE_BIT);
@@ -243,7 +243,7 @@
          } else {
 --- a/windows/src/core/nr_runtime.hpp
 +++ b/windows/src/core/nr_runtime.hpp
-@@ -450,6 +450,19 @@
+@@ -459,6 +459,19 @@
      // a null callback preserves the original single-buffer behavior.
      void set_network_segments(std::function<VkCommandBuffer(VkCommandBuffer, bool)>);
  

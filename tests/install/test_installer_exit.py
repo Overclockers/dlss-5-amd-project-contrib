@@ -679,6 +679,30 @@ class InstallerExitTests(unittest.TestCase):
         self.assertEqual((self.game / "dlssnr-amd/dlssnr.bin").read_bytes(), expected)
         self.assertEqual((self.game / "dlssnr-amd/dlssnr-int4.bin").read_bytes(), INT4_PAYLOAD)
 
+    def test_mochizuki_installs_both_models_and_preserves_selection_on_upgrade(self):
+        self.ready_mochizuki(model=True)
+        small = b'NRMODEL1' + (255).to_bytes(4, 'little') + bytes(20)
+        (self.package / 'dlssnr-amd/dlssnr-small.bin').write_bytes(small)
+        ini = self.game / 'OptiScaler.ini'
+        ini.write_text('[DlssNr]\nBackend=mochizuki\nMochizukiNetworkModel=0\nMochizukiInt4Mixed=true\n', encoding='utf-8')
+        code, output = self.run_direct(flags=('-NonInteractive', '-Backend', 'mochizuki'))
+        self.assertEqual(code, 0, output)
+        self.assertEqual((self.game / 'dlssnr-amd/dlssnr-small.bin').read_bytes(), small)
+        self.assertIn('MochizukiNetworkModel=0', ini.read_text(encoding='utf-8-sig'))
+        self.assertIn('MochizukiInt4Mixed=true', ini.read_text(encoding='utf-8-sig'))
+        (self.package / 'dlssnr-amd/dlssnr-small.bin').write_bytes(small + b'package copy changed')
+        code, output = self.run_direct(flags=('-NonInteractive', '-Backend', 'mochizuki'))
+        self.assertEqual(code, 0, output)
+        self.assertEqual((self.game / 'dlssnr-amd/dlssnr-small.bin').read_bytes(), small)
+
+    def test_mochizuki_invalid_small_model_is_not_copied(self):
+        self.ready_mochizuki(model=True)
+        (self.package / 'dlssnr-amd/dlssnr-small.bin').write_bytes(b'NRMODEL1' + (599).to_bytes(4, 'little') + bytes(20))
+        code, output = self.run_direct(flags=('-NonInteractive', '-Backend', 'mochizuki'))
+        self.assertEqual(code, 0, output)
+        self.assertFalse((self.game / 'dlssnr-amd/dlssnr-small.bin').exists())
+        self.assertTrue((self.game / 'dlssnr-amd/dlssnr.bin').is_file())
+
     def test_mochizuki_int4_reuse_and_failed_conversion_preserve_weights(self):
         self.ready_mochizuki(model=True)
         flags = ('-NonInteractive', '-Backend', 'mochizuki')

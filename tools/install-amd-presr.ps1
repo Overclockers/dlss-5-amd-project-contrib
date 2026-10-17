@@ -744,7 +744,7 @@ $installLmxxf  = $false
 $installDaniel = $false
 $activeBackend = 'lmxxf'
 
-function Test-MochizukiModelHeader([string]$Path) {
+function Test-MochizukiModelHeader([string]$Path, [uint32]$Entries = 599) {
     if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
     $stream = $null
     try {
@@ -752,7 +752,7 @@ function Test-MochizukiModelHeader([string]$Path) {
         $header = New-Object byte[] 16
         if ($stream.Read($header, 0, 16) -ne 16) { return $false }
         return ([Text.Encoding]::ASCII.GetString($header, 0, 8) -ceq 'NRMODEL1' -and
-            [BitConverter]::ToUInt32($header, 8) -eq 599 -and $stream.Length -gt 16)
+            [BitConverter]::ToUInt32($header, 8) -eq $Entries -and $stream.Length -gt 16)
     } catch { return $false } finally { if ($stream) { $stream.Dispose() } }
 }
 $mochizukiModel = $null
@@ -761,7 +761,14 @@ if ($mochizukiAssets) { $modelCandidates += (Join-Path $mochizukiAssets 'dlssnr.
 foreach ($candidate in $modelCandidates) {
     if (Test-MochizukiModelHeader $candidate) { $mochizukiModel = $candidate; break }
 }
+$mochizukiSmallModel = $null
+$smallModelCandidates = @((Join-Path $game 'dlssnr-amd/dlssnr-small.bin'), (Join-Path $Root 'dlssnr-amd/dlssnr-small.bin'))
+if ($mochizukiAssets) { $smallModelCandidates += (Join-Path $mochizukiAssets 'dlssnr-small.bin') }
+foreach ($candidate in $smallModelCandidates) {
+    if (Test-MochizukiModelHeader $candidate 255) { $mochizukiSmallModel = $candidate; break }
+}
 $mochizukiNv = $null
+$mochizukiNewNvSha = '2bc19bc09a7b89dd44f73e2ac0108fcc586e2154bdd0830f242f4f040e28789f'
 $mochizukiNvSha = 'e16bcf15e16e13f527491cdf7845b2fe6521a738d8f7c9c721866a8496e1fc8e'
 # --- Weight-check helpers; preparation runs only after backend selection ---
 # Only checks that already exist are used: Mochizuki INT4 hash pin (model-tools/dlssnr-int4.sha256),
@@ -801,7 +808,7 @@ Write-Host ''
 Write-Host 'Detected backend files (model presence is not a GPU compatibility test):' -ForegroundColor Cyan
 Write-Host ("  lmxxf: runtime/modules={0}; weights={1}" -f $canLmxxf, $(if ($lmxxfWeights) { $lmxxfWeights } else { 'MISSING - supply native-game-tiled-assets' }))
 Write-Host ("  daniel: runtime/installer={0}; weights={1}; NVIDIA model={2}" -f $canDaniel, $(if ($weights) { $weights } else { 'MISSING' }), $(if ($nv) { $nv } else { 'MISSING' }))
-Write-Host ("  mochizuki: runtime/shaders={0}; model={1}" -f $canMochizuki, $(if ($mochizukiModel) { $mochizukiModel + ' (header recognized; runtime validates contents)' } else { 'MISSING - supply dlssnr.bin or nvngx_dlssnr.dll 310.8.0; extraction options follow backend selection' }))
+Write-Host ("  mochizuki: runtime/shaders={0}; model={1}" -f $canMochizuki, $(if ($mochizukiModel) { $mochizukiModel + ' (header recognized; runtime validates contents)' } else { 'MISSING - supply dlssnr.bin or nvngx_dlssnr.dll 310.9.16 / 310.8.0; extraction options follow backend selection' }))
 
 if ($canMochizuki -or $Backend -ne 'auto') {
     if ($Backend -eq 'auto' -and -not $NonInteractive) {
@@ -893,13 +900,18 @@ if ($installMochizuki) {
 }
 
 if ($installMochizuki) {
-    if (-not $mochizukiModel) {
+    if (-not $mochizukiModel -or -not $mochizukiSmallModel) {
         foreach ($candidate in @((Join-Path $Root 'nvngx_dlssnr.dll'), (Join-Path $game 'nvngx_dlssnr.dll'))) {
             if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-                if ((Get-Sha256 $candidate) -ieq $mochizukiNvSha) {
-                    $mochizukiNv = $candidate; break
+                $hash = Get-Sha256 $candidate
+                if ($hash -ieq $mochizukiNewNvSha) { $mochizukiNv = $candidate; break }
+                if ($hash -ieq $mochizukiNvSha) {
+                    if (-not $mochizukiModel) { $mochizukiNv = $candidate }
+                    continue
                 }
-                Write-Host "Mochizuki needs nvngx_dlssnr.dll 310.8.0; this DLL is not supported: $candidate" -ForegroundColor Yellow
+                if (-not $mochizukiModel) {
+                    Write-Host "Mochizuki needs nvngx_dlssnr.dll 310.9.16 or 310.8.0; this DLL is not supported: $candidate" -ForegroundColor Yellow
+                }
             }
         }
     }
@@ -919,7 +931,7 @@ if ($installMochizuki) {
             $candidate -ne $mochizukiNv -and -not $mochizukiNv) {
             Add-WeightProblem 'mochizuki' $false @(
                 "  Wrong file: $candidate (unsupported nvngx_dlssnr.dll version)",
-                "  Expected:   nvngx_dlssnr.dll 310.8.0 (SHA-256 $mochizukiNvSha)",
+                "  Expected:   nvngx_dlssnr.dll 310.9.16 (SHA-256 $mochizukiNewNvSha) or 310.8.0 (SHA-256 $mochizukiNvSha)",
                 '  Fix: replace it with version 310.8.0, run Mochizuki-Model.bat, then run Setup again.') @(
                 "  有问题的文件：$candidate（nvngx_dlssnr.dll 版本不受支持）",
                 "  期望：310.8.0 版 nvngx_dlssnr.dll（SHA-256 $mochizukiNvSha）",
@@ -1043,10 +1055,11 @@ if ($droppedBackends.Count -gt 0) {
 
 # Extract from the user's supported DLL when selected. Python is needed only
 # for extraction; an already extracted model can be installed without Python.
-if ($installMochizuki -and -not $mochizukiModel -and $mochizukiNv) {
+if ($installMochizuki -and $mochizukiNv -and (-not $mochizukiModel -or
+    (-not $mochizukiSmallModel -and (Get-Sha256 $mochizukiNv) -ieq $mochizukiNewNvSha))) {
     $extract = $NonInteractive
     if (-not $NonInteractive) {
-        $extract = (Ask-Choice 'Mochizuki model is missing. Extract it from the detected NVIDIA DLL?' @('Extract and install model (recommended)', 'Install runtime only; prepare model later')) -eq 1
+        $extract = (Ask-Choice 'A Mochizuki model is missing. Extract the available models from the detected NVIDIA DLL?' @('Extract and install model (recommended)', 'Install runtime only; prepare model later')) -eq 1
     }
     if ($extract) {
         $modelTool = Find-FirstFile @((Join-Path $Root 'mochizuki-model.py'), (Join-Path $PSScriptRoot 'install/mochizuki-model.py'))
@@ -1065,12 +1078,16 @@ if ($installMochizuki -and -not $mochizukiModel -and $mochizukiNv) {
             Write-Host 'Model extractor missing. Re-extract the complete OptiScaler package. Runtime installation will continue.' -ForegroundColor Yellow
         } else {
             $modelOutput = Join-Path $Root 'dlssnr-amd/dlssnr.bin'
-            if (Test-Path -LiteralPath $modelOutput) {
+            if ((Test-Path -LiteralPath $modelOutput) -and -not (Test-MochizukiModelHeader $modelOutput)) {
                 Write-Host "Existing invalid model was preserved: $modelOutput. Move it aside before rerunning extraction." -ForegroundColor Yellow
             } else {
                 Write-Host 'Extracting Mochizuki model; validating every tensor. This may take a few minutes...' -ForegroundColor Cyan
                 & $python -X utf8 $modelTool $mochizukiNv $modelOutput
-                if ($LASTEXITCODE -eq 0 -and (Test-MochizukiModelHeader $modelOutput)) { $mochizukiModel = $modelOutput }
+                if ($LASTEXITCODE -eq 0 -and (Test-MochizukiModelHeader $modelOutput)) {
+                    $mochizukiModel = $modelOutput
+                    $smallOutput = Join-Path $Root 'dlssnr-amd/dlssnr-small.bin'
+                    if (Test-MochizukiModelHeader $smallOutput 255) { $mochizukiSmallModel = $smallOutput }
+                }
                 else { Write-Host 'Model extraction failed. See the error above; rerun Mochizuki-Model.bat after fixing it. Runtime installation will continue.' -ForegroundColor Yellow }
             }
         }
@@ -1393,7 +1410,7 @@ function Install-One([string]$src, [string]$rel) {
     # They are not original game files and must never bloat backup directories.
     $isWeight = ($rel -ieq 'dlssnr_on_amd_weights.bin') -or
                 ($rel -ilike 'native-game-tiled-assets\*') -or
-                ($rel -ilike 'native-game-tiled-assets/*') -or ($rel -ieq 'dlssnr-amd/dlssnr.bin')
+                ($rel -ilike 'native-game-tiled-assets/*') -or ($rel -in @('dlssnr-amd/dlssnr.bin', 'dlssnr-amd/dlssnr-small.bin'))
 
     try {
         if (Test-Path -LiteralPath $dest) {
@@ -1630,6 +1647,7 @@ if ($installMochizuki) {
         Write-Host "Renamed mismatched Mochizuki model: $aside" -ForegroundColor Yellow
     }
     if ($mochizukiModel) { Install-One $mochizukiModel 'dlssnr-amd/dlssnr.bin' }
+    if ($mochizukiSmallModel) { Install-One $mochizukiSmallModel 'dlssnr-amd/dlssnr-small.bin' }
     $int4Root = Join-Path $mochizukiAssets 'int4'
     if (Test-Path -LiteralPath $int4Root -PathType Container) {
         foreach ($file in @(Get-LmxxfUnlinkedFiles $int4Root)) {

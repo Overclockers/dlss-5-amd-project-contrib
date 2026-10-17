@@ -3,6 +3,7 @@
 #include <utility>
 #include <vector>
 #include <vulkan/vulkan.h>
+#include "nr_native_plan.hpp"
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -147,6 +148,12 @@ struct RuntimeConfig {
     // the cost tracks scale^2 while the game's own resolution is untouched.
     // The "Model Resolution" of the NVIDIA-side mods.
     float model_scale = 1.0f;
+    // The network: the 310.8 model (dlssnr.bin) or the 310.9 small model
+    // (dlssnr-small.bin). Same shaders; the plan and the weights differ.
+    // -1 = as DLSSNR_MODEL / dlssnr-amd.ini [Network] Model say (small or original;
+    // neither: small), 0 = the original model, 1 = the small model. The small model
+    // needs an installed tree with dlssnr-small.bin; without it, the original model.
+    int network = -1;
 #if NR_INT4
     // The int4 mixed network: -1 = as DLSSNR_INT4 / dlssnr-amd.ini [Int4Mixed] Enabled say (start), 0 = the original
     // network, 1 = int4 mixed when installed and the device has VK_KHR_pipeline_binary ([Int4Mixed] Hotkey switches).
@@ -450,6 +457,8 @@ public:
     // The extent the network actually runs at (RuntimeConfig::model_scale applied).
     uint32_t model_width() const;
     uint32_t model_height() const;
+    // The model this runtime runs (RuntimeConfig::network resolved).
+    NetworkModel network() const;
 #if NR_INT4
     // Whether this runtime runs the int4 mixed network (asked for and everything it needs present).
     bool int4_mixed() const;

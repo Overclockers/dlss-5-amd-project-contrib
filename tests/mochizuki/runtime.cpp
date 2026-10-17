@@ -26,7 +26,7 @@ int wmain(int argc,wchar_t**argv) try {
     Require(getProgress(nullptr,&invalidProgress)==LMXXF_NR_INVALID_ARGUMENT,"progress accepted null session");
     Require(defaults&&set&&prepare&&getInfo,"missing controls/frame exports");Rc(defaults(&controls));
     Require(controls.intensity==1&&controls.preprocess==0&&controls.compact_transfer==1&&controls.enlarge_mode==0&&
-            controls.classic_scaler==1&&controls.aco_mode==1,"control defaults");
+            controls.classic_scaler==1&&controls.aco_mode==1&&controls.network_model==1,"control defaults");
     MochizukiNrControls oldControls {sizeof controls-4};
     Require(defaults(&oldControls)==LMXXF_NR_INVALID_ARGUMENT,"partial controls accepted");
     if(argc==2) {puts("MOCHIZUKI_ABI_OK");FreeLibrary(dll);return 0;}

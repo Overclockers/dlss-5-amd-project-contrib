@@ -22,6 +22,18 @@ static void rejects(F&& f)
 int main(int argc, char** argv) try
 {
     require(argc == 3, "record directory and scratch cache path required");
+    // Minimal PAL ELF string table: both RDNA4 machine IDs pass; older architectures stay rejected.
+    nr::pal::Bytes elf(129, 0);
+    std::memcpy(elf.data(), "\x7f" "ELF", 4); elf[4] = 2; elf[5] = 1; elf[7] = 65;
+    auto put = [&](size_t at, auto value) { std::memcpy(elf.data() + at, &value, sizeof value); };
+    put(16, uint16_t(1)); put(18, uint16_t(224)); put(40, uint64_t(64));
+    put(58, uint16_t(64)); put(60, uint16_t(1));
+    put(68, uint32_t(3)); put(88, uint64_t(128)); put(96, uint64_t(1));
+    for (uint32_t machine : {0x48u, 0x4eu}) {
+        put(48, machine); nr::pal::Elf parsed(elf);
+        require(parsed.sections.size() == 1, "RDNA4 ELF rejected");
+    }
+    put(48, uint32_t(0x44)); rejects([&] { nr::pal::Elf parsed(elf); });
     unsigned count = 0;
     for (const auto& entry : std::filesystem::directory_iterator(argv[1]))
     {

@@ -1,8 +1,6 @@
-diff --git a/windows/src/core/nr_runtime.cpp b/windows/src/core/nr_runtime.cpp
-index 3273043..6383508 100644
 --- a/windows/src/core/nr_runtime.cpp
 +++ b/windows/src/core/nr_runtime.cpp
-@@ -335,6 +335,9 @@ struct Runtime::Impl {
+@@ -345,6 +345,9 @@
      nrvk::Kernel unpack_f16, pack_f16;
      nrvk::Context::Image input_f16{}, output_f16{};
      bool f16_built{};
@@ -12,7 +10,7 @@ index 3273043..6383508 100644
      const char* convert_refusal{}; // compute_convert_colour: why a listed format kept the blits (menu status)
      bool compute_recording{}, graphics_family{true};
      void graphics_only(const char* what) const {
-@@ -1555,6 +1558,27 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
+@@ -1692,6 +1695,27 @@
              nr::logf("[nr] colour format %u input converted on compute (runtime_unpack_f16), write-back %s",
                       unsigned(cfmt), impl_->direct_out ? "direct" : colour_pack ? pack_name : "stored in its own format");
      }
@@ -40,7 +38,7 @@ index 3273043..6383508 100644
      if (!impl_->graphics_family && compute_refusal(false, VK_FORMAT_UNDEFINED, 0, 1))
          throw std::invalid_argument("NR colour format conversion requires a graphics-capable queue");
      impl_->compute_recording = !impl_->graphics_family;
-@@ -1888,9 +1912,11 @@ void Runtime::set_network_segments(std::function<VkCommandBuffer(VkCommandBuffer
+@@ -2036,9 +2060,11 @@
  const char* Runtime::compute_refusal(bool motion, VkFormat motion_format, VkImageUsageFlags motion_usage,
                                       int passes, bool mask) const {
      auto& m = *impl_;
@@ -55,7 +53,7 @@ index 3273043..6383508 100644
          return "colour write-back conversion needs a blit";
      if (motion && !(NR_DIRECT_MOTION && !m.motion_src_failed && !mask && passes == 1 && m.temporal.pingpong &&
                      (motion_usage & VK_IMAGE_USAGE_SAMPLED_BIT) && m.filters_linearly(motion_format)))
-@@ -2826,7 +2852,7 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
+@@ -2989,7 +3015,7 @@
              // Already the frame's bits (an *_SRGB frame takes its UNORM twin's).
              vkCmdCopyImage(cmd, out, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                             wb, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
@@ -64,7 +62,7 @@ index 3273043..6383508 100644
              barrier(cmd,encoded.handle,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                      VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT,
                      VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT);
-@@ -2841,10 +2867,11 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
+@@ -3004,10 +3030,11 @@
              barrier(cmd,encoded.handle,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,
                      VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT,
                      VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT|VK_ACCESS_TRANSFER_WRITE_BIT);
@@ -79,11 +77,9 @@ index 3273043..6383508 100644
              barrier(cmd, out, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
                      VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT,
                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
-diff --git a/windows/src/core/nr_runtime.hpp b/windows/src/core/nr_runtime.hpp
-index bf28d2c..79f7abf 100644
 --- a/windows/src/core/nr_runtime.hpp
 +++ b/windows/src/core/nr_runtime.hpp
-@@ -184,6 +184,11 @@ struct RuntimeConfig {
+@@ -200,6 +200,11 @@
      // A2R10G10B10 UNORM) take the compute input conversion and a compute write-back pack instead
      // of the graphics blits; otherwise the blit path and its refusal remain.
      bool compute_convert_colour = false;
