@@ -68,7 +68,16 @@ and host, replays the pin, signs and verifies the final ZIP, then uploads a test
 artifact. It does not create a Release or tag. The model-plan, resource-selection,
 failure-preservation, PAL architecture and dual-model installer tests run there.
 
-Actions completion is pending for this initial branch submission. No new-model
-GPU frames, temporal/barrier oracle, driver import, retained model-switch frames
-or game acceptance were run locally. Those require the user's legal model files
-and a supported GPU; no FPS or output-quality claim is made from CPU CI.
+[Actions run 38994911535](https://github.com/Overclockers/dlss-5-amd-project-contrib/actions/runs/38994911535)
+completed successfully on 2026-10-17 for source commit
+`5b53113df6c30c563de3e3acfd01535cecfb3c31`. Its validation summary passes runtime
+build, Mochizuki ABI, host CI, shaders, lmxxf ABI/WARP, installer and sync suites.
+Both runtime and host builds, package signing, final ZIP guards and upstream pin
+replay passed. Release creation and upload steps were skipped as intended.
+The artifact is `OptScaler-NR-1.12.2-test-3-5b53113d.zip`, SHA-256
+`2682C3E21457951788CD61BD95E4F89CC8771A1D06DABD2526E4355496C8A13B`.
+
+No new-model GPU frames, temporal/barrier oracle, driver import, retained
+model-switch frames or game acceptance were run locally. Those require the
+user's legal model files and a supported GPU; no FPS or output-quality claim is
+made from CPU/WARP CI.

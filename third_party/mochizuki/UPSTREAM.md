@@ -112,4 +112,4 @@ These are fixture results, not new game acceptance or FPS measurements.
 
 ## Not claimed
 
-No game scene was part of those historical checks. Official timing numbers are not reused as local results. INT4 was off in those checks and remains off by default. Current 0.0.5 integration and validation scope are recorded in [the integration review](../../docs/architecture/mochizuki-005-integration.md). The same-repo draft's explicit barrier switch was not added.
+No game scene was part of those historical checks. Official timing numbers are not reused as local results. INT4 was off in those checks and remains off by default. Current 0.0.6 integration and validation scope are recorded in [the integration review](../../docs/architecture/mochizuki-006-integration.md); [the 0.0.5 review](../../docs/architecture/mochizuki-005-integration.md) retains the earlier evidence. The same-repo draft's explicit barrier switch was not added.

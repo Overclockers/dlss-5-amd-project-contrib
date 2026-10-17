@@ -15,7 +15,7 @@
 - 当前产品名为 **OptScaler(NR)**。品牌仅用于安装/卸载窗口、README、包名等产品展示：窗口显示 `OptScaler(NR) <版本>`，正式 ZIP 为 `OptScaler-NR-<版本>.zip`，直接作为 GitHub Release 附件上传。ZIP 使用连字符，避免 GitHub 上传附件时将括号改为点号、导致按文件名核验失败。同步修改名称时检查打包、上传和下载路径。`OptiScaler.dll` / INI、旧日志名、源码目录及注册表位置保持兼容，旧安装记录仍可识别，新记录写入 `project=OptScaler(NR)`。
 - **tag 与 GitHub Release 标题固定为 `v<版本>`**（例如 `v1.10.2`），不添加品牌或其他描述；workflow 的发布标题直接使用 `github.ref_name`。CI 在 tag 名含 `-alpha`、`-beta` 或 `-rc` 时发成 prerelease，否则是正式版（Latest）。只认这三个后缀。
 - 1.8.x 时代的形式是 `1.8.x-0.3.y`（本 fork 版本 + 支持的 daniel runtime 版本）；1.9 起双后端，不再带 runtime 后缀。
-- **1.9.0.x 已全部撤包。** 本地遗留的 annotated tag `v1.9.0` 和 `dist/OptiScaler-AMD-PreSR-1.9.0.3.zip` 不要复用，任何新版本都不要再用 `1.9.0.x` 这个号。tag 必须与已提交的 `VERSION` 一致。手动 workflow 只跑完整回归，不出包。
+- **1.9.0.x 已全部撤包。** 本地遗留的 annotated tag `v1.9.0` 和 `dist/OptiScaler-AMD-PreSR-1.9.0.3.zip` 不要复用，任何新版本都不要再用 `1.9.0.x` 这个号。tag 必须与已提交的 `VERSION` 一致。手动 workflow 默认只跑完整回归；选中 `test_package` 可同时上传测试包 artifact，不创建 Release。
 
 ## 一键本地测试包
 
@@ -281,7 +281,7 @@ GPU的shader优先级回归包装既有HIP专项调用，同样不重复矩阵�
 
 ## CI 与 GitHub Release
 
-- `.github/workflows/release.yml`：推 `v*` tag 执行一次构建、精简 release 检查、打包并自动上传 Release；手动触发只执行完整回归，即使选择 tag 也不发布。无需预验证出包或跨 run 搬运产物。
+- `.github/workflows/release.yml`：推 `v*` tag 执行一次构建、精简 release 检查、打包并自动上传 Release；手动触发默认执行完整回归，选中 `test_package` 时还会构建、签名、核验并上传测试包 artifact。手动运行即使选择 tag 也不创建 Release。无需预验证出包或跨 run 搬运产物。
 - 核对线上资产用 **CI 产出的 zip**，不要用本机 `dist/` 冒充。
 - Release 的 tag、CI 构建的 commit（`head_sha`）、正文里的源码链接必须指向同一个提交。
 - 查 GitHub 状态用 REST（`gh api repos/TheAutomatic/dlss-5-amd-project/releases/tags/<tag>`），不要凭一次 GraphQL 失败下结论；`gh` 一律带 `-R TheAutomatic/dlss-5-amd-project`（见 [dev-environment.md](dev-environment.md)）。
