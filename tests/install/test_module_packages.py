@@ -57,12 +57,16 @@ Add-Type -TypeDefinition 'public static class PackageFixture { public static int
         (self.root / 'tools/release').mkdir(parents=True)
         (self.root / 'tools/lmxxf-sync').mkdir(parents=True)
         (self.root / 'tools/install').mkdir(parents=True, exist_ok=True)
+        (self.root / 'tools/build').mkdir(parents=True, exist_ok=True)
         shutil.copy2(REPO / 'tools/install/mochizuki-owned.txt', self.root / 'tools/install/mochizuki-owned.txt')
         for name in ('release/PACKAGE_RELEASE.ps1', 'install-amd-presr.ps1', 'uninstall-amd-presr.ps1',
                      'lmxxf-module-package.ps1', 'stage-lmxxf-beside-optiscaler.cmd',
                      'stage-lmxxf-beside-optiscaler.ps1', 'release/check-module-contract.ps1',
-                     'release/check-release-freshness.ps1', 'release/package-signing.ps1', 'lmxxf-sync/manifest.json'):
+                     'release/check-release-freshness.ps1', 'release/package-signing.ps1', 'lmxxf-sync/manifest.json',
+                     'build/build-launcher.ps1', 'install/launcher-worker.ps1', 'install/proxy-probe.ps1',
+                     'install/library-scan.ps1', 'install/install-capabilities.ps1'):
             shutil.copy2(REPO / 'tools' / name, self.root / 'tools' / name)
+        shutil.copytree(REPO / 'tools/install/launcher', self.root / 'tools/install/launcher')
         for name in ('LICENSE', 'NOTICE', 'OptiScaler-DLSSNR-PreSR-Multipass-main/LICENSE',
                      'third_party/lmxxf/LICENSE', 'third_party/onnxruntime/LICENSE',
                      'third_party/onnxruntime/YOLO11_AGPL-3.0.txt',

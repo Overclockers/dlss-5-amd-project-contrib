@@ -287,21 +287,35 @@ function Get-ProxyRecommendation([string]$exe) {
             }
         }
     }
-    foreach ($n in $owned) { Add-Cand $n 'high' 'existing project proxy' }
-    $all = @($result.pe.imports + $result.pe.delayImports + $walk.names)
-    foreach ($n in $CandidateNames) {
-        if ($all -contains $n) { Add-Cand $n 'medium' 'imported or delay-imported by the EXE or a local dependency' }
+    if ($owned.Count -eq 1) { Add-Cand $owned[0] 'high' 'existing project proxy' }
+    elseif ($owned.Count -gt 1) {
+        $result.hint = '已安装多个本项目代理，请选择要继续使用的 DLL。'
+        $result.selectionRequired = $true
     }
-    Add-Cand 'dxgi.dll' 'low' 'manual choice or default suggestion; not guaranteed to load'
+    $direct = @($result.pe.imports)
+    $delay = @($result.pe.delayImports)
+    $deps = @($walk.names)
+    foreach ($n in $CandidateNames) { if ($direct -contains $n) { Add-Cand $n 'medium' 'imported by the selected EXE' } }
+    foreach ($n in $CandidateNames) { if ($delay -contains $n) { Add-Cand $n 'medium' 'delay-imported by the selected EXE' } }
+    foreach ($n in $CandidateNames) { if ($deps -contains $n) { Add-Cand $n 'medium' 'imported by a local dependency' } }
     for ($i = 0; $i -lt $script:rank.Count; $i++) {
         $c = $script:rank[$i]
         $c.rank = $i + 1
         $result.candidates += $c
     }
-    if ($result.pe.arch -and $result.pe.arch -ne 'x64' -and $result.pe.arch -ne 'unknown') {
-        $result.hint = 'The selected EXE is not x64. Pick the game rendering executable.'
-    } elseif (-not $result.pe.ok) {
-        $result.hint = 'No usable import evidence. Pick the rendering EXE or choose a proxy manually.'
+    $result.recommend = $null
+    $blockedArch = ($result.pe.arch -and $result.pe.arch -ne 'x64' -and $result.pe.arch -ne 'unknown')
+    if ($blockedArch) {
+        $result.hint = '选中的 EXE 不是 x64。请改选游戏真正的渲染程序。'
+        $result.blockInstall = $true
+    } elseif ($owned.Count -eq 1) {
+        $result.recommend = $owned[0]
+        $result.hint = ("已安装 {0}，建议继续使用 {0}。" -f $owned[0])
+    } elseif ($script:rank.Count -gt 0 -and -not $result.selectionRequired) {
+        $result.recommend = $script:rank[0].name
+        $result.hint = ("检测到程序导入 {0}，建议尝试注入 {0}。" -f $result.recommend)
+    } elseif (-not $result.hint) {
+        $result.hint = '无法判断，请选择 DLL 自行尝试。'
     }
     $result.partial = [bool]$result.pe.partial -or [bool]$walk.partial
     if ($sw.ElapsedMilliseconds -gt $script:MaxMs) { $result.partial = $true }

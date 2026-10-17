@@ -1,4 +1,4 @@
-﻿# Compile OptScalerNR.Launcher.exe with the machine Framework 4 WPF assemblies.
+# Compile OptScalerNR.Launcher.exe with the machine Framework 4 WPF assemblies.
 # Output: exports/launcher/ (never the repo root).
 [CmdletBinding()]
 param(
@@ -60,9 +60,13 @@ Copy-Item -LiteralPath (Join-Path $src 'mock-worker.ps1') -Destination $OutDir -
 Copy-Item -LiteralPath (Join-Path $src 'PROTOCOL.md') -Destination $OutDir -Force
 Copy-Item -LiteralPath (Join-Path $root 'tools/install/launcher-worker.ps1') -Destination $OutDir -Force
 Copy-Item -LiteralPath (Join-Path $root 'tools/install/proxy-probe.ps1') -Destination $OutDir -Force
+Copy-Item -LiteralPath (Join-Path $root 'tools/install/library-scan.ps1') -Destination $OutDir -Force
+Copy-Item -LiteralPath (Join-Path $root 'tools/install/install-capabilities.ps1') -Destination $OutDir -Force
 $srcFiles = Get-ChildItem -LiteralPath $src -File | Where-Object { $_.Extension -match '\.(cs|xaml|manifest|md|ps1)$' }
 $srcFiles += Get-Item -LiteralPath (Join-Path $root 'tools/install/launcher-worker.ps1')
 $srcFiles += Get-Item -LiteralPath (Join-Path $root 'tools/install/proxy-probe.ps1')
+$srcFiles += Get-Item -LiteralPath (Join-Path $root 'tools/install/library-scan.ps1')
+$srcFiles += Get-Item -LiteralPath (Join-Path $root 'tools/install/install-capabilities.ps1')
 $sha = [Security.Cryptography.SHA256]::Create()
 $concat = New-Object IO.MemoryStream
 foreach ($f in ($srcFiles | Sort-Object FullName)) {

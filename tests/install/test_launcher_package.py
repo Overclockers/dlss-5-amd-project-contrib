@@ -29,3 +29,5 @@ class LauncherPackageTests(unittest.TestCase):
         self.assertIn("'OptScalerNR.Launcher.exe'", text)
         self.assertIn("'launcher-worker.ps1'", text)
         self.assertIn("'proxy-probe.ps1'", text)
+        self.assertIn("'library-scan.ps1'", text)
+        self.assertIn("'install-capabilities.ps1'", text)

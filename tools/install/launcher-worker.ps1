@@ -34,6 +34,8 @@ function New-Result([string]$status, [string]$error) {
         fingerprint = $script:fingerprint
         notes = $script:notes
         partial = $script:partial
+        recommend = $script:recommend
+        backends = $script:backends
     }
 }
 function Fail-Result([string]$status, [string]$error, [int]$code) {
@@ -146,10 +148,8 @@ $script:fingerprint = $probe.fingerprint
 $script:partial = [bool]$probe.partial
 $choice = [string]$req.proxyChoice
 if (-not $choice -or $choice -eq 'auto') {
-    $script:resolved = $probe.candidates[0].name
-    if ($probe.candidates[0].confidence -eq 'low') {
-        $script:notes += 'No strong import evidence. Manual proxy selection is recommended.'
-    }
+    if ($probe.recommend) { $script:resolved = [string]$probe.recommend }
+    else { $script:resolved = $null }
 } elseif ($allowedProxy -contains $choice) {
     $script:resolved = $choice
 } else {
@@ -158,10 +158,25 @@ if (-not $choice -or $choice -eq 'auto') {
 $backend = [string]$req.backendChoice
 if ($backend -and $allowedBackend -notcontains $backend) { Fail-Result 'failed' 'invalid backendChoice' 1 }
 
-$pkg = $null
-foreach ($c in @((Find-Sibling 'Setup.ps1'), (Find-Sibling 'install-amd-presr.ps1'))) {
-    if ($c) { $pkg = Split-Path $c -Parent; break }
+function Find-PackageRoot([string]$requested) {
+    $dirs = @()
+    if ($requested) { $dirs += $requested }
+    $dirs += $here
+    $dirs += (Split-Path $here -Parent)
+    foreach ($d in $dirs) {
+        if (-not $d) { continue }
+        try { $d = [IO.Path]::GetFullPath($d) } catch { continue }
+        $dll = Join-Path $d 'OptiScaler.dll'
+        $setup = @(
+            (Join-Path $d 'Setup.ps1'),
+            (Join-Path $d 'install-amd-presr.ps1')
+        ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
+        if ((Test-Path -LiteralPath $dll -PathType Leaf) -and $setup) { return $d }
+    }
+    return $null
 }
+$script:packageRoot = Find-PackageRoot ([string]$req.packageRoot)
+$pkg = $script:packageRoot
 if ($pkg) {
     $pythonHelper = Join-Path $pkg 'mochizuki-python.ps1'
     if (-not (Test-Path $pythonHelper)) { $pythonHelper = Join-Path $here 'mochizuki-python.ps1' }
@@ -169,6 +184,27 @@ if ($pkg) {
     $hasNv = Test-Path -LiteralPath (Join-Path $pkg 'nvngx_dlssnr.dll')
     $script:notes += ('Package model file present: {0}. That is not a GPU compatibility test.' -f $hasModel)
     $script:notes += ('NVIDIA DLL for optional extraction present: {0}.' -f $hasNv)
+}
+
+$script:recommend = $probe.recommend
+$script:backends = @()
+$capScript = Join-Path $here 'install-capabilities.ps1'
+if (-not (Test-Path -LiteralPath $capScript)) { $capScript = Find-Sibling 'install-capabilities.ps1' }
+if ($capScript -and (Test-Path -LiteralPath $capScript)) {
+    . $capScript
+    $script:backends = @(Get-OptScalerBackendCapabilities $script:packageRoot $script:gameDir)
+}
+
+if ($req.action -eq 'scan') {
+    $scan = Join-Path $here 'library-scan.ps1'
+    if (-not (Test-Path -LiteralPath $scan)) { $scan = Find-Sibling 'library-scan.ps1' }
+    if (-not $scan) { Fail-Result 'failed' 'library-scan.ps1 is missing from the package.' 1 }
+    . $scan
+    $games = @(Get-OptScalerGameLibrary)
+    $obj = New-Result 'success' $null
+    $obj.games = $games
+    Write-Result $obj
+    exit 0
 }
 
 if ($req.action -eq 'inspect') {
@@ -209,6 +245,13 @@ function ConvertTo-ForeignProxyMap($raw) {
 }
 
 $dec = $req.explicitDecisions
+if ($req.action -in @('install','update')) {
+    if ($probe.blockInstall) { Fail-Result 'failed' $probe.hint 1 }
+    if (-not $script:resolved) { Fail-Result 'needsInput' '无法判断，请选择 DLL 自行尝试。' 2 }
+    if (-not $script:packageRoot) {
+        Fail-Result 'failed' 'Complete package required: OptiScaler.dll was not found next to the installer. Unzip the full package and run Setup.bat from that folder.' 1
+    }
+}
 if ($req.action -ne 'uninstall') {
     if ($probe.conflicts.Count -gt 0) {
         $map = @{}
@@ -263,10 +306,12 @@ $prevEap = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
 if ($req.action -eq 'uninstall') {
     & $ps51 -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $install -GameDir $script:gameDir -NonInteractive -NoPause 1>$stdoutLog 2>$stderrLog
+} elseif ($req.backends) {
+    & $ps51 -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $install -GameDir $script:gameDir -Proxy $script:resolved -NoPause -NonInteractive -Root $script:packageRoot -Backends @($req.backends) -ActiveBackend ([string]$req.activeBackend) -DecisionJson $dj 1>$stdoutLog 2>$stderrLog
 } elseif ($backend -and $backend -ne 'auto') {
-    & $ps51 -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $install -GameDir $script:gameDir -Proxy $script:resolved -NoPause -NonInteractive -Backend $backend -DecisionJson $dj 1>$stdoutLog 2>$stderrLog
+    & $ps51 -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $install -GameDir $script:gameDir -Proxy $script:resolved -NoPause -NonInteractive -Root $script:packageRoot -Backend $backend -DecisionJson $dj 1>$stdoutLog 2>$stderrLog
 } else {
-    & $ps51 -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $install -GameDir $script:gameDir -Proxy $script:resolved -NoPause -NonInteractive -DecisionJson $dj 1>$stdoutLog 2>$stderrLog
+    & $ps51 -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $install -GameDir $script:gameDir -Proxy $script:resolved -NoPause -NonInteractive -Root $script:packageRoot -DecisionJson $dj 1>$stdoutLog 2>$stderrLog
 }
 $code = $LASTEXITCODE
 $ErrorActionPreference = $prevEap

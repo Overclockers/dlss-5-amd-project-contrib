@@ -20,25 +20,23 @@ BUILD = REPO / "tools/build/build-launcher.ps1"
 
 @unittest.skipUnless(os.name == "nt" and PS.exists(), "requires Windows PowerShell 5.1")
 class LauncherWorkerTests(unittest.TestCase):
-    def invoke(self, script, action, exe, decisions=None):
+    def invoke(self, script, action, exe, decisions=None, proxy=None, package_root=None):
         work = Path(tempfile.mkdtemp(prefix="launcher-worker-"))
         req = work / "request.json"
         events = work / "events.jsonl"
         result = work / "result.json"
-        req.write_text(
-            json.dumps(
-                {
-                    "schema": 1,
-                    "requestId": "test",
-                    "action": action,
-                    "gameExe": str(exe),
-                    "proxyChoice": "auto",
-                    "backendChoice": "auto",
-                    "explicitDecisions": decisions or {},
-                }
-            ),
-            encoding="utf-8",
-        )
+        payload = {
+            "schema": 1,
+            "requestId": "test",
+            "action": action,
+            "gameExe": str(exe),
+            "proxyChoice": proxy or "auto",
+            "backendChoice": "auto",
+            "explicitDecisions": decisions or {},
+        }
+        if package_root:
+            payload["packageRoot"] = str(package_root)
+        req.write_text(json.dumps(payload), encoding="utf-8")
         events.write_text("", encoding="utf-8")
         cmd = [
             str(PS),
@@ -69,7 +67,6 @@ class LauncherWorkerTests(unittest.TestCase):
         self.assertEqual(code, 0, events)
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["schema"], 1)
-        self.assertTrue(result["candidates"])
         self.assertEqual(result["effectiveGameDir"], str(d))
         self.assertNotIn("version.dll", [c["name"] for c in result["candidates"]])
         self.assertNotIn("dinput8.dll", [c["name"] for c in result["candidates"]])
@@ -146,6 +143,9 @@ class LauncherWorkerTests(unittest.TestCase):
 
     def test_foreign_proxy_key_value_array_is_accepted(self):
         d = Path(tempfile.mkdtemp(prefix="launcher-kv-"))
+        pkg = Path(tempfile.mkdtemp(prefix="launcher-pkg-"))
+        (pkg / "OptiScaler.dll").write_bytes(b"fixture")
+        (pkg / "Setup.ps1").write_text("# dummy", encoding="utf-8")
         exe = d / "game.exe"
         shutil.copy2(Path(os.environ["SystemRoot"]) / "System32/whoami.exe", exe)
         (d / "dxgi.dll").write_bytes(b"not-optiscaler")
@@ -154,6 +154,8 @@ class LauncherWorkerTests(unittest.TestCase):
             "install",
             exe,
             {"foreignProxy": [{"Key": "dxgi.dll", "Value": "backup"}]},
+            proxy="dxgi.dll",
+            package_root=pkg,
         )
         self.assertNotEqual(code, 2, events + str(result))
         ids = [x.get("id") for x in result.get("requiredDecisions") or []]
@@ -161,10 +163,13 @@ class LauncherWorkerTests(unittest.TestCase):
 
     def test_foreign_proxy_needs_input(self):
         d = Path(tempfile.mkdtemp(prefix="launcher-foreign-"))
+        pkg = Path(tempfile.mkdtemp(prefix="launcher-pkg-"))
+        (pkg / "OptiScaler.dll").write_bytes(b"fixture")
+        (pkg / "Setup.ps1").write_text("# dummy", encoding="utf-8")
         exe = d / "game.exe"
         shutil.copy2(Path(os.environ["SystemRoot"]) / "System32/whoami.exe", exe)
         (d / "dxgi.dll").write_bytes(b"not-optiscaler")
-        code, result, events = self.invoke(WORKER, "install", exe)
+        code, result, events = self.invoke(WORKER, "install", exe, proxy="dxgi.dll", package_root=pkg)
         self.assertEqual(code, 2, events)
         self.assertEqual(result["status"], "needsInput")
         ids = [x["id"] for x in result.get("requiredDecisions") or []]
@@ -178,6 +183,7 @@ class LauncherWorkerTests(unittest.TestCase):
         shutil.copy2(REPO / "tools/lmxxf-module-package.ps1", pkg / "lmxxf-module-package.ps1")
         shutil.copy2(REPO / "tools/install/launcher-worker.ps1", pkg / "launcher-worker.ps1")
         shutil.copy2(REPO / "tools/install/proxy-probe.ps1", pkg / "proxy-probe.ps1")
+        shutil.copy2(REPO / "tools/install/install-capabilities.ps1", pkg / "install-capabilities.ps1")
         shutil.copy2(REPO / "VERSION", pkg / "VERSION")
         fake = b"Harmless installer test data; not an executable."
         digest = hashlib.sha256(fake).hexdigest().upper()
@@ -207,6 +213,7 @@ class LauncherWorkerTests(unittest.TestCase):
                 action,
                 exe,
                 {"existingIni": "keep", "foreignProxy": {"dxgi.dll": "backup"}},
+                proxy="dxgi.dll",
             )
 
         code, result, events = go("install")

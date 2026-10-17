@@ -28,7 +28,7 @@ def write_pe(path: Path, machine=0x8664, magic=0x20B, imports=("dxgi.dll",), del
     struct.pack_into("<I", opt, 108, 16)  # NumberOfRvaAndSizes
     # section
     sec = bytearray(40)
-    sec[0:5] = b".rdata"
+    sec[0:6] = b".rdata"
     struct.pack_into("<I", sec, 8, 0x200)  # vsize
     struct.pack_into("<I", sec, 12, 0x2000)  # va
     struct.pack_into("<I", sec, 16, 0x200)  # raw size
@@ -84,8 +84,8 @@ class ProxyProbeTests(unittest.TestCase):
         exe.write_bytes(b"not a pe")
         data = self.run_probe(exe)
         self.assertFalse(data["pe"]["ok"])
-        self.assertEqual(data["candidates"][0]["name"], "dxgi.dll")
-        self.assertEqual(data["candidates"][0]["confidence"], "low")
+        self.assertIsNone(data.get("recommend"))
+        self.assertIn("自行尝试", data.get("hint") or "")
 
     def test_truncated(self):
         d = Path(tempfile.mkdtemp(prefix="probe-trunc-"))
@@ -131,4 +131,5 @@ class ProxyProbeTests(unittest.TestCase):
         data = self.run_probe(exe)
         names = [c["name"] for c in data["candidates"]]
         self.assertEqual(names[0], "dxgi.dll")
-        self.assertIn(data["candidates"][0]["confidence"], ("medium", "high", "low"))
+        self.assertEqual(data["recommend"], "dxgi.dll")
+        self.assertIn("dxgi.dll", data.get("hint") or "")

@@ -18,6 +18,9 @@ namespace OptScalerNR.Launcher
         [DataMember(Name = "backendChoice")] public string BackendChoice;
         [DataMember(Name = "explicitDecisions")] public Decisions ExplicitDecisions;
         [DataMember(Name = "fingerprint")] public string Fingerprint;
+        [DataMember(Name = "packageRoot")] public string PackageRoot;
+        [DataMember(Name = "backends")] public string[] Backends;
+        [DataMember(Name = "activeBackend")] public string ActiveBackend;
     }
 
     [DataContract]
@@ -46,6 +49,30 @@ namespace OptScalerNR.Launcher
         [DataMember(Name = "fingerprint")] public string Fingerprint;
         [DataMember(Name = "notes")] public string[] Notes;
         [DataMember(Name = "partial")] public bool Partial;
+        [DataMember(Name = "recommend")] public string Recommend;
+        [DataMember(Name = "games")] public GameInfo[] Games;
+        [DataMember(Name = "backends")] public BackendInfo[] Backends;
+    }
+
+    [DataContract]
+    public sealed class BackendInfo
+    {
+        [DataMember(Name = "id")] public string Id;
+        [DataMember(Name = "runtimeState")] public string RuntimeState;
+        [DataMember(Name = "modelState")] public string ModelState;
+        [DataMember(Name = "enabled")] public bool Enabled;
+        [DataMember(Name = "reasonCode")] public string ReasonCode;
+        [DataMember(Name = "reason")] public string Reason;
+    }
+
+    [DataContract]
+    public sealed class GameInfo
+    {
+        [DataMember(Name = "id")] public string Id;
+        [DataMember(Name = "name")] public string Name;
+        [DataMember(Name = "exe")] public string Exe;
+        [DataMember(Name = "source")] public string Source;
+        [DataMember(Name = "installed")] public bool Installed;
     }
 
     [DataContract]

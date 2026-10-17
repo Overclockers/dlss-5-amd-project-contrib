@@ -37,6 +37,9 @@ param(
     [string]$MochizukiModels,
     [ValidateSet('small', 'original')]
     [string]$MochizukiActiveModel,
+    [string[]]$Backends,
+    [ValidateSet('lmxxf','daniel','mochizuki')]
+    [string]$ActiveBackend,
     [switch]$NonInteractive,
     # Explicit opt-in for unattended clean reinstall. Otherwise unattended setup overwrites.
     [switch]$UninstallExisting,
@@ -871,7 +874,35 @@ Write-Host ("  lmxxf: runtime/modules={0}; weights={1}" -f $canLmxxf, $(if ($lmx
 Write-Host ("  daniel: runtime/installer={0}; weights={1}; NVIDIA model={2}" -f $canDaniel, $(if ($weights) { $weights } else { 'MISSING' }), $(if ($nv) { $nv } else { 'MISSING' }))
 Write-Host ("  mochizuki: runtime/shaders={0}; model={1}" -f $canMochizuki, $(if ($mochizukiModel) { $mochizukiModel + ' (header recognized; runtime validates contents)' } else { 'MISSING - supply dlssnr.bin or nvngx_dlssnr.dll 310.9.16 / 310.8.0; extraction options follow backend selection' }))
 
-if ($canMochizuki -or $Backend -ne 'auto') {
+if ($PSBoundParameters.ContainsKey('Backends') -and $PSBoundParameters.ContainsKey('Backend')) {
+    Fail 'Pass either -Backend or -Backends, not both.'
+}
+if ($PSBoundParameters.ContainsKey('Backends')) {
+    $allowedBackendIds = @('lmxxf','daniel','mochizuki')
+    if (-not $Backends -or @($Backends).Count -eq 0) { Fail '-Backends requires at least one backend id.' }
+    $seenBackend = @{}
+    foreach ($id in @($Backends)) {
+        if ($allowedBackendIds -notcontains $id) { Fail "Unknown backend id: $id" }
+        if ($seenBackend.ContainsKey($id)) { Fail "Duplicate backend id: $id" }
+        $seenBackend[$id] = $true
+    }
+    if (($seenBackend.ContainsKey('lmxxf') -and -not $canLmxxf) -or
+        ($seenBackend.ContainsKey('daniel') -and -not $canDaniel) -or
+        ($seenBackend.ContainsKey('mochizuki') -and -not $canMochizuki)) {
+        Fail 'A requested backend is not present in the package.'
+    }
+    $installLmxxf = [bool]$seenBackend.ContainsKey('lmxxf')
+    $installDaniel = [bool]$seenBackend.ContainsKey('daniel')
+    $installMochizuki = [bool]$seenBackend.ContainsKey('mochizuki')
+    $activeBackend = $null
+    foreach ($id in @('lmxxf','daniel','mochizuki')) {
+        if ($seenBackend.ContainsKey($id)) { $activeBackend = $id; break }
+    }
+    if ($PSBoundParameters.ContainsKey('ActiveBackend')) {
+        if (-not $seenBackend.ContainsKey($ActiveBackend)) { Fail 'ActiveBackend is not in -Backends.' }
+        $activeBackend = $ActiveBackend
+    }
+} elseif ($canMochizuki -or $Backend -ne 'auto') {
     if ($Backend -eq 'auto' -and -not $NonInteractive) {
         $choices = @('Install all available backends')
         $kinds = @('all')
