@@ -41,7 +41,10 @@ param(
     # Explicit opt-in for unattended clean reinstall. Otherwise unattended setup overwrites.
     [switch]$UninstallExisting,
     # Setup.bat owns the final pause; keep all folder/proxy/confirmation prompts.
-    [switch]$NoPause
+    [switch]$NoPause,
+    # Absolute JSON file from the GUI worker. Missing keys still require a prompt
+    # (or fail under -NonInteractive). Never treated as blanket consent.
+    [string]$DecisionJson
 )
 $ErrorActionPreference = 'Stop'
 $lmxxfStage = $null
@@ -87,6 +90,12 @@ function Fail([string]$msg) {
 # an invalid danielblnc setup executable). The batch also catches parser/parameter
 # binding failures, which happen before this script body can run.
 trap { Fail ("Unexpected install error: " + $_.Exception.Message) }
+
+$launcherDecisions = $null
+if ($DecisionJson) {
+    if (-not [IO.Path]::IsPathRooted($DecisionJson)) { Fail 'DecisionJson must be an absolute path.' }
+    $launcherDecisions = Get-Content -LiteralPath $DecisionJson -Raw -Encoding UTF8 | ConvertFrom-Json
+}
 
 . (Join-Path $PSScriptRoot 'lmxxf-module-package.ps1')
 
@@ -562,6 +571,11 @@ if (-not $existingOpti -and (Test-Path -LiteralPath $existingRecord -PathType Le
 $uninstallFirst = $false
 if ($existingOpti) {
     if ($UninstallExisting) { $uninstallFirst = $true }
+    elseif ($launcherDecisions -and $launcherDecisions.existingInstall) {
+        if ($launcherDecisions.existingInstall -eq 'uninstall') { $uninstallFirst = $true }
+        elseif ($launcherDecisions.existingInstall -eq 'overwrite') { $uninstallFirst = $false }
+        else { Fail 'DecisionJson existingInstall must be uninstall or overwrite.' }
+    }
     elseif (-not $NonInteractive) { $uninstallFirst = Ask-UninstallExisting }
     if (-not $uninstallFirst) { Write-Host 'Continuing with an overwrite installation.' -ForegroundColor Cyan }
 }
@@ -582,6 +596,10 @@ if (-not $NonInteractive -and -not $PSBoundParameters.ContainsKey('Proxy')) {
 }
 
 function Confirm-Continue([string]$title) {
+    if ($launcherDecisions) {
+        if ([string]$launcherDecisions.shortFileContinue -eq 'continue') { return }
+        Fail $title
+    }
     if ($NonInteractive) { Fail $title }
     $choice = Ask-Choice $title @('Cancel and exit', 'Continue anyway')
     if ($choice -eq 1) { Write-Host 'Cancelled.'; Pause-Exit 0 }
@@ -1424,6 +1442,26 @@ foreach ($f in $found) {
             Write-Host ("{0} is a previous OptiScaler proxy — removing it to prevent duplicate injection with {1}." -f $f.Name, $Proxy) -ForegroundColor Yellow
         }
     } else {
+        $fp = $null
+        if ($launcherDecisions -and $launcherDecisions.foreignProxy) {
+            $fp = $launcherDecisions.foreignProxy.PSObject.Properties[$f.Name]
+            if (-not $fp) { $fp = $launcherDecisions.foreignProxy.PSObject.Properties[$f.Name.ToLowerInvariant()] }
+            if ($fp) { $fp = [string]$fp.Value }
+        }
+        if ($fp) {
+            switch ($fp) {
+                'cancel' { Write-Host 'Cancelled.'; Pause-Exit 0 }
+                'backup' { $toMove += $f }
+                'keep' {
+                    if ($isTarget) {
+                        Fail ("You chose to keep {0}, but that is also the proxy name we would install as. Pick a different -Proxy." -f $f.Name)
+                    }
+                    $keep[$f.Name] = $true
+                }
+                default { Fail ("DecisionJson foreignProxy for {0} must be backup, keep, or cancel." -f $f.Name) }
+            }
+            continue
+        }
         if ($NonInteractive) {
             if ($isTarget) {
                 Fail ("{0} exists and is not OptiScaler. Refusing to overwrite in -NonInteractive. Backup/remove it or pick another -Proxy." -f $f.Name)
@@ -1622,7 +1660,12 @@ if (Test-Path -LiteralPath $ini -PathType Leaf) {
     } else {
         # Recommended on a large version jump. -NonInteractive takes that option.
         $overwriteIni = $NonInteractive
-        if (-not $NonInteractive) {
+        if ($launcherDecisions -and $launcherDecisions.existingIni) {
+            if ($launcherDecisions.existingIni -eq 'overwrite') { $overwriteIni = $true }
+            elseif ($launcherDecisions.existingIni -eq 'keep') { $overwriteIni = $false }
+            else { Fail 'DecisionJson existingIni must be overwrite or keep.' }
+        }
+        elseif (-not $NonInteractive) {
             $iniChoice = Ask-Choice 'OptiScaler.ini already exists in the game folder.' @(
                 'Overwrite OptiScaler.ini (Recommended: major version update!)'
                 'Keep the existing OptiScaler.ini'
@@ -1925,6 +1968,12 @@ if ($installLmxxf) {
 # --- Optional OptiPatcher (DLSS Spoofing Enhancement / OptiScaler native feature) ---
 $installedOptiPatcher = $false
 $isInteractiveUser = (-not $NonInteractive) -and (-not [Console]::IsInputRedirected -or [Console]::In.Peek() -ge 0)
+if ($launcherDecisions) {
+    $isInteractiveUser = $false
+    if ([string]$launcherDecisions.optiPatcher -eq 'install') {
+        Write-Host 'DecisionJson requested OptiPatcher; GUI installs do not download it in this version.' -ForegroundColor Yellow
+    }
+}
 if ($isInteractiveUser) {
     Write-Host ''
     Write-Host '===================================================' -ForegroundColor Cyan
