@@ -1,6 +1,6 @@
 --- a/windows/src/core/nr_runtime.cpp
 +++ b/windows/src/core/nr_runtime.cpp
-@@ -483,6 +483,9 @@
+@@ -487,6 +487,9 @@
      uint32_t timing_stride{2};             // queries per slot: 2 + 2 x max_passes
      uint32_t slot_passes[kTimingSlots]{};  // passes timed in each slot
      float net_ms{}, net_ms_avg{};
@@ -10,7 +10,7 @@
      // Read the oldest slot in the ring, if its recording has finished. Called
      // once per recording, from the thread that records.
      void read_timing() {
-@@ -494,15 +497,21 @@
+@@ -498,15 +501,21 @@
          if (vkGetQueryPoolResults(session.ctx.device, timing, oldest * timing_stride, n, n * sizeof(uint64_t), stamps,
                                    sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) != VK_SUCCESS)
              return;   // VK_NOT_READY: still running, ask again next frame
@@ -41,7 +41,7 @@
          // A plain exponential average. Ten frames is enough to stop the last
          // digit dancing and short enough that a resolution change shows up
          // immediately rather than being dragged in from before it.
-@@ -1280,6 +1289,8 @@
+@@ -1315,6 +1324,8 @@
          if (vkCreateQueryPool(s.ctx.device, &qi, nullptr, &impl_->timing) == VK_SUCCESS) {
              impl_->timing_ok = true;
              impl_->timestamp_ns = s.ctx.timestamp_period;
@@ -50,7 +50,7 @@
          }
      }
      // Values share arena memory by lifetime (nr_graph.cpp, `reuse`): same
-@@ -2812,6 +2823,9 @@
+@@ -2848,6 +2859,9 @@
  float Runtime::last_gpu_ms() const { return impl_->gpu_ms; }
  float Runtime::average_gpu_ms() const { return impl_->gpu_ms_avg; }
  float Runtime::average_network_ms() const { return impl_->split_timing ? impl_->net_ms_avg : 0.0f; }
@@ -62,7 +62,7 @@
      if (!s || s[1] != 1.0f) return {NAN, NAN};
 --- a/windows/src/core/nr_runtime.hpp
 +++ b/windows/src/core/nr_runtime.hpp
-@@ -447,6 +447,13 @@
+@@ -456,6 +456,13 @@
      // The network's share of average_gpu_ms (every pass's dispatches), the same average; the rest is
      // the work around it (input, composition, copies). Zero until the first result is back.
      float average_network_ms() const;

@@ -87,6 +87,7 @@ inline constexpr const char *MochizukiEnlargeMode = "MochizukiEnlargeMode";
 inline constexpr const char *MochizukiClassicScaler = "MochizukiClassicScaler";
 inline constexpr const char *MochizukiCompactTransfer = "MochizukiCompactTransfer";
 inline constexpr const char *MochizukiAcoMode = "MochizukiAcoMode";
+inline constexpr const char *MochizukiNetworkModel = "MochizukiNetworkModel";
 inline constexpr const char *MochizukiInt4Mixed = "MochizukiInt4Mixed";
 inline constexpr const char *MochizukiRenoDX = "MochizukiRenoDX";
 inline constexpr const char *MochizukiNoiseEveryFrame = "MochizukiNoiseEveryFrame";
@@ -352,6 +353,7 @@ inline constexpr const char *const kKnown[] = {
     MochizukiClassicScaler,
     MochizukiCompactTransfer,
     MochizukiAcoMode,
+    MochizukiNetworkModel,
     MochizukiInt4Mixed,
     MochizukiRenoDX,
     MochizukiNoiseEveryFrame,

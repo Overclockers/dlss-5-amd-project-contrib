@@ -804,7 +804,7 @@ if (Test-Path -LiteralPath $versionFile -PathType Leaf) {
 # danielblnc pass（dlssnr_amd_pass*.dll）必须不在包内 —— README 明写「包里没有 danielblnc pass」。
 # Keep this filename-only and case-insensitive: the same expression validates the
 # staged tree and every entry in the finished archive.
-$forbidden = '(?i)^(nvngx.*\.dll|dlssnr_amd_pass.*\.dll|dlssnr_on_amd_weights\.bin|dlssnr\.bin|version\.dll|dlssnr_on_amd_setup\.exe|.*\.generated\.hip|.*\.hsaco\.s)$'
+$forbidden = '(?i)^(nvngx.*\.dll|dlssnr_amd_pass.*\.dll|dlssnr_on_amd_weights\.bin|dlssnr(?:-int4|-small)?\.bin|version\.dll|dlssnr_on_amd_setup\.exe|.*\.generated\.hip|.*\.hsaco\.s)$'
 $badAll = Get-ChildItem -LiteralPath $stage -Recurse -File -ErrorAction SilentlyContinue |
     Where-Object { $_.Name -match $forbidden }
 if ($badAll) {
@@ -819,7 +819,9 @@ if ($LocalTest) {
         "Local test package $Version. Full release tests were not run for this package. Pending game validation and release validation.`n",
         [Text.UTF8Encoding]::new($false))
 }
-if (Test-Path (Join-Path $stage 'dlssnr-amd/dlssnr.bin')) { throw 'User model must never be packaged.' }
+foreach ($model in @('dlssnr.bin', 'dlssnr-small.bin', 'dlssnr-int4.bin')) {
+    if (Test-Path (Join-Path $stage "dlssnr-amd/$model")) { throw 'User model must never be packaged.' }
+}
 if (Test-Path (Join-Path $stage 'dlssnr-amd/pipeline.cache')) { throw 'Pipeline cache must never be packaged.' }
 if (Test-Path (Join-Path $stage 'dlssnr-amd/aco-cache')) { throw 'ACO driver cache must never be packaged.' }
 # Source identity/freshness gates above certify the original build. Only staged copies are signed.

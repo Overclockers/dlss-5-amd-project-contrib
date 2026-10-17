@@ -455,6 +455,7 @@ class Config
     CustomOptional<uint32_t> MochizukiEnlargeMode { 0u };
     CustomOptional<uint32_t> MochizukiClassicScaler { 1u };
     CustomOptional<bool> MochizukiAcoMode { true };
+    CustomOptional<uint32_t> MochizukiNetworkModel { 1u }; // 0: 310.8.0, 1: 310.9.16
     CustomOptional<bool> MochizukiInt4Mixed { false };
     CustomOptional<bool> MochizukiRenoDX { false };
     CustomOptional<bool> MochizukiNoiseEveryFrame { false };

@@ -9,11 +9,12 @@
 #include <filesystem>
 #include <string>
 #include <mutex>
+#include "nr_ini_network.hpp"
 #if NR_INT4
 #include "nr_ini_int4.hpp"
+#endif
 #ifdef _WIN32
 extern "C" __declspec(dllimport) unsigned long __stdcall GetEnvironmentVariableA(const char*, char*, unsigned long);
-#endif
 #endif
 
 // Arena reuse: byte-identical to one value one slot at 16 extents, first and fourth
@@ -240,11 +241,12 @@ constexpr unsigned kTemporalBase = 4;
 constexpr int kTemporalRadius[kTemporalLevels] = {2, 3, 3, 4};
 constexpr float kTemporalReject = 0.50f;
 // The post block's history weight is sigmoid(net) * clamp(s, 0, 1), where s is
-// the model's own f16 weight block70.layer0.blend_scale (0x39EB, the post
-// kernel's +104 pointer; the DLL looks it up next to the layer's weights at
-// 0x180075ce0). The model is pinned to 310.8.0 by its SHA-256, so it is a
-// constant here. TemporalConfig::history_strength scales it.
+// the model's own f16 weight <post block>.layer0.blend_scale (the post kernel's
+// +104 pointer; the DLL looks it up next to the layer's weights). Both models
+// are pinned by their SHA-256, so these are constants: 310.8.0 block70 0x39EB,
+// the 310.9 small model's block30 0x3A23. TemporalConfig::history_strength scales it.
 constexpr float kPostBlendScale = 0.73974609375f;
+constexpr float kPostBlendScaleSmall = 0.76708984375f;
 // The pre block's push, PushFSwin + PushPreImage (nr_graph.cpp).
 constexpr uint32_t kPrePushBytes = sizeof(PushFSwin) + sizeof(PushPreImage);
 constexpr uint32_t kPreSeedAt = sizeof(PushFSwin) + offsetof(PushPreImage, seed);
@@ -333,6 +335,8 @@ struct Temporal {
 };
 
 struct Runtime::Impl {
+    NetworkModel network = NetworkModel::Original;
+    float post_blend_scale = kPostBlendScale;   // this network's blend_scale
     NrSession session;
     nrvk::Kernel alpha, mask_pre, mask_resolve;
     // Compute write-back for an R8G8B8A8_UNORM frame (runtime_pack_u8.spv), used
@@ -1237,11 +1241,41 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
     };
     const uint32_t mw = model_extent(config.width), mh = model_extent(config.height);
     impl_->mw = mw; impl_->mh = mh; impl_->scaled = mw != config.width || mh != config.height;
+    // The model: the caller's choice over DLSSNR_MODEL over dlssnr-amd.ini [Network] Model; none of them: the
+    // small model. Its weights (dlssnr-small.bin, made by install.ps1 from the 310.9 DLL) are only in an installed
+    // tree; missing: the original model, and the log says why.
+    NetworkModel network = NetworkModel::Small;
+    {
+        std::string env;
+#ifdef _WIN32
+        { char b[16] = {}; const unsigned long n = GetEnvironmentVariableA("DLSSNR_MODEL", b, sizeof b); if (n && n < sizeof b) env = b; }
+#endif
+        if (env.empty()) if (const char* e = std::getenv("DLSSNR_MODEL")) env = e;
+        const int ev = env.empty() ? -1 : nr::network_value(env);
+        if (!env.empty() && ev < 0) nr::logf("[nr] DLSSNR_MODEL=%s is not small or original: ignored", env.c_str());
+        const int iv = config.network >= 0 || ev >= 0 ? -1 : nr::ini_network((data.parent_path() / "dlssnr-amd.ini").string());
+        const char* from = config.network >= 0 ? "caller" : ev >= 0 ? "DLSSNR_MODEL" : iv >= 0 ? "dlssnr-amd.ini" : "default";
+        const int v = config.network >= 0 ? config.network : ev >= 0 ? ev : iv;
+        if (v == 0) network = NetworkModel::Original;
+        std::error_code ec;
+        const char* missing = network != NetworkModel::Small ? nullptr
+            : !installed ? "not an installed tree"
+            : !std::filesystem::is_regular_file(data / "dlssnr-small.bin", ec) ? "dlssnr-amd/dlssnr-small.bin is missing (run install.ps1 with the 310.9.16 nvngx_dlssnr.dll)"
+            : nullptr;
+        if (missing) {
+            nr::logf("[nr] small model (%s) but %s: original model", from, missing);
+            network = NetworkModel::Original;
+        } else {
+            nr::logf("[nr] %s model (%s)", network == NetworkModel::Small ? "small" : "original", from);
+        }
+    }
+    impl_->network = network;
+    impl_->post_blend_scale = network == NetworkModel::Small ? kPostBlendScaleSmall : kPostBlendScale;
     impl_->native_compose = config.native_compose;
     if (config.native_compose && impl_->scaled)
         throw std::runtime_error("native_compose needs model_scale 1: the DLL has no transfer pass to resample through");
     impl_->max_passes = config.max_passes;
-    const auto native = make_native_plan(mw, mh);
+    const auto native = make_native_plan(mw, mh, network);
     std::string plan_name = "compiled native descriptor";
     if (!config.plan.empty()) {
         const auto path = std::filesystem::canonical(config.plan);
@@ -1308,7 +1342,8 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
     const std::filesystem::path i4root = data / "int4";
     if (int4_env == "1") {
         std::error_code ec;
-        const char* missing = !installed ? "not an installed tree"
+        const char* missing = network == NetworkModel::Small ? "the small model has no int4 network"
+            : !installed ? "not an installed tree"
             : !std::filesystem::is_directory(i4root / "shaders" / "temporal", ec) || !std::filesystem::is_directory(i4root / "vit", ec) ||
                       !std::filesystem::is_regular_file(i4root / "settings.txt", ec) ? "dlssnr-amd/int4/ is incomplete"
             : !std::filesystem::is_regular_file(data / "dlssnr-int4.bin", ec) ? "dlssnr-amd/dlssnr-int4.bin is missing (run install.ps1 again)"
@@ -1373,9 +1408,9 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
     // The weights as one file (windows/build/pack_model.py); the names inside are
     // the relative paths the graph asks for under --unpacked.
     if (installed) {
-        const auto pack = data / "dlssnr.bin";
+        const auto pack = data / (network == NetworkModel::Small ? "dlssnr-small.bin" : "dlssnr.bin");
         if (!std::filesystem::is_regular_file(pack))
-            throw std::runtime_error("missing " + pack.string() + " (run install.sh again)");
+            throw std::runtime_error("missing " + pack.string() + " (run install.ps1 again)");
         arguments.push_back("--model-pack"); arguments.push_back(pack.string());
     }
     // One pass at the frame's own extent, not linear: every kernel only samples
@@ -2045,6 +2080,7 @@ Runtime::~Runtime() = default;
 
 uint32_t Runtime::model_width() const { return impl_->mw; }
 uint32_t Runtime::model_height() const { return impl_->mh; }
+NetworkModel Runtime::network() const { return impl_->network; }
 #if NR_INT4
 bool Runtime::int4_mixed() const { return impl_->int4_mixed; }
 #endif
@@ -2717,7 +2753,7 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
         const float params[12] = {gate ? 1.0f : 0.0f,
                                   engine ? engine->motion_scale_x : 1.0f,
                                   engine ? engine->motion_scale_y : 1.0f,
-                                  t.history_strength * kPostBlendScale,
+                                  t.history_strength * impl_->post_blend_scale,
                                   float(t.history.w), float(t.history.h),
                                   have_depth ? 1.0f : 0.0f,
                                   have_depth && engine->depth_inverted ? 1.0f : 0.0f,

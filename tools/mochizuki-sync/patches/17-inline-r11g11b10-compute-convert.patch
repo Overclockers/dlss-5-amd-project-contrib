@@ -1,8 +1,6 @@
-diff --git a/windows/src/core/nr_runtime.cpp b/windows/src/core/nr_runtime.cpp
-index 2338b3ef..d5468d2b 100644
 --- a/windows/src/core/nr_runtime.cpp
 +++ b/windows/src/core/nr_runtime.cpp
-@@ -1492,24 +1492,38 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
+@@ -1629,24 +1629,38 @@
      }
      // Optional compute conversions preserve FP16/HDR values. Private images keep
      // descriptors stable across caller recordings; only copies touch caller images.
@@ -45,11 +43,9 @@ index 2338b3ef..d5468d2b 100644
      }
      if (!impl_->graphics_family && compute_refusal(false, VK_FORMAT_UNDEFINED, 0, 1))
          throw std::invalid_argument("NR colour format conversion requires a graphics-capable queue");
-diff --git a/windows/src/core/nr_runtime.hpp b/windows/src/core/nr_runtime.hpp
-index ddb4d859..969ef970 100644
 --- a/windows/src/core/nr_runtime.hpp
 +++ b/windows/src/core/nr_runtime.hpp
-@@ -180,6 +180,11 @@ struct RuntimeConfig {
+@@ -196,6 +196,11 @@
      // separate_answer: do not use store_native; keep a distinct answer image.
      bool compact_transfer = false;
      bool separate_answer = false;

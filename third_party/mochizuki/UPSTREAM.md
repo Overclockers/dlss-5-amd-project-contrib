@@ -1,7 +1,7 @@
 # Mochizuki Vulkan NR core
 
 - Source: https://github.com/mochizuki0323/DLSSNR-AMD
-- Source snapshot: `8a70f7f418294ff1e306b66893456e5319ff8205` (2026-10-14), Windows 0.0.5 preview: ACO INT4 mixed, RenoDX processing, driver identity under GPU spoofing, and the shared 0.0.5 core/shader fixes.
+- Source snapshot: `191b97b54175d50c7ec5992b54322dd3eb0ef8ac` (2026-10-17), Windows 0.0.6 preview alpha: selectable 310.9.16 and original 310.8.0 models, per-model graph/temporal handling, dual-model extraction, plus the gfx1200 ACO ELF correction.
 - Previous pins, kept only as history: Windows `a9b13dd4cdb5f4bf43db358492d72e6e5e2acd67`,  Linux-only v0.0.4 tag `9e4574e1812d7d0632d6db02721a20c9617be434`, and the old Windows v0.0.3 baseline `82560c4fbfaac347fc5e22c22025191402ae916b`. Do not mix those trees back in.
 - License: MIT for this core; the original LICENSE is retained. The product adapter under `dlssnr/backend/mochizuki_runtime/` comes from MatheusFerreiraS/neural-amd-opti `283fdb0a1df9e9c4c78de0d2d848e775cf6ae8ae` (GPL-3.0). The combined runtime is distributed under GPL-3.0, with the MIT notice retained.
 - Closure: `windows/src/core`, `windows/shaders`, `windows/build` (recipe, unroll, quad-quant, `arch/rdna4.sh`), `windows/data/aco` records and `shell-aliases.txt`, `linux/shaders`, `linux/build/build_network.py`, `linux/build/arch/rdna4.sh`, and `linux/package/model-tools`. The 0.0.5 closure also includes `linux/data/int4/rdna4`, Windows INT4 ACO records, the INT4 weight generator, RenoDX core, shaders and their MIT notices. Patch 12 adds weights-only installation extraction; the weight parser, unpackers and model hash lists remain unchanged.
@@ -9,7 +9,7 @@
 
 The source pin and twenty-three feature patches are machine-readable in
 [tools/mochizuki-sync/manifest.json](../../tools/mochizuki-sync/manifest.json).
-[Replay verification](../../tools/mochizuki-sync/README.md) reproduces 563 upstream files and six patch-created shaders (Plan A convert/unconvert and motion rescale) from the pinned Git objects plus these patches, without overwriting
+[Replay verification](../../tools/mochizuki-sync/README.md) reproduces 568 upstream files and six patch-created shaders (Plan A convert/unconvert and motion rescale) from the pinned Git objects plus these patches, without overwriting
 vendor. [Extension decisions](../../docs/architecture/mochizuki-upstream-extensions.md)
 record their consumers, upstream suitability and missing validation.
 
@@ -71,7 +71,11 @@ Reduced model scale, motion needing a blit and first-pass export retain segments
 - Windows glslang 16.5.0, archive SHA-256 `06b71298b750268c127f2ee7ae0ef7525e2068120c6c8a3a08b2f58ca6f325ce`.
 - The official Linux glslang tarball SHA-256 is `b9b1f96acb898a62251b171f7695efcecfc206a530299054071919b06820f657` (same 16.5.0, different archive). This build uses the Windows pin for both shader trees. The loaded ACO corpus is `dlssnr-amd/aco/shaders` (network and temporal). A 4-of-56 comparison against Windows `dlssnr-amd/shaders` is not that corpus: those Windows shaders are the native shell and runtime source. Preflight accepts the bundle only when every hashed ACO network SPIR-V matches its record contents. Device import is a separate result from `tests/mochizuki/run.cmd aco` on the selected adapter.
 
-The 599-entry `dlssnr.bin` model still comes from the user's own `nvngx_dlssnr.dll` 310.8.0. Neither that DLL nor the extracted model is in this repository.
+The 599-entry `dlssnr.bin` comes from the user's own 310.8.0 or 310.9.16 DLL;
+the 255-entry `dlssnr-small.bin` requires 310.9.16. The descriptor, resource-aware
+unpacker and hash lists follow the new pin. Neither DLL nor extracted model is in
+this repository. See [0.0.6 integration](../../docs/architecture/mochizuki-006-integration.md)
+for product selection, validation scope and remaining GPU checks.
 
 ## Measured
 
@@ -108,4 +112,4 @@ These are fixture results, not new game acceptance or FPS measurements.
 
 ## Not claimed
 
-No game scene was part of those historical checks. Official timing numbers are not reused as local results. INT4 was off in those checks and remains off by default. Current 0.0.5 integration and validation scope are recorded in [the integration review](../../docs/architecture/mochizuki-005-integration.md). The same-repo draft's explicit barrier switch was not added.
+No game scene was part of those historical checks. Official timing numbers are not reused as local results. INT4 was off in those checks and remains off by default. Current 0.0.6 integration and validation scope are recorded in [the integration review](../../docs/architecture/mochizuki-006-integration.md); [the 0.0.5 review](../../docs/architecture/mochizuki-005-integration.md) retains the earlier evidence. The same-repo draft's explicit barrier switch was not added.

@@ -480,6 +480,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             MochizukiClassicScaler.set_from_config(readUInt(CfgKey::kSection, CfgKey::MochizukiClassicScaler));
             MochizukiCompactTransfer.set_from_config(readBool(CfgKey::kSection, CfgKey::MochizukiCompactTransfer));
             MochizukiAcoMode.set_from_config(readBool(CfgKey::kSection, CfgKey::MochizukiAcoMode));
+            MochizukiNetworkModel.set_from_config(readUInt(CfgKey::kSection, CfgKey::MochizukiNetworkModel));
             MochizukiInt4Mixed.set_from_config(readBool(CfgKey::kSection, CfgKey::MochizukiInt4Mixed));
             MochizukiRenoDX.set_from_config(readBool(CfgKey::kSection, CfgKey::MochizukiRenoDX));
             MochizukiNoiseEveryFrame.set_from_config(readBool(CfgKey::kSection, CfgKey::MochizukiNoiseEveryFrame));
@@ -1910,6 +1911,7 @@ bool Config::SaveIni()
     ini.SetValue(CfgKey::kSection, CfgKey::MochizukiClassicScaler, GetIntValue(Instance()->MochizukiClassicScaler.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::MochizukiCompactTransfer, GetBoolValue(Instance()->MochizukiCompactTransfer.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::MochizukiAcoMode, GetBoolValue(Instance()->MochizukiAcoMode.value_for_config()).c_str());
+    ini.SetValue(CfgKey::kSection, CfgKey::MochizukiNetworkModel, GetIntValue(Instance()->MochizukiNetworkModel.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::MochizukiInt4Mixed, GetBoolValue(Instance()->MochizukiInt4Mixed.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::MochizukiRenoDX, GetBoolValue(Instance()->MochizukiRenoDX.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::MochizukiNoiseEveryFrame, GetBoolValue(Instance()->MochizukiNoiseEveryFrame.value_for_config()).c_str());

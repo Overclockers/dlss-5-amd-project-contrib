@@ -205,13 +205,15 @@ def main():
     mode.add_argument("--extract", action="store_true", help="Extract DLL, weights and cubins for analysis")
     mode.add_argument("--extract-weights", action="store_true",
                       help="Extract weights for installation; skip CUDA inventory and DLL/cubin copies")
+    parser.add_argument("--resource", default="WEIGHTS_HT",
+                        help="weight resource: WEIGHTS_HT (310.8.0, and 310.9's preset 1) or WEIGHTS_CC_SMALL_FP8 (310.9's small model)")
     args = parser.parse_args()
     data = load_input(args.input)
     pe = PE(data)
     resources = pe.resources()
-    matches = [r for r in resources if "WEIGHTS_HT" in r["path"]]
+    matches = [r for r in resources if args.resource in r["path"]]
     if len(matches) != 1:
-        raise FormatError("expected exactly one WEIGHTS_HT resource")
+        raise FormatError(f"expected exactly one {args.resource} resource")
     resource = matches[0]
     weights = checked(data, resource["file_offset"], resource["size"])
     records = parse_weights(weights)

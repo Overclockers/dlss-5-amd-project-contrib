@@ -627,6 +627,7 @@ struct SessionControls
     bool compactTransfer = true;
     bool acoRequested = false;
     bool int4 = false, renodx = false;
+    uint32_t networkModel = 1;
     nr::renodx::Settings reno;
     uint32_t maxPasses = 0;  // 0: the frame's passes
     uint32_t drsMode = 0;    // MochizukiNrControls::drs_mode: 0 exact, 1 auto, 2 always (Session::DrsExtent)
@@ -638,6 +639,7 @@ void DefaultControls(MochizukiNrControls& c)
     const nr::PassControls pass;
     c = {};
     c.struct_size = sizeof c;
+    c.network_model = 1;
     c.intensity = model.intensity;
     c.style = uint32_t(model.style);
     c.local_tone = model.local_tone;
@@ -696,6 +698,7 @@ SessionControls Sanitise(const MochizukiNrControls& c)
     out.compactTransfer = c.compact_transfer != 0;
     out.acoRequested = c.aco_mode != 0;
     out.int4 = c.int4_mixed != 0;
+    out.networkModel = c.network_model <= 1 ? c.network_model : 1;
     out.renodx = c.renodx_enabled != 0;
     m.noise_every_frame = c.noise_every_frame != 0;
 #define RDX_F(member, field, def, low, high) out.reno.field = San(c.member, low, high, def);
@@ -2073,6 +2076,7 @@ struct NetworkKey
     bool firstPass = false;
     bool aco = false; // this build imports the ACO network; the device must already expose pipeline binaries
     bool int4 = false, renodx = false;
+    uint32_t networkModel = 1;
     uint32_t renoWidth = 0, renoHeight = 0, sourceEncoding = 0;
     float linearNits = 0.f;
     bool computeConvert = false; // NrInlineComputeConvert on a listed-format key (RuntimeConfig::compute_convert_colour)
@@ -2085,7 +2089,7 @@ struct NetworkKey
         return width == other.width && height == other.height && format == other.format &&
                scale == other.scale && linear == other.linear && prep == other.prep &&
                compactTransfer == other.compactTransfer && firstPass == other.firstPass && aco == other.aco &&
-               int4 == other.int4 && renodx == other.renodx && renoWidth == other.renoWidth &&
+               networkModel == other.networkModel && int4 == other.int4 && renodx == other.renodx && renoWidth == other.renoWidth &&
                renoHeight == other.renoHeight && sourceEncoding == other.sourceEncoding && linearNits == other.linearNits &&
                computeConvert == other.computeConvert && computeDownscale == other.computeDownscale &&
                computeExport == other.computeExport && motionPasses == other.motionPasses;
@@ -2616,7 +2620,7 @@ struct Session
     bool deviceStarted = false;
     bool acoAtDevice = false;
     bool acoEffective = false;
-    std::atomic<uint32_t> infoInt4 {0}, infoReno {0};
+    std::atomic<uint32_t> infoInt4 {0}, infoReno {0}, infoNetwork {0};
     char acoFallback[128] {};
     // The builder's result for the network it is about to hand to Install. A discarded candidate leaves these unused.
     bool candidateReady = false;
@@ -4115,7 +4119,7 @@ struct Session
     {
         LogNetworkTime(why);
         finished = lastFinished.load();
-        infoInt4 = infoReno = 0;
+        infoInt4 = infoReno = infoNetwork = 0;
         return std::move(runtime);
     }
 
@@ -4185,6 +4189,7 @@ struct Session
         infoFrameWidth = net.width;
         infoFrameHeight = net.height;
         infoInt4 = runtime->int4_mixed();
+        infoNetwork = runtime->network() == nr::NetworkModel::Small ? 1u : 0u;
         infoReno = runtime->reno != nullptr;
         infoModelWidth = runtime->model_width();
         infoModelHeight = runtime->model_height();
@@ -4366,6 +4371,7 @@ struct Session
             config.colour_format = key.format;
             config.linear_input = key.linear;
             config.model_scale = key.scale;
+            config.network = int(key.networkModel); // Product INI/menu overrides DLSSNR_MODEL and upstream INI.
             config.max_passes = key.maxPasses;
             config.preprocess = key.prep;
             config.compact_transfer = key.compactTransfer;
@@ -5994,7 +6000,7 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
                 MZ_HOLDS(info, MochizukiNrFrameInfo, passes) ? std::clamp(info->passes, 1u, kMaxPasses) : 1u; // 0 is 1
             nr::Controls model;
             float history = 1.f, white = 1.f;
-            uint32_t linearMode = 0, maxPassesSetting = 0, drsMode = 0;
+            uint32_t linearMode = 0, maxPassesSetting = 0, drsMode = 0, networkModel = 1;
             bool compactTransfer = true, aco = false, prepRequested = false, int4 = false, renodx = false;
             nr::renodx::Settings reno;
             float renoExposure = 0.f;
@@ -6026,6 +6032,7 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
                 drsMode = s->controls.drsMode;
                 compactTransfer = s->controls.compactTransfer;
                 aco = s->controls.acoRequested && s->acoAtDevice;
+                networkModel = s->controls.networkModel;
                 int4 = s->controls.int4; renodx = s->controls.renodx; reno = s->controls.reno;
                 prepRequested = s->prepRequested; // the one field of the session SetControls writes under this lock
             }
@@ -6082,7 +6089,9 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
                 keyFormat == VK_FORMAT_A2B10G10R10_UNORM_PACK32 || keyFormat == VK_FORMAT_A2R10G10B10_UNORM_PACK32;
             NetworkKey key { g.width, g.height, keyFormat, scale, maxPasses, linear, s->prepWanted || prepRequested,
                                     compactTransfer, g.firstPass, aco };
-            key.int4 = int4; key.renodx = renodx;
+            key.networkModel = networkModel;
+            key.int4 = int4 && networkModel == 0; // INT4 records/weights describe the original model only.
+            key.renodx = renodx;
             if (renodx) {
                 nr::renodx::working_resolution(reno, g.width, g.height, motionW, motionH, &key.renoWidth, &key.renoHeight);
                 key.sourceEncoding = reno.source_encoding; key.linearNits = reno.linear_unit_nits;
@@ -6521,8 +6530,8 @@ int32_t GetLastError(char* buf, uint32_t chars)
 // MochizukiNrControls.h. Every Controls field is 4 bytes and 4-aligned and the struct ends at its last field, so the
 // whole fields a caller's struct holds are its first struct_size & ~3 bytes.
 static_assert(alignof(MochizukiNrControls) == 4 &&
-              sizeof(MochizukiNrControls) == offsetof(MochizukiNrControls, reno_mvec_scale_y) +
-                                                 sizeof(MochizukiNrControls::reno_mvec_scale_y) &&
+              sizeof(MochizukiNrControls) == offsetof(MochizukiNrControls, network_model) +
+                                                 sizeof(MochizukiNrControls::network_model) &&
               offsetof(MochizukiNrControls, pass) == 72 && offsetof(MochizukiNrControls, preprocess) == 136 &&
               sizeof(MochizukiNrPassControls) == 32);
 // Info has no implicit padding (reserved0 fills the gap before frames), so its offsets do not depend on packing; its
@@ -6558,7 +6567,7 @@ int32_t SetControls(void* context, const MochizukiNrControls* in)
 {
     auto* s = static_cast<Session*>(context);
     if (!s || !in || in->struct_size != sizeof(MochizukiNrControls) || in->flags)
-        return Fail(LMXXF_NR_INVALID_ARGUMENT, "SetControls: bad arguments");
+        return Fail(LMXXF_NR_INVALID_ARGUMENT, "SetControls: package ABI mismatch or bad arguments; update the complete package");
     try
     {
         const MochizukiNrControls c = *in; // Exact current-package ABI only.
@@ -6592,7 +6601,7 @@ int32_t GetInfo(void* context, MochizukiNrInfo* out)
 {
     auto* s = static_cast<Session*>(context);
     if (!s || !out || out->struct_size != sizeof(MochizukiNrInfo))
-        return Fail(LMXXF_NR_INVALID_ARGUMENT, "GetInfo: bad arguments");
+        return Fail(LMXXF_NR_INVALID_ARGUMENT, "GetInfo: package ABI mismatch or bad arguments; update the complete package");
     try
     {
         MochizukiNrInfo info {};
@@ -6634,6 +6643,7 @@ int32_t GetInfo(void* context, MochizukiNrInfo* out)
         info.failed = s->failed;
         info.network_dispatches = s->dispatches;
         info.int4_effective = s->infoInt4;
+        info.network_effective = s->infoNetwork;
         info.renodx_effective = s->infoReno;
         info.preprocess_ev = s->infoPrepEv;
         info.white_point = s->infoWhite;
@@ -6641,6 +6651,7 @@ int32_t GetInfo(void* context, MochizukiNrInfo* out)
             std::lock_guard lock(s->controlsMutex);
             info.aco_requested = s->controls.acoRequested ? 1u : 0u;
             info.int4_requested = s->controls.int4;
+            info.network_requested = s->controls.networkModel;
             info.aco_effective = s->acoEffective ? 1u : 0u;
             std::memcpy(info.aco_fallback, s->acoFallback, sizeof info.aco_fallback);
         }

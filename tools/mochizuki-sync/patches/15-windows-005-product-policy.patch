@@ -11,7 +11,7 @@
  }
 --- a/windows/src/core/nr_runtime.cpp
 +++ b/windows/src/core/nr_runtime.cpp
-@@ -1502,7 +1502,7 @@
+@@ -1537,7 +1537,7 @@
      // alpha pass's rounding (store_native, as below 100%), so there is no alpha pass and the write-back
      // is a copy. The formats whose store is the write-back blit's own conversion (direct_out's).
      // NR_UNSCALED_STORE=0: the RGBA32F answer, the alpha pass and the blit, as before.

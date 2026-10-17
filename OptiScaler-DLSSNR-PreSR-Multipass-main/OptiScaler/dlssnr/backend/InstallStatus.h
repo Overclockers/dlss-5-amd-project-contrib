@@ -72,7 +72,7 @@ inline std::string ProbeInstallIssue(Kind kind, const std::filesystem::path& dir
             return "lmxxf: module package missing. Reinstall the complete OptiScaler package with Setup.";
     } else if (kind == Kind::Mochizuki) {
         if (!NonemptyFile(dir / L"dlssnr-amd/dlssnr.bin"))
-            return "mochizuki: model missing. Put nvngx_dlssnr.dll 310.8.0 beside Setup.bat and run Setup to extract the model, then restart the game.";
+            return "mochizuki: model missing. Put nvngx_dlssnr.dll 310.9.16 or 310.8.0 beside Setup.bat and run Setup to extract the models, then restart the game.";
         if (!HasMochizukiModelHeader(dir / L"dlssnr-amd/dlssnr.bin"))
             return "mochizuki: model header invalid. Move dlssnr-amd/dlssnr.bin aside and rerun Setup to extract it again; the runtime checks full model integrity.";
         std::error_code ec;

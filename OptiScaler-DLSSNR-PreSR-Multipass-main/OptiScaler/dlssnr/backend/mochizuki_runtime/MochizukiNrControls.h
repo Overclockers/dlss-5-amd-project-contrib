@@ -172,6 +172,8 @@ extern "C"
         float reno_norm_slew_stops;
         float reno_mvec_scale_x;
         float reno_mvec_scale_y;
+        /* 0: 310.8.0 original, 1: 310.9.16 small (default). Rebuilds; owns upstream model selection. */
+        uint32_t network_model;
     } MochizukiNrControls;
 
     /* What the session is doing, for a menu. Safe to ask from any thread, at any rate. */
@@ -211,6 +213,7 @@ extern "C"
          * (graphics conversions + compute network); inline_path_why gives the segment reason. */
         uint32_t inline_path;
         char inline_path_why[124];
+        uint32_t network_requested, network_effective; /* 0 original, 1 small; effective valid after frame_w > 0 */
         /* struct_size includes the current definition's tail padding. */
     } MochizukiNrInfo;
 
