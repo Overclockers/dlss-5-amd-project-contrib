@@ -14,6 +14,7 @@
     <Compile Include="MainWindow.cs"/>
     <Compile Include="Protocol.cs"/>
     <Compile Include="WorkerClient.cs"/>
+    <Compile Include="GamePaths.cs"/>
   </ItemGroup>
   <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets"/>
 </Project>

@@ -55,7 +55,9 @@ class LauncherWorkerTests(unittest.TestCase):
             "-ResultJson",
             str(result),
         ]
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        p = subprocess.run(cmd, capture_output=True, timeout=120)
+        out = (p.stdout or b"").decode("utf-8", "replace")
+        err = (p.stderr or b"").decode("utf-8", "replace")
         body = result.read_text(encoding="utf-8") if result.exists() else ""
         return p.returncode, json.loads(body) if body else {}, events.read_text(encoding="utf-8")
 
@@ -119,6 +121,18 @@ class LauncherWorkerTests(unittest.TestCase):
         code, result, events = self.invoke(MOCK, "inspect", exe)
         self.assertEqual(code, 0, events)
         self.assertEqual(result["resolvedProxy"], "dxgi.dll")
+
+    def test_windowsapps_name_maps_to_xboxgames(self):
+        xg = Path(r"C:\XboxGames")
+        hits = list(xg.glob("**/SandFall-WinGDK-Shipping.exe")) if xg.is_dir() else []
+        if not hits:
+            self.skipTest("XboxGames shipping exe not present")
+        fake = Path(r"C:\Program Files\WindowsApps\DummyPkg\SandFall-WinGDK-Shipping.exe")
+        code, result, events = self.invoke(WORKER, "inspect", fake)
+        self.assertEqual(code, 0, events + str(result))
+        folder = Path(result["effectiveGameDir"])
+        self.assertTrue("XboxGames" in folder.parts)
+        self.assertEqual(folder, hits[0].parent)
 
     def test_inspect_path_with_spaces(self):
         d = Path(tempfile.mkdtemp(prefix="launcher space-"))

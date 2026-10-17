@@ -21,7 +21,7 @@ $exe = Join-Path $OutDir 'OptScalerNR.Launcher.exe'
 $obj = Join-Path $OutDir 'obj'
 New-Item -ItemType Directory -Force -Path $obj | Out-Null
 $cs = @(
-    'Program.cs', 'MainWindow.cs', 'Protocol.cs', 'WorkerClient.cs'
+    'Program.cs', 'MainWindow.cs', 'Protocol.cs', 'WorkerClient.cs', 'GamePaths.cs'
 ) | ForEach-Object { Join-Path $src $_ }
 $refs = @(
     (Join-Path $fw 'mscorlib.dll'),

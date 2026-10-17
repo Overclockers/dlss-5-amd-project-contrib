@@ -74,13 +74,67 @@ $allowedProxy = @('dxgi.dll','winmm.dll','d3d12.dll','winhttp.dll','wininet.dll'
 $allowedAction = @('inspect','install','update','uninstall')
 $allowedBackend = @('auto','daniel','lmxxf','mochizuki','all')
 if ($allowedAction -notcontains [string]$req.action) { throw "invalid action $($req.action)" }
+function Resolve-XboxGamePath([string]$exe) {
+    if ($exe -notmatch '(?i)\\WindowsApps\\') { return $exe }
+    $name = [IO.Path]::GetFileName($exe)
+    if (-not $name) { return $exe }
+    $hits = New-Object System.Collections.Generic.List[string]
+    foreach ($drive in [IO.DriveInfo]::GetDrives()) {
+        if (-not $drive.IsReady) { continue }
+        $root = Join-Path $drive.Name 'XboxGames'
+        if (-not (Test-Path -LiteralPath $root -PathType Container)) { continue }
+        $stack = New-Object System.Collections.Generic.Stack[object]
+        $stack.Push(@{ Path = $root; Depth = 0 })
+        while ($stack.Count -gt 0 -and $hits.Count -lt 32) {
+            $cur = $stack.Pop()
+            if ($cur.Depth -gt 8) { continue }
+            $entries = @()
+            try { $entries = [IO.Directory]::GetFileSystemEntries($cur.Path) } catch { continue }
+            foreach ($entry in $entries) {
+                $leaf = [IO.Path]::GetFileName($entry)
+                $isDir = $false
+                $reparse = $false
+                try {
+                    $attr = [IO.File]::GetAttributes($entry)
+                    $isDir = [bool]($attr -band [IO.FileAttributes]::Directory)
+                    $reparse = [bool]($attr -band [IO.FileAttributes]::ReparsePoint)
+                } catch {
+                    if ([string]::Equals($leaf, $name, [StringComparison]::OrdinalIgnoreCase)) {
+                        [void]$hits.Add($entry)
+                    }
+                    continue
+                }
+                if ($reparse) { continue }
+                if ($isDir) {
+                    $stack.Push(@{ Path = $entry; Depth = $cur.Depth + 1 })
+                    continue
+                }
+                if ([string]::Equals($leaf, $name, [StringComparison]::OrdinalIgnoreCase)) {
+                    [void]$hits.Add($entry)
+                }
+            }
+        }
+    }
+    if ($hits.Count -eq 0) { return $exe }
+    return @($hits | Sort-Object {
+        if ($_ -match '(?i)\\WinGDK\\') { 0 } elseif ($_ -match '(?i)\\Win64\\') { 1 } elseif ($_ -match '(?i)\\Binaries\\') { 2 } else { 3 }
+    }, { $_.Length })[0]
+}
+
 $exe = [string]$req.gameExe
 if (-not $exe -or -not [IO.Path]::IsPathRooted($exe)) { Fail-Result 'failed' 'gameExe must be an absolute path' 1 }
+$exe = Resolve-XboxGamePath $exe
 try {
-    $item = Get-Item -LiteralPath $exe -Force
+    $item = Get-Item -LiteralPath $exe -Force -ErrorAction Stop
     if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { Fail-Result 'failed' 'gameExe cannot be a reparse point' 1 }
+} catch [UnauthorizedAccessException] {
+    Write-Event 'inspect' 'selected exe is protected; using its folder'
 } catch {
-    Fail-Result 'failed' 'gameExe not found' 1
+    $parent = [IO.Path]::GetDirectoryName($exe)
+    if (-not $parent -or -not (Test-Path -LiteralPath $parent -PathType Container)) {
+        Fail-Result 'failed' 'gameExe not found' 1
+    }
+    Write-Event 'inspect' 'selected exe metadata unavailable; using its folder'
 }
 
 Write-Event 'inspect' 'reading PE imports and local dependencies'

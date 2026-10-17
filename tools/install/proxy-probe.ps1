@@ -53,10 +53,22 @@ function Get-PeImports([string]$path) {
         $info.error = 'missing'
         return $info
     }
-    $len = (Get-Item -LiteralPath $path).Length
+    try {
+        $len = (Get-Item -LiteralPath $path).Length
+    } catch {
+        $info.error = 'unreadable'
+        $info.partial = $true
+        return $info
+    }
     if ($len -lt 64) { $info.error = 'too-small'; return $info }
     $read = [int][Math]::Min($len, $script:MaxBytes)
-    $fs = [IO.File]::Open($path, 'Open', 'Read', 'ReadWrite')
+    try {
+        $fs = [IO.File]::Open($path, 'Open', 'Read', 'ReadWrite')
+    } catch {
+        $info.error = 'unreadable'
+        $info.partial = $true
+        return $info
+    }
     try {
         $b = New-Object byte[] $read
         $got = $fs.Read($b, 0, $read)
@@ -207,7 +219,7 @@ function Get-LocalImportWalk([string]$startExe, [Diagnostics.Stopwatch]$sw) {
             foreach ($d in $dirs) {
                 $cand = Join-Path $d $n
                 if (Test-Path -LiteralPath $cand -PathType Leaf) {
-                    $queue.Enqueue(@{ Path = (Get-Item -LiteralPath $cand).FullName; Depth = $item.Depth + 1 })
+                    $queue.Enqueue(@{ Path = $cand; Depth = $item.Depth + 1 })
                 }
             }
         }
@@ -219,8 +231,12 @@ function Get-DirFingerprint([string]$exe, [string]$dir) {
     $parts = New-Object System.Collections.Generic.List[string]
     foreach ($p in @($exe) + @($CandidateNames | ForEach-Object { Join-Path $dir $_ })) {
         if (Test-Path -LiteralPath $p -PathType Leaf) {
-            $i = Get-Item -LiteralPath $p
-            [void]$parts.Add(('{0}|{1}|{2}' -f $i.Name, $i.Length, $i.LastWriteTimeUtc.Ticks))
+            try {
+                $i = Get-Item -LiteralPath $p
+                [void]$parts.Add(('{0}|{1}|{2}' -f $i.Name, $i.Length, $i.LastWriteTimeUtc.Ticks))
+            } catch {
+                [void]$parts.Add(([IO.Path]::GetFileName($p) + '|protected'))
+            }
         }
     }
     $sha = [Security.Cryptography.SHA256]::Create()

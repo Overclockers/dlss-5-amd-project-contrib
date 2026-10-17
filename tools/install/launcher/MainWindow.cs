@@ -104,7 +104,7 @@ namespace OptScalerNR.Launcher
             _shownUtc = DateTime.UtcNow;
             var exeArg = FirstExistingExe(args);
             if (exeArg != null) _exePath.Text = exeArg;
-            else if (!string.IsNullOrEmpty(_lastInspected) && File.Exists(_lastInspected))
+            else if (!string.IsNullOrEmpty(_lastInspected) && GamePaths.CanUse(_lastInspected))
                 _exePath.Text = _lastInspected;
             if (args != null)
             {
@@ -125,7 +125,7 @@ namespace OptScalerNR.Launcher
         {
             if (args == null) return null;
             foreach (var a in args)
-                if (a != null && a.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) && File.Exists(a))
+                if (a != null && a.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) && GamePaths.CanUse(a))
                     return a;
             return null;
         }
@@ -226,14 +226,10 @@ namespace OptScalerNR.Launcher
 
         void Browse()
         {
-            var dlg = new OpenFileDialog();
-            dlg.Filter = "Game executable (*.exe)|*.exe";
-            dlg.CheckFileExists = true;
-            if (dlg.ShowDialog(_window) == true)
-            {
-                _exePath.Text = dlg.FileName;
-                MaybeInspect();
-            }
+            var picked = GamePaths.PickExe();
+            if (string.IsNullOrEmpty(picked)) return;
+            _exePath.Text = picked;
+            MaybeInspect();
         }
 
         void OnDrop(object sender, DragEventArgs e)
@@ -241,14 +237,15 @@ namespace OptScalerNR.Launcher
             if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
             var files = (string[])e.Data.GetData(DataFormats.FileDrop);
             if (files == null || files.Length == 0) return;
-            _exePath.Text = files[0];
+            _exePath.Text = GamePaths.Normalize(files[0]);
             MaybeInspect();
         }
 
         void MaybeInspect()
         {
-            var path = (_exePath.Text ?? "").Trim();
-            if (path.Length == 0 || !File.Exists(path)) return;
+            var path = GamePaths.Normalize((_exePath.Text ?? "").Trim());
+            if (path.Length == 0 || !GamePaths.CanUse(path)) return;
+            _exePath.Text = path;
             if (string.Equals(path, _lastInspected, StringComparison.OrdinalIgnoreCase)
                 && _inspect != null
                 && string.Equals(_inspect.Status, "success", StringComparison.OrdinalIgnoreCase))
@@ -287,8 +284,8 @@ namespace OptScalerNR.Launcher
                 }
             }
 
-            var exe = (_exePath.Text ?? "").Trim();
-            if (exe.Length == 0 || !File.Exists(exe))
+            var exe = GamePaths.Normalize((_exePath.Text ?? "").Trim());
+            if (exe.Length == 0 || !GamePaths.CanUse(exe))
             {
                 _status.Text = "Select a game .exe first.";
                 return;
