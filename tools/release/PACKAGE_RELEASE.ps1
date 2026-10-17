@@ -757,12 +757,27 @@ $installerSrc = Join-Path $root 'tools/install-amd-presr.ps1'
 if (!(Test-Path $installerSrc)) { throw "Missing $installerSrc" }
 Copy-Item $installerSrc (Join-Path $stage 'Setup.ps1') -Force
 Copy-Item -LiteralPath (Join-Path $root 'tools/lmxxf-module-package.ps1') -Destination $stage -Force
+& (Join-Path $root 'tools/build/build-launcher.ps1') -OutDir (Join-Path $root 'exports/launcher')
+$launcherExe = Join-Path $root 'exports/launcher/OptScalerNR.Launcher.exe'
+if (!(Test-Path -LiteralPath $launcherExe)) { throw "Launcher EXE was not produced" }
+Copy-Item -LiteralPath $launcherExe -Destination (Join-Path $stage 'OptScalerNR.Launcher.exe') -Force
+Copy-Item -LiteralPath (Join-Path $root 'tools/install/launcher-worker.ps1') -Destination $stage -Force
+Copy-Item -LiteralPath (Join-Path $root 'tools/install/proxy-probe.ps1') -Destination $stage -Force
 (@'
 @echo off
 setlocal
 title OptScaler(NR) @VERSION@ - Setup
-rem No args: Setup.ps1 opens a folder picker and proxy menu.
+rem No args: open OptScalerNR.Launcher.exe. Args keep the CLI Setup.ps1 contract.
 rem Optional: Setup.bat "D:\GameFolder" [dxgi.dll]
+if "%~1"=="" (
+  if exist "%~dp0OptScalerNR.Launcher.exe" (
+    start "" "%~dp0OptScalerNR.Launcher.exe"
+    exit /b 0
+  )
+  echo Complete package required: OptScalerNR.Launcher.exe is missing. Unzip the full package again.
+  pause
+  exit /b 1
+)
 if "%~2"=="" (
   powershell -NoProfile -ExecutionPolicy Bypass -STA -File "%~dp0Setup.ps1" -GameDir "%~1" -NoPause
 ) else (
@@ -882,7 +897,7 @@ try {
             finally { $stream.Dispose(); $sha.Dispose() }
             if ($actual -ne $expectedEntries[$relative]) { throw "Archive checksum mismatch: $relative" }
         }
-        foreach ($required in @('OptiScaler.dll', 'LmxxfNrRuntime.dll', 'MochizukiNrRuntime.dll', 'OptiScaler.ini', 'Setup.ps1', 'Setup.bat', 'lmxxf-module-package.ps1') + @($expectedEntries.Keys)) {
+        foreach ($required in @('OptiScaler.dll', 'LmxxfNrRuntime.dll', 'MochizukiNrRuntime.dll', 'OptiScaler.ini', 'Setup.ps1', 'Setup.bat', 'lmxxf-module-package.ps1', 'OptScalerNR.Launcher.exe', 'launcher-worker.ps1', 'proxy-probe.ps1') + @($expectedEntries.Keys)) {
             if (-not $seen.ContainsKey($required)) { throw "Package archive missing required component: $required" }
         }
     } finally {

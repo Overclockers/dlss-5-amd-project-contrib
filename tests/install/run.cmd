@@ -15,6 +15,10 @@ if /i "%~1"=="release" goto release
 "%PS51%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests\install\plugin-paths.ps1 || goto fail
 "%PS51%" -NoProfile -NonInteractive -STA -ExecutionPolicy Bypass -File tests\install\folder-picker-dpi.ps1 || goto fail
 "%AMD_TEST_PYTHON%" -B tests\install\test_installer_exit.py --failfast || goto fail
+"%AMD_TEST_PYTHON%" -B tests\install\test_proxy_probe.py --failfast || goto fail
+"%AMD_TEST_PYTHON%" -B tests\install\test_launcher_worker.py --failfast || goto fail
+"%AMD_TEST_PYTHON%" -B tests\install\test_launcher_package.py --failfast || goto fail
+"%AMD_TEST_PYTHON%" -B tests\install\test_launcher_startup.py --failfast || goto fail
 "%AMD_TEST_PYTHON%" -B tests\install\test_module_packages.py --failfast || goto fail
 "%PS51%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests\install\amd_uninstall.ps1 || goto fail
 "%AMD_TEST_PYTHON%" -B tests\install\test_release_upload.py || goto fail
