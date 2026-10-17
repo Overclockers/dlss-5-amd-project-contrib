@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using Microsoft.Win32;
@@ -110,6 +111,143 @@ namespace OptScalerNR.Launcher
                 if (string.Equals(Path.GetFileName(entry), fileName, StringComparison.OrdinalIgnoreCase))
                     hits.Add(entry);
             }
+        }
+    }
+
+    public static class PeProbe
+    {
+        static readonly string[] CandidateDlls = { "dxgi.dll", "d3d12.dll", "winmm.dll", "winhttp.dll", "wininet.dll", "dbghelp.dll" };
+
+        public static string QuickRecommend(string exePath)
+        {
+            if (string.IsNullOrEmpty(exePath) || !File.Exists(exePath)) return "dxgi.dll";
+            try
+            {
+                var dir = Path.GetDirectoryName(exePath);
+                if (!string.IsNullOrEmpty(dir))
+                {
+                    foreach (var c in CandidateDlls)
+                    {
+                        var p = Path.Combine(dir, c);
+                        if (File.Exists(p))
+                        {
+                            try
+                            {
+                                var vi = FileVersionInfo.GetVersionInfo(p);
+                                if (vi != null && (vi.ProductName == "OptiScaler" || vi.FileDescription == "OptiScaler"))
+                                    return c;
+                            }
+                            catch { }
+                        }
+                    }
+                }
+
+                var imports = ReadImports(exePath);
+                if (imports != null)
+                {
+                    foreach (var c in CandidateDlls)
+                    {
+                        if (imports.Contains(c)) return c;
+                    }
+                }
+            }
+            catch { }
+            return "dxgi.dll";
+        }
+
+        static HashSet<string> ReadImports(string exePath)
+        {
+            var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using (var fs = new FileStream(exePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            using (var br = new BinaryReader(fs))
+            {
+                if (fs.Length < 0x200) return null;
+                if (br.ReadUInt16() != 0x5A4D) return null;
+                fs.Seek(0x3C, SeekOrigin.Begin);
+                var peOffset = br.ReadUInt32();
+                if (peOffset + 0x100 > fs.Length) return null;
+                fs.Seek(peOffset, SeekOrigin.Begin);
+                if (br.ReadUInt32() != 0x00004550) return null;
+
+                var machine = br.ReadUInt16();
+                var numSections = br.ReadUInt16();
+                fs.Seek(12, SeekOrigin.Current);
+                var optHeaderSize = br.ReadUInt16();
+                fs.Seek(2, SeekOrigin.Current);
+
+                var optStart = fs.Position;
+                var magic = br.ReadUInt16();
+                if (magic != 0x20B) return null;
+
+                fs.Seek(optStart + 112, SeekOrigin.Begin);
+                var importRva = br.ReadUInt32();
+                var importSize = br.ReadUInt32();
+                if (importRva == 0 || importSize == 0) return result;
+
+                fs.Seek(optStart + optHeaderSize, SeekOrigin.Begin);
+                var sections = new List<PeSection>(numSections);
+                for (int i = 0; i < numSections; i++)
+                {
+                    fs.Seek(8, SeekOrigin.Current);
+                    var vSize = br.ReadUInt32();
+                    var va = br.ReadUInt32();
+                    var rawSize = br.ReadUInt32();
+                    var rawPtr = br.ReadUInt32();
+                    fs.Seek(16, SeekOrigin.Current);
+                    sections.Add(new PeSection { VA = va, VSize = Math.Max(vSize, rawSize), Raw = rawPtr });
+                }
+
+                long importFileOffset = RvaToOffset(sections, importRva);
+                if (importFileOffset < 0 || importFileOffset >= fs.Length) return result;
+
+                fs.Seek(importFileOffset, SeekOrigin.Begin);
+                for (int i = 0; i < 256; i++)
+                {
+                    if (fs.Position + 20 > fs.Length) break;
+                    var originalFirstThunk = br.ReadUInt32();
+                    var timeDateStamp = br.ReadUInt32();
+                    var forwarderChain = br.ReadUInt32();
+                    var nameRva = br.ReadUInt32();
+                    var firstThunk = br.ReadUInt32();
+
+                    if (nameRva == 0 && firstThunk == 0) break;
+
+                    long nameOffset = RvaToOffset(sections, nameRva);
+                    if (nameOffset > 0 && nameOffset < fs.Length)
+                    {
+                        var curPos = fs.Position;
+                        fs.Seek(nameOffset, SeekOrigin.Begin);
+                        var sb = new System.Text.StringBuilder();
+                        int b;
+                        while ((b = fs.ReadByte()) > 0 && sb.Length < 128)
+                        {
+                            sb.Append((char)b);
+                        }
+                        result.Add(sb.ToString().ToLowerInvariant());
+                        fs.Seek(curPos, SeekOrigin.Begin);
+                    }
+                }
+            }
+            return result;
+        }
+
+        static long RvaToOffset(List<PeSection> sections, uint rva)
+        {
+            foreach (var s in sections)
+            {
+                if (rva >= s.VA && rva < s.VA + s.VSize)
+                {
+                    return s.Raw + (rva - s.VA);
+                }
+            }
+            return -1;
+        }
+
+        struct PeSection
+        {
+            public uint VA;
+            public uint VSize;
+            public uint Raw;
         }
     }
 }

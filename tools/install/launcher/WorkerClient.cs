@@ -22,10 +22,12 @@ namespace OptScalerNR.Launcher
 
         public bool IsRunning { get { return _process != null && !_process.HasExited; } }
         public bool CanKill { get; private set; }
+        public string Action { get; private set; }
 
-        WorkerSession(Process process, string eventsPath, string resultPath, bool canKill)
+        WorkerSession(Process process, string action, string eventsPath, string resultPath, bool canKill)
         {
             _process = process;
+            Action = action;
             _resultPath = resultPath;
             CanKill = canKill;
             _events = new FileStream(eventsPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
@@ -58,7 +60,7 @@ namespace OptScalerNR.Launcher
             psi.RedirectStandardError = false;
             var proc = Process.Start(psi);
             if (proc == null) throw new InvalidOperationException("failed to start worker");
-            return new WorkerSession(proc, eventsPath, resultPath, canKill);
+            return new WorkerSession(proc, request != null ? request.Action : "", eventsPath, resultPath, canKill);
         }
 
         void OnTick(object sender, EventArgs e)

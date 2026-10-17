@@ -1186,10 +1186,25 @@ namespace OptScalerNR.Launcher
                 else return;
             }
 
+            var fastProxy = PeProbe.QuickRecommend(game.Exe);
+            if (!string.IsNullOrEmpty(fastProxy))
+            {
+                SelectProxy(fastProxy);
+                if (_injectIcon != null) { _injectIcon.Text = "✓"; _injectIcon.Foreground = ReadyBrush; }
+                if (_injectRecommendation != null)
+                {
+                    _injectRecommendation.Text = _language == "zh"
+                        ? ("检测到程序导入 " + fastProxy + "，已自动选定为推荐代理。")
+                        : ("Detected import for " + fastProxy + ", recommended proxy auto-selected.");
+                }
+            }
+
             SetBusy(true, "inspect");
+            _pendingAction = "inspect";
             if (_injectText != null) _injectText.Text = _language == "zh" ? "正在检查导入与后端…" : "Checking imports and backends…";
             if (_statusLed != null) _statusLed.Fill = WarningBrush;
             if (_progress != null) _progress.IsIndeterminate = true;
+            UpdatePrimaryButtonState();
 
             var req = new LauncherRequest
             {
@@ -1332,6 +1347,9 @@ namespace OptScalerNR.Launcher
                 if (_progress != null) _progress.IsIndeterminate = false;
                 SetBusy(false, "");
 
+                var action = (source != null && !string.IsNullOrEmpty(source.Action)) ? source.Action : _pendingAction;
+                _pendingAction = "";
+
                 if (result != null && !string.IsNullOrEmpty(result.LogPath))
                     _currentLogPath = result.LogPath;
 
@@ -1351,23 +1369,26 @@ namespace OptScalerNR.Launcher
                     if (_statusText != null) _statusText.Text = result.Status + (string.IsNullOrEmpty(result.Error) ? "" : (": " + result.Error));
                 }
 
-                if (string.Equals(_pendingAction, "inspect", StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(action, "inspect", StringComparison.OrdinalIgnoreCase))
                 {
                     ApplyInspect(result);
                 }
                 else if (result != null && string.Equals(result.Status, "success", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (_pendingAction == "install" || _pendingAction == "update")
+                    if (action == "install" || action == "update" || action == "uninstall")
                     {
-                        if (_selectedGame != null) _selectedGame.Installed = true;
+                        if (action == "uninstall")
+                        {
+                            if (_selectedGame != null) _selectedGame.Installed = false;
+                        }
+                        else
+                        {
+                            if (_selectedGame != null) _selectedGame.Installed = true;
+                        }
+                        SaveLibraryCache();
+                        RefreshGameListView();
+                        if (_selectedGame != null) InspectGame(_selectedGame);
                     }
-                    else if (_pendingAction == "uninstall")
-                    {
-                        if (_selectedGame != null) _selectedGame.Installed = false;
-                    }
-                    SaveLibraryCache();
-                    RefreshGameListView();
-                    if (_selectedGame != null) InspectGame(_selectedGame);
                 }
 
                 AppendLog(_statusText != null ? _statusText.Text : "");
