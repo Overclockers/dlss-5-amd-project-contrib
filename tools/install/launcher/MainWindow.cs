@@ -2,21 +2,27 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Markup;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Shapes;
 using Microsoft.Win32;
+using Path = System.IO.Path;
 
 namespace OptScalerNR.Launcher
 {
     public sealed class GameItemViewModel
     {
         public GameInfo Info { get; set; }
+        public bool IsZh { get; set; }
         public string Name { get { return Info != null ? Info.Name : ""; } }
         public string Initial
         {
@@ -27,29 +33,67 @@ namespace OptScalerNR.Launcher
             }
         }
         public string SourceText { get { return Info != null ? Info.Source : ""; } }
-        public string StatusText { get { return (Info != null && Info.Installed) ? "已安装" : "未安装"; } }
+        public string StatusText
+        {
+            get
+            {
+                if (Info != null && Info.Installed)
+                    return IsZh ? "● 已安装" : "● Installed";
+                return IsZh ? "○ 未安装" : "○ Not Installed";
+            }
+        }
         public Brush StatusBrush
         {
             get
             {
                 if (Info != null && Info.Installed)
                     return (Brush)new BrushConverter().ConvertFromString("#FF4ADE80");
-                return (Brush)new BrushConverter().ConvertFromString("#FF9AA3B2");
+                return (Brush)new BrushConverter().ConvertFromString("#FF8E95A5");
             }
         }
+        public string Cover { get { return Info != null ? Info.Cover : null; } }
+        public bool HasCover
+        {
+            get
+            {
+                try
+                {
+                    return !string.IsNullOrEmpty(Cover) && File.Exists(Cover);
+                }
+                catch { return false; }
+            }
+        }
+        public Visibility CoverVisibility { get { return HasCover ? Visibility.Visible : Visibility.Collapsed; } }
+        public Visibility InitialVisibility { get { return HasCover ? Visibility.Collapsed : Visibility.Visible; } }
+        public string Hero { get { return Info != null ? Info.Hero : null; } }
     }
 
     public sealed class MainController
     {
+        [DllImport("dwmapi.dll")]
+        static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+
+        const int DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1 = 19;
+        const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+
         readonly Window _window;
         TextBox _searchBox, _logView, _packageRootBox;
-        Button _libraryTab, _settingsTab, _addButton, _primaryButton, _changeExeButton, _uninstallButton, _openLogButton, _refreshButton, _packageBrowse;
+        Button _libraryTab, _settingsTab, _addButton, _primaryButton, _changeExeButton, _openFolderButton, _uninstallButton, _openLogButton, _refreshButton, _langToggle, _packageBrowse;
         FrameworkElement _libraryPage, _settingsPage;
         ComboBox _filterCombo, _proxyCombo, _activeCombo, _langCombo;
         ListBox _gameList;
-        TextBlock _heroTitle, _heroMeta, _heroPath, _injectText, _lmxxfReason, _danielReason, _mochiReason, _statusText, _countText;
+        TextBlock _pageTitle, _countBadge, _heroKicker, _heroTitle, _heroMeta, _heroPath, _heroPosterInitial, _injectText, _injectIcon, _injectRecommendation;
+        TextBlock _lmxxfReason, _danielReason, _mochiReason, _statusText, _countText;
+        Border _lmxxfBadge, _danielBadge, _mochiBadge;
+        Button _lmxxfActiveBtn, _danielActiveBtn, _mochiActiveBtn;
+        TextBlock _lmxxfActiveLabel, _danielActiveLabel, _mochiActiveLabel;
         CheckBox _lmxxfCheck, _danielCheck, _mochiCheck, _replaceIni, _scanOnStartup;
         ProgressBar _progress;
+        Image _heroPosterImage;
+        Ellipse _statusLed;
+
+        RadioButton _pillDxgi, _pillD3d12, _pillWinmm, _pillWinhttp, _pillWininet, _pillDbghelp;
+        Dictionary<string, RadioButton> _proxyPills;
 
         WorkerSession _session;
         Mutex _targetMutex;
@@ -61,6 +105,7 @@ namespace OptScalerNR.Launcher
         string _packageRoot = "";
         string _pendingAction = "";
         string _currentLogPath = "";
+        string _activeBackend = "lmxxf";
         DateTime _shownUtc;
 
         readonly List<GameInfo> _allGames = new List<GameInfo>();
@@ -69,7 +114,12 @@ namespace OptScalerNR.Launcher
         Decisions _decisions = new Decisions();
 
         static readonly Brush ReadyBrush = (Brush)new BrushConverter().ConvertFromString("#FF4ADE80");
-        static readonly Brush MissingBrush = (Brush)new BrushConverter().ConvertFromString("#FF9AA3B2");
+        static readonly Brush ReadyBorder = (Brush)new BrushConverter().ConvertFromString("#FF22C55E");
+        static readonly Brush ReadyBg = (Brush)new BrushConverter().ConvertFromString("#FF17281F");
+        static readonly Brush MissingBrush = (Brush)new BrushConverter().ConvertFromString("#FF8E95A5");
+        static readonly Brush MissingBorder = (Brush)new BrushConverter().ConvertFromString("#FF282D3A");
+        static readonly Brush MissingBg = (Brush)new BrushConverter().ConvertFromString("#FF1E222E");
+        static readonly Brush WarningBrush = (Brush)new BrushConverter().ConvertFromString("#FFFACC15");
         static readonly Brush ActiveBrush = (Brush)new BrushConverter().ConvertFromString("#FFE8EEFF");
 
         public static Window Create(string[] args)
@@ -85,7 +135,11 @@ namespace OptScalerNR.Launcher
         MainController(Window window, string[] args)
         {
             _window = window;
+
             _searchBox = (TextBox)window.FindName("SearchBox");
+            _pageTitle = (TextBlock)window.FindName("PageTitle");
+            _countBadge = (TextBlock)window.FindName("CountBadge");
+            _langToggle = (Button)window.FindName("LangToggle");
             _libraryTab = (Button)window.FindName("LibraryTab");
             _settingsTab = (Button)window.FindName("SettingsTab");
             _libraryPage = (FrameworkElement)window.FindName("LibraryPage");
@@ -93,27 +147,58 @@ namespace OptScalerNR.Launcher
             _filterCombo = (ComboBox)window.FindName("FilterCombo");
             _addButton = (Button)window.FindName("AddButton");
             _gameList = (ListBox)window.FindName("GameList");
+
+            _heroKicker = (TextBlock)window.FindName("HeroKicker");
             _heroTitle = (TextBlock)window.FindName("HeroTitle");
             _heroMeta = (TextBlock)window.FindName("HeroMeta");
             _heroPath = (TextBlock)window.FindName("HeroPath");
+            _heroPosterInitial = (TextBlock)window.FindName("HeroPosterInitial");
+            _heroPosterImage = (Image)window.FindName("HeroPosterImage");
+
             _primaryButton = (Button)window.FindName("PrimaryButton");
-            _progress = (ProgressBar)window.FindName("Progress");
-            _injectText = (TextBlock)window.FindName("InjectText");
-            _proxyCombo = (ComboBox)window.FindName("ProxyCombo");
             _changeExeButton = (Button)window.FindName("ChangeExeButton");
+            _openFolderButton = (Button)window.FindName("OpenFolderButton");
+            _uninstallButton = (Button)window.FindName("UninstallButton");
+            _progress = (ProgressBar)window.FindName("Progress");
+
+            _injectText = (TextBlock)window.FindName("InjectText");
+            _injectIcon = (TextBlock)window.FindName("InjectIcon");
+            _injectRecommendation = (TextBlock)window.FindName("InjectRecommendation");
+            _proxyCombo = (ComboBox)window.FindName("ProxyCombo");
+
+            _pillDxgi = (RadioButton)window.FindName("PillDxgi");
+            _pillD3d12 = (RadioButton)window.FindName("PillD3d12");
+            _pillWinmm = (RadioButton)window.FindName("PillWinmm");
+            _pillWinhttp = (RadioButton)window.FindName("PillWinhttp");
+            _pillWininet = (RadioButton)window.FindName("PillWininet");
+            _pillDbghelp = (RadioButton)window.FindName("PillDbghelp");
+
             _lmxxfCheck = (CheckBox)window.FindName("LmxxfCheck");
+            _lmxxfBadge = (Border)window.FindName("LmxxfBadge");
             _lmxxfReason = (TextBlock)window.FindName("LmxxfReason");
+            _lmxxfActiveBtn = (Button)window.FindName("LmxxfActiveBtn");
+            _lmxxfActiveLabel = (TextBlock)window.FindName("LmxxfActiveLabel");
+
             _danielCheck = (CheckBox)window.FindName("DanielCheck");
+            _danielBadge = (Border)window.FindName("DanielBadge");
             _danielReason = (TextBlock)window.FindName("DanielReason");
+            _danielActiveBtn = (Button)window.FindName("DanielActiveBtn");
+            _danielActiveLabel = (TextBlock)window.FindName("DanielActiveLabel");
+
             _mochiCheck = (CheckBox)window.FindName("MochiCheck");
+            _mochiBadge = (Border)window.FindName("MochiBadge");
             _mochiReason = (TextBlock)window.FindName("MochiReason");
+            _mochiActiveBtn = (Button)window.FindName("MochiActiveBtn");
+            _mochiActiveLabel = (TextBlock)window.FindName("MochiActiveLabel");
+
             _activeCombo = (ComboBox)window.FindName("ActiveCombo");
             _replaceIni = (CheckBox)window.FindName("ReplaceIni");
-            _uninstallButton = (Button)window.FindName("UninstallButton");
             _openLogButton = (Button)window.FindName("OpenLogButton");
             _logView = (TextBox)window.FindName("LogView");
             _statusText = (TextBlock)window.FindName("StatusText");
+            _statusLed = (Ellipse)window.FindName("StatusLed");
             _countText = (TextBlock)window.FindName("CountText");
+
             _langCombo = (ComboBox)window.FindName("LangCombo");
             _scanOnStartup = (CheckBox)window.FindName("ScanOnStartup");
             _refreshButton = (Button)window.FindName("RefreshButton");
@@ -130,8 +215,11 @@ namespace OptScalerNR.Launcher
             _decisions.ShortFileContinue = "abort";
             _decisions.ForeignProxy = new Dictionary<string, string>();
 
+            EnableImmersiveDarkMode(_window);
+
             if (_libraryTab != null) _libraryTab.Click += (s, e) => SwitchTab(true);
-            if (_settingsTab != null) _settingsTab.Click += (s, e) => SwitchTab(false);
+            if (_settingsTab != null) _settingsTab.Click += (s, e) => SwitchTab(_settingsPage != null && _settingsPage.Visibility == Visibility.Visible);
+            if (_langToggle != null) _langToggle.Click += (s, e) => ToggleLanguage();
 
             if (_filterCombo != null)
             {
@@ -145,13 +233,20 @@ namespace OptScalerNR.Launcher
             if (_searchBox != null)
                 _searchBox.TextChanged += (s, e) => RefreshGameListView();
 
+            InitProxyPills();
+
             if (_proxyCombo != null)
             {
                 _proxyCombo.Items.Add("请选择");
                 foreach (var name in new[] { "dxgi.dll", "winmm.dll", "d3d12.dll", "winhttp.dll", "wininet.dll", "dbghelp.dll" })
                     _proxyCombo.Items.Add(name);
                 _proxyCombo.SelectedIndex = 0;
-                _proxyCombo.SelectionChanged += (s, e) => UpdatePrimaryButtonState();
+                _proxyCombo.SelectionChanged += (s, e) =>
+                {
+                    var selected = Convert.ToString(_proxyCombo.SelectedItem);
+                    SelectProxyPillOnly(selected);
+                    UpdatePrimaryButtonState();
+                };
             }
 
             if (_langCombo != null)
@@ -186,6 +281,7 @@ namespace OptScalerNR.Launcher
             if (_addButton != null) _addButton.Click += (s, e) => AddGame();
             if (_gameList != null) _gameList.SelectionChanged += (s, e) => OnGameSelected();
             if (_changeExeButton != null) _changeExeButton.Click += (s, e) => ChangeExe();
+            if (_openFolderButton != null) _openFolderButton.Click += (s, e) => OpenSelectedFolder();
             if (_primaryButton != null) _primaryButton.Click += (s, e) => OnPrimaryAction();
             if (_uninstallButton != null) _uninstallButton.Click += (s, e) => OnUninstall();
             if (_openLogButton != null) _openLogButton.Click += (s, e) => OpenLog();
@@ -195,6 +291,10 @@ namespace OptScalerNR.Launcher
             if (_lmxxfCheck != null) { _lmxxfCheck.Checked += backendChanged; _lmxxfCheck.Unchecked += backendChanged; }
             if (_danielCheck != null) { _danielCheck.Checked += backendChanged; _danielCheck.Unchecked += backendChanged; }
             if (_mochiCheck != null) { _mochiCheck.Checked += backendChanged; _mochiCheck.Unchecked += backendChanged; }
+
+            if (_lmxxfActiveBtn != null) _lmxxfActiveBtn.Click += (s, e) => SetActiveBackend("lmxxf");
+            if (_danielActiveBtn != null) _danielActiveBtn.Click += (s, e) => SetActiveBackend("daniel");
+            if (_mochiActiveBtn != null) _mochiActiveBtn.Click += (s, e) => SetActiveBackend("mochizuki");
 
             _window.AllowDrop = true;
             _window.Drop += OnDrop;
@@ -208,13 +308,196 @@ namespace OptScalerNR.Launcher
             ApplyLang();
             ShowVersion();
             RefreshGameListView();
+            UpdateActiveCombo();
             UpdatePrimaryButtonState();
         }
 
-        void SwitchTab(bool isLibrary)
+        static void EnableImmersiveDarkMode(Window window)
         {
-            if (_libraryPage != null) _libraryPage.Visibility = isLibrary ? Visibility.Visible : Visibility.Collapsed;
-            if (_settingsPage != null) _settingsPage.Visibility = isLibrary ? Visibility.Collapsed : Visibility.Visible;
+            try
+            {
+                var helper = new WindowInteropHelper(window);
+                var hwnd = helper.EnsureHandle();
+                int trueValue = 1;
+                if (DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref trueValue, Marshal.SizeOf(typeof(int))) != 0)
+                {
+                    DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1, ref trueValue, Marshal.SizeOf(typeof(int)));
+                }
+            }
+            catch { }
+        }
+
+        void InitProxyPills()
+        {
+            _proxyPills = new Dictionary<string, RadioButton>(StringComparer.OrdinalIgnoreCase);
+            if (_pillDxgi != null) _proxyPills["dxgi.dll"] = _pillDxgi;
+            if (_pillD3d12 != null) _proxyPills["d3d12.dll"] = _pillD3d12;
+            if (_pillWinmm != null) _proxyPills["winmm.dll"] = _pillWinmm;
+            if (_pillWinhttp != null) _proxyPills["winhttp.dll"] = _pillWinhttp;
+            if (_pillWininet != null) _proxyPills["wininet.dll"] = _pillWininet;
+            if (_pillDbghelp != null) _proxyPills["dbghelp.dll"] = _pillDbghelp;
+
+            foreach (var kvp in _proxyPills)
+            {
+                var dllName = kvp.Key;
+                var pill = kvp.Value;
+                pill.Checked += (s, e) =>
+                {
+                    if (_proxyCombo != null)
+                    {
+                        for (int i = 0; i < _proxyCombo.Items.Count; i++)
+                        {
+                            if (string.Equals(Convert.ToString(_proxyCombo.Items[i]), dllName, StringComparison.OrdinalIgnoreCase))
+                            {
+                                _proxyCombo.SelectedIndex = i;
+                                break;
+                            }
+                        }
+                    }
+                    UpdatePrimaryButtonState();
+                };
+            }
+        }
+
+        void SelectProxyPillOnly(string dllName)
+        {
+            if (_proxyPills == null) return;
+            foreach (var kvp in _proxyPills)
+            {
+                if (string.Equals(kvp.Key, dllName, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (kvp.Value.IsChecked != true) kvp.Value.IsChecked = true;
+                }
+            }
+        }
+
+        void SelectProxy(string dllName)
+        {
+            if (string.IsNullOrEmpty(dllName))
+            {
+                if (_proxyPills != null)
+                {
+                    foreach (var p in _proxyPills.Values) p.IsChecked = false;
+                }
+                if (_proxyCombo != null) _proxyCombo.SelectedIndex = 0;
+                return;
+            }
+
+            if (_proxyPills != null && _proxyPills.ContainsKey(dllName))
+            {
+                _proxyPills[dllName].IsChecked = true;
+            }
+
+            if (_proxyCombo != null)
+            {
+                for (int i = 0; i < _proxyCombo.Items.Count; i++)
+                {
+                    if (string.Equals(Convert.ToString(_proxyCombo.Items[i]), dllName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _proxyCombo.SelectedIndex = i;
+                        break;
+                    }
+                }
+            }
+            UpdatePrimaryButtonState();
+        }
+
+        string CurrentSelectedProxy
+        {
+            get
+            {
+                if (_proxyPills != null)
+                {
+                    foreach (var kvp in _proxyPills)
+                    {
+                        if (kvp.Value.IsChecked == true) return kvp.Key;
+                    }
+                }
+                if (_proxyCombo != null && _proxyCombo.SelectedIndex > 0)
+                    return Convert.ToString(_proxyCombo.SelectedItem);
+                return "";
+            }
+        }
+
+        void SetActiveBackend(string backend)
+        {
+            _activeBackend = backend;
+            if (_activeCombo != null)
+            {
+                for (int i = 0; i < _activeCombo.Items.Count; i++)
+                {
+                    if (string.Equals(Convert.ToString(_activeCombo.Items[i]), backend, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _activeCombo.SelectedIndex = i;
+                        break;
+                    }
+                }
+            }
+            UpdateActiveUI();
+        }
+
+        void UpdateActiveUI()
+        {
+            var isZh = _language == "zh";
+            var isLmxxf = string.Equals(_activeBackend, "lmxxf", StringComparison.OrdinalIgnoreCase);
+            var isDaniel = string.Equals(_activeBackend, "daniel", StringComparison.OrdinalIgnoreCase);
+            var isMochi = string.Equals(_activeBackend, "mochizuki", StringComparison.OrdinalIgnoreCase);
+
+            if (_lmxxfActiveLabel != null)
+            {
+                _lmxxfActiveLabel.Visibility = isLmxxf ? Visibility.Visible : Visibility.Collapsed;
+                _lmxxfActiveLabel.Text = isZh ? "★ 当前主后端" : "★ Active Backend";
+            }
+            if (_lmxxfActiveBtn != null)
+            {
+                _lmxxfActiveBtn.Visibility = isLmxxf ? Visibility.Collapsed : Visibility.Visible;
+                _lmxxfActiveBtn.Content = isZh ? "设为主后端" : "Set as Active";
+                _lmxxfActiveBtn.IsEnabled = _lmxxfCheck != null && _lmxxfCheck.IsChecked == true;
+            }
+
+            if (_danielActiveLabel != null)
+            {
+                _danielActiveLabel.Visibility = isDaniel ? Visibility.Visible : Visibility.Collapsed;
+                _danielActiveLabel.Text = isZh ? "★ 当前主后端" : "★ Active Backend";
+            }
+            if (_danielActiveBtn != null)
+            {
+                _danielActiveBtn.Visibility = isDaniel ? Visibility.Collapsed : Visibility.Visible;
+                _danielActiveBtn.Content = isZh ? "设为主后端" : "Set as Active";
+                _danielActiveBtn.IsEnabled = _danielCheck != null && _danielCheck.IsChecked == true;
+            }
+
+            if (_mochiActiveLabel != null)
+            {
+                _mochiActiveLabel.Visibility = isMochi ? Visibility.Visible : Visibility.Collapsed;
+                _mochiActiveLabel.Text = isZh ? "★ 当前主后端" : "★ Active Backend";
+            }
+            if (_mochiActiveBtn != null)
+            {
+                _mochiActiveBtn.Visibility = isMochi ? Visibility.Collapsed : Visibility.Visible;
+                _mochiActiveBtn.Content = isZh ? "设为主后端" : "Set as Active";
+                _mochiActiveBtn.IsEnabled = _mochiCheck != null && _mochiCheck.IsChecked == true;
+            }
+        }
+
+        void SwitchTab(bool toSettings)
+        {
+            if (_libraryPage != null) _libraryPage.Visibility = toSettings ? Visibility.Collapsed : Visibility.Visible;
+            if (_settingsPage != null) _settingsPage.Visibility = toSettings ? Visibility.Visible : Visibility.Collapsed;
+            if (_settingsTab != null)
+            {
+                _settingsTab.Content = toSettings ? (_language == "zh" ? "返回游戏库" : "Back to Library") : (_language == "zh" ? "设置" : "Settings");
+            }
+        }
+
+        void ToggleLanguage()
+        {
+            _language = (_language == "zh") ? "en" : "zh";
+            if (_langCombo != null && _langCombo.Items.Contains(_language))
+                _langCombo.SelectedItem = _language;
+            SaveSettings();
+            ApplyLang();
+            RefreshGameListView();
         }
 
         void OnFirstShown(string[] args)
@@ -279,14 +562,21 @@ namespace OptScalerNR.Launcher
         void ApplyLang()
         {
             var isZh = _language == "zh";
+            if (_pageTitle != null) _pageTitle.Text = isZh ? "游戏库" : "Library";
+            if (_langToggle != null) _langToggle.Content = isZh ? "🌐 English" : "🌐 简体中文";
             if (_libraryTab != null) _libraryTab.Content = isZh ? "游戏库" : "Library";
-            if (_settingsTab != null) _settingsTab.Content = isZh ? "设置" : "Settings";
+            if (_settingsTab != null && (_settingsPage == null || _settingsPage.Visibility != Visibility.Visible))
+                _settingsTab.Content = isZh ? "设置" : "Settings";
             if (_addButton != null) _addButton.Content = isZh ? "+ 添加游戏" : "+ Add Game";
-            if (_changeExeButton != null) _changeExeButton.Content = isZh ? "更换游戏 EXE" : "Change EXE";
+            if (_changeExeButton != null) _changeExeButton.Content = isZh ? "更换 EXE" : "Change EXE";
+            if (_openFolderButton != null) _openFolderButton.Content = isZh ? "打开目录" : "Open Folder";
             if (_uninstallButton != null) _uninstallButton.Content = isZh ? "卸载" : "Uninstall";
             if (_openLogButton != null) _openLogButton.Content = isZh ? "打开完整日志" : "Open Full Log";
-            if (_refreshButton != null) _refreshButton.Content = isZh ? "刷新游戏库" : "Refresh Library";
+            if (_refreshButton != null) _refreshButton.Content = isZh ? "刷新" : "Refresh";
             if (_packageBrowse != null) _packageBrowse.Content = isZh ? "浏览…" : "Browse…";
+            if (_heroKicker != null) _heroKicker.Text = isZh ? "已选游戏" : "Selected Game";
+            if (_replaceIni != null) _replaceIni.Content = isZh ? "覆盖现有 OptiScaler.ini 配置文件 (推荐)" : "Replace existing OptiScaler.ini (recommended)";
+            if (_scanOnStartup != null) _scanOnStartup.Content = isZh ? "启动时自动扫描游戏库" : "Scan game library on startup";
 
             if (_filterCombo != null && _filterCombo.Items.Count >= 3)
             {
@@ -305,6 +595,7 @@ namespace OptScalerNR.Launcher
                 if (idx >= 0) _proxyCombo.SelectedIndex = idx;
             }
 
+            UpdateActiveUI();
             UpdatePrimaryButtonState();
         }
 
@@ -468,7 +759,7 @@ namespace OptScalerNR.Launcher
                     Id = "custom:" + norm.ToLowerInvariant(),
                     Name = name,
                     Exe = norm,
-                    Source = "Added",
+                    Source = "Manual",
                     Installed = File.Exists(Path.Combine(dir, "amd-presr-install.txt"))
                 };
                 _allGames.Add(found);
@@ -496,6 +787,20 @@ namespace OptScalerNR.Launcher
             SelectGame(_selectedGame);
         }
 
+        void OpenSelectedFolder()
+        {
+            if (_selectedGame == null || string.IsNullOrEmpty(_selectedGame.Exe)) return;
+            try
+            {
+                var dir = Path.GetDirectoryName(_selectedGame.Exe);
+                if (Directory.Exists(dir))
+                {
+                    Process.Start("explorer.exe", dir);
+                }
+            }
+            catch { }
+        }
+
         void OnDrop(object sender, DragEventArgs e)
         {
             if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
@@ -517,6 +822,7 @@ namespace OptScalerNR.Launcher
         {
             var query = (_searchBox != null ? _searchBox.Text : "").Trim().ToLowerInvariant();
             var filterIdx = _filterCombo != null ? _filterCombo.SelectedIndex : 0; // 0=all, 1=installed, 2=not installed
+            var isZh = _language == "zh";
 
             var list = new List<GameItemViewModel>();
             foreach (var g in _allGames)
@@ -529,7 +835,7 @@ namespace OptScalerNR.Launcher
                     var matchExe = g.Exe != null && g.Exe.ToLowerInvariant().Contains(query);
                     if (!matchName && !matchExe) continue;
                 }
-                list.Add(new GameItemViewModel { Info = g });
+                list.Add(new GameItemViewModel { Info = g, IsZh = isZh });
             }
 
             if (_gameList != null)
@@ -548,10 +854,11 @@ namespace OptScalerNR.Launcher
                 }
             }
 
+            if (_countBadge != null) _countBadge.Text = list.Count.ToString();
             if (_countText != null)
             {
-                _countText.Text = _language == "zh"
-                    ? string.Format("{0} 款游戏", list.Count)
+                _countText.Text = isZh
+                    ? string.Format("共 {0} 款游戏", list.Count)
                     : string.Format("{0} games", list.Count);
             }
         }
@@ -575,6 +882,38 @@ namespace OptScalerNR.Launcher
             if (_heroMeta != null) _heroMeta.Text = game.Source + " · PC";
             if (_heroPath != null) _heroPath.Text = game.Exe;
 
+            if (_heroPosterImage != null && _heroPosterInitial != null)
+            {
+                if (!string.IsNullOrEmpty(game.Cover) && File.Exists(game.Cover))
+                {
+                    try
+                    {
+                        var bi = new BitmapImage();
+                        bi.BeginInit();
+                        bi.CacheOption = BitmapCacheOption.OnLoad;
+                        bi.UriSource = new Uri(game.Cover, UriKind.Absolute);
+                        bi.EndInit();
+                        _heroPosterImage.Source = bi;
+                        _heroPosterImage.Visibility = Visibility.Visible;
+                        _heroPosterInitial.Visibility = Visibility.Collapsed;
+                    }
+                    catch
+                    {
+                        _heroPosterImage.Source = null;
+                        _heroPosterImage.Visibility = Visibility.Collapsed;
+                        _heroPosterInitial.Text = string.IsNullOrEmpty(game.Name) ? "?" : game.Name.Substring(0, 1).ToUpperInvariant();
+                        _heroPosterInitial.Visibility = Visibility.Visible;
+                    }
+                }
+                else
+                {
+                    _heroPosterImage.Source = null;
+                    _heroPosterImage.Visibility = Visibility.Collapsed;
+                    _heroPosterInitial.Text = string.IsNullOrEmpty(game.Name) ? "?" : game.Name.Substring(0, 1).ToUpperInvariant();
+                    _heroPosterInitial.Visibility = Visibility.Visible;
+                }
+            }
+
             UpdatePrimaryButtonState();
             InspectGame(game);
         }
@@ -585,7 +924,7 @@ namespace OptScalerNR.Launcher
             var isZh = _language == "zh";
             if (_selectedGame == null)
             {
-                _primaryButton.Content = isZh ? "选择一个游戏" : "Select a Game";
+                _primaryButton.Content = isZh ? "⚡ 选择一个游戏" : "⚡ Select a Game";
                 _primaryButton.IsEnabled = false;
                 if (_uninstallButton != null) _uninstallButton.IsEnabled = false;
                 return;
@@ -595,10 +934,12 @@ namespace OptScalerNR.Launcher
                 || (_danielCheck != null && _danielCheck.IsChecked == true)
                 || (_mochiCheck != null && _mochiCheck.IsChecked == true);
 
-            var proxyChosen = _proxyCombo != null && _proxyCombo.SelectedIndex > 0;
+            var proxyChosen = !string.IsNullOrEmpty(CurrentSelectedProxy);
             var isBusy = _session != null && _session.IsRunning;
 
-            _primaryButton.Content = _selectedGame.Installed ? (isZh ? "更新" : "Update") : (isZh ? "安装" : "Install");
+            _primaryButton.Content = _selectedGame.Installed
+                ? (isZh ? "⚡ 更新 OptScaler NR" : "⚡ Update OptScaler NR")
+                : (isZh ? "⚡ 安装 OptScaler NR" : "⚡ Install OptScaler NR");
             _primaryButton.IsEnabled = !isBusy && hasBackend && proxyChosen;
             if (_uninstallButton != null)
                 _uninstallButton.IsEnabled = !isBusy && _selectedGame.Installed;
@@ -606,40 +947,42 @@ namespace OptScalerNR.Launcher
 
         void UpdateActiveCombo()
         {
-            if (_activeCombo == null) return;
             var checkedBackends = new List<string>();
             if (_lmxxfCheck != null && _lmxxfCheck.IsChecked == true) checkedBackends.Add("lmxxf");
             if (_danielCheck != null && _danielCheck.IsChecked == true) checkedBackends.Add("daniel");
             if (_mochiCheck != null && _mochiCheck.IsChecked == true) checkedBackends.Add("mochizuki");
 
-            var currentActive = Convert.ToString(_activeCombo.SelectedItem);
-            _activeCombo.Items.Clear();
-            foreach (var b in checkedBackends) _activeCombo.Items.Add(b);
+            if (_activeCombo != null)
+            {
+                _activeCombo.Items.Clear();
+                foreach (var b in checkedBackends) _activeCombo.Items.Add(b);
 
-            if (checkedBackends.Count >= 2)
-            {
-                _activeCombo.IsEnabled = true;
-                if (checkedBackends.Contains(currentActive))
-                    _activeCombo.SelectedItem = currentActive;
-                else
-                    _activeCombo.SelectedIndex = 0;
+                if (checkedBackends.Count >= 1)
+                {
+                    if (checkedBackends.Contains(_activeBackend))
+                        _activeCombo.SelectedItem = _activeBackend;
+                    else
+                    {
+                        _activeBackend = checkedBackends[0];
+                        _activeCombo.SelectedIndex = 0;
+                    }
+                }
             }
-            else if (checkedBackends.Count == 1)
+
+            if (!checkedBackends.Contains(_activeBackend) && checkedBackends.Count > 0)
             {
-                _activeCombo.SelectedIndex = 0;
-                _activeCombo.IsEnabled = false;
+                _activeBackend = checkedBackends[0];
             }
-            else
-            {
-                _activeCombo.IsEnabled = false;
-            }
+
+            UpdateActiveUI();
         }
 
         void RunScan()
         {
             if (_session != null && _session.IsRunning) return;
             SetBusy(true, "scan");
-            if (_statusText != null) _statusText.Text = _language == "zh" ? "扫描游戏库中…" : "Scanning library…";
+            if (_statusText != null) _statusText.Text = _language == "zh" ? "正在扫描游戏库…" : "Scanning library…";
+            if (_statusLed != null) _statusLed.Fill = WarningBrush;
             if (_progress != null) _progress.IsIndeterminate = true;
 
             var req = new LauncherRequest
@@ -675,6 +1018,7 @@ namespace OptScalerNR.Launcher
                 Detach(source);
                 _session = null;
                 SetBusy(false, "");
+                if (_progress != null) _progress.IsIndeterminate = false;
 
                 if (result != null && result.Games != null)
                 {
@@ -695,12 +1039,15 @@ namespace OptScalerNR.Launcher
                         else
                         {
                             map[g.Exe].Installed = g.Installed;
+                            if (!string.IsNullOrEmpty(g.Cover)) map[g.Exe].Cover = g.Cover;
+                            if (!string.IsNullOrEmpty(g.Hero)) map[g.Exe].Hero = g.Hero;
                         }
                     }
                     SaveLibraryCache();
                     RefreshGameListView();
                 }
 
+                if (_statusLed != null) _statusLed.Fill = ReadyBrush;
                 if (_statusText != null)
                     _statusText.Text = _language == "zh" ? "游戏库已更新" : "Library updated";
             }));
@@ -725,6 +1072,7 @@ namespace OptScalerNR.Launcher
 
             SetBusy(true, "inspect");
             if (_injectText != null) _injectText.Text = _language == "zh" ? "正在检查导入与后端…" : "Checking imports and backends…";
+            if (_statusLed != null) _statusLed.Fill = WarningBrush;
             if (_progress != null) _progress.IsIndeterminate = true;
 
             var req = new LauncherRequest
@@ -790,9 +1138,7 @@ namespace OptScalerNR.Launcher
                 return;
             }
 
-            var proxy = (_proxyCombo != null && _proxyCombo.SelectedIndex > 0)
-                ? Convert.ToString(_proxyCombo.SelectedItem)
-                : "";
+            var proxy = CurrentSelectedProxy;
             if (action != "uninstall" && string.IsNullOrEmpty(proxy))
             {
                 MessageBox.Show(_window, _language == "zh" ? "请先选择要注入的代理 DLL。" : "Please select a proxy DLL to inject first.", _window.Title);
@@ -814,6 +1160,7 @@ namespace OptScalerNR.Launcher
 
             SetBusy(true, action);
             if (_logView != null) _logView.Clear();
+            if (_statusLed != null) _statusLed.Fill = WarningBrush;
             if (_progress != null) _progress.IsIndeterminate = true;
             _pendingAction = action;
 
@@ -826,7 +1173,7 @@ namespace OptScalerNR.Launcher
                 GameExe = _selectedGame.Exe,
                 ProxyChoice = proxy,
                 Backends = checkedBackends.ToArray(),
-                ActiveBackend = Convert.ToString(_activeCombo.SelectedItem),
+                ActiveBackend = _activeBackend,
                 PackageRoot = _packageRoot,
                 ExplicitDecisions = _decisions,
                 Fingerprint = (action != "inspect" && _lastInspectResult != null) ? _lastInspectResult.Fingerprint : null
@@ -874,14 +1221,17 @@ namespace OptScalerNR.Launcher
 
                 if (result == null)
                 {
+                    if (_statusLed != null) _statusLed.Fill = WarningBrush;
                     if (_statusText != null) _statusText.Text = "Worker failed (exit " + code + ").";
                 }
                 else if (string.Equals(result.Status, "success", StringComparison.OrdinalIgnoreCase) && code != 0)
                 {
+                    if (_statusLed != null) _statusLed.Fill = WarningBrush;
                     if (_statusText != null) _statusText.Text = "Worker exit " + code + " does not match status " + result.Status;
                 }
                 else
                 {
+                    if (_statusLed != null) _statusLed.Fill = ReadyBrush;
                     if (_statusText != null) _statusText.Text = result.Status + (string.IsNullOrEmpty(result.Error) ? "" : (": " + result.Error));
                 }
 
@@ -923,22 +1273,39 @@ namespace OptScalerNR.Launcher
             if (result == null) return;
             _lastInspectResult = result;
 
-            if (_injectText != null)
+            var isZh = _language == "zh";
+
+            if (!string.IsNullOrEmpty(result.Recommend))
             {
-                if (!string.IsNullOrEmpty(result.Recommend))
+                if (_injectIcon != null)
                 {
-                    _injectText.Text = _language == "zh"
-                        ? ("检测到程序导入 " + result.Recommend + "，建议尝试注入 " + result.Recommend + "。")
-                        : ("Detected program import for " + result.Recommend + ", suggest injecting " + result.Recommend + ".");
-                    if (_proxyCombo != null && _proxyCombo.Items.Contains(result.Recommend))
-                        _proxyCombo.SelectedItem = result.Recommend;
+                    _injectIcon.Text = "✓";
+                    _injectIcon.Foreground = ReadyBrush;
                 }
-                else
+                if (_injectRecommendation != null)
                 {
-                    _injectText.Text = _language == "zh"
-                        ? "无法判断，请选择 DLL 自行尝试。"
-                        : "Cannot determine, please select a DLL manually.";
-                    if (_proxyCombo != null) _proxyCombo.SelectedIndex = 0;
+                    _injectRecommendation.Text = isZh
+                        ? ("检测到程序导入 " + result.Recommend + "，已自动选定为推荐代理。")
+                        : ("Detected import for " + result.Recommend + ", recommended proxy auto-selected.");
+                }
+                SelectProxy(result.Recommend);
+            }
+            else
+            {
+                if (_injectIcon != null)
+                {
+                    _injectIcon.Text = "ℹ";
+                    _injectIcon.Foreground = WarningBrush;
+                }
+                if (_injectRecommendation != null)
+                {
+                    _injectRecommendation.Text = isZh
+                        ? "无法从导入表判断首选 DLL，建议优先尝试 dxgi.dll。"
+                        : "Cannot determine preferred DLL, recommend trying dxgi.dll.";
+                }
+                if (string.IsNullOrEmpty(CurrentSelectedProxy))
+                {
+                    SelectProxy("dxgi.dll");
                 }
             }
 
@@ -959,6 +1326,11 @@ namespace OptScalerNR.Launcher
                             _lmxxfReason.Text = b.Reason;
                             _lmxxfReason.Foreground = b.Enabled ? ReadyBrush : MissingBrush;
                         }
+                        if (_lmxxfBadge != null)
+                        {
+                            _lmxxfBadge.Background = b.Enabled ? ReadyBg : MissingBg;
+                            _lmxxfBadge.BorderBrush = b.Enabled ? ReadyBorder : MissingBorder;
+                        }
                     }
                     else if (b.Id == "daniel")
                     {
@@ -972,6 +1344,11 @@ namespace OptScalerNR.Launcher
                             _danielReason.Text = b.Reason;
                             _danielReason.Foreground = b.Enabled ? ReadyBrush : MissingBrush;
                         }
+                        if (_danielBadge != null)
+                        {
+                            _danielBadge.Background = b.Enabled ? ReadyBg : MissingBg;
+                            _danielBadge.BorderBrush = b.Enabled ? ReadyBorder : MissingBorder;
+                        }
                     }
                     else if (b.Id == "mochizuki")
                     {
@@ -984,6 +1361,11 @@ namespace OptScalerNR.Launcher
                         {
                             _mochiReason.Text = b.Reason;
                             _mochiReason.Foreground = b.Enabled ? ReadyBrush : MissingBrush;
+                        }
+                        if (_mochiBadge != null)
+                        {
+                            _mochiBadge.Background = b.Enabled ? ReadyBg : MissingBg;
+                            _mochiBadge.BorderBrush = b.Enabled ? ReadyBorder : MissingBorder;
                         }
                     }
                 }
@@ -1072,10 +1454,15 @@ namespace OptScalerNR.Launcher
         {
             if (_addButton != null) _addButton.IsEnabled = !busy;
             if (_changeExeButton != null) _changeExeButton.IsEnabled = !busy;
+            if (_openFolderButton != null) _openFolderButton.IsEnabled = !busy;
             if (_refreshButton != null) _refreshButton.IsEnabled = !busy;
             if (_primaryButton != null) _primaryButton.IsEnabled = !busy;
             if (_uninstallButton != null) _uninstallButton.IsEnabled = !busy && (_selectedGame != null && _selectedGame.Installed);
             if (_proxyCombo != null) _proxyCombo.IsEnabled = !busy;
+            if (_proxyPills != null)
+            {
+                foreach (var p in _proxyPills.Values) p.IsEnabled = !busy;
+            }
             if (_lmxxfCheck != null) _lmxxfCheck.IsEnabled = !busy && (_lastInspectResult == null || IsBackendReady("lmxxf"));
             if (_danielCheck != null) _danielCheck.IsEnabled = !busy && (_lastInspectResult == null || IsBackendReady("daniel"));
             if (_mochiCheck != null) _mochiCheck.IsEnabled = !busy && (_lastInspectResult == null || IsBackendReady("mochizuki"));

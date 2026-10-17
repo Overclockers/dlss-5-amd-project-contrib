@@ -34,7 +34,7 @@ function Get-OptScalerPrimaryExes([string]$dir, [int]$depth = 4) {
     return @($found | Sort-Object rank, name)
 }
 
-function Add-OptScalerGame($list, $seen, [string]$name, [string]$exe, [string]$source, [string]$id) {
+function Add-OptScalerGame($list, $seen, [string]$name, [string]$exe, [string]$source, [string]$id, [string]$cover = '', [string]$hero = '') {
     if (-not $exe) { return }
     try { $exe = [IO.Path]::GetFullPath($exe) } catch { return }
     $key = $exe.ToLowerInvariant()
@@ -49,6 +49,8 @@ function Add-OptScalerGame($list, $seen, [string]$name, [string]$exe, [string]$s
         source = $source
         installed = [bool]$installed
         selectionRequired = $false
+        cover = $cover
+        hero = $hero
     })
 }
 
@@ -89,11 +91,27 @@ function Get-OptScalerGameLibrary {
                     $n = [regex]::Match($raw, '"name"\s+"([^"]+)"').Groups[1].Value
                     $d = [regex]::Match($raw, '"installdir"\s+"([^"]+)"').Groups[1].Value
                     $appid = [regex]::Match($raw, '"appid"\s+"([^"]+)"').Groups[1].Value
-                    if (-not $n -or $n -match '(?i)(dedicated server|sdk|soundtrack|benchmark|editor)') { return }
+                    if (-not $n -or $n -match '(?i)(dedicated server|sdk|soundtrack|benchmark|editor|steamworks|redistributable)') { return }
+                    if ($d -match '(?i)Steamworks') { return }
+                    $n = ($n -replace '[®™©]','').Trim()
                     $dir = Join-Path $lib "steamapps\common\$d"
                     $cands = @(Get-OptScalerPrimaryExes $dir 4)
                     if ($cands.Count -gt 0) {
-                        Add-OptScalerGame $games $seen $n $cands[0].path 'Steam' ("steam:" + $appid)
+                        $cover = ''
+                        $hero = ''
+                        $grid = Join-Path $steamRoot "appcache\librarycache\$appid"
+                        if (Test-Path -LiteralPath $grid) {
+                            $c1 = Join-Path $grid 'library_600x900.jpg'
+                            if (Test-Path -LiteralPath $c1 -PathType Leaf) { $cover = $c1 }
+                            elseif (Test-Path -LiteralPath (Join-Path $grid 'header.jpg') -PathType Leaf) { $cover = Join-Path $grid 'header.jpg' }
+                            else {
+                                $candsJpg = @(Get-ChildItem -LiteralPath $grid -Filter '*.jpg' -File -ErrorAction SilentlyContinue | Sort-Object Length -Descending)
+                                if ($candsJpg.Count -gt 0) { $cover = $candsJpg[0].FullName }
+                            }
+                            $h1 = Join-Path $grid 'library_hero.jpg'
+                            if (Test-Path -LiteralPath $h1 -PathType Leaf) { $hero = $h1 }
+                        }
+                        Add-OptScalerGame $games $seen $n $cands[0].path 'Steam' ("steam:" + $appid) $cover $hero
                         if (@($cands | Where-Object { $_.rank -eq $cands[0].rank }).Count -gt 1) {
                             $games[$games.Count - 1].selectionRequired = $true
                         }
@@ -145,7 +163,15 @@ function Get-OptScalerGameLibrary {
             $base = if (Test-Path -LiteralPath $content -PathType Container) { $content } else { $_.FullName }
             $cands = @(Get-OptScalerPrimaryExes $base 6)
             if ($cands.Count -gt 0) {
-                Add-OptScalerGame $games $seen $_.Name $cands[0].path 'Xbox' ("xbox:" + $_.Name.ToLowerInvariant())
+                $cover = ''
+                $assets = Join-Path $base 'Assets'
+                if (Test-Path -LiteralPath $assets) {
+                    foreach ($candImg in @('Wide310x150Logo.png','Square150x150Logo.png','StoreLogo.png','Logo.png','Splash.png')) {
+                        $p = Join-Path $assets $candImg
+                        if (Test-Path -LiteralPath $p -PathType Leaf) { $cover = $p; break }
+                    }
+                }
+                Add-OptScalerGame $games $seen $_.Name $cands[0].path 'Xbox' ("xbox:" + $_.Name.ToLowerInvariant()) $cover
             }
         }
     }

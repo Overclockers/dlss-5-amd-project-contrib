@@ -73,6 +73,8 @@ namespace OptScalerNR.Launcher
         [DataMember(Name = "exe")] public string Exe;
         [DataMember(Name = "source")] public string Source;
         [DataMember(Name = "installed")] public bool Installed;
+        [DataMember(Name = "cover")] public string Cover;
+        [DataMember(Name = "hero")] public string Hero;
     }
 
     [DataContract]

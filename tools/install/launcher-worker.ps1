@@ -73,9 +73,23 @@ $script:notes = @()
 $script:fingerprint = $null
 $script:partial = $false
 $allowedProxy = @('dxgi.dll','winmm.dll','d3d12.dll','winhttp.dll','wininet.dll','dbghelp.dll')
-$allowedAction = @('inspect','install','update','uninstall')
+$allowedAction = @('inspect','install','update','uninstall','scan')
 $allowedBackend = @('auto','daniel','lmxxf','mochizuki','all')
 if ($allowedAction -notcontains [string]$req.action) { throw "invalid action $($req.action)" }
+
+if ($req.action -eq 'scan') {
+    Write-Event 'scan' 'Scanning game libraries...'
+    $scan = Join-Path $here 'library-scan.ps1'
+    if (-not (Test-Path -LiteralPath $scan)) { $scan = Find-Sibling 'library-scan.ps1' }
+    if (-not $scan) { Fail-Result 'failed' 'library-scan.ps1 is missing from the package.' 1 }
+    . $scan
+    $games = @(Get-OptScalerGameLibrary)
+    $obj = New-Result 'success' $null
+    $obj.games = $games
+    Write-Result $obj
+    Write-Event 'done' "scan complete ($($games.Count) games found)"
+    exit 0
+}
 function Resolve-XboxGamePath([string]$exe) {
     if ($exe -notmatch '(?i)\\WindowsApps\\') { return $exe }
     $name = [IO.Path]::GetFileName($exe)
@@ -195,17 +209,6 @@ if ($capScript -and (Test-Path -LiteralPath $capScript)) {
     $script:backends = @(Get-OptScalerBackendCapabilities $script:packageRoot $script:gameDir)
 }
 
-if ($req.action -eq 'scan') {
-    $scan = Join-Path $here 'library-scan.ps1'
-    if (-not (Test-Path -LiteralPath $scan)) { $scan = Find-Sibling 'library-scan.ps1' }
-    if (-not $scan) { Fail-Result 'failed' 'library-scan.ps1 is missing from the package.' 1 }
-    . $scan
-    $games = @(Get-OptScalerGameLibrary)
-    $obj = New-Result 'success' $null
-    $obj.games = $games
-    Write-Result $obj
-    exit 0
-}
 
 if ($req.action -eq 'inspect') {
     if ($probe.hint) { $script:notes += $probe.hint }
