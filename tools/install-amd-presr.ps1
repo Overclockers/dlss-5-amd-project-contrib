@@ -763,7 +763,7 @@ function Test-MochizukiModelFile([string]$Path, [uint32]$Entries = 599) {
         $magic = [Text.Encoding]::ASCII.GetString($header, 0, 8)
         $count = [BitConverter]::ToUInt32($header, 8)
         $reserved = [BitConverter]::ToUInt32($header, 12)
-        if ($magic -cne 'NRMODEL1' -or $count -ne $Entries) { return $false }
+        if ($magic -cne 'NRMODEL1' -or $count -ne $Entries -or $reserved -ne 0) { return $false }
 
         # Check known fast SHA
         $stream.Position = 0
@@ -775,25 +775,15 @@ function Test-MochizukiModelFile([string]$Path, [uint32]$Entries = 599) {
         if ($Entries -eq 599 -and $hashStr -eq $script:knownOriginalSha) { return $true }
         if ($Entries -eq 255 -and $hashStr -eq $script:knownSmallSha) { return $true }
 
-        if ($flen -gt 16) {
-            $stream.Position = 16
-            $reader = New-Object System.IO.BinaryReader($stream)
-            $validEntries = 0
-            while ($validEntries -lt $count -and $stream.Position -lt $flen) {
-                if (($stream.Position + 4) -gt $flen) { break }
-                $n = $reader.ReadUInt32()
-                if ($n -eq 0 -or $n -gt 4096) { break }
-                if (($stream.Position + $n + 16) -gt $flen) { break }
-                $stream.Position += $n
-                $off = $reader.ReadUInt64()
-                $sz = $reader.ReadUInt64()
-                if ($off -lt 16 -or $sz -eq 0 -or ($off + $sz) -gt $flen) { break }
-                $validEntries++
+        # Fallback to python full tensor validation
+        $modelTool = Find-FirstFile @((Join-Path $Root 'mochizuki-model.py'), (Join-Path $PSScriptRoot 'install/mochizuki-model.py'))
+        if ($modelTool) {
+            $py = Get-Command 'python' -ErrorAction SilentlyContinue
+            if ($py) {
+                $fam = if ($Entries -eq 255) { 'small' } else { 'original' }
+                & $py.Source -B $modelTool --verify-pack $Path --family $fam *>$null
+                if ($LASTEXITCODE -eq 0) { return $true }
             }
-            if ($validEntries -eq $count) { return $true }
-        }
-        if ($flen -lt 1048576 -and $reserved -eq 0) {
-            return $true
         }
         return $false
     } catch {
@@ -807,14 +797,17 @@ function Test-MochizukiModelHeader([string]$Path, [uint32]$Entries = 599) {
     return Test-MochizukiModelFile $Path $Entries
 }
 $mochizukiModel = $null
-$modelCandidates = @((Join-Path $game 'dlssnr-amd/dlssnr.bin'), (Join-Path $Root 'dlssnr-amd/dlssnr.bin'))
+$modelCandidates = @((Join-Path $Root 'dlssnr-amd/dlssnr.bin'), (Join-Path $Root 'dlssnr.bin'))
 if ($mochizukiAssets) { $modelCandidates += (Join-Path $mochizukiAssets 'dlssnr.bin') }
+$modelCandidates += (Join-Path $game 'dlssnr-amd/dlssnr.bin')
 foreach ($candidate in $modelCandidates) {
     if (Test-MochizukiModelHeader $candidate) { $mochizukiModel = $candidate; break }
 }
+
 $mochizukiSmallModel = $null
-$smallModelCandidates = @((Join-Path $game 'dlssnr-amd/dlssnr-small.bin'), (Join-Path $Root 'dlssnr-amd/dlssnr-small.bin'))
+$smallModelCandidates = @((Join-Path $Root 'dlssnr-amd/dlssnr-small.bin'), (Join-Path $Root 'dlssnr-small.bin'))
 if ($mochizukiAssets) { $smallModelCandidates += (Join-Path $mochizukiAssets 'dlssnr-small.bin') }
+$smallModelCandidates += (Join-Path $game 'dlssnr-amd/dlssnr-small.bin')
 foreach ($candidate in $smallModelCandidates) {
     if (Test-MochizukiModelHeader $candidate 255) { $mochizukiSmallModel = $candidate; break }
 }
@@ -1136,7 +1129,7 @@ if ($installMochizuki) {
         if ($mochizukiModel -and (Test-Path -LiteralPath $gameModelPath -PathType Leaf)) {
             $chosenFull = [IO.Path]::GetFullPath($mochizukiModel)
             $gameFull = [IO.Path]::GetFullPath($gameModelPath)
-            if ($chosenFull -ne $gameFull) {
+            if ($chosenFull -ne $gameFull -and (Get-Sha256 $mochizukiModel) -ne (Get-Sha256 $gameModelPath)) {
                 $mochizukiStaleGameModel = $gameModelPath
                 if (-not ($mismatches | Where-Object { $_.Data['Model'] -eq $gameModelPath })) {
                     Add-WeightProblem 'mochizuki' $false @(
@@ -1197,6 +1190,18 @@ if ($droppedBackends.Count -gt 0) {
 }
 
 # --- process danielblnc runtime if selected ---
+# Detect existing model locks before updating any game files.
+if ($installMochizuki) {
+    $selectedModelNames = @()
+    if ($MochizukiModels -in @('both', 'original')) { $selectedModelNames += 'dlssnr.bin' }
+    if ($MochizukiModels -in @('both', 'small')) { $selectedModelNames += 'dlssnr-small.bin' }
+    foreach ($modelName in $selectedModelNames) {
+        $modelTarget = Join-Path $game (Join-Path 'dlssnr-amd' $modelName)
+        if (Test-FileLocked $modelTarget) {
+            Fail "Model destination is locked: $modelTarget. Close the game completely before running Setup again."
+        }
+    }
+}
 $stagedA = $null
 if ($installDaniel) {
     $gameHasNv = Test-Path -LiteralPath (Join-Path $game 'nvngx_dlssnr.dll') -PathType Leaf
@@ -1493,6 +1498,7 @@ function Install-One([string]$src, [string]$rel) {
                 ($rel -ilike 'native-game-tiled-assets\*') -or
                 ($rel -ilike 'native-game-tiled-assets/*') -or $isMochizukiModel
 
+    $aside = $null
     try {
         if (Test-Path -LiteralPath $dest) {
             if ($isMochizukiModel) {
@@ -1512,6 +1518,9 @@ function Install-One([string]$src, [string]$rel) {
         if ($ddir) { [void][System.IO.Directory]::CreateDirectory($ddir) }
         Copy-Item -LiteralPath $src -Destination $dest -Force
     } catch [System.IO.IOException] {
+        if ($aside -and (Test-Path -LiteralPath $aside)) {
+            Move-Item -LiteralPath $aside -Destination $dest -Force -ErrorAction SilentlyContinue
+        }
         Fail @"
 Install failed on $rel :
   $($_.Exception.Message)
@@ -1520,6 +1529,11 @@ The file is probably locked by a running game.
 Close the game completely, then run Setup.bat again.
 Run Setup again after closing the game to finish the full-package overwrite.
 "@
+    } catch {
+        if ($aside -and (Test-Path -LiteralPath $aside)) {
+            Move-Item -LiteralPath $aside -Destination $dest -Force -ErrorAction SilentlyContinue
+        }
+        throw
     }
 }
 
@@ -1730,16 +1744,84 @@ if ($installMochizuki) {
             Install-One $file.FullName (Join-Path 'dlssnr-amd/aco' $relative)
         }
     }
-    if ($mochizukiStaleGameModel -and (Test-Path -LiteralPath $mochizukiStaleGameModel -PathType Leaf)) {
-        $aside = $mochizukiStaleGameModel + '.mismatch-' + (Get-Date -Format 'yyyyMMddHHmmss')
-        Move-Item -LiteralPath $mochizukiStaleGameModel -Destination $aside -ErrorAction Stop
-        Write-Host "Renamed mismatched Mochizuki model: $aside" -ForegroundColor Yellow
-    }
+    $mochizukiModelsToInstall = @()
     if ($MochizukiModels -in @('both', 'original') -and $mochizukiModel) {
-        Install-One $mochizukiModel 'dlssnr-amd/dlssnr.bin'
+        $mochizukiModelsToInstall += @{ Src = $mochizukiModel; Rel = 'dlssnr-amd/dlssnr.bin'; Entries = 599 }
     }
     if ($MochizukiModels -in @('both', 'small') -and $mochizukiSmallModel) {
-        Install-One $mochizukiSmallModel 'dlssnr-amd/dlssnr-small.bin'
+        $mochizukiModelsToInstall += @{ Src = $mochizukiSmallModel; Rel = 'dlssnr-amd/dlssnr-small.bin'; Entries = 255 }
+    }
+
+    # Recheck all destinations immediately before replacing any model.
+    foreach ($m in $mochizukiModelsToInstall) {
+        $destPath = Join-Path $game $m.Rel
+        if (Test-Path -LiteralPath $destPath -PathType Leaf) {
+            try {
+                $fs = [System.IO.File]::Open($destPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+                $fs.Dispose()
+            } catch {
+                Fail @"
+Install failed on $($m.Rel) :
+  $($_.Exception.Message)
+
+The file is probably locked by a running game.
+Close the game completely, then run Setup.bat again.
+"@
+            }
+        }
+    }
+
+    # Install models with transactional rollback
+    $modelBackups = @()
+    try {
+        foreach ($m in $mochizukiModelsToInstall) {
+            $destPath = Join-Path $game $m.Rel
+            $srcPath = $m.Src
+            $destExisted = Test-Path -LiteralPath $destPath -PathType Leaf
+            $backupPath = $null
+            if ($destExisted) {
+                if ((Test-MochizukiModelFile $destPath $m.Entries) -and ((Get-Sha256 $destPath) -eq (Get-Sha256 $srcPath))) {
+                    Write-Host ("Skip (verified model already in place): {0}" -f $m.Rel)
+                    continue
+                }
+                $backupSuffix = if ($destPath -eq $mochizukiStaleGameModel) { '.mismatch-' } else { '.bak-' }
+                $backupPath = $destPath + $backupSuffix + (Get-Date -Format 'yyyyMMddHHmmss') + '-' + [guid]::NewGuid().ToString('N')
+                Move-Item -LiteralPath $destPath -Destination $backupPath -Force -ErrorAction Stop
+                Write-Host "Backed up mismatched or invalid model: $destPath -> $backupPath" -ForegroundColor Yellow
+            }
+            $modelBackups += @{ Dest = $destPath; Backup = $backupPath; Existed = $destExisted; Rel = $m.Rel }
+            $parentDir = Split-Path -Parent $destPath
+            if ($parentDir) { [void][System.IO.Directory]::CreateDirectory($parentDir) }
+            Copy-Item -LiteralPath $srcPath -Destination $destPath -Force -ErrorAction Stop
+        }
+    } catch {
+        $installError = $_.Exception.Message
+        $failedModel = $m.Rel
+        $restoreErrors = @()
+        for ($i = $modelBackups.Count - 1; $i -ge 0; $i--) {
+            $entry = $modelBackups[$i]
+            try {
+                if (Test-Path -LiteralPath $entry.Dest) {
+                    Remove-Item -LiteralPath $entry.Dest -Force -ErrorAction Stop
+                }
+                if ($entry.Existed) {
+                    if (-not $entry.Backup -or -not (Test-Path -LiteralPath $entry.Backup -PathType Leaf)) {
+                        throw "The original model backup is missing: $($entry.Backup)"
+                    }
+                    Move-Item -LiteralPath $entry.Backup -Destination $entry.Dest -Force -ErrorAction Stop
+                }
+            } catch {
+                $restoreErrors += "Could not restore $($entry.Rel): $($_.Exception.Message). Backup retained at: $($entry.Backup)"
+            }
+        }
+        foreach ($restoreError in $restoreErrors) { Write-Host $restoreError -ForegroundColor Red }
+        Fail @"
+Install failed on $failedModel :
+  $installError
+
+Check file permissions, available disk space, and whether the game is closed.
+If any restoration failed, preserve the reported backups before retrying Setup.
+"@
     }
     $int4Root = Join-Path $mochizukiAssets 'int4'
     if (Test-Path -LiteralPath $int4Root -PathType Container) {
@@ -1800,13 +1882,16 @@ if (Test-Path -LiteralPath $gameIni -PathType Leaf) {
             }
         }
     }
-    Set-IniSettings $gameIni 'DlssNr' ([ordered]@{
+    $dlssnrSettings = [ordered]@{
         'Enabled' = 'true'
         'RunBeforeSR' = 'true'
         'NrBackend' = $activeBackend
         'LmxxfDiagnostic' = 'off'
-        'MochizukiNetworkModel' = $targetNetworkModel.ToString()
-    })
+    }
+    if ($installMochizuki) {
+        $dlssnrSettings['MochizukiNetworkModel'] = $targetNetworkModel.ToString()
+    }
+    Set-IniSettings $gameIni 'DlssNr' $dlssnrSettings
     Set-IniSettings $gameIni 'DlssNr' ([ordered]@{
         'DLSS5_FIT_LARGE' = $fitLargeDefault
         'DLSS5_HIP_PDL' = $pdlDefault

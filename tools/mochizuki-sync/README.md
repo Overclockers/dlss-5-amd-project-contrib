@@ -1,7 +1,7 @@
 # Mochizuki source pin and interface patches
 
 The runtime uses official core/shaders at the full SHA in `manifest.json`, plus
-twenty-three explicit feature patches. There are no whole-file preservation overlays.
+the explicit feature patches listed in the manifest. There are no whole-file preservation overlays.
 The host loads our `MochizukiNrRuntime.dll`, which wraps that core; this does not
 claim binary compatibility with an official distributed runtime.
 
@@ -11,12 +11,18 @@ tests\mochizuki\run.cmd source-pin
 ```
 
 The first command reads **Git objects at the pin**, replays the patch series in
-a temporary directory under `exports/`, and compares 568 upstream files and six patch-created shaders (Plan A convert/unconvert and motion rescale) with
+a temporary directory under `exports/`, and compares the upstream closure and patch-created files with
 vendor. It rejects missing/extra source paths, patch conflicts and unrecorded
 vendor edits. It normalizes text CRLF only; machine-code records remain opaque.
 It does not fetch, change vendor, advance the pin, build, package or publish.
 The second command tests the checker with synthetic Git repositories and no GPU.
 Those tests also run in `run.cmd abi`.
+
+Patch 25 also carries the runtime model inventory. Regenerate it with
+`python -B tools/mochizuki-sync/generate-model-profile.py` after an intentional
+change to the tracked tensor checksum lists, then update the patch. The runtime
+checks the selected family, exact tensor set and SHA256 contents, and keeps a
+read lease that denies file writes and renames until weight loading completes.
 
 | Patch | Local purpose | Upstream preparation |
 |---|---|---|

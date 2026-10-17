@@ -17,6 +17,13 @@
 //
 // Two things this is not, yet: every family - `--report` says which - and the
 // OptiScaler entry point. The arenas are already the shapes that adapter wants.
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <bcrypt.h>
+#pragma comment(lib, "bcrypt.lib")
+#include "nr_model_profile.hpp"
 #if NR_INT4
 #include "nr_build_cfg.hpp"
 #endif
@@ -38,9 +45,7 @@
 #include <iostream>
 #include <map>
 #include <mutex>
-#if NR_INT4
 #include <memory>
-#endif
 #include <set>
 #include <sstream>
 #include <string>
@@ -326,10 +331,54 @@ bool slot_reading_diagnostic(int c, char** v) {
 // is what it was with loose files.
 struct ModelPack {
     std::string root, file;
+    std::shared_ptr<void> read_lease;
     std::map<std::string, std::pair<uint64_t, uint64_t>> index;   // name -> offset, size
 };
 ModelPack g_pack;
-bool open_model_pack(const std::string& file, const std::string& root, std::string* why) {
+bool model_range_sha256(std::ifstream& f, uint64_t offset, uint64_t size, std::string& hex) {
+    BCRYPT_ALG_HANDLE algorithm = nullptr;
+    if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0) return false;
+    struct AlgorithmGuard {
+        BCRYPT_ALG_HANDLE value;
+        ~AlgorithmGuard() { BCryptCloseAlgorithmProvider(value, 0); }
+    } algorithm_guard{algorithm};
+    DWORD object_size = 0, written = 0;
+    if (BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&object_size),
+                          sizeof object_size, &written, 0) < 0 || !object_size) return false;
+    std::vector<unsigned char> object(object_size);
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    if (BCryptCreateHash(algorithm, &hash, object.data(), object_size, nullptr, 0, 0) < 0) return false;
+    struct HashGuard {
+        BCRYPT_HASH_HANDLE value;
+        ~HashGuard() { BCryptDestroyHash(value); }
+    } hash_guard{hash};
+    f.clear();
+    f.seekg(static_cast<std::streamoff>(offset));
+    if (!f) return false;
+    std::array<unsigned char, 65536> buffer{};
+    while (size) {
+        const auto n = static_cast<ULONG>(std::min<uint64_t>(size, buffer.size()));
+        if (!f.read(reinterpret_cast<char*>(buffer.data()), n) ||
+            BCryptHashData(hash, buffer.data(), n, 0) < 0) return false;
+        size -= n;
+    }
+    std::array<unsigned char, 32> digest{};
+    if (BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0) < 0) return false;
+    static constexpr char digits[] = "0123456789abcdef";
+    hex.clear();
+    for (auto b : digest) { hex += digits[b >> 4]; hex += digits[b & 15]; }
+    return true;
+}
+bool open_model_pack(const std::string& file, const std::string& root, const std::string& family, std::string* why) {
+    ModelPack p; p.root = root; p.file = file;
+    // Keep writers and renames out until all validated tensors have been uploaded.
+    const HANDLE handle = CreateFileW(std::filesystem::path(file).c_str(), GENERIC_READ,
+                                      FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        if (why) *why = "cannot lock model pack for verified reading: " + file;
+        return false;
+    }
+    p.read_lease = std::shared_ptr<void>(handle, [](void* h) { CloseHandle(h); });
     std::ifstream f(file, std::ios::binary);
     char magic[8];
     uint32_t count = 0, reserved = 0;
@@ -342,19 +391,50 @@ bool open_model_pack(const std::string& file, const std::string& root, std::stri
         if (why) *why = "unexpected model pack count or format: " + file;
         return false;
     }
+    if ((!family.empty() && family != "small" && family != "original") ||
+        (family == "small" && count != 255) || (family == "original" && count != 599)) {
+        if (why) *why = "model pack does not match the selected network: " + file;
+        return false;
+    }
     f.seekg(0, std::ios::end);
-    const uint64_t file_len = static_cast<uint64_t>(f.tellg());
+    const auto end = f.tellg();
+    if (end < std::streampos(16)) { if (why) *why = "truncated model pack"; return false; }
+    const uint64_t file_len = static_cast<uint64_t>(end);
     f.seekg(16, std::ios::beg);
-    ModelPack p; p.root = root; p.file = file;
     for (uint32_t i = 0; i < count; ++i) {
         uint32_t n = 0; uint64_t off = 0, size = 0;
         if (!f.read(reinterpret_cast<char*>(&n), 4) || n == 0 || n > 4096) { if (why) *why = "model pack index is damaged"; return false; }
         std::string name(n, '\0');
         if (!f.read(name.data(), n) || !f.read(reinterpret_cast<char*>(&off), 8) ||
             !f.read(reinterpret_cast<char*>(&size), 8)) { if (why) *why = "model pack index is damaged"; return false; }
-        if (off < 16 || size == 0 || off + size > file_len) { if (why) *why = "model pack index entry out of bounds"; return false; }
-        p.index[name] = {off, size};
+        if (off < 16 || size == 0 || off > file_len || size > file_len - off ||
+            !p.index.emplace(name, std::make_pair(off, size)).second) {
+            if (why) *why = "invalid or duplicate model pack entry";
+            return false;
+        }
     }
+    const uint64_t index_end = static_cast<uint64_t>(f.tellg());
+    std::vector<std::pair<uint64_t, uint64_t>> ranges;
+    for (const auto& entry : p.index) {
+        const auto [off, size] = entry.second;
+        if (off < index_end) { if (why) *why = "model data overlaps its index"; return false; }
+        ranges.emplace_back(off, off + size);
+    }
+    std::sort(ranges.begin(), ranges.end());
+    for (size_t i = 1; i < ranges.size(); ++i) {
+        if (ranges[i].first < ranges[i - 1].second) { if (why) *why = "overlapping model tensors"; return false; }
+    }
+    const auto* expected = count == 255 ? nr::model_profile::small : nr::model_profile::original;
+    for (uint32_t i = 0; i < count; ++i) {
+        const auto it = p.index.find(expected[i].name);
+        std::string digest;
+        if (it == p.index.end() || !model_range_sha256(f, it->second.first, it->second.second, digest) ||
+            digest != expected[i].sha256) {
+            if (why) *why = "model tensor integrity failed: " + std::string(expected[i].name);
+            return false;
+        }
+    }
+    nr::logf("[nr] verified model identity=%s tensors=%u", count == 255 ? "small" : "original", count);
     g_pack = std::move(p);
     return true;
 }
@@ -1388,6 +1468,11 @@ static std::recursive_mutex g_build_lock;
 
 int NrSession::build(int argc, char** argv, const std::vector<Step>* prepared_plan) {
     std::lock_guard<std::recursive_mutex> one_build(g_build_lock);
+    struct ModelReadScope {
+        ModelPack previous;
+        ~ModelReadScope() { g_pack = std::move(previous); }
+    } model_read_scope{std::move(g_pack)};
+    g_pack = {};
     // A build lays out its own persistent sync words; an epoch word left from a
     // previous build (another extent) would point into the old layout.
     g_chain_epoch_word = 0xFFFFFFFFu;
@@ -1412,7 +1497,7 @@ int NrSession::build(int argc, char** argv, const std::vector<Step>* prepared_pl
     const std::string unp = arg(argc, argv, "--unpacked", "artifacts");
     if (const char* pack = arg(argc, argv, "--model-pack")) {
         std::string why;
-        if (!open_model_pack(pack, unp, &why)) { std::fprintf(stderr, "%s\n", why.c_str()); return 1; }
+        if (!open_model_pack(pack, unp, arg(argc, argv, "--model-family", ""), &why)) { std::fprintf(stderr, "%s\n", why.c_str()); return 1; }
         std::printf("model pack: %s (%zu entries)\n", pack, g_pack.index.size());
     }
     const std::string accumulation=arg(argc,argv,"--accumulation","fp32");

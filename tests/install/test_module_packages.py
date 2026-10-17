@@ -332,7 +332,7 @@ Add-Type -TypeDefinition 'public static class PackageFixture { public static int
             archive.extractall(extracted)
         game = self.root / 'game'
         game.mkdir()
-        code, out = self.run_ps(['-File', str(extracted / 'Setup.ps1'), '-GameDir', str(game), '-NonInteractive'])
+        code, out = self.run_ps(['-File', str(extracted / 'Setup.ps1'), '-GameDir', str(game), '-NonInteractive', '-Backend', 'lmxxf'])
         self.assertEqual(code, 0, out)
         self.assertIn('MODEL SETUP REQUIRED', out)
         self.assertNotIn('Install SUCCEEDED', out)
@@ -369,7 +369,7 @@ Add-Type -TypeDefinition 'public static class PackageFixture { public static int
         self.assertEqual(snapshot_files(game / 'lmxxf-modules'), snapshot_files(self.modules))
 
         code, out = self.run_ps(['-File', str(extracted / 'Setup.ps1'), '-GameDir', str(game),
-                                 '-NonInteractive', '-UninstallExisting'])
+                                 '-NonInteractive', '-UninstallExisting', '-Backend', 'lmxxf'])
         self.assertEqual(code, 0, out)
         self.assertIn('Uninstall SUCCEEDED', out)
         self.assertIn('MODEL SETUP REQUIRED', out)
@@ -403,11 +403,16 @@ Add-Type -TypeDefinition 'public static class PackageFixture { public static int
             archive.extractall(extracted)
         model = extracted / 'dlssnr-amd/dlssnr.bin'
         # Recognized header; this lifecycle fixture is not an inference model.
-        model.write_bytes(b'NRMODEL1' + (599).to_bytes(4, 'little') + b'user-owned model fixture')
+        model.write_bytes(b'NRMODEL1' + (599).to_bytes(4, 'little') + bytes(20))
+        setup_script = extracted / 'Setup.ps1'
+        h = hashlib.sha256(model.read_bytes()).hexdigest()
+        text = setup_script.read_text(encoding='utf-8-sig').replace(
+            '2b41c888cf4155b8958c665ba64018ab0bd25c85fc71a2b6db86d0d04d1f7fbd', h)
+        setup_script.write_bytes(b'\xef\xbb\xbf' + text.encode('utf-8'))
         game = self.root / 'mochizuki game'
         game.mkdir()
         code, out = self.run_ps(['-File', str(extracted / 'Setup.ps1'), '-GameDir', str(game),
-                                '-Backend', 'mochizuki', '-NonInteractive'])
+                                '-Backend', 'mochizuki', '-MochizukiModels', 'original', '-NonInteractive'])
         self.assertEqual(code, 0, out)
         self.assertTrue((game / 'MochizukiNrRuntime.dll').is_file())
         self.assertFalse((game / 'LmxxfNrRuntime.dll').exists())
@@ -415,6 +420,7 @@ Add-Type -TypeDefinition 'public static class PackageFixture { public static int
         parsed = configparser.ConfigParser()
         parsed.read(game / 'OptiScaler.ini', encoding='utf-8-sig')
         self.assertEqual(parsed['DlssNr']['NrBackend'], 'mochizuki')
+        self.assertEqual(parsed['DlssNr']['MochizukiNetworkModel'], '0')
         self.assertEqual((game / 'dlssnr-amd/dlssnr.bin').read_bytes(), model.read_bytes())
         owned_aco = (
             'dlssnr-amd/aco/records/03aef996aaf9f54a.nrp',

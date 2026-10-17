@@ -83,12 +83,10 @@ jobs:
           SOURCE_REPO: ${{ github.repository }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $body = @'
-Mochizuki后端适配DLSS 10.16最新模型。
-The Mochizuki backend now supports the latest DLSS 10.16 model.
-'@
-          if ([string]::IsNullOrWhiteSpace($body)) { throw 'Empty release notes' }
-          $lines = @($body.Trim().Split("`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+          $lines = @(
+            'Mochizuki后端适配DLSS 10.16最新模型。',
+            'The Mochizuki backend now supports the latest DLSS 10.16 model.'
+          )
           if ($lines.Count -ne 2) { throw "Release notes must strictly contain exactly two lines" }
           New-Item -ItemType Directory -Force exports | Out-Null
           [IO.File]::WriteAllText((Join-Path $PWD 'exports/release-notes.md'), ($lines -join "`n") + "`n", [Text.UTF8Encoding]::new($false))

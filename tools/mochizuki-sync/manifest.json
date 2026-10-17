@@ -796,6 +796,15 @@
         "linux/shaders/passes/runtime_transfer.comp",
         "windows/shaders/passes/runtime_transfer.comp"
       ]
+    },
+    {
+      "feature": "model-pack-validation-and-strict-selection",
+      "path": "patches/25-model-pack-validation-and-strict-selection.patch",
+      "files": [
+        "windows/src/core/nr_graph.cpp",
+        "windows/src/core/nr_runtime.cpp",
+        "windows/src/core/nr_model_profile.hpp"
+      ]
     }
   ],
   "added_files": [
@@ -804,7 +813,8 @@
     "windows/shaders/passes/runtime_planA_convert.comp",
     "windows/shaders/passes/runtime_planA_unconvert.comp",
     "linux/shaders/passes/runtime_mv_rescale.comp",
-    "windows/shaders/passes/runtime_mv_rescale.comp"
+    "windows/shaders/passes/runtime_mv_rescale.comp",
+    "windows/src/core/nr_model_profile.hpp"
   ],
   "source_comment_policy": "omit-sample-address-annotations-v1"
 }

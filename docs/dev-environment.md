@@ -25,8 +25,13 @@
 | `tools/diag/set-lmxxf-diagnostic.ps1` | 改游戏 ini 的 `LmxxfDiagnostic`（`-GameDir` 必填） |
 | `tools/diag/retirement_stats.py` | 汇总 `AMD_RETIRE_DIAGNOSTICS` 构建输出的 retirement 采集 |
 | `tools/dev/scan-mojibake.py` | 扫描乱码（UTF-8 标点被按 GB18030 解码后写回，典型：U+9225 + `?`） |
+| `tools/mochizuki-sync/generate-model-profile.py` | 从受管张量校验清单生成 runtime 模型身份表；更新后同时维护 source pin 补丁 |
 
 测试按领域分目录，每个领域一个 `run.cmd`，统一入口：
+
+完整安装器回归的 YAML 解析依赖固定在 `tests/install/requirements.txt`，
+`tests/install/run.cmd` 会为本地和 Actions 的同一 Python 准备这些依赖。
+单独运行正文测试前执行 `python -m pip install -r tests/install/requirements.txt`。
 
 ```
 tests\run-all.cmd --tier release|ci|device|gpu|all [--out 目录] [--skip-sync] [--keep-going]

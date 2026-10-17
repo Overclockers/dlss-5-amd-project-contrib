@@ -1412,6 +1412,8 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
         if (!std::filesystem::is_regular_file(pack))
             throw std::runtime_error("missing " + pack.string() + " (run install.ps1 again)");
         arguments.push_back("--model-pack"); arguments.push_back(pack.string());
+        arguments.push_back("--model-family");
+        arguments.push_back(network == NetworkModel::Small ? "small" : "original");
     }
     // One pass at the frame's own extent, not linear: every kernel only samples
     // the input image, so it can be the frame's own format filled by a copy.

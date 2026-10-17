@@ -8,6 +8,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import zipfile
 
 DLL_3108 = 'e16bcf15e16e13f527491cdf7845b2fe6521a738d8f7c9c721866a8496e1fc8e'
 DLL_3109 = '2bc19bc09a7b89dd44f73e2ac0108fcc586e2154bdd0830f242f4f040e28789f'
@@ -116,25 +117,40 @@ def verify_model_pack(path, family=None, vendor=None):
                 return False
             entries[name] = (off, entry_size)
 
-        if vendor:
-            suffix = PROFILES[detected_family]['suffix']
-            verify_file = vendor / f'model-files{suffix}.sha256'
-            if verify_file.is_file():
-                expected_sums = {}
-                for line in verify_file.read_text(encoding='utf-8').splitlines():
-                    if line.strip():
-                        eh, en = line.split(None, 1)
-                        expected_sums[en.strip()] = eh.strip().lower()
-                if len(expected_sums) != count:
-                    return False
-                for name, expected_h in expected_sums.items():
-                    if name not in entries:
-                        return False
-                    off, entry_size = entries[name]
-                    f.seek(off)
-                    blob = f.read(entry_size)
-                    if hashlib.sha256(blob).hexdigest().lower() != expected_h:
-                        return False
+        if not vendor:
+            here = Path(__file__).resolve().parent
+            candidates = [
+                here / 'model-tools',
+                here.parents[1] / 'third_party/mochizuki/linux/package/model-tools'
+            ]
+            for c in candidates:
+                if c.is_dir():
+                    vendor = c
+                    break
+
+        if not vendor:
+            return False
+
+        suffix = PROFILES[detected_family]['suffix']
+        verify_file = Path(vendor) / f'model-files{suffix}.sha256'
+        if not verify_file.is_file():
+            return False
+
+        expected_sums = {}
+        for line in verify_file.read_text(encoding='utf-8').splitlines():
+            if line.strip():
+                eh, en = line.split(None, 1)
+                expected_sums[en.strip()] = eh.strip().lower()
+        if len(expected_sums) != count:
+            return False
+        for name, expected_h in expected_sums.items():
+            if name not in entries:
+                return False
+            off, entry_size = entries[name]
+            f.seek(off)
+            blob = f.read(entry_size)
+            if hashlib.sha256(blob).hexdigest().lower() != expected_h:
+                return False
 
         return detected_family if family is None else True
 
@@ -161,6 +177,63 @@ def extract(source, output, vendor, models='both', temporary_parent=None):
 
     with tempfile.TemporaryDirectory(prefix='mochizuki-model-', dir=temporary_parent) as tmp:
         work = Path(tmp)
+
+        if zipfile.is_zipfile(source):
+            with zipfile.ZipFile(source) as archive:
+                entries = archive.infolist()
+                if len(entries) > 10000:
+                    raise ValueError("ZIP contains too many entries (limit: 10000)")
+                total_uncompressed = 0
+                matches = []
+                for i in entries:
+                    if ".." in i.filename or i.filename.startswith(("/", "\\")):
+                        raise ValueError("Unsafe path traversal in ZIP archive")
+                    total_uncompressed += i.file_size
+                    if total_uncompressed > 2 * 1024 ** 3:
+                        raise ValueError("Total uncompressed ZIP size exceeds 2 GiB limit")
+                    if Path(i.filename).name.lower() == "nvngx_dlssnr.dll":
+                        if i.file_size > 1024 ** 3:
+                            raise ValueError("DLL exceeds 1 GiB inspection limit")
+                        matches.append(i)
+                if not matches:
+                    raise ValueError("expected at least one nvngx_dlssnr.dll ZIP member")
+
+                candidates = []
+                seen_shas = {}
+                for m in matches:
+                    b = archive.read(m)
+                    h = hashlib.sha256(b).hexdigest().lower()
+                    if h not in seen_shas:
+                        seen_shas[h] = (m.filename, b)
+                        candidates.append((m.filename, b, h))
+
+                qualifying = []
+                for fname, b, h in candidates:
+                    if h == DLL_3109:
+                        qualifying.append((fname, b, h))
+                    elif h == DLL_3108 and models == 'original':
+                        qualifying.append((fname, b, h))
+
+                if not qualifying:
+                    if any(h == DLL_3108 for _, _, h in candidates) and models in ('both', 'small'):
+                        raise ValueError(
+                            'Original model only: this source cannot provide the new model.\n'
+                            'To use the new model, provide nvngx_dlssnr.dll 310.9.16.0.\n'
+                            'You may continue with the original model by explicitly selecting it.'
+                        )
+                    raise ValueError('nvngx_dlssnr.dll 310.9.16 or 310.8.0 is required (SHA256 mismatch)')
+
+                if len(qualifying) == 1:
+                    chosen_bytes = qualifying[0][1]
+                elif models == 'original' and any(h == DLL_3109 for _, _, h in qualifying):
+                    chosen_bytes = next(b for _, b, h in qualifying if h == DLL_3109)
+                else:
+                    cand_desc = ", ".join(f"{fn} ({h[:8]})" for fn, _, h in qualifying)
+                    raise ValueError(f"ambiguous ZIP members matching requested models ({models}): {cand_desc}")
+
+                chosen_dll = work / 'nvngx_dlssnr.dll'
+                chosen_dll.write_bytes(chosen_bytes)
+                source = chosen_dll
 
         def run(script, *params, capture=False):
             return subprocess.run([sys.executable, '-X', 'utf8', str(vendor / script), *map(str, params)],
@@ -204,6 +277,8 @@ def extract(source, output, vendor, models='both', temporary_parent=None):
             packed_models.append((packed, destination))
 
         staged_models = []
+        backups = []
+        preserve_backups = set()
         try:
             for packed, destination in packed_models:
                 destination.parent.mkdir(parents=True, exist_ok=True)
@@ -211,12 +286,54 @@ def extract(source, output, vendor, models='both', temporary_parent=None):
                     staged = Path(f.name)
                 staged_models.append((staged, destination))
                 shutil.copyfile(packed, staged)
-            for staged, destination in staged_models:
-                staged.replace(destination)
+
+            for _, destination in staged_models:
+                dest_backup = None
+                existed = destination.is_file()
+                if existed:
+                    with tempfile.NamedTemporaryFile(prefix=f'.bak-tx-{destination.name}-',
+                                                     dir=destination.parent, delete=False) as f:
+                        dest_backup = Path(f.name)
+                    try:
+                        shutil.copyfile(destination, dest_backup)
+                    except Exception:
+                        dest_backup.unlink(missing_ok=True)
+                        raise
+                backups.append((destination, dest_backup, existed))
+
+            completed = []
+            try:
+                for staged, destination in staged_models:
+                    staged.replace(destination)
+                    completed.append(destination)
+            except Exception as install_error:
+                restore_errors = []
+                for destination, dest_backup, existed in reversed(backups):
+                    if destination in completed:
+                        try:
+                            if existed and dest_backup and dest_backup.is_file():
+                                dest_backup.replace(destination)
+                            elif existed:
+                                raise OSError(f'Original backup is missing: {dest_backup}')
+                            else:
+                                destination.unlink(missing_ok=True)
+                        except OSError as restore_error:
+                            if dest_backup:
+                                preserve_backups.add(dest_backup)
+                            restore_errors.append(f'{destination}: {restore_error}; backup retained at {dest_backup}')
+                if restore_errors:
+                    raise RuntimeError('Model installation failed; restoration was incomplete.\n' +
+                                       '\n'.join(restore_errors)) from install_error
+                raise
+
+            for _, destination in staged_models:
                 print('MODEL_OK', destination)
         finally:
             for staged, _ in staged_models:
                 staged.unlink(missing_ok=True)
+            for _, dest_backup, _ in backups:
+                if dest_backup and dest_backup not in preserve_backups:
+                    dest_backup.unlink(missing_ok=True)
 
 
 def main():

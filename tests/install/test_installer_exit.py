@@ -66,6 +66,11 @@ class InstallerExitTests(unittest.TestCase):
             batch = batch.replace("\npause\n", f"\necho {PAUSE_MARKER}\npause\n")
             (self.package / f"{file_name}.bat").write_bytes(batch.replace("\n", "\r\n").encode("ascii"))
             original = (REPO / f"tools/{script}-amd-presr.ps1").read_text(encoding="utf-8-sig")
+            if script == "install":
+                orig_hash = hashlib.sha256(b"NRMODEL1" + (599).to_bytes(4, "little") + bytes(20)).hexdigest()
+                small_hash = hashlib.sha256(b"NRMODEL1" + (255).to_bytes(4, "little") + bytes(20)).hexdigest()
+                original = re.sub(r"(\$knownOriginalSha\s*=\s*)'[a-f0-9]{64}'", r"\g<1>'" + orig_hash + "'", original)
+                original = re.sub(r"(\$knownSmallSha\s*=\s*)'[a-f0-9]{64}'", r"\g<1>'" + small_hash + "'", original)
             write_ps(self.package / f"{file_name}.ps1", original)
 
     def launcher_files(self, name):

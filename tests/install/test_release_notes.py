@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import textwrap
 import unittest
+import yaml
 
 REPO = Path(__file__).resolve().parents[2]
 PS = shutil.which('powershell.exe')
@@ -19,19 +20,22 @@ class ReleaseNotesTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix='release-notes-', dir=scratch)
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        workflow = (REPO / '.github/workflows/release.yml').read_text(encoding='utf-8-sig')
-        step = workflow.split('      - name: Prepare release notes\n', 1)[1].split('\n      - name:', 1)[0]
-        script = textwrap.dedent(step.split('        run: |\n', 1)[1])
+        doc = yaml.safe_load((REPO / '.github/workflows/release.yml').read_text(encoding='utf-8-sig'))
+        build_steps = doc['jobs']['build']['steps']
+        step = next(s for s in build_steps if s.get('name') == 'Prepare release notes')
+        script = step['run']
         self.script = self.root / 'step.ps1'
         self.template = script
         self.script.write_text(script, encoding='utf-8-sig')
         self.output = self.root / 'exports/release-notes.md'
 
-    def set_body(self, body):
-        before, rest = self.template.split("$body = @'\n", 1)
-        _, after = rest.split("\n'@", 1)
-        self.script.write_text(before + "$body = @'\n" + body + "\n'@" + after,
-                               encoding='utf-8-sig')
+    def set_lines(self, items):
+        items_ps = ', '.join(f"'{x}'" for x in items)
+        # Replace $lines = @(...)
+        prefix, rest = self.template.split('$lines = @(', 1)
+        _, suffix = rest.split(')', 1)
+        new_script = prefix + f'$lines = @({items_ps})' + suffix
+        self.script.write_text(new_script, encoding='utf-8-sig')
 
     def run_step(self, version='9.9.9-alpha.2'):
         env = dict(os.environ, RELEASE_VERSION=version, SOURCE_SHA='a' * 40,
@@ -48,9 +52,9 @@ class ReleaseNotesTests(unittest.TestCase):
         self.assertEqual(lines[1], 'The Mochizuki backend now supports the latest DLSS 10.16 model.')
 
     def test_empty_or_wrong_line_count_fails_before_output(self):
-        for body in ('', 'Only one line\n', 'Line 1\nLine 2\nLine 3\n'):
-            with self.subTest(body=body):
-                self.set_body(body)
+        for items in ([], ['Only one line'], ['Line 1', 'Line 2', 'Line 3']):
+            with self.subTest(items=items):
+                self.set_lines(items)
                 self.assertNotEqual(self.run_step().returncode, 0)
 
 
