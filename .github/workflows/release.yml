@@ -54,6 +54,10 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
+      - name: Enable long Git paths
+        shell: pwsh
+        run: git config --global core.longpaths true
+
       - name: Checkout
         uses: actions/checkout@v6
         with:
@@ -466,6 +470,10 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
+      - name: Enable long Git paths
+        shell: pwsh
+        run: git config --global core.longpaths true
+
       - name: Checkout
         uses: actions/checkout@v6
         with:
