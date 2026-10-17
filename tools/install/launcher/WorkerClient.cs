@@ -120,6 +120,10 @@ namespace OptScalerNR.Launcher
             _timer.Stop();
             _reader.Dispose();
             _events.Dispose();
+            if (_process != null)
+            {
+                try { _process.Dispose(); } catch { }
+            }
         }
 
         [System.Runtime.Serialization.DataContract]

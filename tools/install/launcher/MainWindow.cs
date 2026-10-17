@@ -298,6 +298,13 @@ namespace OptScalerNR.Launcher
                 _filterCombo.SelectedIndex = idx >= 0 ? idx : 0;
             }
 
+            if (_proxyCombo != null && _proxyCombo.Items.Count > 0)
+            {
+                var idx = _proxyCombo.SelectedIndex;
+                _proxyCombo.Items[0] = isZh ? "请选择" : "Select DLL";
+                if (idx >= 0) _proxyCombo.SelectedIndex = idx;
+            }
+
             UpdatePrimaryButtonState();
         }
 
@@ -555,6 +562,8 @@ namespace OptScalerNR.Launcher
             var item = _gameList.SelectedItem as GameItemViewModel;
             if (item != null && item.Info != null)
             {
+                if (_selectedGame != null && string.Equals(_selectedGame.Id, item.Info.Id, StringComparison.OrdinalIgnoreCase))
+                    return;
                 SelectGame(item.Info);
             }
         }
@@ -781,8 +790,10 @@ namespace OptScalerNR.Launcher
                 return;
             }
 
-            var proxy = Convert.ToString(_proxyCombo.SelectedItem);
-            if (action != "uninstall" && (string.IsNullOrEmpty(proxy) || proxy == "请选择"))
+            var proxy = (_proxyCombo != null && _proxyCombo.SelectedIndex > 0)
+                ? Convert.ToString(_proxyCombo.SelectedItem)
+                : "";
+            if (action != "uninstall" && string.IsNullOrEmpty(proxy))
             {
                 MessageBox.Show(_window, _language == "zh" ? "请先选择要注入的代理 DLL。" : "Please select a proxy DLL to inject first.", _window.Title);
                 ReleaseLock();
