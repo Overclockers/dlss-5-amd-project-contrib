@@ -1,6 +1,6 @@
 **中文** | [English](README.en.md) | [Español](README.es.md)
 
-# OptScaler(NR) 1.12.2
+# OptScaler(NR) 1.13.0-alpha
 
 **特别感谢**：各位 Bilibili 用户的测试与反馈意见。
 
@@ -51,10 +51,10 @@ UI升级、NR强度及人脸保护等多重更新，详见 [Release 页](https:/
 
 1. **下载解压**：从 [Release 页](https://github.com/TheAutomatic/dlss-5-amd-project/releases) 下载本项目最新 zip 压缩包，解压至任意非中文路径。
 2. **收集必备外部文件**（复制到与 `Setup.bat` 同一文件夹下，即 **1 个文件夹 + 1 个 DLL + 1 个 EXE**）：
-   - `nvngx_dlssnr.dll`（NVIDIA 原生降噪动态库，当前**仅支持 310.8.0** 版本）；
+   - `nvngx_dlssnr.dll`（NVIDIA 原生降噪动态库，支持 310.9.16 或 310.8.0 版本；310.9.16 支持小模型与双模型，310.8.0 仅支持老模型）；
    - [`native-game-tiled-assets` 文件夹](https://github.com/lmxxf/dlss5-on-amd-9070xt-porting)（lmxxf 权重目录，解压后包含权重文件）；
    - [`dlssnr_on_amd_setup.exe`](https://github.com/danielblnc/DLSS-NR-on-AMD/releases)（Danielblnc 所需的安装/提取程序）。
-   > 💡 **提示**：若计划使用 **Mochizuki** 后端，请提前在微软商店（Microsoft Store）搜索并安装 **Python 3.10+**。
+   > 💡 **提示**：若计划使用 **Mochizuki** 后端，请提前在微软商店（Microsoft Store）搜索并安装 **Python 3.10+**。提取模型支持 `both`、`small`、`original` 三种选择。新小模型暂不支持 INT4，等待上游适配。
 3. **运行安装器并选择游戏**：
    - 双击运行 `Setup.bat`，在弹出的窗口中选择**游戏的实际主程序运行目录**（注意：必须是游戏 exe 实际执行的所在目录，例如虚幻引擎游戏通常为 `...\<GameName>\Binaries\Win64\`，而非平台 Launcher 或外层快捷方式目录）；
    - 按交互提示选择代理 DLL（通常可选 `dxgi.dll`，无法使用时可尝试 `winmm.dll` 或其他注入方式）与后端进行安装。若检测到旧版本，推荐输入 **Y** 自动卸载后安装（避免新旧文件与配置冲突），亦可输入 **N** 直接覆盖安装；
@@ -117,9 +117,9 @@ UI升级、NR强度及人脸保护等多重更新，详见 [Release 页](https:/
 
 ##### 选项 C：准备 Mochizuki（Windows / RDNA4）
 
-完整包已包含 `MochizukiNrRuntime.dll` 和 `dlssnr-amd/shaders/`。另外准备自己的 `nvngx_dlssnr.dll` **310.8.0**（当前仅支持该版本，SHA256 为 `e16bcf15e16e13f527491cdf7845b2fe6521a738d8f7c9c721866a8496e1fc8e`），放在 `Setup.bat` 旁；安装 Python **3.10+**，运行 Setup 并选择 Mochizuki，安装器会提取和验证模型。已有模型时可直接放入 `dlssnr-amd/dlssnr.bin`，无需重新提取。完整校验值和独立提取方法见 [Mochizuki 安装说明](docs/mochizuki.md)。
+完整包已包含 `MochizukiNrRuntime.dll` 和 `dlssnr-amd/shaders/`。另外准备自己的 `nvngx_dlssnr.dll` **310.9.16** 或 **310.8.0**，放在 `Setup.bat` 旁；安装 Python **3.10+**，运行 Setup 并选择 Mochizuki，安装器会提取和验证模型。已有模型时可直接放入 `dlssnr-amd/dlssnr.bin`（原版模型）或 `dlssnr-amd/dlssnr-small.bin`（新小模型），无需重新提取。310.9.16 支持 `both`（双模型）、`small`（仅新模型）、`original`（仅老模型）三种安装选项；310.8.0 仅支持老模型。新小模型暂不支持 INT4（保存的 INT4 偏好仍保留，仅对原版模型生效）。项目自有安装提示与选项均为英文。完整校验值和独立提取方法见 [Mochizuki 安装说明](docs/mochizuki.md)。
 
-没有源 DLL 或模型时，Setup 会提示 `MODEL SETUP REQUIRED`；只有 runtime 不代表可以运行。其他版本的 DLL 不自动尝试提取。模型损坏时先把旧 `dlssnr.bin` 移走，再运行 Setup；安装器不会静默覆盖它。
+没有有效模型或模型准备失败时，Setup 会明确报错终止并非零退出，并保持游戏目录未作修改。模型损坏时安装器会安全备份至 `.bak-<timestamp>` 并使用核验通过的模型替换。
 
 首次进入游戏可能需要数分钟编译网络，右下角显示阶段和进度；期间显示原始画面。改变分辨率、模型比例或叠层容量可能再次编译。Mochizuki 有独立的输入预处理、三种风格、1–3 遍叠层和时序控制；默认叠层 1。Ins/INI 中 `Mochizuki*` 参数不影响另外两个后端。需要排错时先看 Ins 的缺失依赖/编译状态，再看 `OptiScaler.log`。
 

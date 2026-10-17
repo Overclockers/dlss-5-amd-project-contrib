@@ -708,8 +708,13 @@ $mzDoc = $mzDoc.Replace('../third_party/mochizuki/UPSTREAM.md', '../Licenses/Moc
 @echo off
 setlocal
 set "SOURCE=%~1"
+set "MODELS=%~2"
 if not defined SOURCE set "SOURCE=%~dp0nvngx_dlssnr.dll"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0mochizuki-python.ps1" -Source "%SOURCE%" -Output "%~dp0dlssnr-amd/dlssnr.bin"
+if defined MODELS (
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0mochizuki-python.ps1" -Source "%SOURCE%" -Output "%~dp0dlssnr-amd/dlssnr.bin" -Models "%MODELS%"
+) else (
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0mochizuki-python.ps1" -Source "%SOURCE%" -Output "%~dp0dlssnr-amd/dlssnr.bin"
+)
 set "RC=%ERRORLEVEL%"
 pause
 exit /b %RC%

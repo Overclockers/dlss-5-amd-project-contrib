@@ -1,8 +1,10 @@
-"""Extract both supported Mochizuki models locally; never loads the NVIDIA DLL."""
+"""Extract supported Mochizuki models locally; never loads the NVIDIA DLL."""
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -10,9 +12,153 @@ import tempfile
 DLL_3108 = 'e16bcf15e16e13f527491cdf7845b2fe6521a738d8f7c9c721866a8496e1fc8e'
 DLL_3109 = '2bc19bc09a7b89dd44f73e2ac0108fcc586e2154bdd0830f242f4f040e28789f'
 
+ORIGINAL_SHA256 = '2b41c888cf4155b8958c665ba64018ab0bd25c85fc71a2b6db86d0d04d1f7fbd'
+SMALL_SHA256 = '7e966e2639dbec6596aa0bac3b8761137d2c40ca8cb4aca30df7ca10043c6e33'
+ORIGINAL_ENTRIES = 599
+SMALL_ENTRIES = 255
+ORIGINAL_SIZE = 147756560
+SMALL_SIZE = 113917248
 
-def extract(source, output, vendor, temporary_parent=None):
-    """The output names the original pack; its sibling holds the new model, when present."""
+PROFILES = {
+    'original': {
+        'resource': 'WEIGHTS_HT',
+        'suffix': '',
+        'post': 70,
+        'filename': 'dlssnr.bin',
+        'entries': ORIGINAL_ENTRIES,
+        'full_sha256': ORIGINAL_SHA256,
+        'full_size': ORIGINAL_SIZE,
+    },
+    'small': {
+        'resource': 'WEIGHTS_CC_SMALL_FP8',
+        'suffix': '-small',
+        'post': 30,
+        'filename': 'dlssnr-small.bin',
+        'entries': SMALL_ENTRIES,
+        'full_sha256': SMALL_SHA256,
+        'full_size': SMALL_SIZE,
+    }
+}
+
+
+def verify_model_pack(path, family=None, vendor=None):
+    """Verify a model pack binary by full-file SHA256 or structural index + per-tensor SHA256."""
+    p = Path(path)
+    if not p.is_file():
+        return False
+    size = p.stat().st_size
+    if size < 16:
+        return False
+
+    # Fast path: deterministic whole-file SHA256
+    h = hashlib.sha256()
+    with open(p, 'rb') as f:
+        while chunk := f.read(1024 * 1024):
+            h.update(chunk)
+    actual_hash = h.hexdigest().lower()
+
+    if family == 'original':
+        if actual_hash == ORIGINAL_SHA256 and size == ORIGINAL_SIZE:
+            return True
+    elif family == 'small':
+        if actual_hash == SMALL_SHA256 and size == SMALL_SIZE:
+            return True
+    elif family is None:
+        if actual_hash == ORIGINAL_SHA256 and size == ORIGINAL_SIZE:
+            return 'original'
+        if actual_hash == SMALL_SHA256 and size == SMALL_SIZE:
+            return 'small'
+
+    # Fallback path: parse binary header and validate index
+    with open(p, 'rb') as f:
+        magic = f.read(8)
+        if magic != b'NRMODEL1':
+            return False
+        count_bytes = f.read(4)
+        reserved_bytes = f.read(4)
+        if len(count_bytes) != 4 or len(reserved_bytes) != 4:
+            return False
+        count, reserved = struct.unpack('<II', count_bytes + reserved_bytes)
+        if reserved != 0:
+            return False
+
+        detected_family = None
+        if count == ORIGINAL_ENTRIES:
+            detected_family = 'original'
+        elif count == SMALL_ENTRIES:
+            detected_family = 'small'
+        else:
+            return False
+
+        if family and family != detected_family:
+            return False
+
+        entries = {}
+        for _ in range(count):
+            nb = f.read(4)
+            if len(nb) != 4:
+                return False
+            n = struct.unpack('<I', nb)[0]
+            if n == 0 or n > 4096:
+                return False
+            name_bytes = f.read(n)
+            off_size = f.read(16)
+            if len(name_bytes) != n or len(off_size) != 16:
+                return False
+            try:
+                name = name_bytes.decode('utf-8')
+            except UnicodeDecodeError:
+                return False
+            off, entry_size = struct.unpack('<QQ', off_size)
+            if off + entry_size > size or off < 16:
+                return False
+            if name in entries:
+                return False
+            entries[name] = (off, entry_size)
+
+        if vendor:
+            suffix = PROFILES[detected_family]['suffix']
+            verify_file = vendor / f'model-files{suffix}.sha256'
+            if verify_file.is_file():
+                expected_sums = {}
+                for line in verify_file.read_text(encoding='utf-8').splitlines():
+                    if line.strip():
+                        eh, en = line.split(None, 1)
+                        expected_sums[en.strip()] = eh.strip().lower()
+                if len(expected_sums) != count:
+                    return False
+                for name, expected_h in expected_sums.items():
+                    if name not in entries:
+                        return False
+                    off, entry_size = entries[name]
+                    f.seek(off)
+                    blob = f.read(entry_size)
+                    if hashlib.sha256(blob).hexdigest().lower() != expected_h:
+                        return False
+
+        return detected_family if family is None else True
+
+
+def extract(source, output, vendor, models='both', temporary_parent=None):
+    """Extract requested Mochizuki model(s) locally from user's supported DLL or ZIP."""
+    if isinstance(models, Path) or (temporary_parent is None and models not in ('both', 'small', 'original')):
+        temporary_parent = models
+        models = 'both'
+
+    if models not in ('both', 'small', 'original'):
+        raise ValueError(f"Invalid models choice: {models}. Expected 'both', 'small', or 'original'.")
+
+    output_path = Path(output)
+    if output_path.is_dir() or output_path.suffix == '':
+        orig_dest = output_path / 'dlssnr.bin'
+        small_dest = output_path / 'dlssnr-small.bin'
+    elif output_path.name.lower() == 'dlssnr-small.bin':
+        small_dest = output_path
+        orig_dest = output_path.with_name('dlssnr.bin')
+    else:
+        orig_dest = output_path
+        small_dest = output_path.with_name('dlssnr-small.bin')
+
     with tempfile.TemporaryDirectory(prefix='mochizuki-model-', dir=temporary_parent) as tmp:
         work = Path(tmp)
 
@@ -25,12 +171,23 @@ def extract(source, output, vendor, temporary_parent=None):
         sha = json.loads(probe.stdout)['dll_sha256'].lower()
         if sha not in (DLL_3108, DLL_3109):
             raise ValueError('nvngx_dlssnr.dll 310.9.16 or 310.8.0 is required (SHA256 mismatch)')
-        models = [('WEIGHTS_HT', '', 70, output)]
-        if sha == DLL_3109:
-            models.append(('WEIGHTS_CC_SMALL_FP8', '-small', 30, output.with_name('dlssnr-small.bin')))
+
+        if sha == DLL_3108 and models in ('both', 'small'):
+            raise ValueError(
+                'Original model only: this source cannot provide the new model.\n'
+                'To use the new model, provide nvngx_dlssnr.dll 310.9.16.0.\n'
+                'You may continue with the original model by explicitly selecting it.'
+            )
+
+        models_to_pack = []
+        if models in ('both', 'original'):
+            models_to_pack.append(('WEIGHTS_HT', '', 70, orig_dest))
+        if models in ('both', 'small'):
+            models_to_pack.append(('WEIGHTS_CC_SMALL_FP8', '-small', 30, small_dest))
+
         packed_models = []
         # Validate every requested model before replacing any installed pack.
-        for resource, suffix, post, destination in models:
+        for resource, suffix, post, destination in models_to_pack:
             model_work = work / resource
             (model_work / 'graph').mkdir(parents=True)
             shutil.copy2(vendor / ('descriptor' + suffix + '.json'), model_work / 'graph/descriptor.json')
@@ -45,11 +202,12 @@ def extract(source, output, vendor, temporary_parent=None):
             run('pack_model.py', '--root', model_work, '--list', vendor / ('model-files' + suffix + '.txt'),
                 '--out', packed, '--verify', vendor / ('model-files' + suffix + '.sha256'))
             packed_models.append((packed, destination))
-        output.parent.mkdir(parents=True, exist_ok=True)
+
         staged_models = []
         try:
             for packed, destination in packed_models:
-                with tempfile.NamedTemporaryFile(prefix='.mochizuki-', dir=output.parent, delete=False) as f:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.NamedTemporaryFile(prefix='.mochizuki-', dir=destination.parent, delete=False) as f:
                     staged = Path(f.name)
                 staged_models.append((staged, destination))
                 shutil.copyfile(packed, staged)
@@ -63,25 +221,41 @@ def extract(source, output, vendor, temporary_parent=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('source', type=Path, help='User-supplied nvngx_dlssnr.dll 310.9.16 / 310.8.0, or its ZIP')
-    parser.add_argument('output', type=Path, help='Destination dlssnr-amd/dlssnr.bin; new model is written beside it')
+    parser.add_argument('source', nargs='?', type=Path, help='User-supplied nvngx_dlssnr.dll 310.9.16 / 310.8.0, or its ZIP')
+    parser.add_argument('output', nargs='?', type=Path, help='Destination dlssnr-amd/dlssnr.bin; new model is written beside it')
+    parser.add_argument('--models', choices=['both', 'small', 'original'], help='Model set to extract: both, small, or original (required for extraction)')
+    parser.add_argument('--verify-pack', type=Path, help='Verify an existing model pack file')
+    parser.add_argument('--family', choices=['small', 'original'], help='Expected model family for --verify-pack')
     parser.add_argument('--work', type=Path, help='Parent for temporary extraction files')
     args = parser.parse_args()
+
     here = Path(__file__).resolve().parent
     vendor = here / 'model-tools'
     if not vendor.is_dir():
         vendor = here.parents[1] / 'third_party/mochizuki/linux/package/model-tools'
+
+    if args.verify_pack:
+        res = verify_model_pack(args.verify_pack, family=args.family, vendor=vendor)
+        if not res:
+            sys.exit(f"VERIFY_FAILED: {args.verify_pack} is not a valid {args.family or ''} model pack")
+        print(f"VERIFY_OK {args.verify_pack} family={res if isinstance(res, str) else args.family}")
+        return
+
+    if not args.source or not args.output:
+        parser.error('the following arguments are required: source, output')
+    if not args.models:
+        parser.error('the following arguments are required: --models')
+
     source, output = args.source.resolve(), args.output.resolve()
     if source in (output, output.with_name('dlssnr-small.bin')) or not source.is_file():
         parser.error('Source must be an existing DLL/ZIP distinct from the output')
-    if output.name.lower() == 'dlssnr-small.bin':
-        parser.error('Output must name the original dlssnr.bin; the new model is written beside it')
     if args.work:
         args.work.mkdir(parents=True, exist_ok=True)
     try:
-        extract(source, output, vendor, args.work)
+        extract(source, output, vendor, models=args.models, temporary_parent=args.work)
     except ValueError as error:
         parser.error(str(error))
+
 
 if __name__ == '__main__':
     main()

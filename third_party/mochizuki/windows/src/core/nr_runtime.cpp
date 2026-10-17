@@ -1260,11 +1260,11 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
         std::error_code ec;
         const char* missing = network != NetworkModel::Small ? nullptr
             : !installed ? "not an installed tree"
-            : !std::filesystem::is_regular_file(data / "dlssnr-small.bin", ec) ? "dlssnr-amd/dlssnr-small.bin is missing (run install.ps1 with the 310.9.16 nvngx_dlssnr.dll)"
+            : !std::filesystem::is_regular_file(data / "dlssnr-small.bin", ec) ? "dlssnr-amd/dlssnr-small.bin is missing (run Setup with nvngx_dlssnr.dll 310.9.16)"
             : nullptr;
         if (missing) {
-            nr::logf("[nr] small model (%s) but %s: original model", from, missing);
-            network = NetworkModel::Original;
+            nr::logf("[nr] small model requested (%s) but %s: unavailable", from, missing);
+            throw std::runtime_error(std::string("small model unavailable (") + from + "): " + missing);
         } else {
             nr::logf("[nr] %s model (%s)", network == NetworkModel::Small ? "small" : "original", from);
         }

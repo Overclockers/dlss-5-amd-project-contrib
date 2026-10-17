@@ -55,7 +55,7 @@ inline bool HasMochizukiModelHeader(const std::filesystem::path& path) {
     in.read(magic, sizeof magic);
     in.read(reinterpret_cast<char*>(&count), sizeof count);
     in.seekg(0, std::ios::end);
-    return in && std::memcmp(magic, "NRMODEL1", 8) == 0 && count == 599 && in.tellg() > 16;
+    return in && std::memcmp(magic, "NRMODEL1", 8) == 0 && (count == 599 || count == 255) && in.tellg() > 16;
 }
 inline std::string ProbeInstallIssue(Kind kind, const std::filesystem::path& dir) {
     const auto* runtime = kind == Kind::Lmxxf ? L"LmxxfNrRuntime.dll" :
@@ -71,10 +71,14 @@ inline std::string ProbeInstallIssue(Kind kind, const std::filesystem::path& dir
         if (!hasManifest)
             return "lmxxf: module package missing. Reinstall the complete OptiScaler package with Setup.";
     } else if (kind == Kind::Mochizuki) {
-        if (!NonemptyFile(dir / L"dlssnr-amd/dlssnr.bin"))
+        const bool hasOriginal = NonemptyFile(dir / L"dlssnr-amd/dlssnr.bin");
+        const bool hasSmall = NonemptyFile(dir / L"dlssnr-amd/dlssnr-small.bin");
+        if (!hasOriginal && !hasSmall)
             return "mochizuki: model missing. Put nvngx_dlssnr.dll 310.9.16 or 310.8.0 beside Setup.bat and run Setup to extract the models, then restart the game.";
-        if (!HasMochizukiModelHeader(dir / L"dlssnr-amd/dlssnr.bin"))
+        if (hasOriginal && !HasMochizukiModelHeader(dir / L"dlssnr-amd/dlssnr.bin"))
             return "mochizuki: model header invalid. Move dlssnr-amd/dlssnr.bin aside and rerun Setup to extract it again; the runtime checks full model integrity.";
+        if (hasSmall && !HasMochizukiModelHeader(dir / L"dlssnr-amd/dlssnr-small.bin"))
+            return "mochizuki: model header invalid. Move dlssnr-amd/dlssnr-small.bin aside and rerun Setup to extract it again; the runtime checks full model integrity.";
         std::error_code ec;
         const auto shaders = dir / L"dlssnr-amd/shaders";
         if (!std::filesystem::is_directory(shaders, ec) || std::filesystem::is_empty(shaders, ec))

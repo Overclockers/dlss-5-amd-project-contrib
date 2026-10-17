@@ -184,16 +184,57 @@ def cuda_elfs(data):
     return result
 
 
-def load_input(path):
+def load_input(path, requested_resource=None):
     if zipfile.is_zipfile(path):
         with zipfile.ZipFile(path) as archive:
-            matches = [i for i in archive.infolist()
-                       if Path(i.filename).name.lower() == "nvngx_dlssnr.dll"]
-            if len(matches) != 1:
-                raise FormatError("expected exactly one nvngx_dlssnr.dll ZIP member")
-            if matches[0].file_size > 1024 ** 3:
-                raise FormatError("DLL exceeds 1 GiB inspection limit")
-            return archive.read(matches[0])
+            entries = archive.infolist()
+            if len(entries) > 10000:
+                raise FormatError("ZIP contains too many entries (limit: 10000)")
+            total_uncompressed = 0
+            matches = []
+            for i in entries:
+                if ".." in i.filename or i.filename.startswith(("/", "\\")):
+                    raise FormatError("Unsafe path traversal in ZIP archive")
+                total_uncompressed += i.file_size
+                if total_uncompressed > 2 * 1024 ** 3:
+                    raise FormatError("Total uncompressed ZIP size exceeds 2 GiB limit")
+                if Path(i.filename).name.lower() == "nvngx_dlssnr.dll":
+                    if i.file_size > 1024 ** 3:
+                        raise FormatError("DLL exceeds 1 GiB inspection limit")
+                    matches.append(i)
+            if not matches:
+                raise FormatError("expected at least one nvngx_dlssnr.dll ZIP member")
+
+            candidates = []
+            seen_shas = {}
+            for m in matches:
+                b = archive.read(m)
+                h = sha256(b)
+                if h not in seen_shas:
+                    seen_shas[h] = (m.filename, b)
+                    candidates.append((m.filename, b, h))
+
+            if len(candidates) == 1:
+                return candidates[0][1]
+
+            if requested_resource:
+                matching_res = []
+                for fname, b, h in candidates:
+                    try:
+                        pe = PE(b)
+                        res = [r for r in pe.resources() if requested_resource in r["path"]]
+                        if len(res) == 1:
+                            matching_res.append((fname, b, h))
+                    except Exception:
+                        pass
+                if len(matching_res) == 1:
+                    return matching_res[0][1]
+                if len(matching_res) > 1:
+                    cand_desc = ", ".join(f"{fn} ({h[:8]})" for fn, _, h in matching_res)
+                    raise FormatError(f"ambiguous ZIP members containing {requested_resource}: {cand_desc}")
+
+            cand_desc = ", ".join(f"{fn} ({h[:8]})" for fn, _, h in candidates)
+            raise FormatError(f"multiple distinct nvngx_dlssnr.dll members in ZIP: {cand_desc}")
     return path.read_bytes()
 
 
@@ -208,7 +249,7 @@ def main():
     parser.add_argument("--resource", default="WEIGHTS_HT",
                         help="weight resource: WEIGHTS_HT (310.8.0, and 310.9's preset 1) or WEIGHTS_CC_SMALL_FP8 (310.9's small model)")
     args = parser.parse_args()
-    data = load_input(args.input)
+    data = load_input(args.input, args.resource)
     pe = PE(data)
     resources = pe.resources()
     matches = [r for r in resources if args.resource in r["path"]]

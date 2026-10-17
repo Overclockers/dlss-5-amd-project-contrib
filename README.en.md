@@ -1,6 +1,6 @@
 [中文](README.md) | **English** | [Español](README.es.md)
 
-# OptScaler(NR) 1.12.2
+# OptScaler(NR) 1.13.0-alpha
 
 **Special Thanks**: Thank you to all Bilibili users for your testing and feedback.
 
@@ -51,10 +51,10 @@ RX 6000 (RDNA2) cards using danielblnc 0.6.0 require the AMD HIP 7.2 runtime.
 
 1. **Download & Extract**: Download the latest release `.zip` from the [Releases page](https://github.com/TheAutomatic/dlss-5-amd-project/releases) and extract it to any folder.
 2. **Collect Required External Files** (copy them into the same extracted folder as `Setup.bat`, i.e., **1 folder + 1 DLL + 1 EXE**):
-   - `nvngx_dlssnr.dll` (NVIDIA DLSS-NR native library, **version 310.8.0 is strictly required**);
+   - `nvngx_dlssnr.dll` (NVIDIA native DLSS-NR dynamic library, supports version 310.9.16 or 310.8.0; 310.9.16 supports small and dual models, while 310.8.0 supports only the original model);
    - [`native-game-tiled-assets` folder](https://github.com/lmxxf/dlss5-on-amd-9070xt-porting) (lmxxf weights directory containing model files);
    - [`dlssnr_on_amd_setup.exe`](https://github.com/danielblnc/DLSS-NR-on-AMD/releases) (Setup/extraction executable for danielblnc).
-   > 💡 **Tip**: If you plan to use the **Mochizuki** backend, please make sure **Python 3.10+** is installed from the Microsoft Store beforehand.
+   > 💡 **Tip**: If you plan to use the **Mochizuki** backend, please make sure **Python 3.10+** is installed from the Microsoft Store beforehand. Model extraction supports three options: `both`, `small`, and `original`. The new small model currently does not support INT4, pending upstream adaptation.
 3. **Run Setup & Select Game Directory**:
    - Double-click `Setup.bat` and select the directory where the **actual game executable** is located (e.g. Unreal Engine games typically use `...\<GameName>\Binaries\Win64\`, not the platform launcher or shortcut folder);
    - Follow prompts to select your proxy DLL (typically `dxgi.dll`; try `winmm.dll` or other injection methods if unavailable) and desired backend. If an existing installation is detected, **Y (Recommended)** is suggested to uninstall first before installing (avoiding conflicts), or **N** to overwrite directly;
@@ -117,9 +117,9 @@ To upgrade, run the new package's `Setup.bat` and select the game folder. When O
 
 ##### Option C: Prepare Mochizuki (Windows / RDNA4)
 
-The complete package includes `MochizukiNrRuntime.dll` and `dlssnr-amd/shaders/`. Supply your own `nvngx_dlssnr.dll` **310.8.0** (version 310.8.0 is strictly required, SHA256: `e16bcf15e16e13f527491cdf7845b2fe6521a738d8f7c9c721866a8496e1fc8e`) beside `Setup.bat`, install Python **3.10+**, and select Mochizuki in Setup to extract and validate the model. An existing model at `dlssnr-amd/dlssnr.bin` can be reused without extraction. See [Mochizuki installation](docs/mochizuki.md) for the source hash and standalone extraction tool.
+The complete package includes `MochizukiNrRuntime.dll` and `dlssnr-amd/shaders/`. Supply your own `nvngx_dlssnr.dll` **310.9.16** or **310.8.0** beside `Setup.bat`, install Python **3.10+**, and select Mochizuki in Setup to extract and validate the model. An existing model at `dlssnr-amd/dlssnr.bin` (original model) or `dlssnr-amd/dlssnr-small.bin` (new small model) can be reused without extraction. 310.9.16 supports three installation options: `both` (dual models), `small` (new model only), and `original` (original model only); 310.8.0 supports only the original model. The new small model currently does not support INT4 (saved INT4 preferences are preserved but only take effect on the original model). Project-owned installer prompts and options are in English. See [Mochizuki installation](docs/mochizuki.md) for source hashes and standalone extraction instructions.
 
-Without the source DLL or model, Setup reports `MODEL SETUP REQUIRED`; the runtime alone is insufficient. Other DLL versions are not extracted automatically. Move an invalid model aside before rerunning Setup; it is not silently overwritten.
+When no valid model is available or model preparation fails, Setup aborts with a clear error, exits non-zero, and leaves the game directory untouched. If models are corrupted, the installer safely backs them up to `.bak-<timestamp>` and replaces them with verified models.
 
 The first network build can take minutes. The bottom-right panel shows build progress while frames pass through unchanged. Resolution, model scale or pass capacity changes can trigger another build. Mochizuki has independent preprocessing, three styles, 1–3 passes (default 1), and temporal controls. Its `Mochizuki*` INI keys do not change other backends. For troubleshooting, check Ins dependency/build status first, then `OptiScaler.log`.
 

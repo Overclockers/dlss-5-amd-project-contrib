@@ -338,13 +338,21 @@ bool open_model_pack(const std::string& file, const std::string& root, std::stri
         if (why) *why = "not a model pack: " + file;
         return false;
     }
+    if (reserved != 0 || (count != 599 && count != 255)) {
+        if (why) *why = "unexpected model pack count or format: " + file;
+        return false;
+    }
+    f.seekg(0, std::ios::end);
+    const uint64_t file_len = static_cast<uint64_t>(f.tellg());
+    f.seekg(16, std::ios::beg);
     ModelPack p; p.root = root; p.file = file;
     for (uint32_t i = 0; i < count; ++i) {
         uint32_t n = 0; uint64_t off = 0, size = 0;
-        if (!f.read(reinterpret_cast<char*>(&n), 4) || n > 4096) { if (why) *why = "model pack index is damaged"; return false; }
+        if (!f.read(reinterpret_cast<char*>(&n), 4) || n == 0 || n > 4096) { if (why) *why = "model pack index is damaged"; return false; }
         std::string name(n, '\0');
         if (!f.read(name.data(), n) || !f.read(reinterpret_cast<char*>(&off), 8) ||
             !f.read(reinterpret_cast<char*>(&size), 8)) { if (why) *why = "model pack index is damaged"; return false; }
+        if (off < 16 || size == 0 || off + size > file_len) { if (why) *why = "model pack index entry out of bounds"; return false; }
         p.index[name] = {off, size};
     }
     g_pack = std::move(p);

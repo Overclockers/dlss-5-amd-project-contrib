@@ -84,75 +84,14 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $body = @'
-          ### v1.12.2
-
-          - **lmxxf**：
-            - **同步更新**：跟随至 0.42 `3a1be68c`，接入 W16、inter-byte 与紧凑 QKV 更新。
-            - **时序模式**：新增低频稳定（Mode 2）与残差增强（Mode 3，强度 0..2），均为手动选择，限超分前单层；默认仍为完整模型历史（Mode 1）。不支持的组合保留设置并跳过历史。
-          - **Mochizuki**：
-            - **内联 (Inline) 模式**：调优模式自动搜索设为 Auto 的自旋选项，显式指定值保持固定；启用自适应等待预算时暂停调优。
-            - **HDR 闪点修复（剑星等）**：限制普通 HDR 合成参考的负 RGB，避免亮度校正异常放大为红蓝闪点。负 RGB 场景的细微颜色变化仍需进一步验证。
-          - **XeFG 动态多帧生成（Dynamic MFG）与插件支持**（安装详见 README）：
-            - 首次支持 [MFGUnlocker.asi](https://github.com/dashdogy/MFG-Unlocker) 版插件（外部插件需自行准备，不随包提供，不提供技术支持）。
-            - 可根据真实原生帧耗时自动在 1x～上限倍率（2x/3x/4x）之间平滑切换；调整 XeLL 钩子与首次上下文创建的导出解析以兼容外部解锁插件；发布包与安装目录现默认预创建 `plugins` 文件夹方便用户自行放入 `.asi` 插件。
-            - 原OptiScaler社区常用 [XeFG 多帧解锁插件（XeFGUnlock.asi）](https://github.com/Coldwood1026/OptiScaler) 仍支持继续使用。
-          - **构建与发布**：固定工具下载包跨工作树复用，修复人物模型导出的长路径问题，发布检查加入时序 Mode 2/3 回归。
-
-          **安装与权重**
-
-          - 完整解压并运行新包 `Setup.bat`，更新整包，建议使用覆盖安装。
-          - lmxxf 0.42：从合法持有且许可允许使用的模型准备 `native-game-tiled-assets`，见 [原仓库](https://github.com/lmxxf/dlss5-on-amd-9070xt-porting)。
-          - Mochizuki 0.0.5（基于 0.0.5-win-preview）：从自备的 `nvngx_dlssnr.dll` 310.8.0 提取模型，需要 Python 3.10+。
-          - Daniel 0.6.0：从 [作者发布页](https://github.com/danielblnc/DLSS-NR-on-AMD/releases) 获取运行文件，自备 `nvngx_dlssnr.dll` 310.8.0。
-
-          **已知问题**
-
-          - RenoDX 无法与人物保护功能同时生效，请尝试 RenoDX 下相关类似功能。
-          - 内联模式仍为实验功能，可尝试在《红色沙漠》等不支持帧切分的游戏中打开。
-          - 自动调优与新时序模式的跨游戏画质、长时间运行和性能尚未全面验收；不承诺所有游戏提速。
-          - lmxxf 时序模式与 ViT 自适应复用保持互斥；Mode 2/3 不支持多层。SR → NR 不扩展原生 RR/Vulkan 支持范围。
-          - 新 XeFG 插件偶发性能下降问题，可尝试重启游戏；帧生成类插件不提供技术支持。
-
-          ---
-
-          ### v1.12.2
-
-          - **lmxxf**:
-            - **Sync update**: Updated to 0.42 (`3a1be68c`), incorporating W16, inter-byte, and compact-QKV updates.
-            - **Temporal modes**: Opt-in low-frequency stabilization (Mode 2) and residual enhancement (Mode 3, strength 0..2), limited to single-pass pre-SR. Full model history (Mode 1) remains the default. Unsupported combinations preserve settings and run without history.
-          - **Mochizuki**:
-            - **Inline mode**: Tuning mode searches spin options set to Auto, preserves fixed values, and pauses during adaptive wait budgeting.
-            - **HDR sparkle fix (Stellar Blade, etc.)**: Clamps negative RGB in the normal HDR composition reference to prevent extreme red/blue amplification. Subtle colour effects on signed HDR input need further evaluation.
-          - **XeFG Dynamic MFG and plugin compatibility** (see README for details):
-            - Initial support for [MFGUnlocker.asi](https://github.com/dashdogy/MFG-Unlocker) (external plugins must be provided by the user, are not bundled, and receive no technical support).
-            - Target-FPS Dynamic Multi-Frame Generation (DMFG) dynamically scales interpolation count between 1x and the configured maximum (2x/3x/4x) based on native frame times; updated XeLL hooking and first-context export resolution for external plugin compatibility; pre-created `plugins` directory in release packages and install folders.
-            - Popular OptiScaler community plugin [XeFGUnlock.asi](https://github.com/Coldwood1026/OptiScaler) remains supported.
-          - **Build and release**: Shared pinned downloads across worktrees, shorter person-model export paths, and temporal Mode 2/3 checks in the release tier.
-
-          **Installation and models**
-
-          - Extract the complete ZIP and run the new `Setup.bat` to update the package (clean overwrite recommended).
-          - lmxxf 0.42: Prepare `native-game-tiled-assets` from lawfully held model files where permitted; see [upstream](https://github.com/lmxxf/dlss5-on-amd-9070xt-porting).
-          - Mochizuki 0.0.5 (based on 0.0.5-win-preview): Extract the model from your own `nvngx_dlssnr.dll` 310.8.0, using Python 3.10+.
-          - Daniel 0.6.0: Obtain runtime files from the [author](https://github.com/danielblnc/DLSS-NR-on-AMD/releases) and supply `nvngx_dlssnr.dll` 310.8.0 separately.
-
-          **Known issues**
-
-          - RenoDX cannot be used simultaneously with person protection; please try corresponding similar features in RenoDX.
-          - Inline mode remains experimental; you can try enabling it in titles that do not support command list splitting (such as Crimson Desert).
-          - Automatic tuning and new temporal modes have not completed broad in-game image-quality, long-run, or performance acceptance. No universal speedup is claimed.
-          - lmxxf temporal modes remain mutually exclusive with ViT adaptive reuse; Modes 2/3 require one pass. Post-SR NR does not extend native RR/Vulkan support.
-          - Occasional performance drops with new XeFG plugins can usually be resolved by restarting the game; no technical support is provided for frame-generation plugins.
-          '@
+Mochizuki后端适配DLSS 10.16最新模型。
+The Mochizuki backend now supports the latest DLSS 10.16 model.
+'@
           if ([string]::IsNullOrWhiteSpace($body)) { throw 'Empty release notes' }
-          $headings = [regex]::Matches($body, '(?m)^### v([^\s]+)\s*$')
-          if (!$headings.Count) { throw "Missing release notes version heading" }
-          foreach ($heading in $headings) {
-            if ($heading.Groups[1].Value -cne $env:RELEASE_VERSION) { throw "Release notes version mismatch" }
-          }
-          $body += "`nSource / 源码：[$env:SOURCE_SHA](https://github.com/$env:SOURCE_REPO/tree/$env:SOURCE_SHA)`n"
+          $lines = @($body.Trim().Split("`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+          if ($lines.Count -ne 2) { throw "Release notes must strictly contain exactly two lines" }
           New-Item -ItemType Directory -Force exports | Out-Null
-          [IO.File]::WriteAllText((Join-Path $PWD 'exports/release-notes.md'), $body, [Text.UTF8Encoding]::new($false))
+          [IO.File]::WriteAllText((Join-Path $PWD 'exports/release-notes.md'), ($lines -join "`n") + "`n", [Text.UTF8Encoding]::new($false))
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -449,7 +388,7 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') }}
           name: ${{ github.ref_name }}
           target_commitish: ${{ github.sha }}
-          generate_release_notes: true
+          generate_release_notes: false
           body_path: exports/release-notes.md
 
       - name: Upload release asset with verified retries

@@ -1,4 +1,4 @@
-﻿param([string]$Source, [string]$Output)
+param([string]$Source, [string]$Output, [string]$Models)
 
 # Dot-sourced by Setup, or run directly by Mochizuki-Model.bat.
 function Find-MochizukiPython {
@@ -31,17 +31,45 @@ if ($MyInvocation.InvocationName -ne '.') {
     if (-not $python) { Write-MochizukiPythonHelp; exit 1 }
     if (-not $Source) { $Source = Join-Path $PSScriptRoot 'nvngx_dlssnr.dll' }
     if (-not $Output) { $Output = Join-Path $PSScriptRoot 'dlssnr-amd/dlssnr.bin' }
+
+    if (-not $Models) {
+        Write-Host ''
+        Write-Host 'Select Mochizuki models to install:' -ForegroundColor Cyan
+        Write-Host '1. Both models (recommended)'
+        Write-Host '2. New model only'
+        Write-Host '3. Original model only'
+        Write-Host '0. Cancel'
+        Write-Host ''
+        $choice = Read-Host 'Enter your choice (1/2/3/0)'
+        switch ($choice.Trim()) {
+            '1' { $Models = 'both' }
+            '2' { $Models = 'small' }
+            '3' { $Models = 'original' }
+            '0' { Write-Host 'Operation cancelled.'; exit 0 }
+            default {
+                Write-Host 'Invalid selection. Operation cancelled.' -ForegroundColor Red
+                exit 1
+            }
+        }
+    }
+
+    if ($Models -notin @('both', 'small', 'original')) {
+        Write-Host "Invalid models parameter: '$Models'. Expected 'both', 'small', or 'original'." -ForegroundColor Red
+        exit 1
+    }
+
     $extractor = Join-Path $PSScriptRoot 'mochizuki-model.py'
     if (-not (Test-Path -LiteralPath $extractor -PathType Leaf)) {
         Write-Host 'Model extractor missing. Re-extract the complete OptiScaler package.' -ForegroundColor Yellow
         exit 1
     }
-    & $python -X utf8 $extractor $Source $Output
+
+    & $python -X utf8 $extractor $Source $Output --models $Models
     $result = $LASTEXITCODE
     if ($result -ne 0) {
         Write-Host 'Model extraction failed. Python was found; see the error above and check nvngx_dlssnr.dll 310.9.16 / 310.8.0. See docs/mochizuki.md.' -ForegroundColor Yellow
     }
-    if ($result -eq 0) {
+    if ($result -eq 0 -and $Models -in @('both', 'original')) {
         try {
             . (Join-Path $PSScriptRoot 'mochizuki-int4.ps1')
             Initialize-MochizukiInt4 -Model $Output -Data (Join-Path $PSScriptRoot 'dlssnr-amd/int4') -Tools (Join-Path $PSScriptRoot 'model-tools')

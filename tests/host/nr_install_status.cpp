@@ -40,6 +40,10 @@ int main() {
     assert(ProbeInstallIssue(Kind::Mochizuki, dir).find("shaders missing") != std::string::npos);
     Write(dir / "dlssnr-amd/shaders/test.spv", "shader");
     assert(ProbeInstallIssue(Kind::Mochizuki, dir).empty());
+    fs::remove(dir / "dlssnr-amd/dlssnr.bin");
+    Write(dir / "dlssnr-amd/dlssnr-small.bin", std::string("NRMODEL1\xff\0\0\0payload", 19));
+    assert(HasMochizukiModelHeader(dir / "dlssnr-amd/dlssnr-small.bin"));
+    assert(ProbeInstallIssue(Kind::Mochizuki, dir).empty());
     fs::remove_all(dir);
     std::cout << "PASS installation diagnostics and Unicode/shared path resolution\n";
 }
