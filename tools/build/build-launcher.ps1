@@ -31,7 +31,8 @@ $refs = @(
     (Join-Path $fw 'System.Xaml.dll'),
     (Join-Path $wpf 'WindowsBase.dll'),
     (Join-Path $wpf 'PresentationCore.dll'),
-    (Join-Path $wpf 'PresentationFramework.dll')
+    (Join-Path $wpf 'PresentationFramework.dll'),
+    (Join-Path $fw 'System.Drawing.dll')
 )
 $win32 = Join-Path $fw 'Microsoft.Build.Tasks.v4.0.dll'
 $res = @(

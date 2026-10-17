@@ -23,6 +23,8 @@ namespace OptScalerNR.Launcher
     {
         public GameInfo Info { get; set; }
         public bool IsZh { get; set; }
+        public ImageSource IconSource { get; set; }
+
         public string Name { get { return Info != null ? Info.Name : ""; } }
         public string Initial
         {
@@ -56,28 +58,43 @@ namespace OptScalerNR.Launcher
         {
             get
             {
-                try
-                {
-                    return !string.IsNullOrEmpty(Cover) && File.Exists(Cover);
-                }
+                try { return !string.IsNullOrEmpty(Cover) && File.Exists(Cover); }
                 catch { return false; }
             }
         }
-        public Visibility CoverVisibility { get { return HasCover ? Visibility.Visible : Visibility.Collapsed; } }
-        public Visibility InitialVisibility { get { return HasCover ? Visibility.Collapsed : Visibility.Visible; } }
+
+        public ImageSource DisplayImage
+        {
+            get
+            {
+                if (HasCover)
+                {
+                    try
+                    {
+                        var bi = new BitmapImage();
+                        bi.BeginInit();
+                        bi.CacheOption = BitmapCacheOption.OnLoad;
+                        bi.DecodePixelWidth = 84;
+                        bi.UriSource = new Uri(Cover, UriKind.Absolute);
+                        bi.EndInit();
+                        return bi;
+                    }
+                    catch { }
+                }
+                return IconSource;
+            }
+        }
+
+        public Visibility CoverVisibility { get { return (HasCover || IconSource != null) ? Visibility.Visible : Visibility.Collapsed; } }
+        public Visibility InitialVisibility { get { return (HasCover || IconSource != null) ? Visibility.Collapsed : Visibility.Visible; } }
         public string Hero { get { return Info != null ? Info.Hero : null; } }
     }
 
     public sealed class MainController
     {
-        [DllImport("dwmapi.dll")]
-        static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
-
-        const int DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1 = 19;
-        const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
-
         readonly Window _window;
         TextBox _searchBox, _logView, _packageRootBox;
+        Button _minBtn, _maxBtn, _closeBtn;
         Button _libraryTab, _settingsTab, _addButton, _primaryButton, _changeExeButton, _openFolderButton, _uninstallButton, _openLogButton, _refreshButton, _langToggle, _packageBrowse;
         FrameworkElement _libraryPage, _settingsPage;
         ComboBox _filterCombo, _proxyCombo, _activeCombo, _langCombo;
@@ -89,7 +106,7 @@ namespace OptScalerNR.Launcher
         TextBlock _lmxxfActiveLabel, _danielActiveLabel, _mochiActiveLabel;
         CheckBox _lmxxfCheck, _danielCheck, _mochiCheck, _replaceIni, _scanOnStartup;
         ProgressBar _progress;
-        Image _heroPosterImage;
+        Image _heroPosterImage, _heroBgImage;
         Ellipse _statusLed;
 
         RadioButton _pillDxgi, _pillD3d12, _pillWinmm, _pillWinhttp, _pillWininet, _pillDbghelp;
@@ -120,7 +137,6 @@ namespace OptScalerNR.Launcher
         static readonly Brush MissingBorder = (Brush)new BrushConverter().ConvertFromString("#FF282D3A");
         static readonly Brush MissingBg = (Brush)new BrushConverter().ConvertFromString("#FF1E222E");
         static readonly Brush WarningBrush = (Brush)new BrushConverter().ConvertFromString("#FFFACC15");
-        static readonly Brush ActiveBrush = (Brush)new BrushConverter().ConvertFromString("#FFE8EEFF");
 
         public static Window Create(string[] args)
         {
@@ -135,6 +151,10 @@ namespace OptScalerNR.Launcher
         MainController(Window window, string[] args)
         {
             _window = window;
+
+            _minBtn = (Button)window.FindName("MinBtn");
+            _maxBtn = (Button)window.FindName("MaxBtn");
+            _closeBtn = (Button)window.FindName("CloseBtn");
 
             _searchBox = (TextBox)window.FindName("SearchBox");
             _pageTitle = (TextBlock)window.FindName("PageTitle");
@@ -154,6 +174,7 @@ namespace OptScalerNR.Launcher
             _heroPath = (TextBlock)window.FindName("HeroPath");
             _heroPosterInitial = (TextBlock)window.FindName("HeroPosterInitial");
             _heroPosterImage = (Image)window.FindName("HeroPosterImage");
+            _heroBgImage = (Image)window.FindName("HeroBgImage");
 
             _primaryButton = (Button)window.FindName("PrimaryButton");
             _changeExeButton = (Button)window.FindName("ChangeExeButton");
@@ -215,10 +236,29 @@ namespace OptScalerNR.Launcher
             _decisions.ShortFileContinue = "abort";
             _decisions.ForeignProxy = new Dictionary<string, string>();
 
-            EnableImmersiveDarkMode(_window);
+            if (_minBtn != null) _minBtn.Click += (s, e) => _window.WindowState = WindowState.Minimized;
+            if (_maxBtn != null) _maxBtn.Click += (s, e) =>
+            {
+                _window.WindowState = (_window.WindowState == WindowState.Maximized) ? WindowState.Normal : WindowState.Maximized;
+            };
+            if (_closeBtn != null) _closeBtn.Click += (s, e) => _window.Close();
 
-            if (_libraryTab != null) _libraryTab.Click += (s, e) => SwitchTab(true);
-            if (_settingsTab != null) _settingsTab.Click += (s, e) => SwitchTab(_settingsPage != null && _settingsPage.Visibility == Visibility.Visible);
+            _window.StateChanged += (s, e) =>
+            {
+                if (_window.WindowState == WindowState.Maximized)
+                {
+                    _window.BorderThickness = new Thickness(7);
+                    if (_maxBtn != null) _maxBtn.Content = "\x25A3";
+                }
+                else
+                {
+                    _window.BorderThickness = new Thickness(1);
+                    if (_maxBtn != null) _maxBtn.Content = "\x25A2";
+                }
+            };
+
+            if (_libraryTab != null) _libraryTab.Click += (s, e) => SwitchTab(false);
+            if (_settingsTab != null) _settingsTab.Click += (s, e) => SwitchTab(_settingsPage == null || _settingsPage.Visibility != Visibility.Visible);
             if (_langToggle != null) _langToggle.Click += (s, e) => ToggleLanguage();
 
             if (_filterCombo != null)
@@ -310,21 +350,6 @@ namespace OptScalerNR.Launcher
             RefreshGameListView();
             UpdateActiveCombo();
             UpdatePrimaryButtonState();
-        }
-
-        static void EnableImmersiveDarkMode(Window window)
-        {
-            try
-            {
-                var helper = new WindowInteropHelper(window);
-                var hwnd = helper.EnsureHandle();
-                int trueValue = 1;
-                if (DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref trueValue, Marshal.SizeOf(typeof(int))) != 0)
-                {
-                    DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1, ref trueValue, Marshal.SizeOf(typeof(int)));
-                }
-            }
-            catch { }
         }
 
         void InitProxyPills()
@@ -557,6 +582,35 @@ namespace OptScalerNR.Launcher
                 }
             }
             catch { }
+        }
+
+        static string GetReasonText(string reasonCode, string fallbackReason, bool isZh)
+        {
+            if (string.IsNullOrEmpty(reasonCode)) return fallbackReason ?? "";
+            if (isZh)
+            {
+                switch (reasonCode.ToLowerInvariant())
+                {
+                    case "ready": return "就绪";
+                    case "missing-weights": return "权重缺失";
+                    case "missing-runtime": return "runtime 缺失";
+                    case "preparable": return "需准备模型";
+                    case "missing-model": return "模型缺失";
+                    default: return fallbackReason ?? reasonCode;
+                }
+            }
+            else
+            {
+                switch (reasonCode.ToLowerInvariant())
+                {
+                    case "ready": return "Ready";
+                    case "missing-weights": return "Missing Weights";
+                    case "missing-runtime": return "Missing Runtime";
+                    case "preparable": return "Weights Needed";
+                    case "missing-model": return "Missing Model";
+                    default: return fallbackReason ?? reasonCode;
+                }
+            }
         }
 
         void ApplyLang()
@@ -818,10 +872,34 @@ namespace OptScalerNR.Launcher
             }
         }
 
+        static ImageSource GetOrExtractIcon(GameInfo g)
+        {
+            if (g == null || string.IsNullOrEmpty(g.Exe)) return null;
+            if (!string.IsNullOrEmpty(g.Cover) && File.Exists(g.Cover)) return null;
+            try
+            {
+                if (File.Exists(g.Exe))
+                {
+                    using (var ico = System.Drawing.Icon.ExtractAssociatedIcon(g.Exe))
+                    {
+                        if (ico != null)
+                        {
+                            return Imaging.CreateBitmapSourceFromHIcon(
+                                ico.Handle,
+                                Int32Rect.Empty,
+                                BitmapSizeOptions.FromEmptyOptions());
+                        }
+                    }
+                }
+            }
+            catch { }
+            return null;
+        }
+
         void RefreshGameListView()
         {
             var query = (_searchBox != null ? _searchBox.Text : "").Trim().ToLowerInvariant();
-            var filterIdx = _filterCombo != null ? _filterCombo.SelectedIndex : 0; // 0=all, 1=installed, 2=not installed
+            var filterIdx = _filterCombo != null ? _filterCombo.SelectedIndex : 0;
             var isZh = _language == "zh";
 
             var list = new List<GameItemViewModel>();
@@ -835,7 +913,8 @@ namespace OptScalerNR.Launcher
                     var matchExe = g.Exe != null && g.Exe.ToLowerInvariant().Contains(query);
                     if (!matchName && !matchExe) continue;
                 }
-                list.Add(new GameItemViewModel { Info = g, IsZh = isZh });
+                var icon = GetOrExtractIcon(g);
+                list.Add(new GameItemViewModel { Info = g, IsZh = isZh, IconSource = icon });
             }
 
             if (_gameList != null)
@@ -882,8 +961,30 @@ namespace OptScalerNR.Launcher
             if (_heroMeta != null) _heroMeta.Text = game.Source + " · PC";
             if (_heroPath != null) _heroPath.Text = game.Exe;
 
+            if (_heroBgImage != null)
+            {
+                if (!string.IsNullOrEmpty(game.Hero) && File.Exists(game.Hero))
+                {
+                    try
+                    {
+                        var bi = new BitmapImage();
+                        bi.BeginInit();
+                        bi.CacheOption = BitmapCacheOption.OnLoad;
+                        bi.UriSource = new Uri(game.Hero, UriKind.Absolute);
+                        bi.EndInit();
+                        _heroBgImage.Source = bi;
+                    }
+                    catch { _heroBgImage.Source = null; }
+                }
+                else
+                {
+                    _heroBgImage.Source = null;
+                }
+            }
+
             if (_heroPosterImage != null && _heroPosterInitial != null)
             {
+                bool loaded = false;
                 if (!string.IsNullOrEmpty(game.Cover) && File.Exists(game.Cover))
                 {
                     try
@@ -891,21 +992,30 @@ namespace OptScalerNR.Launcher
                         var bi = new BitmapImage();
                         bi.BeginInit();
                         bi.CacheOption = BitmapCacheOption.OnLoad;
+                        bi.DecodePixelWidth = 180;
                         bi.UriSource = new Uri(game.Cover, UriKind.Absolute);
                         bi.EndInit();
                         _heroPosterImage.Source = bi;
                         _heroPosterImage.Visibility = Visibility.Visible;
                         _heroPosterInitial.Visibility = Visibility.Collapsed;
+                        loaded = true;
                     }
-                    catch
+                    catch { }
+                }
+
+                if (!loaded)
+                {
+                    var icon = GetOrExtractIcon(game);
+                    if (icon != null)
                     {
-                        _heroPosterImage.Source = null;
-                        _heroPosterImage.Visibility = Visibility.Collapsed;
-                        _heroPosterInitial.Text = string.IsNullOrEmpty(game.Name) ? "?" : game.Name.Substring(0, 1).ToUpperInvariant();
-                        _heroPosterInitial.Visibility = Visibility.Visible;
+                        _heroPosterImage.Source = icon;
+                        _heroPosterImage.Visibility = Visibility.Visible;
+                        _heroPosterInitial.Visibility = Visibility.Collapsed;
+                        loaded = true;
                     }
                 }
-                else
+
+                if (!loaded)
                 {
                     _heroPosterImage.Source = null;
                     _heroPosterImage.Visibility = Visibility.Collapsed;
@@ -1050,6 +1160,11 @@ namespace OptScalerNR.Launcher
                 if (_statusLed != null) _statusLed.Fill = ReadyBrush;
                 if (_statusText != null)
                     _statusText.Text = _language == "zh" ? "游戏库已更新" : "Library updated";
+
+                if (_selectedGame == null && _allGames.Count > 0 && _gameList != null && _gameList.Items.Count > 0)
+                {
+                    _gameList.SelectedIndex = 0;
+                }
             }));
         }
 
@@ -1063,6 +1178,7 @@ namespace OptScalerNR.Launcher
                     var old = _session;
                     old.EventReceived -= OnEvent;
                     old.Completed -= OnCompleted;
+                    old.Completed -= OnScanCompleted;
                     old.CancelInspect();
                     Detach(old);
                     _session = null;
@@ -1272,16 +1388,11 @@ namespace OptScalerNR.Launcher
         {
             if (result == null) return;
             _lastInspectResult = result;
-
             var isZh = _language == "zh";
 
             if (!string.IsNullOrEmpty(result.Recommend))
             {
-                if (_injectIcon != null)
-                {
-                    _injectIcon.Text = "✓";
-                    _injectIcon.Foreground = ReadyBrush;
-                }
+                if (_injectIcon != null) { _injectIcon.Text = "✓"; _injectIcon.Foreground = ReadyBrush; }
                 if (_injectRecommendation != null)
                 {
                     _injectRecommendation.Text = isZh
@@ -1292,11 +1403,7 @@ namespace OptScalerNR.Launcher
             }
             else
             {
-                if (_injectIcon != null)
-                {
-                    _injectIcon.Text = "ℹ";
-                    _injectIcon.Foreground = WarningBrush;
-                }
+                if (_injectIcon != null) { _injectIcon.Text = "ℹ"; _injectIcon.Foreground = WarningBrush; }
                 if (_injectRecommendation != null)
                 {
                     _injectRecommendation.Text = isZh
@@ -1309,21 +1416,29 @@ namespace OptScalerNR.Launcher
                 }
             }
 
+            if (_injectText != null)
+            {
+                _injectText.Text = isZh
+                    ? "分析完成，请确认注入代理与后端配置："
+                    : "Analysis complete, please confirm proxy DLL and backends:";
+            }
+
             if (result.Backends != null)
             {
                 foreach (var b in result.Backends)
                 {
                     if (b == null) continue;
+                    var reasonText = GetReasonText(b.ReasonCode, b.Reason, isZh);
                     if (b.Id == "lmxxf")
                     {
                         if (_lmxxfCheck != null)
                         {
-                            _lmxxfCheck.IsEnabled = b.Enabled;
-                            _lmxxfCheck.IsChecked = b.Enabled;
+                            _lmxxfCheck.IsEnabled = true;
+                            _lmxxfCheck.IsChecked = b.Enabled || (_lmxxfCheck.IsChecked == true);
                         }
                         if (_lmxxfReason != null)
                         {
-                            _lmxxfReason.Text = b.Reason;
+                            _lmxxfReason.Text = reasonText;
                             _lmxxfReason.Foreground = b.Enabled ? ReadyBrush : MissingBrush;
                         }
                         if (_lmxxfBadge != null)
@@ -1336,12 +1451,12 @@ namespace OptScalerNR.Launcher
                     {
                         if (_danielCheck != null)
                         {
-                            _danielCheck.IsEnabled = b.Enabled;
+                            _danielCheck.IsEnabled = true;
                             _danielCheck.IsChecked = b.Enabled;
                         }
                         if (_danielReason != null)
                         {
-                            _danielReason.Text = b.Reason;
+                            _danielReason.Text = reasonText;
                             _danielReason.Foreground = b.Enabled ? ReadyBrush : MissingBrush;
                         }
                         if (_danielBadge != null)
@@ -1354,12 +1469,12 @@ namespace OptScalerNR.Launcher
                     {
                         if (_mochiCheck != null)
                         {
-                            _mochiCheck.IsEnabled = b.Enabled;
+                            _mochiCheck.IsEnabled = true;
                             _mochiCheck.IsChecked = b.Enabled;
                         }
                         if (_mochiReason != null)
                         {
-                            _mochiReason.Text = b.Reason;
+                            _mochiReason.Text = reasonText;
                             _mochiReason.Foreground = b.Enabled ? ReadyBrush : MissingBrush;
                         }
                         if (_mochiBadge != null)
@@ -1369,6 +1484,13 @@ namespace OptScalerNR.Launcher
                         }
                     }
                 }
+            }
+
+            if ((_lmxxfCheck == null || _lmxxfCheck.IsChecked != true) &&
+                (_danielCheck == null || _danielCheck.IsChecked != true) &&
+                (_mochiCheck == null || _mochiCheck.IsChecked != true))
+            {
+                if (_lmxxfCheck != null) _lmxxfCheck.IsChecked = true;
             }
 
             UpdateActiveCombo();
@@ -1463,19 +1585,6 @@ namespace OptScalerNR.Launcher
             {
                 foreach (var p in _proxyPills.Values) p.IsEnabled = !busy;
             }
-            if (_lmxxfCheck != null) _lmxxfCheck.IsEnabled = !busy && (_lastInspectResult == null || IsBackendReady("lmxxf"));
-            if (_danielCheck != null) _danielCheck.IsEnabled = !busy && (_lastInspectResult == null || IsBackendReady("daniel"));
-            if (_mochiCheck != null) _mochiCheck.IsEnabled = !busy && (_lastInspectResult == null || IsBackendReady("mochizuki"));
-        }
-
-        bool IsBackendReady(string id)
-        {
-            if (_lastInspectResult == null || _lastInspectResult.Backends == null) return false;
-            foreach (var b in _lastInspectResult.Backends)
-            {
-                if (b != null && b.Id == id) return b.Enabled;
-            }
-            return false;
         }
 
         void Detach(WorkerSession session)

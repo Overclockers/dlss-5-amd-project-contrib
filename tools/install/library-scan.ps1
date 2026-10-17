@@ -164,14 +164,25 @@ function Get-OptScalerGameLibrary {
             $cands = @(Get-OptScalerPrimaryExes $base 6)
             if ($cands.Count -gt 0) {
                 $cover = ''
-                $assets = Join-Path $base 'Assets'
-                if (Test-Path -LiteralPath $assets) {
-                    foreach ($candImg in @('Wide310x150Logo.png','Square150x150Logo.png','StoreLogo.png','Logo.png','Splash.png')) {
-                        $p = Join-Path $assets $candImg
+                $hero = ''
+                $candDirs = @($base, (Join-Path $base 'Assets'), $_.FullName, (Join-Path $_.FullName 'Assets'), (Join-Path $_.FullName 'Content\Assets'))
+                foreach ($cd in $candDirs) {
+                    if (-not (Test-Path -LiteralPath $cd -PathType Container)) { continue }
+                    foreach ($candImg in @('StoreLogo.png','Logo.png','Square150x150Logo.png','LargeLogo.png','SmallLogo.png','Wide310x150Logo.png','WideLogo.png','SplashScreen.png')) {
+                        $p = Join-Path $cd $candImg
                         if (Test-Path -LiteralPath $p -PathType Leaf) { $cover = $p; break }
                     }
+                    if ($cover) { break }
                 }
-                Add-OptScalerGame $games $seen $_.Name $cands[0].path 'Xbox' ("xbox:" + $_.Name.ToLowerInvariant()) $cover
+                foreach ($cd in $candDirs) {
+                    if (-not (Test-Path -LiteralPath $cd -PathType Container)) { continue }
+                    foreach ($candHero in @('SplashScreen.png','MCSplashScreen.png','WideLogo.png','Wide310x150Logo.png','LargeLogo.png')) {
+                        $p = Join-Path $cd $candHero
+                        if (Test-Path -LiteralPath $p -PathType Leaf) { $hero = $p; break }
+                    }
+                    if ($hero) { break }
+                }
+                Add-OptScalerGame $games $seen $_.Name $cands[0].path 'Xbox' ("xbox:" + $_.Name.ToLowerInvariant()) $cover $hero
             }
         }
     }

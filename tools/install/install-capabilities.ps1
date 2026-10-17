@@ -49,8 +49,21 @@ function Get-OptScalerBackendCapabilities([string]$pkgRoot, [string]$gameDir) {
         $treeShaders = Join-Path $PSScriptRoot '../../shaders'
         if (Test-Path -LiteralPath $treeMods -PathType Container) { $lmxxfMods = $treeMods }
         if (Test-Path -LiteralPath $treeShaders -PathType Container) { $lmxxfShaders = $treeShaders }
-        $treeRuntime = Join-Path $PSScriptRoot '../../exports/release-local/LmxxfNrRuntime.dll'
-        if (Test-Path -LiteralPath $treeRuntime -PathType Leaf) { $lmxxfRuntime = $treeRuntime }
+        foreach ($candPath in @(
+            (Join-Path $PSScriptRoot '../../exports/lmxxf-runtime/LmxxfNrRuntime.dll'),
+            (Join-Path $PSScriptRoot '../../exports/release-local/LmxxfNrRuntime.dll'),
+            (Join-Path $PSScriptRoot '../../exports/launcher/LmxxfNrRuntime.dll')
+        )) {
+            if (Test-Path -LiteralPath $candPath -PathType Leaf) { $lmxxfRuntime = $candPath; break }
+        }
+        if (-not $lmxxfRuntime) {
+            $distCand = Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot '../../dist') -Filter 'LmxxfNrRuntime.dll' -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($distCand) { $lmxxfRuntime = $distCand.FullName }
+        }
+    }
+    if ($gameDir -and -not $lmxxfRuntime) {
+        $cand = Join-Path $gameDir 'LmxxfNrRuntime.dll'
+        if (Test-Path -LiteralPath $cand -PathType Leaf) { $lmxxfRuntime = $cand }
     }
 
     $canLmxxfRuntime = [bool]($lmxxfRuntime -and $lmxxfMods -and $lmxxfShaders)

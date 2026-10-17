@@ -39,17 +39,23 @@ namespace OptScalerNR.Launcher
 
         public static string PickExe()
         {
-            var dlg = new OpenFileDialog();
-            dlg.Filter = "Game executable (*.exe)|*.exe";
-            dlg.CheckFileExists = false;
-            dlg.CheckPathExists = true;
-            dlg.DereferenceLinks = false;
-            dlg.AddExtension = false;
-            dlg.ValidateNames = false;
-            if (Directory.Exists(@"C:\XboxGames"))
-                dlg.InitialDirectory = @"C:\XboxGames";
-            if (dlg.ShowDialog() != true) return null;
-            return Normalize(dlg.FileName);
+            try
+            {
+                var dlg = new OpenFileDialog();
+                dlg.Filter = "Game executable (*.exe)|*.exe";
+                dlg.CheckFileExists = false;
+                dlg.CheckPathExists = true;
+                dlg.DereferenceLinks = false;
+                dlg.AddExtension = false;
+                dlg.ValidateNames = false;
+                if (Directory.Exists(@"C:\XboxGames"))
+                    dlg.InitialDirectory = @"C:\XboxGames";
+                if (dlg.ShowDialog() != true) return null;
+                var fn = dlg.FileName;
+                if (string.IsNullOrEmpty(fn)) return null;
+                return Normalize(fn);
+            }
+            catch { return null; }
         }
 
         static string FindUnderXboxGames(string fileName)

@@ -1,5 +1,6 @@
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="OptScaler NR"
         Width="1200" Height="780"
         MinWidth="1020" MinHeight="660"
@@ -11,7 +12,18 @@
         SnapsToDevicePixels="True"
         UseLayoutRounding="True"
         WindowStartupLocation="CenterScreen"
+        WindowStyle="None"
+        BorderBrush="#FF282D3A"
+        BorderThickness="1"
         AllowDrop="True">
+  <WindowChrome.WindowChrome>
+    <WindowChrome CaptionHeight="56"
+                  ResizeBorderThickness="6"
+                  CornerRadius="0"
+                  GlassFrameThickness="0"
+                  UseAeroCaptionButtons="False" />
+  </WindowChrome.WindowChrome>
+
   <Window.Resources>
     <!-- Modern Dark ScrollBar -->
     <Style TargetType="{x:Type ScrollBar}">
@@ -84,7 +96,7 @@
       <Setter Property="BorderBrush" Value="#FF282D3A"/>
       <Setter Property="Foreground" Value="#FFF3F4F6"/>
       <Setter Property="BorderThickness" Value="1"/>
-      <Setter Property="Height" Value="34"/>
+      <Setter Property="Height" Value="32"/>
       <Setter Property="Padding" Value="10,0"/>
       <Setter Property="SnapsToDevicePixels" Value="true"/>
       <Setter Property="Template">
@@ -182,10 +194,10 @@
       <Setter Property="Background" Value="#FFED1C24"/>
       <Setter Property="Foreground" Value="#FFFFFFFF"/>
       <Setter Property="BorderThickness" Value="0"/>
-      <Setter Property="Height" Value="42"/>
-      <Setter Property="FontSize" Value="14"/>
+      <Setter Property="Height" Value="40"/>
+      <Setter Property="FontSize" Value="13.5"/>
       <Setter Property="FontWeight" Value="SemiBold"/>
-      <Setter Property="Padding" Value="20,0"/>
+      <Setter Property="Padding" Value="18,0"/>
       <Setter Property="Cursor" Value="Hand"/>
       <Setter Property="Template">
         <Setter.Value>
@@ -216,9 +228,9 @@
       <Setter Property="Foreground" Value="#FFF3F4F6"/>
       <Setter Property="BorderBrush" Value="#FF282D3A"/>
       <Setter Property="BorderThickness" Value="1"/>
-      <Setter Property="Height" Value="34"/>
-      <Setter Property="Padding" Value="14,0"/>
-      <Setter Property="FontSize" Value="12.5"/>
+      <Setter Property="Height" Value="32"/>
+      <Setter Property="Padding" Value="12,0"/>
+      <Setter Property="FontSize" Value="12"/>
       <Setter Property="Cursor" Value="Hand"/>
       <Setter Property="Template">
         <Setter.Value>
@@ -277,6 +289,63 @@
       </Setter>
     </Style>
 
+    <!-- Window Caption Buttons (Modern Fluent Integrated Chrome) -->
+    <Style x:Key="CaptionButton" TargetType="Button">
+      <Setter Property="Width" Value="46"/>
+      <Setter Property="Height" Value="56"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Foreground" Value="#FFC5CBD8"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Bd" Background="{TemplateBinding Background}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="#FF1E222E"/>
+                <Setter Property="Foreground" Value="#FFFFFFFF"/>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="#FF161820"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key="CloseCaptionButton" TargetType="Button">
+      <Setter Property="Width" Value="46"/>
+      <Setter Property="Height" Value="56"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Foreground" Value="#FFC5CBD8"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Bd" Background="{TemplateBinding Background}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="#FFE81123"/>
+                <Setter Property="Foreground" Value="#FFFFFFFF"/>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="#FFF1707A"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
     <!-- Game List Item Style with Crimson Selection Accent -->
     <Style TargetType="ListBoxItem">
       <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
@@ -307,51 +376,58 @@
   </Window.Resources>
 
   <DockPanel>
-    <!-- Top App Bar -->
-    <Border DockPanel.Dock="Top" BorderBrush="#FF1E222E" BorderThickness="0,0,0,1" Height="64" Background="#FF101218">
-      <Grid Margin="24,0">
+    <!-- Modern Integrated Top App Bar -->
+    <Border DockPanel.Dock="Top" BorderBrush="#FF1E222E" BorderThickness="0,0,0,1" Height="56" Background="#FF101218">
+      <Grid Margin="18,0,0,0">
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="Auto"/>
           <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="Auto"/>
           <ColumnDefinition Width="Auto"/>
         </Grid.ColumnDefinitions>
 
         <!-- Left Brand & Library Badge -->
         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-          <Border Width="8" Height="22" Background="#FFED1C24" CornerRadius="2" Margin="0,0,12,0" VerticalAlignment="Center"/>
-          <TextBlock x:Name="PageTitle" Text="游戏库" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center"/>
-          <Border x:Name="CountBadgeBorder" Background="#FF1E222E" CornerRadius="10" Padding="8,2" Margin="10,0,0,0" VerticalAlignment="Center">
+          <Border Width="6" Height="18" Background="#FFED1C24" CornerRadius="2" Margin="0,0,10,0" VerticalAlignment="Center"/>
+          <TextBlock x:Name="PageTitle" Text="游戏库" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="#FFFFFFFF"/>
+          <Border x:Name="CountBadgeBorder" Background="#FF1E222E" CornerRadius="10" Padding="8,2" Margin="8,0,0,0" VerticalAlignment="Center">
             <TextBlock x:Name="CountBadge" Text="0" FontSize="11" FontWeight="SemiBold" Foreground="#FF8E95A5"/>
           </Border>
         </StackPanel>
 
         <!-- Center Search Box -->
-        <Border Grid.Column="1" Background="#FF161820" BorderBrush="#FF282D3A" BorderThickness="1" CornerRadius="6" Height="36" Margin="24,0,24,0" MaxWidth="400" HorizontalAlignment="Stretch">
+        <Border Grid.Column="1" Background="#FF161820" BorderBrush="#FF282D3A" BorderThickness="1" CornerRadius="6" Height="34" Margin="20,0,20,0" MaxWidth="360" HorizontalAlignment="Stretch" WindowChrome.IsHitTestVisibleInChrome="True">
           <Grid Margin="10,0">
             <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="24"/>
+              <ColumnDefinition Width="22"/>
               <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
-            <TextBlock Text="🔍" FontSize="12" Foreground="#FF6E7585" VerticalAlignment="Center" HorizontalAlignment="Center"/>
+            <TextBlock Text="🔍" FontSize="11" Foreground="#FF6E7585" VerticalAlignment="Center" HorizontalAlignment="Center"/>
             <TextBox x:Name="SearchBox" Grid.Column="1" Background="Transparent" BorderThickness="0" Foreground="#FFF3F4F6" VerticalContentAlignment="Center" Margin="4,0,0,0"/>
           </Grid>
         </Border>
 
-        <!-- Right Quick Action Bar with Bilingual Toggle -->
-        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-          <Button x:Name="AddButton" Content="+ 添加游戏" Style="{StaticResource GhostButton}" Margin="0,0,8,0"/>
-          <Button x:Name="RefreshButton" Content="刷新" Style="{StaticResource GhostButton}" Margin="0,0,8,0"/>
-          <Button x:Name="LangToggle" Content="🌐 简体中文" Style="{StaticResource GhostButton}" Margin="0,0,8,0"/>
-          <Button x:Name="SettingsTab" Content="设置" Style="{StaticResource GhostButton}"/>
-          <!-- Hidden compatibility elements -->
+        <!-- Quick Action Bar -->
+        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,10,0">
+          <Button x:Name="AddButton" Content="+ 添加游戏" Style="{StaticResource GhostButton}" Height="30" Padding="12,0" Margin="0,0,6,0" WindowChrome.IsHitTestVisibleInChrome="True"/>
+          <Button x:Name="RefreshButton" Content="刷新" Style="{StaticResource GhostButton}" Height="30" Padding="12,0" Margin="0,0,6,0" WindowChrome.IsHitTestVisibleInChrome="True"/>
+          <Button x:Name="LangToggle" Content="🌐 English" Style="{StaticResource GhostButton}" Height="30" Padding="12,0" Margin="0,0,6,0" WindowChrome.IsHitTestVisibleInChrome="True"/>
+          <Button x:Name="SettingsTab" Content="设置" Style="{StaticResource GhostButton}" Height="30" Padding="12,0" WindowChrome.IsHitTestVisibleInChrome="True"/>
           <Button x:Name="LibraryTab" Visibility="Collapsed"/>
+        </StackPanel>
+
+        <!-- Windows 11 Native Caption Buttons (Unified Window Frame) -->
+        <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Stretch">
+          <Button x:Name="MinBtn" Style="{StaticResource CaptionButton}" Content="&#x2014;" WindowChrome.IsHitTestVisibleInChrome="True"/>
+          <Button x:Name="MaxBtn" Style="{StaticResource CaptionButton}" Content="&#x25A2;" WindowChrome.IsHitTestVisibleInChrome="True"/>
+          <Button x:Name="CloseBtn" Style="{StaticResource CloseCaptionButton}" Content="&#x2715;" WindowChrome.IsHitTestVisibleInChrome="True"/>
         </StackPanel>
       </Grid>
     </Border>
 
     <!-- Bottom Status Bar -->
-    <Border DockPanel.Dock="Bottom" BorderBrush="#FF1E222E" BorderThickness="0,1,0,0" Height="34" Background="#FF0C0D12">
-      <DockPanel Margin="24,0">
+    <Border DockPanel.Dock="Bottom" BorderBrush="#FF1E222E" BorderThickness="0,1,0,0" Height="32" Background="#FF0C0D12">
+      <DockPanel Margin="20,0">
         <TextBlock x:Name="CountText" DockPanel.Dock="Right" VerticalAlignment="Center" Foreground="#FF8E95A5" Text="0 款游戏" FontSize="11"/>
         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
           <Ellipse x:Name="StatusLed" Width="7" Height="7" Fill="#FF4ADE80" Margin="0,0,8,0" VerticalAlignment="Center"/>
@@ -363,18 +439,18 @@
     <!-- Content Workspace -->
     <Grid>
       <!-- Library View Page -->
-      <Grid x:Name="LibraryPage" Margin="24,16,24,12">
+      <Grid x:Name="LibraryPage" Margin="20,14,20,10">
         <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="330"/>
+          <ColumnDefinition Width="320"/>
           <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
         <!-- Left Column: Game List -->
-        <Border Style="{StaticResource Surface}" Margin="0,0,16,0" Padding="12">
+        <Border Style="{StaticResource Surface}" Margin="0,0,14,0" Padding="10">
           <DockPanel>
-            <DockPanel DockPanel.Dock="Top" Margin="2,0,2,10">
+            <DockPanel DockPanel.Dock="Top" Margin="2,0,2,8">
               <TextBlock Text="本地游戏" Foreground="#FF8E95A5" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
-              <ComboBox x:Name="FilterCombo" DockPanel.Dock="Right" Width="110" Height="28" FontSize="11"/>
+              <ComboBox x:Name="FilterCombo" DockPanel.Dock="Right" Width="105" Height="26" FontSize="11"/>
             </DockPanel>
             <ListBox x:Name="GameList" Background="Transparent" BorderThickness="0"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled">
@@ -382,7 +458,7 @@
                 <DataTemplate>
                   <Grid Margin="2,3">
                     <Grid.ColumnDefinitions>
-                      <ColumnDefinition Width="44"/>
+                      <ColumnDefinition Width="42"/>
                       <ColumnDefinition Width="*"/>
                       <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
@@ -392,8 +468,8 @@
                       <Grid>
                         <!-- Stylized Initial Monogram -->
                         <TextBlock Text="{Binding Initial}" Visibility="{Binding InitialVisibility}" Foreground="#FFF3F4F6" FontWeight="Bold" FontSize="16" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        <!-- Cover Poster -->
-                        <Image Source="{Binding Cover}" Visibility="{Binding CoverVisibility}" Stretch="UniformToFill"/>
+                        <!-- Cover Poster Image or Extracted Icon -->
+                        <Image Source="{Binding DisplayImage}" Visibility="{Binding CoverVisibility}" Stretch="UniformToFill"/>
                       </Grid>
                     </Border>
 
@@ -420,39 +496,44 @@
         <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
           <StackPanel>
             <!-- Hero Game Banner Card -->
-            <Border Style="{StaticResource Surface}" Padding="20" MinHeight="180">
+            <Border Style="{StaticResource Surface}" Padding="20" MinHeight="180" ClipToBounds="True">
               <Grid>
-                <Grid.ColumnDefinitions>
-                  <ColumnDefinition Width="100"/>
-                  <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
+                <!-- Hero Wallpaper Background (Faded vignette) -->
+                <Image x:Name="HeroBgImage" Stretch="UniformToFill" HorizontalAlignment="Right" VerticalAlignment="Center" Opacity="0.18" Margin="-20,-20,-20,-20"/>
 
-                <!-- Large Cover Poster Preview -->
-                <Border Width="90" Height="120" CornerRadius="6" Background="#FF1E2330" BorderBrush="#FF282D3A" BorderThickness="1" HorizontalAlignment="Left" VerticalAlignment="Top" ClipToBounds="True">
-                  <Grid>
-                    <TextBlock x:Name="HeroPosterInitial" Text="?" Foreground="#FF6E7585" FontWeight="Bold" FontSize="28" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                    <Image x:Name="HeroPosterImage" Stretch="UniformToFill"/>
-                  </Grid>
-                </Border>
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="100"/>
+                    <ColumnDefinition Width="*"/>
+                  </Grid.ColumnDefinitions>
 
-                <!-- Hero Content Details -->
-                <StackPanel Grid.Column="1" Margin="14,0,0,0">
-                  <TextBlock x:Name="HeroKicker" Text="已选游戏" Foreground="#FF8E95A5" FontSize="11" FontWeight="SemiBold"/>
-                  <TextBlock x:Name="HeroTitle" Text="选择一个游戏以开始" FontSize="24" FontWeight="Bold" Margin="0,4,0,0" Foreground="#FFFFFFFF"/>
-                  <TextBlock x:Name="HeroMeta" Text="选择游戏后自动检查运行状态与注入环境" Foreground="#FF8E95A5" FontSize="12" Margin="0,4,0,0"/>
-                  <TextBlock x:Name="HeroPath" Text="" Foreground="#FF6E7585" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,12"/>
+                  <!-- Large Cover Poster Preview -->
+                  <Border Width="90" Height="120" CornerRadius="6" Background="#FF1E2330" BorderBrush="#FF282D3A" BorderThickness="1" HorizontalAlignment="Left" VerticalAlignment="Top" ClipToBounds="True">
+                    <Grid>
+                      <TextBlock x:Name="HeroPosterInitial" Text="?" Foreground="#FF6E7585" FontWeight="Bold" FontSize="28" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                      <Image x:Name="HeroPosterImage" Stretch="UniformToFill"/>
+                    </Grid>
+                  </Border>
 
-                  <!-- Action Buttons Row -->
-                  <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                    <Button x:Name="PrimaryButton" Content="⚡ 选择一个游戏" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left" MinWidth="190" IsEnabled="False"/>
-                    <Button x:Name="ChangeExeButton" Content="更换 EXE" Style="{StaticResource GhostButton}" Margin="10,0,0,0"/>
-                    <Button x:Name="OpenFolderButton" Content="打开目录" Style="{StaticResource GhostButton}" Margin="10,0,0,0"/>
-                    <Button x:Name="UninstallButton" Content="卸载" Style="{StaticResource GhostButton}" Margin="10,0,0,0" IsEnabled="False"/>
+                  <!-- Hero Content Details -->
+                  <StackPanel Grid.Column="1" Margin="14,0,0,0">
+                    <TextBlock x:Name="HeroKicker" Text="已选游戏" Foreground="#FF8E95A5" FontSize="11" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="HeroTitle" Text="选择一个游戏以开始" FontSize="24" FontWeight="Bold" Margin="0,4,0,0" Foreground="#FFFFFFFF"/>
+                    <TextBlock x:Name="HeroMeta" Text="选择游戏后自动检查运行状态与注入环境" Foreground="#FF8E95A5" FontSize="12" Margin="0,4,0,0"/>
+                    <TextBlock x:Name="HeroPath" Text="" Foreground="#FF6E7585" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,12"/>
+
+                    <!-- Action Buttons Row -->
+                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                      <Button x:Name="PrimaryButton" Content="⚡ 选择一个游戏" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left" MinWidth="190" IsEnabled="False"/>
+                      <Button x:Name="ChangeExeButton" Content="更换 EXE" Style="{StaticResource GhostButton}" Margin="10,0,0,0"/>
+                      <Button x:Name="OpenFolderButton" Content="打开目录" Style="{StaticResource GhostButton}" Margin="10,0,0,0"/>
+                      <Button x:Name="UninstallButton" Content="卸载" Style="{StaticResource GhostButton}" Margin="10,0,0,0" IsEnabled="False"/>
+                    </StackPanel>
+
+                    <!-- Progress Bar -->
+                    <ProgressBar x:Name="Progress" Height="4" Margin="0,14,0,0" IsIndeterminate="False" Foreground="#FFED1C24" Background="#FF1E222E" BorderThickness="0"/>
                   </StackPanel>
-
-                  <!-- Progress Bar -->
-                  <ProgressBar x:Name="Progress" Height="4" Margin="0,14,0,0" IsIndeterminate="False" Foreground="#FFED1C24" Background="#FF1E222E" BorderThickness="0"/>
-                </StackPanel>
+                </Grid>
               </Grid>
             </Border>
 

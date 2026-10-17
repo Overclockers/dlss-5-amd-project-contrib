@@ -54,10 +54,8 @@ namespace OptScalerNR.Launcher
                 eventsPath + "\" -ResultJson \"" + resultPath + "\"";
             psi.UseShellExecute = false;
             psi.CreateNoWindow = true;
-            psi.RedirectStandardOutput = true;
-            psi.RedirectStandardError = true;
-            psi.StandardOutputEncoding = Encoding.UTF8;
-            psi.StandardErrorEncoding = Encoding.UTF8;
+            psi.RedirectStandardOutput = false;
+            psi.RedirectStandardError = false;
             var proc = Process.Start(psi);
             if (proc == null) throw new InvalidOperationException("failed to start worker");
             return new WorkerSession(proc, eventsPath, resultPath, canKill);
