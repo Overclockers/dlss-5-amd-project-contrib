@@ -99,6 +99,19 @@ if ($DecisionJson) {
     if (-not [IO.Path]::IsPathRooted($DecisionJson)) { Fail 'DecisionJson must be an absolute path.' }
     $launcherDecisions = Get-Content -LiteralPath $DecisionJson -Raw -Encoding UTF8 | ConvertFrom-Json
 }
+$hasBackendSelection = $PSBoundParameters.ContainsKey('Backends')
+if ($launcherDecisions) {
+    if (-not $hasBackendSelection -and $launcherDecisions.PSObject.Properties['backends']) {
+        $Backends = @($launcherDecisions.backends | ForEach-Object { [string]$_ })
+        $hasBackendSelection = $true
+    }
+    if (-not $PSBoundParameters.ContainsKey('MochizukiModels') -and $launcherDecisions.mochizukiModels) {
+        $MochizukiModels = [string]$launcherDecisions.mochizukiModels
+        if ($MochizukiModels -notin @('both','small','original')) {
+            Fail 'DecisionJson mochizukiModels must be both, small, or original.'
+        }
+    }
+}
 
 . (Join-Path $PSScriptRoot 'lmxxf-module-package.ps1')
 
@@ -874,10 +887,10 @@ Write-Host ("  lmxxf: runtime/modules={0}; weights={1}" -f $canLmxxf, $(if ($lmx
 Write-Host ("  daniel: runtime/installer={0}; weights={1}; NVIDIA model={2}" -f $canDaniel, $(if ($weights) { $weights } else { 'MISSING' }), $(if ($nv) { $nv } else { 'MISSING' }))
 Write-Host ("  mochizuki: runtime/shaders={0}; model={1}" -f $canMochizuki, $(if ($mochizukiModel) { $mochizukiModel + ' (header recognized; runtime validates contents)' } else { 'MISSING - supply dlssnr.bin or nvngx_dlssnr.dll 310.9.16 / 310.8.0; extraction options follow backend selection' }))
 
-if ($PSBoundParameters.ContainsKey('Backends') -and $PSBoundParameters.ContainsKey('Backend')) {
+if ($hasBackendSelection -and $PSBoundParameters.ContainsKey('Backend')) {
     Fail 'Pass either -Backend or -Backends, not both.'
 }
-if ($PSBoundParameters.ContainsKey('Backends')) {
+if ($hasBackendSelection) {
     $allowedBackendIds = @('lmxxf','daniel','mochizuki')
     if (-not $Backends -or @($Backends).Count -eq 0) { Fail '-Backends requires at least one backend id.' }
     $seenBackend = @{}

@@ -1252,7 +1252,49 @@ namespace OptScalerNR.Launcher
             ExecuteAction("uninstall");
         }
 
-        void ExecuteAction(string action)
+        string SelectMochizukiModels()
+        {
+            var dialog = new Window
+            {
+                Owner = _window, Title = "Select Mochizuki models", Width = 500,
+                SizeToContent = SizeToContent.Height, WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                ResizeMode = ResizeMode.NoResize, ShowInTaskbar = false,
+                Background = new SolidColorBrush(Color.FromRgb(32, 35, 43)), Foreground = Brushes.White
+            };
+            var panel = new StackPanel { Margin = new Thickness(24) };
+            panel.Children.Add(new TextBlock
+            {
+                Text = "Choose the models to install. No option is selected automatically.",
+                TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12)
+            });
+            panel.Children.Add(new TextBlock
+            {
+                Text = "The new model requires nvngx_dlssnr.dll 310.9.16.0 or verified new weights. Original uses older weights. Missing or invalid sources stop installation.",
+                TextWrapping = TextWrapping.Wrap, Foreground = Brushes.Orange,
+                Margin = new Thickness(0, 0, 0, 16)
+            });
+            string choice = null;
+            var proceed = new Button { Content = "Continue", IsEnabled = false, MinWidth = 100, Margin = new Thickness(4) };
+            var values = new[] { "both", "small", "original" };
+            var labels = new[] { "Both models (recommended)", "New model only", "Original model only" };
+            for (var i = 0; i < values.Length; i++)
+            {
+                var value = values[i];
+                var radio = new RadioButton { Content = labels[i], GroupName = "MochizukiModels", Margin = new Thickness(0, 6, 0, 6) };
+                radio.Checked += delegate { choice = value; proceed.IsEnabled = true; };
+                panel.Children.Add(radio);
+            }
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+            var cancel = new Button { Content = "Cancel", IsCancel = true, MinWidth = 100, Margin = new Thickness(4) };
+            proceed.Click += delegate { dialog.DialogResult = true; };
+            buttons.Children.Add(cancel);
+            buttons.Children.Add(proceed);
+            panel.Children.Add(buttons);
+            dialog.Content = panel;
+            return dialog.ShowDialog() == true ? choice : null;
+        }
+
+        void ExecuteAction(string action, bool keepModelChoice = false)
         {
             if (_selectedGame == null || string.IsNullOrEmpty(_selectedGame.Exe)) return;
             if (_session != null && _session.IsRunning)
@@ -1287,6 +1329,13 @@ namespace OptScalerNR.Launcher
                 MessageBox.Show(_window, _language == "zh" ? "请至少勾选一个可安装的后端。" : "Please select at least one backend to install.", _window.Title);
                 ReleaseLock();
                 return;
+            }
+
+            if (action != "uninstall" && checkedBackends.Contains("mochizuki") &&
+                (!keepModelChoice || string.IsNullOrEmpty(_decisions.MochizukiModels)))
+            {
+                _decisions.MochizukiModels = SelectMochizukiModels();
+                if (string.IsNullOrEmpty(_decisions.MochizukiModels)) { ReleaseLock(); return; }
             }
 
             SetBusy(true, action);
@@ -1349,6 +1398,9 @@ namespace OptScalerNR.Launcher
 
                 var action = (source != null && !string.IsNullOrEmpty(source.Action)) ? source.Action : _pendingAction;
                 _pendingAction = "";
+                Detach(source);
+                _session = null;
+                ReleaseLock();
 
                 if (result != null && !string.IsNullOrEmpty(result.LogPath))
                     _currentLogPath = result.LogPath;
@@ -1395,12 +1447,9 @@ namespace OptScalerNR.Launcher
 
                 if (result != null && string.Equals(result.Status, "needsInput", StringComparison.OrdinalIgnoreCase))
                 {
-                    AskDecisions(result);
+                    AskDecisions(result, action);
                 }
 
-                Detach(source);
-                _session = null;
-                ReleaseLock();
                 UpdatePrimaryButtonState();
             }));
         }
@@ -1523,7 +1572,7 @@ namespace OptScalerNR.Launcher
             }
         }
 
-        bool AskDecisions(LauncherResult result)
+        bool AskDecisions(LauncherResult result, string action)
         {
             if (result.RequiredDecisions == null) return false;
             foreach (var d in result.RequiredDecisions)
@@ -1541,13 +1590,18 @@ namespace OptScalerNR.Launcher
                         return false;
                     }
                 }
+                else if (d.Id == "mochizukiModels")
+                {
+                    _decisions.MochizukiModels = SelectMochizukiModels();
+                    if (string.IsNullOrEmpty(_decisions.MochizukiModels)) return false;
+                }
                 else if (d.Id == "reinspect")
                 {
                     if (_selectedGame != null) InspectGame(_selectedGame);
                     return true;
                 }
             }
-            ExecuteAction(string.IsNullOrEmpty(_pendingAction) ? "install" : _pendingAction);
+            ExecuteAction(string.IsNullOrEmpty(action) ? "install" : action, true);
             return true;
         }
 

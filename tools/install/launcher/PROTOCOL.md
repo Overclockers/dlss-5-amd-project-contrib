@@ -25,10 +25,14 @@ Exit codes match `status`: 0 success, 1 failed, 2 needsInput, 3 cancelled.
 - `existingInstall`: `uninstall` | `overwrite`
 - `foreignProxy`: map of file name to `backup` | `keep` | `cancel`
 - `existingIni`: `overwrite` | `keep`
-- `missingMochizukiModel`: `extract` | `skip`
+- `mochizukiModels`: `both` | `small` | `original`; required when installing Mochizuki.
+  The explicit `original` selection authorizes the older model. Missing or invalid
+  sources still fail validation; there is no runtime-only installation fallback.
 - `shortFileContinue`: `continue` | `abort`
 
 Inspect never writes the game folder, never extracts weights, never downloads.
+The worker passes backend arrays through the decision JSON file so Windows
+PowerShell's native command line does not flatten the selected backend set.
 
 ## Events (`-EventsJsonl`, append-only JSONL)
 

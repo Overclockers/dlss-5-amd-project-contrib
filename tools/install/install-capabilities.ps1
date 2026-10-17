@@ -10,7 +10,7 @@ function Test-LmxxfWeightsDir([string]$Directory) {
     return $false
 }
 
-function Test-MochizukiModelHeaderFile([string]$Path) {
+function Test-MochizukiModelHeaderFile([string]$Path, [uint32]$Entries = 599) {
     if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
     $stream = $null
     try {
@@ -18,7 +18,7 @@ function Test-MochizukiModelHeaderFile([string]$Path) {
         $header = New-Object byte[] 16
         if ($stream.Read($header, 0, 16) -ne 16) { return $false }
         return ([Text.Encoding]::ASCII.GetString($header, 0, 8) -ceq 'NRMODEL1' -and
-            [BitConverter]::ToUInt32($header, 8) -eq 599 -and $stream.Length -gt 16)
+            [BitConverter]::ToUInt32($header, 8) -eq $Entries -and $stream.Length -gt 16)
     } catch { return $false } finally { if ($stream) { $stream.Dispose() } }
 }
 
@@ -69,7 +69,7 @@ function Get-OptScalerBackendCapabilities([string]$pkgRoot, [string]$gameDir) {
     $canLmxxfRuntime = [bool]($lmxxfRuntime -and $lmxxfMods -and $lmxxfShaders)
     $hasLmxxfWeights = [bool]$lmxxfWeights
     $lmxxfEnabled = $canLmxxfRuntime -and $hasLmxxfWeights
-    $lmxxfReason = if (-not $canLmxxfRuntime) { 'runtime 缺失' } elseif (-not $hasLmxxfWeights) { '权重缺失' } else { '就绪' }
+    $lmxxfReason = if (-not $canLmxxfRuntime) { 'Runtime missing' } elseif (-not $hasLmxxfWeights) { 'Weights missing' } else { 'Ready' }
     $backends += @{
         id = 'lmxxf'
         runtimeState = if ($canLmxxfRuntime) { 'ready' } else { 'missing' }
@@ -95,7 +95,7 @@ function Get-OptScalerBackendCapabilities([string]$pkgRoot, [string]$gameDir) {
     $canDanielRuntime = [bool]$danielRuntime
     $hasDanielWeights = [bool]$danielWeights
     $danielEnabled = $canDanielRuntime -and $hasDanielWeights
-    $danielReason = if (-not $canDanielRuntime) { 'runtime 缺失' } elseif (-not $hasDanielWeights) { '权重缺失' } else { '就绪' }
+    $danielReason = if (-not $canDanielRuntime) { 'Runtime missing' } elseif (-not $hasDanielWeights) { 'Weights missing' } else { 'Ready' }
     $backends += @{
         id = 'daniel'
         runtimeState = if ($canDanielRuntime) { 'ready' } else { 'missing' }
@@ -114,6 +114,8 @@ function Get-OptScalerBackendCapabilities([string]$pkgRoot, [string]$gameDir) {
         if (Test-Path -LiteralPath $cand -PathType Leaf) { $mochiRuntime = $cand }
         $cand = Join-Path $pkgRoot 'dlssnr-amd\dlssnr.bin'
         if (Test-MochizukiModelHeaderFile $cand) { $mochiModel = $cand }
+        $cand = Join-Path $pkgRoot 'dlssnr-amd\dlssnr-small.bin'
+        if (-not $mochiModel -and (Test-MochizukiModelHeaderFile $cand 255)) { $mochiModel = $cand }
         $cand = Join-Path $pkgRoot 'nvngx_dlssnr.dll'
         if (Test-Path -LiteralPath $cand -PathType Leaf) { $mochiNv = $cand }
     }
@@ -121,6 +123,8 @@ function Get-OptScalerBackendCapabilities([string]$pkgRoot, [string]$gameDir) {
         if (-not $mochiModel) {
             $cand = Join-Path $gameDir 'dlssnr-amd\dlssnr.bin'
             if (Test-MochizukiModelHeaderFile $cand) { $mochiModel = $cand }
+            $cand = Join-Path $gameDir 'dlssnr-amd\dlssnr-small.bin'
+            if (-not $mochiModel -and (Test-MochizukiModelHeaderFile $cand 255)) { $mochiModel = $cand }
         }
         if (-not $mochiNv) {
             $cand = Join-Path $gameDir 'nvngx_dlssnr.dll'
@@ -131,7 +135,7 @@ function Get-OptScalerBackendCapabilities([string]$pkgRoot, [string]$gameDir) {
     $hasMochiModel = [bool]$mochiModel
     $mochiPreparable = (-not $hasMochiModel) -and [bool]$mochiNv
     $mochiEnabled = $canMochiRuntime -and $hasMochiModel
-    $mochiReason = if (-not $canMochiRuntime) { 'runtime 缺失' } elseif ($hasMochiModel) { '就绪' } elseif ($mochiPreparable) { '需准备模型' } else { '模型缺失' }
+    $mochiReason = if (-not $canMochiRuntime) { 'Runtime missing' } elseif ($hasMochiModel) { 'Ready' } elseif ($mochiPreparable) { 'Model preparation required' } else { 'Model missing' }
     $backends += @{
         id = 'mochizuki'
         runtimeState = if ($canMochiRuntime) { 'ready' } else { 'missing' }

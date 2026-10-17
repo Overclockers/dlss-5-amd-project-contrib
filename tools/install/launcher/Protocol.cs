@@ -29,6 +29,7 @@ namespace OptScalerNR.Launcher
         [DataMember(Name = "existingInstall")] public string ExistingInstall;
         [DataMember(Name = "existingIni")] public string ExistingIni;
         [DataMember(Name = "missingMochizukiModel")] public string MissingMochizukiModel;
+        [DataMember(Name = "mochizukiModels")] public string MochizukiModels;
         [DataMember(Name = "shortFileContinue")] public string ShortFileContinue;
         [DataMember(Name = "foreignProxy")] public Dictionary<string, string> ForeignProxy;
     }

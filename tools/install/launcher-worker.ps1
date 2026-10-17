@@ -250,12 +250,28 @@ function ConvertTo-ForeignProxyMap($raw) {
 $dec = $req.explicitDecisions
 if ($req.action -in @('install','update')) {
     if ($probe.blockInstall) { Fail-Result 'failed' $probe.hint 1 }
-    if (-not $script:resolved) { Fail-Result 'needsInput' '无法判断，请选择 DLL 自行尝试。' 2 }
+    if (-not $script:resolved) { Fail-Result 'needsInput' 'No proxy recommendation is available. Select a DLL explicitly.' 2 }
     if (-not $script:packageRoot) {
         Fail-Result 'failed' 'Complete package required: OptiScaler.dll was not found next to the installer. Unzip the full package and run Setup.bat from that folder.' 1
     }
 }
 if ($req.action -ne 'uninstall') {
+    $mochiAvailable = @($script:backends | Where-Object { $_.id -eq 'mochizuki' -and $_.runtimeState -eq 'ready' }).Count -gt 0
+    $mochiSelected = if ($req.backends) { @($req.backends) -contains 'mochizuki' } else {
+        $backend -eq 'mochizuki' -or (($backend -in @('auto','all','')) -and $mochiAvailable)
+    }
+    if ($mochiSelected) {
+        $modelChoice = if ($dec) { [string]$dec.mochizukiModels } else { '' }
+        if (-not $modelChoice) {
+            $script:needed += @{
+                id = 'mochizukiModels'
+                prompt = 'Select Mochizuki models explicitly. The new model requires nvngx_dlssnr.dll 310.9.16.0; Original uses older weights.'
+                options = @('both','small','original')
+            }
+        } elseif ($modelChoice -notin @('both','small','original')) {
+            Fail-Result 'failed' 'Invalid Mochizuki models choice.' 1
+        }
+    }
     if ($probe.conflicts.Count -gt 0) {
         $map = @{}
         if ($dec -and $dec.foreignProxy) { $map = ConvertTo-ForeignProxyMap $dec.foreignProxy }
@@ -290,18 +306,18 @@ if ($req.action -eq 'uninstall') {
     $payload = @{
         existingInstall = 'overwrite'
         existingIni = 'keep'
-        missingMochizukiModel = 'skip'
         shortFileContinue = 'abort'
         optiPatcher = 'skip'
     }
     if ($dec) {
-        foreach ($name in @('existingInstall','existingIni','missingMochizukiModel','shortFileContinue','optiPatcher','foreignProxy')) {
+        foreach ($name in @('existingInstall','existingIni','mochizukiModels','shortFileContinue','optiPatcher','foreignProxy')) {
             if ($dec.PSObject.Properties[$name] -and $null -ne $dec.$name) {
                 if ($name -eq 'foreignProxy') { $payload[$name] = ConvertTo-ForeignProxyMap $dec.$name }
                 else { $payload[$name] = $dec.$name }
             }
         }
     }
+    if ($req.backends) { $payload['backends'] = @($req.backends) }
     ($payload | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath $dj -Encoding UTF8
     Write-Event 'install' "starting $($req.action)"
 }
@@ -310,7 +326,9 @@ $ErrorActionPreference = 'Continue'
 if ($req.action -eq 'uninstall') {
     & $ps51 -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $install -GameDir $script:gameDir -NonInteractive -NoPause 1>$stdoutLog 2>$stderrLog
 } elseif ($req.backends) {
-    & $ps51 -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $install -GameDir $script:gameDir -Proxy $script:resolved -NoPause -NonInteractive -Root $script:packageRoot -Backends @($req.backends) -ActiveBackend ([string]$req.activeBackend) -DecisionJson $dj 1>$stdoutLog 2>$stderrLog
+    $activeArguments = @()
+    if ($req.activeBackend) { $activeArguments = @('-ActiveBackend', [string]$req.activeBackend) }
+    & $ps51 -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $install -GameDir $script:gameDir -Proxy $script:resolved -NoPause -NonInteractive -Root $script:packageRoot @activeArguments -DecisionJson $dj 1>$stdoutLog 2>$stderrLog
 } elseif ($backend -and $backend -ne 'auto') {
     & $ps51 -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $install -GameDir $script:gameDir -Proxy $script:resolved -NoPause -NonInteractive -Root $script:packageRoot -Backend $backend -DecisionJson $dj 1>$stdoutLog 2>$stderrLog
 } else {
