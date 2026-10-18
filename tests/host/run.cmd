@@ -1,6 +1,6 @@
 @echo off
 rem Host-contract tests. Every *.cpp in tests\host belongs to exactly one tier below.
-rem Usage: tests\host\run.cmd [release^|ci^|device^|xefg^|all] [out-dir]
+rem Usage: tests\host\run.cmd [release^|ci^|device^|xefg^|nr-coverage^|all] [out-dir]
 rem   ci     : CPU only, no GPU. nr_backend_selector, amd_submission_state, amd_graphics_{snapshot,
 rem            tracker,restore,restore_dx12,invocation,native_hooks}, amd_runtime_host_load (+ its
 rem            generated fixture PE), amd_retirement_diagnostics, and hip_load.ps1 (amd_hip_load +
@@ -30,10 +30,12 @@ if /i "%TIER%"=="all" goto ci
 if /i "%TIER%"=="device" goto device
 if /i "%TIER%"=="release" goto release
 if /i "%TIER%"=="xefg" goto Xefg
-echo usage: tests\host\run.cmd [release^|ci^|device^|xefg^|all] [out-dir]
+if /i "%TIER%"=="nr-coverage" goto NrCoverage
+echo usage: tests\host\run.cmd [release^|ci^|device^|xefg^|nr-coverage^|all] [out-dir]
 exit /b 2
 
 :ci
+call :NrCoverage || goto fail
 %CXX% /utf-8 tests\host\mochizuki_network_shortcut.cpp /Fe"%OUT%\mochizuki_network_shortcut.exe" /Fo"%OUT%\mochizuki_network_shortcut.obj" || goto fail
 "%OUT%\mochizuki_network_shortcut.exe" || goto fail
 %CXX% /utf-8 tests\host\nr_recording_admission.cpp /Fe"%OUT%\nr_recording_admission.exe" /Fo"%OUT%\nr_recording_admission.obj" || goto fail
@@ -112,6 +114,11 @@ if /i not "%TIER%"=="all" exit /b 0
 %CXX% /utf-8 tests\host\amd_graphics_d3.cpp /Fe"%OUT%\amd_graphics_d3.exe" /Fo"%OUT%\amd_graphics_d3.obj" /link d3d12.lib dxgi.lib || goto fail
 "%OUT%\amd_graphics_d3.exe" || goto fail
 echo host device: PASS
+exit /b 0
+
+:NrCoverage
+%CXX% /utf-8 tests\host\nr_coverage.cpp /Fe"%OUT%\nr_coverage.exe" /Fo"%OUT%\nr_coverage.obj" || goto fail
+"%OUT%\nr_coverage.exe" || goto fail
 exit /b 0
 
 :fail

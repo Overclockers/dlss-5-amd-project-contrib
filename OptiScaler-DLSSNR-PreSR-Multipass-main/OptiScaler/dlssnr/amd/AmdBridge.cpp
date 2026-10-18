@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "AmdBridge.h"
 #include "../DiagnosticLog.h"
+#include "../NrCoverageHost.h"
 #include "AwaitingListTracker.h"
 #include "../submission/SubmissionTls.h"
 #include "AmdPreSr.h"
@@ -493,10 +494,14 @@ bool Evaluate(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* params, ID3D1
         ~EffectHistoryGuard() { if (!recorded) { DlssNr::Effects::InvalidateHistory(); DlssNr::Person::Invalidate(); } }
     } effectHistoryGuard {effectRecorded};
     DlssNr::Backend::LmxxfProbe::CurrentEvidence() = {};
+    static Coverage::Tracker bridgeCoverage {"bridge"};
+    Coverage::Attempt coverage(bridgeCoverage, cmd);
+    coverage.Set(Coverage::Outcome::BridgeBypass, "files_unavailable");
     if (!HasFiles())
         return false;
     const auto requested = DlssNr::Backend::RequestedKind();
     const auto active = ActiveKindCached();
+    coverage.Set(Coverage::Outcome::BridgeBypass, "before_backend");
     if (requested == DlssNr::Backend::Kind::Lmxxf && !DlssNr::Backend::LmxxfWired())
     {
         static bool loggedLmxxfFallback = false;
@@ -562,6 +567,7 @@ bool Evaluate(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* params, ID3D1
     {
         // Target list not yet observed on any execution queue.
         // Register cmd as awaiting observation, and bypass NR this frame (original Color to SR).
+        coverage.Set(Coverage::Outcome::BridgeBypass, "awaiting_execution_queue");
         s_awaitingTracker.Add(cmd);
         if (!submissionHookReady)
         {
@@ -582,6 +588,7 @@ bool Evaluate(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* params, ID3D1
     std::lock_guard initGuard(initMutex);
     if (!InstallSubmissionHook(device, q))
     {
+        coverage.Set(Coverage::Outcome::BridgeBypass, "submission_hook_unavailable");
         device->Release();
         if (confirmedQ) confirmedQ->Release();
         return true;
@@ -658,6 +665,7 @@ bool Evaluate(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* params, ID3D1
         const auto resolved = ResolveSrOutputExtent(params, outputExtent, allocation.Width, allocation.Height);
         if (!resolved)
         {
+            coverage.Set(Coverage::Outcome::BridgeBypass, "invalid_output_extent");
             b->InvalidateHistory();
             Message("SR -> NR: invalid output extent; keeping the SR output");
             return true;
@@ -688,6 +696,7 @@ bool Evaluate(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* params, ID3D1
     params->Get(beforeUpscale ? NVSDK_NGX_Parameter_DLSS_Input_Color_Subrect_Base_Y : NVSDK_NGX_Parameter_DLSS_Output_Subrect_Base_Y, &y);
     if (x || y)
     {
+        coverage.Set(Coverage::Outcome::BridgeBypass, "colour_subrect_origin");
         Message("AMD NR: nonzero colour subrect origin unsupported");
         return true;
     }
@@ -699,7 +708,7 @@ bool Evaluate(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* params, ID3D1
                                NVSDK_NGX_Parameter_DLSS_Input_MV_SubrectBase_Y})
         {
             UINT origin = 0; params->Get(key, &origin);
-            if (origin) { Message("SR -> NR: nonzero guide subrect origin unsupported"); return true; }
+            if (origin) { coverage.Set(Coverage::Outcome::BridgeBypass, "guide_subrect_origin"); Message("SR -> NR: nonzero guide subrect origin unsupported"); return true; }
         }
     }
     auto haveFlags = params->Get(NVSDK_NGX_Parameter_DLSS_Feature_Create_Flags, &flags) == NVSDK_NGX_Result_Success;
@@ -773,6 +782,7 @@ bool Evaluate(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* params, ID3D1
     }
     if (runtimeDrs) settlingSince = 0;
     if(settlingSince != 0 && now-settlingSince<300) {
+        coverage.Set(Coverage::Outcome::BuildWait, "bridge_extent_settling");
         // Once per settle window, not every 250 ms: Message() also lands in amd_bridge.log.
         static ULONGLONG loggedWindow = 0;
         if (loggedWindow != settlingSince)
@@ -791,6 +801,7 @@ bool Evaluate(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* params, ID3D1
                                          current.height == lastFrame.height);
     if (!sameFrame)
     {
+        coverage.Set(Coverage::Outcome::BuildWait, "bridge_extent_warmup");
         lastFrame = current;
         stableFrames = 0;
         b->InvalidateHistory();
@@ -801,6 +812,7 @@ bool Evaluate(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* params, ID3D1
     if (runtimeDrs) stableFrames = 2;
     if (stableFrames < 2 && ++stableFrames < 2)
     {
+        coverage.Set(Coverage::Outcome::BuildWait, "bridge_stable_frame_warmup");
         Message("AMD NR: warming up after an upscaler/resource change");
         return true;
     }
@@ -932,7 +944,7 @@ bool Evaluate(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* params, ID3D1
         if (!post && mochiNativePost)
             post = DlssNr::PostSr::Prepare(cmd, f, renderWidth, renderHeight, reason,
                                            DlssNr::PostSr::GuideMode::WritebackOnly);
-        if (!post) { b->InvalidateHistory(); Message(reason.c_str()); return true; }
+        if (!post) { coverage.Set(Coverage::Outcome::BridgeBypass, reason.c_str()); b->InvalidateHistory(); Message(reason.c_str()); return true; }
         postReport.prepared = true;
     }
     const auto kind = static_cast<DlssNr::Backend::Kind>(g_activeKind.load(std::memory_order_acquire));
@@ -960,8 +972,11 @@ bool Evaluate(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* params, ID3D1
     previousFaceSize=faceSize;
     const bool person = DlssNr::Person::Prepare(personWanted, Directory(), personModel,faceSize);
     ID3D12Resource* firstPass = nullptr;
+    coverage.Set(Coverage::Outcome::BackendBypass, "backend_returned_original");
     if (auto replacement = b->RecordLayers(cmd, f, s, person && personPasses > 1 ? &firstPass : nullptr))
     {
+        coverage.Prepared();
+        coverage.Set(Coverage::Outcome::Recorded, "replacement_recorded");
         postReport.recorded = true;
         effectRecorded = true;
         const bool isLmxxf = g_activeKind.load(std::memory_order_acquire) == static_cast<int>(DlssNr::Backend::Kind::Lmxxf);
@@ -992,7 +1007,10 @@ bool Evaluate(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* params, ID3D1
         else
         {
             postReport.copied = DlssNr::PostSr::Finish(cmd, post, replacement, f.colourState);
-            if (!postReport.copied) Message("SR -> NR: unsupported NR result; keeping the SR output");
+            if (!postReport.copied) {
+                coverage.Set(Coverage::Outcome::BridgeBypass, "post_sr_copy_failed");
+                Message("SR -> NR: unsupported NR result; keeping the SR output");
+            }
         }
     }
     else { DlssNr::Effects::InvalidateHistory(); DlssNr::Person::Invalidate(); }

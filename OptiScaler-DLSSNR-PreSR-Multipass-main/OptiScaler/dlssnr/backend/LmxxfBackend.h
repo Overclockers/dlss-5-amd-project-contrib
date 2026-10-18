@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <mutex>
 
+namespace DlssNr::Coverage { class Tracker; }
 namespace DlssNr::Backend
 {
 namespace LmxxfRecording { struct SessionOwner; }
@@ -28,6 +29,7 @@ class LmxxfBackend final : public Host
     std::shared_ptr<LmxxfRecording::SessionOwner> sessionOwner;
     std::atomic<std::shared_ptr<LmxxfRecording::SessionOwner>> activityOwner;
     bool sessionReady = false;
+    std::unique_ptr<Coverage::Tracker> coverageStats;
     uint64_t frameId = 0;
     // Recording-proxy coverage (see ProxyDiagnostics.h). Unwrapped lists fall back to
     // the original colour, so a high miss rate alternates NR and original frame by

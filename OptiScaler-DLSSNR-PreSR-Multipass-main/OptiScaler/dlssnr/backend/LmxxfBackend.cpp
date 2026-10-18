@@ -5,6 +5,7 @@
 #include "InstallStatus.h"
 #include "LmxxfRecordingOwner.h"
 #include "../NrFrameDiagHost.h"
+#include "../NrCoverageHost.h"
 #include <resource.h>
 #include "ProxyDiagnostics.h"
 #include <cstring>
@@ -247,7 +248,7 @@ void LmxxfBackend::SetStatus(const char *s)
 }
 
 LmxxfBackend::LmxxfBackend(ID3D12Device *dev, ID3D12CommandQueue *q, const std::filesystem::path &dir)
-    : device(dev), queue(q), directory(dir)
+    : device(dev), queue(q), directory(dir), coverageStats(std::make_unique<Coverage::Tracker>("lmxxf"))
 {
     if (device)
         device->AddRef();
@@ -486,6 +487,8 @@ bool LmxxfBackend::EnsureSession()
     session = ctx;
     sessionOwner->onFailure = RecordingFailure;
     timingConfigured = false;
+    coverageStats->counters->prepared.store(false, std::memory_order_relaxed);
+    sessionOwner->coverage = coverageStats->counters;
     activityOwner.store(sessionOwner, std::memory_order_release);
     sessionReady = true;
     sessionFailures = 0;
@@ -632,19 +635,23 @@ ID3D12Resource* LmxxfBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, const
     auto frame = incoming;
     if(first)*first=nullptr;
     std::lock_guard recordLock(LmxxfCut::LifecycleMutex());
+    Coverage::Attempt coverage(*coverageStats, cmd);
     LmxxfRecording::Collect();
     // Latched proxy fallback: lists are unevenly wrapped, so NR would alternate with
     // the original colour. Stay off rather than flicker.
-    if (proxyFallback) return nullptr;
+    if (proxyFallback) { coverage.Set(Coverage::Outcome::HeldOff, "proxy_fallback_latched"); return nullptr; }
     if (!cmd || !frame.colour)
     {
+        coverage.Set(Coverage::Outcome::InvalidInput, "cmd_or_colour_missing");
         SetStatus("lmxxf: Record missing cmd/colour");
         return nullptr;
     }
     // Crucially before EnsureSession: controls do not load the runtime, prepare HIP,
     // or submit HIP. split-original only cuts the game list for boundary validation.
-    if (diagnostic != LmxxfProbe::Mode::Off)
+    if (diagnostic != LmxxfProbe::Mode::Off) {
+        coverage.Set(Coverage::Outcome::Diagnostic, "passthrough_probe");
         return RecordDiagnostic(cmd, frame, settings);
+    }
     // Never substitute Color from an earlier Evaluate to work around an unsubmitted producer.
     DlssNr::Submission::ILogicalCommandList *logical = nullptr;
     // Count every offered list before the query, so coverage={ok}/{offered} is the real
@@ -655,6 +662,7 @@ ID3D12Resource* LmxxfBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, const
     if (FAILED(proxyHr) || !logical)
     {
         SetStatus("lmxxf: same-frame boundary unavailable (original Color; NO NR)");
+        coverage.Set(Coverage::Outcome::ProxyMissing, "logical_qi_failed");
         const uint32_t missing = ++proxyMissing;
         if (missing <= 5 || missing % 1000 == 0)
         {
@@ -683,6 +691,7 @@ ID3D12Resource* LmxxfBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, const
     ++frameId;
     const bool ineligible = logical->IsSplitIneligible();
     const auto recordingId = logical->Identity();
+    coverage.Identity(recordingId.list, recordingId.generation);
     if (ineligible) logical->TraceOpenQueries();
     const char *borrowedReason = logical->SplitRejectionReason();
     const std::string reason = borrowedReason ? borrowedReason : "unknown";
@@ -696,6 +705,7 @@ ID3D12Resource* LmxxfBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, const
     const bool inlineDepth = (temporalMode == 1u);
     if (ineligible && !inlineMode)
     {
+        coverage.Set(Coverage::Outcome::Rejected, reason.c_str());
         char status[128] {};
         std::snprintf(status, sizeof(status), "lmxxf: split ineligible: %s (NO NR)",
                       reason.c_str());
@@ -715,6 +725,7 @@ ID3D12Resource* LmxxfBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, const
     // In split mode the scope restores the game bindings/layouts on the continuation.
     if (FAILED(inlineState.Begin(cmd, frame, inlineMotion, inlineDepth,
                                 IsUsableExposureTexture(frame.exposure), !inlineMode))) {
+        coverage.Set(Coverage::Outcome::InputRejected, inlineState.Reason().c_str());
         SetStatus((std::string("lmxxf: input state unavailable: ") + inlineState.Reason() + " (NO NR)").c_str());
         static unsigned rejectedInput = 0;
         if (++rejectedInput <= 5 || rejectedInput % 1000 == 0)
@@ -722,19 +733,19 @@ ID3D12Resource* LmxxfBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, const
                                      IsUsableExposureTexture(frame.exposure));
         return nullptr;
     }
-    if (!NoteEnqueueRecoveries())
-        return nullptr;
+    if (!NoteEnqueueRecoveries()) { coverage.Set(Coverage::Outcome::HeldOff, "enqueue_recoveries"); return nullptr; }
     const auto traceDesc = frame.colour->GetDesc();
     ReTraceFrame traceFrame(frame.width, frame.height, traceDesc.Format);
     ReTrace(reTraceId, "session.begin", session, 0);
-    if (!EnsureSession())
-        return nullptr;
+    if (!EnsureSession()) { coverage.Set(Coverage::Outcome::SessionUnavailable, "ensure_session"); return nullptr; }
     sessionOwner->inlineLimit = std::clamp(Config::Instance()->LmxxfInlineSlots.value_or_default(), 1, 5);
     sessionOwner->ReclaimInlineLocked();
     if (!inlineMode && !sessionOwner->inlineInFlight.empty()) {
+        coverage.Set(Coverage::Outcome::Busy, "draining_inline");
         SetStatus("lmxxf: finishing inline frames before split"); return nullptr;
     }
     if (sessionOwner->InlineBusy()) {
+        coverage.Set(Coverage::Outcome::Busy, "inline_ahead_cap");
         sessionOwner->InlineBypassed(); SetStatus("lmxxf: inline ahead cap reached; original frame");
         FrameDiag::EmitBypass("lmxxf", 0, unsigned(sessionOwner->inlineInFlight.size()), 0, 0, OPTI_VERSION);
         return nullptr;
@@ -789,6 +800,7 @@ ID3D12Resource* LmxxfBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, const
         char err[256] {};
         if (api->table.GetLastError)
             api->table.GetLastError(err, sizeof err);
+        coverage.Set(Coverage::Outcome::PrepareFailed, err);
         const auto enqueue = LmxxfCut::LastEnqueueDiagnostic();
         static unsigned prepareFrameRebuilds = 0;
         static constexpr GUID kStreamlineRiid = { 0xADEC44E2, 0x61F0, 0x45C3, { 0xAD, 0x9F, 0x1B, 0x37, 0x37, 0x92, 0x84, 0xFF } };
@@ -893,8 +905,10 @@ ID3D12Resource* LmxxfBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, const
         }
     }
 
+    coverage.Prepared();
     ID3D12Resource *result = FinishRecord(cmd, job.handle, job.private_output,
                                         inlineMode ? &frame : nullptr, job.first_pass_output, first);
+    if (result) coverage.Set(Coverage::Outcome::Recorded, "recording_ready");
     if(result && first && !inlineMode)*first=static_cast<ID3D12Resource*>(job.first_pass_output);
     static uint64_t recordEvalCount = 0;
     const auto rEval = ++recordEvalCount;
@@ -1224,12 +1238,14 @@ void LmxxfBackend::ReleaseSession()
         timingSnapshot = {};
     }
     timingConfigured = false;
+    coverageStats->counters->prepared.store(false, std::memory_order_relaxed);
     // Existing recording observers retain their own session/module. New active
     // sessions can start immediately; old closed lists are still executable.
     activityOwner.store({}, std::memory_order_release);
     sessionOwner.reset(); session = nullptr; sessionReady = false;
     sessionFailures = sessionRetryIn = 0; recoveryDisabled = false;
     LmxxfRecording::Collect();
+    coverageStats->Flush(true);
     if (!Config::Instance()->NrConvenience.value_or_default())
     {
         if (runtimeDll) FreeLibrary(reinterpret_cast<HMODULE>(runtimeDll));

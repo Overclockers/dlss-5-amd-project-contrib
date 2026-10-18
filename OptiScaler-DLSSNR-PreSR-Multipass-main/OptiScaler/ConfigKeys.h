@@ -58,6 +58,7 @@ inline constexpr const char *EarlyAnyModuleWrap = "LmxxfEarlyAnyModuleWrap";
 inline constexpr const char *Diagnostic = "LmxxfDiagnostic";
 inline constexpr const char *NrTimingEnabled = "NrTimingEnabled";
 inline constexpr const char *NrTimingLog = "NrTimingLog";
+inline constexpr const char *NrFlickerDiag = "NrFlickerDiag";
 inline constexpr const char *NrFrameDiag = "NrFrameDiag";
 inline constexpr const char *NrGameWaitDiag = "NrGameWaitDiag";
 inline constexpr const char *NrPersonPartition = "NrPersonPartition";
@@ -324,6 +325,7 @@ inline constexpr const char *const kKnown[] = {
     "NrConvenience",
     NrTimingEnabled,
     NrTimingLog,
+    NrFlickerDiag,
     NrFrameDiag,
     NrGameWaitDiag,
     NrPersonPartition,

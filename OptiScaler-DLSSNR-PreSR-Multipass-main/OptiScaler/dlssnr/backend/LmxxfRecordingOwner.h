@@ -5,6 +5,7 @@
 #include "NrInlineRecording.h"
 #include "NrInlineAutoSpin.h"
 #include "../NrFrameDiag.h"
+#include "../NrCoverage.h"
 #include <algorithm>
 #include <deque>
 #include <memory>
@@ -75,6 +76,7 @@ struct SessionOwner
     HMODULE module = nullptr;
     std::atomic<bool> failed { false };
     NrSessionActivity activity;
+    std::shared_ptr<Coverage::Counters> coverage;
     // Reserved at Attach, including recordings whose command list is not submitted yet.
     // Default conservatively to one; backends with private recording buffers
     // select their limit. A reservation survives until both queues complete.
@@ -144,6 +146,7 @@ struct SessionOwner
             }
             const bool succeeded = pending->Succeeded();
             const bool aborted = pending->WasAborted();
+            if (coverage) (succeeded ? coverage->inlineApplied : coverage->inlineMissed).fetch_add(1, std::memory_order_relaxed);
             if (!succeeded) {
                 // Legacy armed misses reset at reclaim, not before ahead enqueues. This does not certify
                 // subsequent history safety; see docs/architecture/nr-capture-proof-deferral.md.
@@ -565,6 +568,10 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
         std::array<char, 256> error {};
         owner->api.GetLastError(error.data(), static_cast<uint32_t>(error.size()));
         enqueued = rc == LMXXF_NR_OK && error[0] == '\0';
+        if (owner->coverage) {
+            owner->coverage->enqueues.fetch_add(1, std::memory_order_relaxed);
+            if (!enqueued) owner->coverage->enqueueFailed.fetch_add(1, std::memory_order_relaxed);
+        }
         if (neural && !enqueued)
             owner->activity.Reset();
         if (rc != LMXXF_NR_OK) {
@@ -579,6 +586,10 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
     }
     void Executed(const Submission::RecordingExecution& e) noexcept override
     {
+        if (owner->coverage) {
+            owner->coverage->executions.fetch_add(1, std::memory_order_relaxed);
+            if (FAILED(e.status)) owner->coverage->executionFailed.fetch_add(1, std::memory_order_relaxed);
+        }
         // A rejected overlapping replay must not end the still-running execution.
         if (inlineResources && inlineResetSerial != e.serial) return;
         if (inlineResources && inlineBypassSerial == e.serial) {
@@ -630,6 +641,7 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
             SUCCEEDED(e.status) && rc == LMXXF_NR_OK && !owner->failed.load(std::memory_order_acquire))
         {
             owner->activity.Succeeded(activityToken);
+            if (owner->coverage) owner->coverage->splitAccepted.fetch_add(1, std::memory_order_relaxed);
             EmitSplitDiag("apply");
         }
         else if (!inlineResources && neural)

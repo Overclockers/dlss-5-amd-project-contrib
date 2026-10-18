@@ -203,6 +203,7 @@ int main() {
                 "NrTimingEnabled",  # Product telemetry, not an upstream kernel option.
                 "NrTimingLog",
                 "NrFrameDiag",
+                "NrFlickerDiag",  # Host-only diagnostic bundle; no kernel environment alias.
                 "NrGameWaitDiag",  # Host-owned game-thread timing diag.
                 "LmxxfModelHistory",  # Host-owned FrameInfo flag, not an upstream environment key.
                 "NrStabilizerEnabled", "NrStabilizerAlpha", "NrStabilizerThreshold",
