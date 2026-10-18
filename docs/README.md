@@ -16,6 +16,7 @@
 | [architecture/lmxxf-c-abi.md](architecture/lmxxf-c-abi.md) | `LmxxfNrRuntime.dll` 的 C ABI：为什么有 DLL 边界、`struct_size` 分档、四条演进规则、资源查找 |
 | [architecture/lmxxf-native-history.md](architecture/lmxxf-native-history.md) | 原生 temporal history：执行顺序、资源、ABI 与支持范围 |
 | [architecture/lmxxf-recording-lifecycle.md](architecture/lmxxf-recording-lifecycle.md) | 录制租约、实际提交凭证、重放与异步回收 |
+| [architecture/nr-flicker-diagnostics.md](architecture/nr-flicker-diagnostics.md) | NR 闪烁一轮采集：统一诊断开关、处理覆盖统计、日志文件和开销边界 |
 | [architecture/nr-inline-recording.md](architecture/nr-inline-recording.md) | 实验性内联执行：查询、增强布局、有限等待与双队列回收 |
 | [architecture/nr-capture-proof-deferral.md](architecture/nr-capture-proof-deferral.md) | GPU-armed输入核验暂缓：性能证据、风险、保留补丁、无效方案与研究止步线 |
 | [lmxxf-inline-slots.md](lmxxf-inline-slots.md) | lmxxf inline 1–5 槽、即时切换、离线一致性及相对 split 的同会话性能 |

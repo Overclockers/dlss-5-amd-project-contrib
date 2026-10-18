@@ -1197,3 +1197,5 @@
 {"Temporal modes 2/3 currently require Original. Select Off or Native history to use Small.", "时序模式 2/3 目前需要 Original。关闭时序或选择原生历史即可使用 Small。"},
 {"Current advanced kernel settings require Original. Restore compatible model defaults to use Small.", "当前高级内核设置需要 Original。恢复兼容的模型默认值后可使用 Small。"},
 {"Network passes", "网络层数"},
+{"NR flicker diagnostics", "NR 闪烁诊断"},
+{"Default off. Enables coverage details, per-frame trace, game-thread timing and file logging.\nSave Settings and restart, reproduce for 30-60 seconds after the model is ready, then exit normally.\nSend OptiScaler*.log, mochizuki_nr.log*, NrFrameDiag.log* and OptiScaler.ini.\nLeaves processing and compatibility settings unchanged. INI: NrFlickerDiag.", "默认关闭。统一开启处理覆盖详细日志、逐帧追踪、游戏线程计时及文件日志。\n保存设置并重启，等待模型就绪后复现 30–60 秒，再正常退出游戏。\n发送 OptiScaler*.log、mochizuki_nr.log*、NrFrameDiag.log* 和 OptiScaler.ini。\n不改变处理与兼容性设置。INI：NrFlickerDiag。"},

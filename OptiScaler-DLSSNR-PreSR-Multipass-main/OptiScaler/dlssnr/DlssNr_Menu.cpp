@@ -60,6 +60,7 @@ static void ResetSharedNrDefaults(Config* config)
     ResetSharedEffectsDefaults(config);
     config->NrTimingEnabled = std::optional<bool>{};
     config->NrTimingLog = std::optional<bool>{};
+    config->NrFlickerDiag = std::optional<bool>{};
     config->NrFrameDiag = std::optional<bool>{};
     config->NrGameWaitDiag = std::optional<bool>{};
     config->NrInline.reset();
@@ -452,6 +453,16 @@ static void RenderAllowEnhancedBarriers(Config* config)
     }
 }
 
+static void RenderFlickerDiagnostics(Config* config)
+{
+    bool enabled = config->NrFlickerDiag.value_or_default();
+    if (MenuUi::Checkbox("NR flicker diagnostics", &enabled)) config->NrFlickerDiag = enabled;
+    HelpMarker("Default off. Enables coverage details, per-frame trace, game-thread timing and file logging."
+               "\nSave Settings and restart, reproduce for 30-60 seconds after the model is ready, then exit normally."
+               "\nSend OptiScaler*.log, mochizuki_nr.log*, NrFrameDiag.log* and OptiScaler.ini."
+               "\nLeaves processing and compatibility settings unchanged. INI: NrFlickerDiag.");
+}
+
 static void RenderEarlyCommandListWrap(Config* config)
 {
     static const char* names[] = {"auto (Unreal/Forza/Aniimo)", "force on", "force off"};
@@ -622,18 +633,23 @@ static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const 
             MenuUi::TextWrapped(timing.int4_effective ? "INT4 mixed active" : "INT4 mixed inactive; select 310.8.0, enable ACO and prepare matching INT4 weights.");
         if (timing.renodx_effective) MenuUi::TextWrapped("RenoDX processing active; GPU timing shows the network only");
         MenuUi::TextWrapped("Completed-sample means. Network includes fused temporal shaders; Other covers core input, history copies and composition. Bridge copies, shared effects and whole-frame latency are excluded.");
+        RenderFlickerDiagnostics(config);
         bool logging = config->NrTimingLog.value_or_default();
         if (MenuUi::Checkbox("Write timing summary to log", &logging)) config->NrTimingLog = logging;
-        bool frameDiag = config->NrFrameDiag.value_or_default();
+        const bool flickerBundle = config->NrFlickerDiag.value_or_default();
+        ImGui::BeginDisabled(flickerBundle);
+        bool frameDiag = config->NrFrameDiag.value_or_default() || flickerBundle;
         if (MenuUi::Checkbox("Per-frame NR diag (PresentMon)", &frameDiag)) config->NrFrameDiag = frameDiag;
         HelpMarker("Default off. Writes NrFrameDiag.log next to the DLL (split and inline) for PresentMon join. No sync GPU waits.");
-        bool gameWait = config->NrGameWaitDiag.value_or_default();
+        bool gameWait = config->NrGameWaitDiag.value_or_default() || flickerBundle;
         if (MenuUi::Checkbox("Game thread wait timing", &gameWait)) config->NrGameWaitDiag = gameWait;
         HelpMarker("Default off. Needs per-frame NR diag. Timestamps only: game thread Present -> first submit and"
                    "\nfence waits (gw_* fields in NrFrameDiag.log). No behavior change. INI: NrGameWaitDiag.");
+        ImGui::EndDisabled();
         MenuUi::TextWrapped("%s", AmdBridge::EffectsStatus().c_str());
         if (MenuUi::Button("Reset diagnostics")) {
             config->NrTimingLog = std::optional<bool>{};
+            config->NrFlickerDiag = std::optional<bool>{};
             config->NrFrameDiag = std::optional<bool>{};
             config->NrGameWaitDiag = std::optional<bool>{};
         }
@@ -2040,11 +2056,15 @@ void RenderMenu(Config* config, float menuResScale)
                     MenuUi::TextWrapped("lmxxf HIP backend. Same-frame execution at the selected processing stage.");
                     MenuUi::TextWrapped("NR GPU measures the HIP network. Display uses a 5-sample median after warm-up. Measurement uses non-blocking HIP events and leaves PDL unchanged.");
                     const bool timingEnabled = config->NrTimingEnabled.value_or_default();
+                    RenderFlickerDiagnostics(config);
                     bool timingLog = config->NrTimingLog.value_or_default();
                     if (MenuUi::Checkbox("Write timing summary to log", &timingLog)) config->NrTimingLog = timingLog;
-                    bool frameDiag = config->NrFrameDiag.value_or_default();
+                    const bool flickerBundle = config->NrFlickerDiag.value_or_default();
+                    ImGui::BeginDisabled(flickerBundle);
+                    bool frameDiag = config->NrFrameDiag.value_or_default() || flickerBundle;
                     if (MenuUi::Checkbox("Per-frame NR diag (PresentMon)", &frameDiag)) config->NrFrameDiag = frameDiag;
                     HelpMarker("Default off. Writes NrFrameDiag.log next to the DLL (split and inline) for PresentMon join.");
+                    ImGui::EndDisabled();
                     HelpMarker("Requires measurement and file logging. At most one summary every five seconds.");
                     if (timingEnabled) {
                         const auto snapshot = DlssNr::AmdBridge::Timing();
@@ -2095,6 +2115,7 @@ void RenderMenu(Config* config, float menuResScale)
                 {
                     resetOption(config->NrTimingEnabled);
                     resetOption(config->NrTimingLog);
+                    resetOption(config->NrFlickerDiag);
                     resetOption(config->NrFrameDiag);
                     resetOption(config->DlssNrDebugView);
                 }

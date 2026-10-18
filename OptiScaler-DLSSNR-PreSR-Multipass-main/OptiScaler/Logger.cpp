@@ -72,7 +72,8 @@ void PrepareLogger()
         if (spdlog::default_logger() != nullptr)
             spdlog::default_logger().reset();
 
-        if (Config::Instance()->LogToConsole.value_or_default() || Config::Instance()->LogToFile.value_or_default() ||
+        const bool fileLogging = Config::Instance()->LogToFile.value_or_default() || Config::Instance()->NrFlickerDiag.value_or_default();
+        if (Config::Instance()->LogToConsole.value_or_default() || fileLogging ||
             Config::Instance()->LogToNGX.value_or_default() || Config::Instance()->LogToDebug.value_or_default())
         {
             if (Config::Instance()->OpenConsole.value_or_default())
@@ -112,7 +113,7 @@ void PrepareLogger()
                 sinks.push_back(console_sink);
             }
 
-            if (Config::Instance()->LogToFile.value_or_default())
+            if (fileLogging)
             {
                 auto file_sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
                     Config::Instance()->LogFileName.value_or_default(), 8 * 1024 * 1024, 2, true);
@@ -159,7 +160,8 @@ void PrepareLogger()
                 shared_logger = std::make_shared<spdlog::logger>(logger);
             }
 
-            shared_logger->set_level((spdlog::level::level_enum) Config::Instance()->LogLevel.value_or_default());
+            const auto configuredLevel = Config::Instance()->LogLevel.value_or_default();
+            shared_logger->set_level((spdlog::level::level_enum)(Config::Instance()->NrFlickerDiag.value_or_default() && configuredLevel > 2 ? 2 : configuredLevel));
             shared_logger->flush_on(spdlog::level::trace);
 
             spdlog::set_default_logger(shared_logger);

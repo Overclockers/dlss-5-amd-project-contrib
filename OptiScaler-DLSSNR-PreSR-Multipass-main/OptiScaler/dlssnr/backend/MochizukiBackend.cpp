@@ -4,6 +4,7 @@
 #include "../NrFrameDiagHost.h"
 #include <resource.h>
 #include "ProxyDiagnostics.h"
+#include "../NrCoverageHost.h"
 #include "mochizuki_runtime/MochizukiNrApi.h"
 #include "../amd/GraphicsInvocation.h"
 #include <State.h>
@@ -48,6 +49,7 @@ void SubmissionTrace(uint64_t frame, const char* phase, const void* object, int3
 }
 struct MochizukiBackend::Impl
 {
+    Coverage::Tracker coverage {"mochizuki"};
     Microsoft::WRL::ComPtr<ID3D12Device> device;
     Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue;
     std::filesystem::path directory;
@@ -127,7 +129,7 @@ struct MochizukiBackend::Impl
                 return false;
             }
         }
-        setLogging(Config::Instance()->LogToFile.value_or_default());
+        setLogging((Config::Instance()->LogToFile.value_or_default() || Config::Instance()->NrFlickerDiag.value_or_default()));
         if (!std::filesystem::is_regular_file(directory / L"dlssnr-amd/dlssnr.bin"))
         { Status("mochizuki: model missing; run the Mochizuki model installer (see docs/mochizuki.md)"); return false; }
         LmxxfNrCreateInfo ci {sizeof ci, device.Get(), queue.Get(), directory.c_str(),
@@ -148,6 +150,8 @@ struct MochizukiBackend::Impl
         gDiagGetInfo = getInfo;
         if (owner) owner->diagCoreGpuMs = &DiagCoreGpuMs;
         if (!owner) { api.Destroy(session); Status("mochizuki: session ownership allocation failed"); return false; }
+        coverage.counters->prepared.store(false, std::memory_order_relaxed);
+        owner->coverage = coverage.counters;
         owner->onFailure = SubmissionFailure;
         // ACO is chosen when the Vulkan device is created. Push the current ini before PrepareSession.
         MochizukiNrControls controls {};
@@ -234,14 +238,15 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     auto input = incoming;
     if (first) *first = nullptr;
     std::lock_guard lifetime(Submission::RecordingMutex());
+    Coverage::Attempt coverage(p->coverage, cmd);
     LmxxfRecording::Collect();
     // Callback failures and background progress must remain visible even when
     // this frame is rejected before PrepareFrame/Record.
     p->Info();
     // Latched proxy fallback: the miss rate proved the lists are unevenly wrapped, so
     // NR would alternate with the original colour. Stay off rather than flicker.
-    if (p->proxyFallback) return nullptr;
-    if (!cmd || !input.colour) return nullptr;
+    if (p->proxyFallback) { coverage.Set(Coverage::Outcome::HeldOff, "proxy_fallback_latched"); return nullptr; }
+    if (!cmd || !input.colour) { coverage.Set(Coverage::Outcome::InvalidInput, "cmd_or_colour_missing"); return nullptr; }
     Microsoft::WRL::ComPtr<Submission::ILogicalCommandList> logical;
     Microsoft::WRL::ComPtr<Submission::IRecordingResources> resources;
     // Count every offered list, so coverage={success}/{offered} is the real ratio and
@@ -251,6 +256,7 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     const HRESULT resourcesHr = cmd->QueryInterface(IID_PPV_ARGS(&resources));
     if (FAILED(proxyHr) || FAILED(resourcesHr))
     {
+        coverage.Set(Coverage::Outcome::ProxyMissing, "logical_or_resources_qi_failed");
         const uint32_t missing = ++p->proxyMissing;
         p->Status("mochizuki: recording proxy unavailable; original frame");
         if (missing <= 5 || missing % 1000 == 0)
@@ -277,6 +283,8 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
         return nullptr;
     }
     p->lastProxiedList = cmd;
+    const auto coverageId = logical->Identity();
+    coverage.Identity(coverageId.list, coverageId.generation);
     // The frame id advances only for frames we can actually record: a rejected frame
     // must not consume a number, or the next accepted frame looks like a gap and the
     // runtime resets its temporal history for nothing.
@@ -286,6 +294,7 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     InlineRecording::StateScope inlineState;
     if (!inlineMode && logical->IsSplitIneligible()) {
         const char* reason = logical->SplitRejectionReason();
+        coverage.Set(Coverage::Outcome::Rejected, reason);
         p->Status(std::string("mochizuki: recording boundary unavailable: ") + reason + "; original frame");
         static unsigned rejected = 0;
         if (++rejected <= 5 || rejected % 1000 == 0) {
@@ -298,14 +307,16 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     const bool motion = (input.nativeGuideScale || !input.motionJittered) &&
         Config::Instance()->MochizukiTemporal.value_or_default();
     if (FAILED(inlineState.Begin(cmd, input, motion, false, false, !inlineMode))) {
+        coverage.Set(Coverage::Outcome::InputRejected, inlineState.Reason().c_str());
         p->Status(std::string("mochizuki: input state unavailable: ") + inlineState.Reason());
         static unsigned rejectedInput = 0;
         if (++rejectedInput <= 5 || rejectedInput % 1000 == 0)
             inlineState.TraceFailure("mochizuki", frameId, cmd, input, motion, false, false);
         return nullptr;
     }
-    if (!p->Ensure()) return nullptr;
+    if (!p->Ensure()) { coverage.Set(Coverage::Outcome::SessionUnavailable, "ensure_session"); return nullptr; }
     if (p->owner->InlineBusy()) {
+        coverage.Set(Coverage::Outcome::Busy, "inline_ahead_cap");
         p->owner->InlineBypassed();
         p->Status("mochizuki: inline ahead cap reached; original frame");
         FrameDiag::EmitBypass("mochizuki", frameId, unsigned(p->owner->inlineInFlight.size()),
@@ -313,7 +324,7 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
         return nullptr;
     }
     auto* cfg = Config::Instance();
-    p->setLogging(cfg->LogToFile.value_or_default());
+    p->setLogging((cfg->LogToFile.value_or_default() || cfg->NrFlickerDiag.value_or_default()));
     MochizukiNrFrameInfo frame {};
     MochizukiNrControls controls {};
     controls.struct_size = sizeof controls;
@@ -388,6 +399,8 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
         char reason[256] {};
         p->api.GetLastError(reason, sizeof reason);
         p->Info();
+        coverage.Set(std::strstr(reason, "building the network") || std::strstr(reason, "input resolution is settling")
+            ? Coverage::Outcome::BuildWait : Coverage::Outcome::PrepareFailed, reason);
         if (std::strstr(reason, "building the network"))
             p->Status("mochizuki: building the network; first use may take minutes (original frame)");
         else if (std::strstr(reason, "input resolution is settling"))
@@ -399,6 +412,7 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
         }
         return nullptr;
     }
+    coverage.Prepared();
     std::shared_ptr<InlineRecording::Resources> inlineResources;
     if (inlineMode) {
         try {
@@ -523,6 +537,7 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     }
     if (inlineResources) inlineResources->RecordSelect(cmd, input.colourState);
     lease->ready = true;
+    coverage.Set(Coverage::Outcome::Recorded, "recording_ready");
     if (lease->trace) {
         SubmissionTrace(frameId, "record.ready", cmd, 0);
         const auto id = logical->Identity();
@@ -544,9 +559,11 @@ void MochizukiBackend::ReleaseSession()
 {
     std::lock_guard lifetime(Submission::RecordingMutex());
     FrameDiag::AutoSpinPresentRing().SetActive(false);
+    p->coverage.counters->prepared.store(false, std::memory_order_relaxed);
     p->owner.reset(); p->failed = false; p->retryAt = p->infoAt = 0;
     p->tracedRecordings = 0;
     LmxxfRecording::Collect();
+    p->coverage.Flush(true);
     { std::lock_guard lock(p->mutex); p->timing = {}; p->progress = {}; p->details = {}; p->status = "mochizuki: NR off"; }
     if (!Config::Instance()->NrConvenience.value_or_default() && p->module)
     { FreeLibrary(p->module); p->module = nullptr; p->api = {}; }

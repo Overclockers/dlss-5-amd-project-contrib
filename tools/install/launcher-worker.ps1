@@ -77,6 +77,28 @@ $allowedAction = @('inspect','install','update','uninstall','scan')
 $allowedBackend = @('auto','daniel','lmxxf','mochizuki','all')
 if ($allowedAction -notcontains [string]$req.action) { throw "invalid action $($req.action)" }
 
+# An explicitly empty list must not fall through to automatic/all-backend installation.
+$hasRequestedBackends = $null -ne $req.backends
+if ($req.action -in @('install','update')) {
+    if ($hasRequestedBackends) {
+        if (@($req.backends).Count -eq 0) { Fail-Result 'failed' 'Select at least one backend.' 1 }
+        if ($req.backendChoice -and $req.backendChoice -ne 'auto') {
+            Fail-Result 'failed' 'Pass either backendChoice or backends, not both.' 1
+        }
+        $seenRequestedBackends = @{}
+        foreach ($id in @($req.backends)) {
+            if ($id -notin @('lmxxf','daniel','mochizuki')) { Fail-Result 'failed' "Unknown backend id: $id" 1 }
+            if ($seenRequestedBackends.ContainsKey($id)) { Fail-Result 'failed' "Duplicate backend id: $id" 1 }
+            $seenRequestedBackends[$id] = $true
+        }
+        if ($req.activeBackend -and -not $seenRequestedBackends.ContainsKey([string]$req.activeBackend)) {
+            Fail-Result 'failed' 'Active backend must be in the selected backends.' 1
+        }
+    } elseif ($req.activeBackend) {
+        Fail-Result 'failed' 'Active backend requires an explicit backends list.' 1
+    }
+}
+
 if ($req.action -eq 'scan') {
     Write-Event 'scan' 'Scanning game libraries...'
     $scan = Join-Path $here 'library-scan.ps1'
@@ -175,8 +197,10 @@ if ($backend -and $allowedBackend -notcontains $backend) { Fail-Result 'failed' 
 function Find-PackageRoot([string]$requested) {
     $dirs = @()
     if ($requested) { $dirs += $requested }
-    $dirs += $here
-    $dirs += (Split-Path $here -Parent)
+    else {
+        $dirs += $here
+        $dirs += (Split-Path $here -Parent)
+    }
     foreach ($d in $dirs) {
         if (-not $d) { continue }
         try { $d = [IO.Path]::GetFullPath($d) } catch { continue }
@@ -221,7 +245,16 @@ if ($req.action -in @('install','update') -and $req.fingerprint -and $req.finger
     Fail-Result 'needsInput' 'stale inspect fingerprint' 2
 }
 
-function Find-Setup([string]$name) { Find-Sibling $name }
+function Find-Setup([string]$name) {
+    # Scripts and runtime inputs must belong to the same selected package.
+    if ($script:packageRoot) {
+        $path = Join-Path $script:packageRoot $name
+        if (Test-Path -LiteralPath $path -PathType Leaf) { return $path }
+        return $null
+    }
+    if ($req.packageRoot) { return $null }
+    return Find-Sibling $name
+}
 $install = Find-Setup 'install-amd-presr.ps1'
 if (-not $install) { $install = Find-Setup 'Setup.ps1' }
 $uninstall = Find-Setup 'uninstall-amd-presr.ps1'
@@ -257,7 +290,7 @@ if ($req.action -in @('install','update')) {
 }
 if ($req.action -ne 'uninstall') {
     $mochiAvailable = @($script:backends | Where-Object { $_.id -eq 'mochizuki' -and $_.runtimeState -eq 'ready' }).Count -gt 0
-    $mochiSelected = if ($req.backends) { @($req.backends) -contains 'mochizuki' } else {
+    $mochiSelected = if ($hasRequestedBackends) { @($req.backends) -contains 'mochizuki' } else {
         $backend -eq 'mochizuki' -or (($backend -in @('auto','all','')) -and $mochiAvailable)
     }
     if ($mochiSelected) {
@@ -308,6 +341,7 @@ if ($req.action -eq 'uninstall') {
         existingIni = 'keep'
         shortFileContinue = 'abort'
         optiPatcher = 'skip'
+        language = if ($req.language -eq 'zh') { 'zh' } else { 'en' }
     }
     if ($dec) {
         foreach ($name in @('existingInstall','existingIni','mochizukiModels','shortFileContinue','optiPatcher','foreignProxy')) {
@@ -317,7 +351,7 @@ if ($req.action -eq 'uninstall') {
             }
         }
     }
-    if ($req.backends) { $payload['backends'] = @($req.backends) }
+    if ($hasRequestedBackends) { $payload['backends'] = @($req.backends) }
     ($payload | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath $dj -Encoding UTF8
     Write-Event 'install' "starting $($req.action)"
 }
@@ -325,7 +359,7 @@ $prevEap = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
 if ($req.action -eq 'uninstall') {
     & $ps51 -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $install -GameDir $script:gameDir -NonInteractive -NoPause 1>$stdoutLog 2>$stderrLog
-} elseif ($req.backends) {
+} elseif ($hasRequestedBackends) {
     $activeArguments = @()
     if ($req.activeBackend) { $activeArguments = @('-ActiveBackend', [string]$req.activeBackend) }
     & $ps51 -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $install -GameDir $script:gameDir -Proxy $script:resolved -NoPause -NonInteractive -Root $script:packageRoot @activeArguments -DecisionJson $dj 1>$stdoutLog 2>$stderrLog

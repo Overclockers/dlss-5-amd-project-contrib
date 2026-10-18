@@ -11,7 +11,7 @@ namespace DlssNr::FrameDiag
 inline bool Enabled()
 {
     auto* cfg = Config::Instance();
-    return cfg && cfg->NrFrameDiag.value_or_default();
+    return cfg && (cfg->NrFrameDiag.value_or_default() || cfg->NrFlickerDiag.value_or_default());
 }
 
 inline std::atomic<uint64_t>& PresentSerialAtom()
@@ -23,7 +23,8 @@ inline std::atomic<uint64_t>& PresentSerialAtom()
 inline bool GameWaitEnabled()
 {
     auto* cfg = Config::Instance();
-    return cfg && cfg->NrFrameDiag.value_or_default() && cfg->NrGameWaitDiag.value_or_default();
+    return cfg && (cfg->NrFlickerDiag.value_or_default() ||
+                   (cfg->NrFrameDiag.value_or_default() && cfg->NrGameWaitDiag.value_or_default()));
 }
 
 inline void NotePresent(void* swapchain) noexcept

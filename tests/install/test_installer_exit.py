@@ -6,6 +6,7 @@ The batch pause gets an output marker because its own text is localized.
 """
 from pathlib import Path
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -143,6 +144,85 @@ class InstallerExitTests(unittest.TestCase):
     def broken_author_setup(self):
         (self.package / "OptiScaler.dll").write_bytes(b"fixture proxy")
         (self.package / "dlssnr_on_amd_setup.exe").write_bytes(b"invalid executable")
+
+    def backend_decisions(self, backends):
+        path = self.root / "backend-decisions.json"
+        path.write_text(json.dumps({"backends": backends, "existingIni": "keep"}), encoding="utf-8")
+        return ("-NonInteractive", "-DecisionJson", str(path))
+
+    def test_explicit_active_backend_survives_install_update_and_reinstall(self):
+        self.ready_install()
+        self.ready_lmxxf_dual_arch()
+        (self.package / "OptiScaler.ini").write_text(
+            "[DlssNr]\nNrBackend=lmxxf\nAmdModelScale=0.75\n", encoding="utf-8"
+        )
+        flags = self.backend_decisions(["lmxxf", "daniel"]) + ("-ActiveBackend", "daniel")
+        for action in ("install", "overwrite", "reinstall"):
+            with self.subTest(action=action):
+                if action == "reinstall":
+                    code, output = self.run_direct(name="Uninstall")
+                    self.assertEqual(code, 0, output)
+                code, output = self.run_direct(flags=flags)
+                self.assertEqual(code, 0, output)
+                self.assertIn("Active Backend: daniel", output)
+                ini = (self.game / "OptiScaler.ini").read_text(encoding="utf-8-sig")
+                self.assertRegex(ini, r"NrBackend\s*=\s*daniel")
+                self.assertRegex(ini, r"AmdModelScale\s*=\s*0\.75")
+                record = (self.game / "amd-presr-install.txt").read_text(encoding="utf-8-sig")
+                self.assertIn("backend=daniel", record)
+
+    def test_explicit_backend_list_without_active_uses_first_available(self):
+        self.ready_install()
+        self.ready_lmxxf_dual_arch()
+        code, output = self.run_direct(flags=self.backend_decisions(["daniel", "lmxxf"]))
+        self.assertEqual(code, 0, output)
+        self.assertIn("Active Backend: lmxxf", output)
+
+    def test_explicit_mochizuki_active_backend_with_multiple_backends(self):
+        self.ready_install()
+        self.ready_mochizuki(model=True)
+        (self.package / "OptiScaler.ini").write_text("[DlssNr]\nNrBackend=lmxxf\n", encoding="utf-8")
+        flags = self.backend_decisions(["daniel", "mochizuki"]) + (
+            "-ActiveBackend", "mochizuki", "-MochizukiModels", "original"
+        )
+        code, output = self.run_direct(flags=flags)
+        self.assertEqual(code, 0, output)
+        self.assertIn("Active Backend: mochizuki", output)
+        self.assertRegex((self.game / "OptiScaler.ini").read_text(encoding="utf-8-sig"),
+                         r"NrBackend\s*=\s*mochizuki")
+
+    def test_failed_active_backend_falls_back_to_installed_backend(self):
+        self.ready_install()
+        self.ready_lmxxf_dual_arch()
+        (self.package / "dlssnr_on_amd_weights.bin").write_bytes(b"truncated")
+        code, output = self.run_direct(
+            flags=self.backend_decisions(["lmxxf", "daniel"]) + ("-ActiveBackend", "daniel")
+        )
+        self.assertEqual(code, 0, output)
+        self.assertIn("Skipping daniel: weights check failed", output)
+        self.assertIn("Active backend changed to lmxxf", output)
+        self.assertIn("Active Backend: lmxxf", output)
+        self.assertFalse((self.game / "dlssnr_amd_pass1.dll").exists())
+
+    def test_invalid_or_unselected_active_backend_does_not_change_game(self):
+        self.ready_install()
+        self.ready_lmxxf_dual_arch()
+        before = snapshot_files(self.game)
+        for active in ("unknown", "", "mochizuki"):
+            with self.subTest(active=active):
+                code, output = self.run_direct(
+                    flags=self.backend_decisions(["lmxxf", "daniel"]) + ("-ActiveBackend", active)
+                )
+                self.assertEqual(code, 1, output)
+                self.assertIn("ActiveBackend", output)
+                self.assertEqual(snapshot_files(self.game), before)
+
+    def test_active_backend_requires_explicit_backend_list(self):
+        self.ready_install()
+        code, output = self.run_direct(flags=("-NonInteractive", "-ActiveBackend", "daniel"))
+        self.assertEqual(code, 1, output)
+        self.assertIn("ActiveBackend requires", output)
+        self.assertFalse((self.game / "dxgi.dll").exists())
 
     def test_noninteractive_ini_overwrite_keeps_install_backend(self):
         self.ready_install()

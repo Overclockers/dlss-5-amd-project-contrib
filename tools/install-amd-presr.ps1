@@ -112,6 +112,13 @@ if ($launcherDecisions) {
     }
 }
 
+# Keep the requested parameter separate from the resolved installation state:
+# PowerShell variable names are case-insensitive, including parameter names.
+if ($PSBoundParameters.ContainsKey('ActiveBackend')) {
+    if (-not $hasBackendSelection) { Fail 'ActiveBackend requires an explicit -Backends list (or DecisionJson backends).' }
+    if ($ActiveBackend -notin @('lmxxf','daniel','mochizuki')) { Fail 'ActiveBackend must be lmxxf, daniel, or mochizuki.' }
+}
+
 . (Join-Path $PSScriptRoot 'lmxxf-module-package.ps1')
 
 # $Root must not be a param default of $PSScriptRoot: when invoked via powershell -File,
@@ -138,8 +145,12 @@ if (Test-Path -LiteralPath $versionFile -PathType Leaf) {
 }
 Write-Host $productTitle -ForegroundColor Cyan
 Write-Host '==============================================================================' -ForegroundColor Yellow
-Write-Host '  本软件免费，如付费购买请立即退款！' -ForegroundColor Yellow
-Write-Host '  This software is free. If you paid for it, request a refund immediately!' -ForegroundColor Yellow
+if (-not $launcherDecisions -or $launcherDecisions.language -ne 'en') {
+    Write-Host '  本软件免费，如付费购买请立即退款！' -ForegroundColor Yellow
+}
+if (-not $launcherDecisions -or $launcherDecisions.language -ne 'zh') {
+    Write-Host '  This software is free. If you paid for it, request a refund immediately!' -ForegroundColor Yellow
+}
 Write-Host '==============================================================================' -ForegroundColor Yellow
 
 # Do not use Get-FileHash: it belongs to Microsoft.PowerShell.Utility and relies on module autoloading.
@@ -783,7 +794,7 @@ $canDaniel = [bool]($srcA -or (Test-Path -LiteralPath $setup -PathType Leaf) -or
 
 $installLmxxf  = $false
 $installDaniel = $false
-$activeBackend = 'lmxxf'
+$selectedActiveBackend = 'lmxxf'
 
 $knownOriginalSha = '2b41c888cf4155b8958c665ba64018ab0bd25c85fc71a2b6db86d0d04d1f7fbd'
 $knownSmallSha    = '7e966e2639dbec6596aa0bac3b8761137d2c40ca8cb4aca30df7ca10043c6e33'
@@ -910,14 +921,13 @@ if ($hasBackendSelection) {
     $installLmxxf = [bool]$seenBackend.ContainsKey('lmxxf')
     $installDaniel = [bool]$seenBackend.ContainsKey('daniel')
     $installMochizuki = [bool]$seenBackend.ContainsKey('mochizuki')
-    $activeBackend = $null
+    $selectedActiveBackend = $null
     foreach ($id in @('lmxxf','daniel','mochizuki')) {
-        if ($seenBackend.ContainsKey($id)) { $activeBackend = $id; break }
+        if ($seenBackend.ContainsKey($id)) { $selectedActiveBackend = $id; break }
     }
     if ($PSBoundParameters.ContainsKey('ActiveBackend')) {
-        if ($ActiveBackend -notin @('lmxxf','daniel','mochizuki')) { Fail 'ActiveBackend must be lmxxf, daniel, or mochizuki.' }
         if (-not $seenBackend.ContainsKey($ActiveBackend)) { Fail 'ActiveBackend is not in -Backends.' }
-        $activeBackend = $ActiveBackend
+        $selectedActiveBackend = $ActiveBackend
     }
 } elseif ($canMochizuki -or $Backend -ne 'auto') {
     if ($Backend -eq 'auto' -and -not $NonInteractive) {
@@ -938,16 +948,16 @@ if ($hasBackendSelection) {
     $installLmxxf = $canLmxxf -and $Backend -in @('all','lmxxf')
     $installDaniel = $canDaniel -and $Backend -in @('all','daniel')
     if (-not ($installMochizuki -or $installLmxxf -or $installDaniel)) { Fail 'No requested backend is available.' }
-    $activeBackend = if ($installLmxxf) { 'lmxxf' } elseif ($installDaniel) { 'daniel' } else { 'mochizuki' }
+    $selectedActiveBackend = if ($installLmxxf) { 'lmxxf' } elseif ($installDaniel) { 'daniel' } else { 'mochizuki' }
     if ($Backend -eq 'all' -and -not $NonInteractive) {
         $defaults = @(); if ($installLmxxf) { $defaults += 'lmxxf' }; if ($installDaniel) { $defaults += 'daniel' }; if ($installMochizuki) { $defaults += 'mochizuki' }
-        if ($defaults.Count -gt 1) { $activeBackend = $defaults[(Ask-Choice 'Choose the active backend:' $defaults) - 1] }
+        if ($defaults.Count -gt 1) { $selectedActiveBackend = $defaults[(Ask-Choice 'Choose the active backend:' $defaults) - 1] }
     }
 } elseif ($canLmxxf -and $canDaniel) {
     if ($NonInteractive) {
         $installLmxxf  = $true
         $installDaniel = $true
-        $activeBackend = 'lmxxf'
+        $selectedActiveBackend = 'lmxxf'
     } else {
         $choice = Ask-Choice "Detected files for both neural rendering backends. Select installation mode:" @(
             "Install lmxxf backend (using native-game-tiled-assets)",
@@ -955,8 +965,8 @@ if ($hasBackendSelection) {
             "Install both backends (coexist in game folder, switch via OptiScaler.ini)"
         )
         switch ($choice) {
-            1 { $installLmxxf = $true; $installDaniel = $false; $activeBackend = 'lmxxf' }
-            2 { $installLmxxf = $false; $installDaniel = $true; $activeBackend = 'daniel' }
+            1 { $installLmxxf = $true; $installDaniel = $false; $selectedActiveBackend = 'lmxxf' }
+            2 { $installLmxxf = $false; $installDaniel = $true; $selectedActiveBackend = 'daniel' }
             3 {
                 $installLmxxf  = $true
                 $installDaniel = $true
@@ -964,21 +974,21 @@ if ($hasBackendSelection) {
                     "Default: lmxxf backend",
                     "Default: danielblnc backend"
                 )
-                $activeBackend = if ($defChoice -eq 1) { 'lmxxf' } else { 'daniel' }
+                $selectedActiveBackend = if ($defChoice -eq 1) { 'lmxxf' } else { 'daniel' }
             }
         }
     }
 } elseif ($canLmxxf) {
     $installLmxxf  = $true
     $installDaniel = $false
-    $activeBackend = 'lmxxf'
+    $selectedActiveBackend = 'lmxxf'
     Write-Host ''
     Write-Host "Detected lmxxf backend components. Preparing to install lmxxf backend." -ForegroundColor Cyan
     Write-Host "NOTE: danielblnc backend files not detected (missing dlssnr_on_amd_setup.exe or version.dll)." -ForegroundColor DarkYellow
 } elseif ($canDaniel) {
     $installLmxxf  = $false
     $installDaniel = $true
-    $activeBackend = 'daniel'
+    $selectedActiveBackend = 'daniel'
     Write-Host ''
     Write-Host "Detected danielblnc backend components. Preparing to install danielblnc backend." -ForegroundColor Cyan
     Write-Host "NOTE: lmxxf backend components not detected (missing LmxxfNrRuntime.dll or lmxxf-modules)." -ForegroundColor DarkYellow
@@ -1249,9 +1259,9 @@ if ($droppedBackends.Count -gt 0) {
         Write-Host "Skipping ${kind}: weights check failed (see the red WEIGHTS CHECK block)." -ForegroundColor Red
         switch ($kind) { 'lmxxf' { $installLmxxf = $false } 'daniel' { $installDaniel = $false } 'mochizuki' { $installMochizuki = $false } }
     }
-    if ($activeBackend -in $droppedBackends) {
-        $activeBackend = @($selectedBackends | Where-Object { $_ -notin $droppedBackends })[0]
-        Write-Host "Active backend changed to $activeBackend." -ForegroundColor Yellow
+    if ($selectedActiveBackend -in $droppedBackends) {
+        $selectedActiveBackend = @($selectedBackends | Where-Object { $_ -notin $droppedBackends })[0]
+        Write-Host "Active backend changed to $selectedActiveBackend." -ForegroundColor Yellow
     }
 }
 
@@ -1997,7 +2007,7 @@ if (Test-Path -LiteralPath $gameIni -PathType Leaf) {
     $dlssnrSettings = [ordered]@{
         'Enabled' = 'true'
         'RunBeforeSR' = 'true'
-        'NrBackend' = $activeBackend
+        'NrBackend' = $selectedActiveBackend
         'LmxxfDiagnostic' = 'off'
     }
     if ($installMochizuki) {
@@ -2012,7 +2022,7 @@ if (Test-Path -LiteralPath $gameIni -PathType Leaf) {
         'AmdEncoding' = '0'
         'AmdEveryFrame' = 'true'
     }) -OnlyMissing
-    Write-Host "Updated OptiScaler.ini [DlssNr] (Enabled=true, NrBackend=$activeBackend; preference defaults only where missing)" -ForegroundColor Green
+    Write-Host "Updated OptiScaler.ini [DlssNr] (Enabled=true, NrBackend=$selectedActiveBackend; preference defaults only where missing)" -ForegroundColor Green
 }
 
 # Product keys live in OptiScaler.ini (menu > ini). native-game-flags.txt is only a
@@ -2262,7 +2272,7 @@ try {
     @(
         'project=OptScaler(NR)',
         ('proxy=' + $Proxy),
-        ('backend=' + $activeBackend),
+        ('backend=' + $selectedActiveBackend),
         ('uninstallFirst=' + $uninstallFirst.ToString().ToLowerInvariant()),
         ('installed=' + (Get-Date -Format 'yyyy-MM-ddTHH:mm:ssK')),
         ('game=' + $game)
@@ -2391,7 +2401,7 @@ Write-Host "  Proxy:          $Proxy"
 if (Test-Path -LiteralPath $backup) {
     Write-Host "  Backup:         $backup"
 }
-Write-Host "  Active Backend: $activeBackend" -ForegroundColor Cyan
+Write-Host "  Active Backend: $selectedActiveBackend" -ForegroundColor Cyan
 if ($installLmxxf) {
     Write-Host "  Installed:      OptScaler(NR) + lmxxf runtime (LmxxfNrRuntime.dll, modules, shaders)" -ForegroundColor Green
 }
@@ -2432,9 +2442,9 @@ if ($weightProblems.Count -gt 0) {
     }
 }
 $mochizukiActiveValid = if ($targetNetworkModel -eq 1) { Test-MochizukiModelHeader (Join-Path $game 'dlssnr-amd/dlssnr-small.bin') 255 } else { Test-MochizukiModelHeader (Join-Path $game 'dlssnr-amd/dlssnr.bin') 599 }
-$activeModelPending = ($activeBackend -eq 'mochizuki' -and -not $mochizukiActiveValid) -or
-    ($activeBackend -eq 'lmxxf' -and -not $lmxxfWeights)
+$activeModelPending = ($selectedActiveBackend -eq 'mochizuki' -and -not $mochizukiActiveValid) -or
+    ($selectedActiveBackend -eq 'lmxxf' -and -not $lmxxfWeights)
 if ($activeModelPending) {
-    Write-Host "Installation completed, but $activeBackend cannot run yet: MODEL SETUP REQUIRED. Follow the model instructions above, then restart the game." -ForegroundColor Yellow
+    Write-Host "Installation completed, but $selectedActiveBackend cannot run yet: MODEL SETUP REQUIRED. Follow the model instructions above, then restart the game." -ForegroundColor Yellow
 } else { Write-Host 'Install SUCCEEDED. Verify backend status in Ins when the game starts.' -ForegroundColor Green }
 Pause-Exit 0

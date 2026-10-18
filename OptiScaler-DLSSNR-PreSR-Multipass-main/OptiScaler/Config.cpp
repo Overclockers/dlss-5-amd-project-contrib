@@ -451,6 +451,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             NrConvenience.set_from_config(readInt("DlssNr", "NrConvenience"));
             NrTimingEnabled.set_from_config(readBool(CfgKey::kSection, CfgKey::NrTimingEnabled));
             NrTimingLog.set_from_config(readBool(CfgKey::kSection, CfgKey::NrTimingLog));
+            NrFlickerDiag.set_from_config(readBool(CfgKey::kSection, CfgKey::NrFlickerDiag));
             NrFrameDiag.set_from_config(readBool(CfgKey::kSection, CfgKey::NrFrameDiag));
             NrGameWaitDiag.set_from_config(readBool(CfgKey::kSection, CfgKey::NrGameWaitDiag));
             NrPersonPartition.set_from_config(readBool(CfgKey::kSection, CfgKey::NrPersonPartition));
@@ -1878,6 +1879,7 @@ bool Config::SaveIni()
     ini.SetValue("DlssNr", "NrConvenience", GetIntValue(Instance()->NrConvenience.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::NrTimingEnabled, GetBoolValue(Instance()->NrTimingEnabled.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::NrTimingLog, GetBoolValue(Instance()->NrTimingLog.value_for_config()).c_str());
+    ini.SetValue(CfgKey::kSection, CfgKey::NrFlickerDiag, GetBoolValue(Instance()->NrFlickerDiag.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::NrFrameDiag, GetBoolValue(Instance()->NrFrameDiag.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::NrGameWaitDiag, GetBoolValue(Instance()->NrGameWaitDiag.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::NrPersonPartition, GetBoolValue(Instance()->NrPersonPartition.value_for_config()).c_str());

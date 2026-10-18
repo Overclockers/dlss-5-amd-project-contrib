@@ -342,6 +342,8 @@ class Config
     CustomOptional<bool> NrTimingLog { false };
     // Default-off per-frame NR diag for PresentMon join (NrFrameDiag.log).
     CustomOptional<bool> NrFrameDiag { false };
+    // One capture switch: coverage details, frame trace, game wait timing and file logging.
+    CustomOptional<bool> NrFlickerDiag { false };
     // Default-off game-thread timing (Present -> submit, fence waits) in NrFrameDiag lines; timestamps only.
     CustomOptional<bool> NrGameWaitDiag { false };
     CustomOptional<bool> NrPersonPartition { false };

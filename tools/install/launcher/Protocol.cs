@@ -21,6 +21,7 @@ namespace OptScalerNR.Launcher
         [DataMember(Name = "packageRoot")] public string PackageRoot;
         [DataMember(Name = "backends")] public string[] Backends;
         [DataMember(Name = "activeBackend")] public string ActiveBackend;
+        [DataMember(Name = "language")] public string Language;
     }
 
     [DataContract]

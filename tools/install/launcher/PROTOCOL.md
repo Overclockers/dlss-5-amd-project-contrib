@@ -15,6 +15,7 @@ Exit codes match `status`: 0 success, 1 failed, 2 needsInput, 3 cancelled.
   "gameExe": "C:\\\\absolute\\\\game.exe",
   "proxyChoice": "auto | dxgi.dll | winmm.dll | d3d12.dll | winhttp.dll | wininet.dll | dbghelp.dll",
   "backendChoice": "auto | daniel | lmxxf | mochizuki | all",
+  "language": "zh | en",
   "explicitDecisions": {},
   "fingerprint": "optional inspect token; install/update refuse a stale folder"
 }
@@ -33,6 +34,9 @@ Exit codes match `status`: 0 success, 1 failed, 2 needsInput, 3 cancelled.
 Inspect never writes the game folder, never extracts weights, never downloads.
 The worker passes backend arrays through the decision JSON file so Windows
 PowerShell's native command line does not flatten the selected backend set.
+`language` is the launcher's saved UI preference. The worker forwards it in decision
+JSON for localized installer notices; omitted/unknown values use English. Raw system
+and third-party diagnostics retain their original text.
 
 ## Events (`-EventsJsonl`, append-only JSONL)
 
