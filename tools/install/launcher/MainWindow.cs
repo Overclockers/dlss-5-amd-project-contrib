@@ -129,11 +129,13 @@ namespace OptScalerNR.Launcher
         string _packageRoot = "";
         string _pendingAction = "";
         bool _writeBusy;
+        bool _updatingBackends;
         string _currentLogPath = "";
         string _activeBackend = "mochizuki";
         DateTime _shownUtc;
 
         readonly List<GameInfo> _allGames = new List<GameInfo>();
+        readonly Dictionary<string, BackendChoice> _backendChoices = new Dictionary<string, BackendChoice>(StringComparer.OrdinalIgnoreCase);
         GameInfo _selectedGame;
         LauncherResult _lastInspectResult;
         Decisions _decisions = new Decisions();
@@ -340,7 +342,10 @@ namespace OptScalerNR.Launcher
             if (_openLogButton != null) _openLogButton.Click += (s, e) => OpenLog();
             if (_refreshButton != null) _refreshButton.Click += (s, e) => RunScan();
 
-            RoutedEventHandler backendChanged = (s, e) => { UpdateActiveCombo(); UpdatePrimaryButtonState(); };
+            RoutedEventHandler backendChanged = (s, e) => {
+                if (_updatingBackends) return;
+                UpdateActiveCombo(); SaveBackendChoice(); UpdatePrimaryButtonState();
+            };
             if (_lmxxfCheck != null) { _lmxxfCheck.Checked += backendChanged; _lmxxfCheck.Unchecked += backendChanged; }
             if (_danielCheck != null) { _danielCheck.Checked += backendChanged; _danielCheck.Unchecked += backendChanged; }
             if (_mochiCheck != null) { _mochiCheck.Checked += backendChanged; _mochiCheck.Unchecked += backendChanged; }
@@ -474,6 +479,7 @@ namespace OptScalerNR.Launcher
                 }
             }
             UpdateActiveUI();
+            SaveBackendChoice();
         }
 
         void UpdateActiveUI()
@@ -618,7 +624,7 @@ namespace OptScalerNR.Launcher
                 {
                     case "ready": return "就绪";
                     case "missing-weights": return "权重缺失";
-                    case "missing-runtime": return "runtime 缺失";
+                    case "missing-runtime": return "运行库缺失";
                     case "preparable": return "需准备模型";
                     case "missing-model": return "模型缺失";
                     default: return fallbackReason ?? reasonCode;
@@ -631,7 +637,7 @@ namespace OptScalerNR.Launcher
                     case "ready": return "Ready";
                     case "missing-weights": return "Missing Weights";
                     case "missing-runtime": return "Missing Runtime";
-                    case "preparable": return "Weights Needed";
+                    case "preparable": return "Preparation Required";
                     case "missing-model": return "Missing Model";
                     default: return fallbackReason ?? reasonCode;
                 }
@@ -753,6 +759,65 @@ namespace OptScalerNR.Launcher
                 var label = id == "lmxxf" ? _lmxxfReason : id == "daniel" ? _danielReason : _mochiReason;
                 if (label != null) label.Text = reason;
             }
+            RefreshBackendHints();
+        }
+
+        string BackendHintText(BackendInfo backend)
+        {
+            var lines = new List<string>();
+            if (backend.MissingPackageFiles != null && backend.MissingPackageFiles.Length > 0)
+            {
+                var files = string.Join(", ", backend.MissingPackageFiles, 0, Math.Min(3, backend.MissingPackageFiles.Length));
+                if (backend.MissingPackageFiles.Length > 3) files += L(" 等 " + backend.MissingPackageFiles.Length + " 项", " (" + backend.MissingPackageFiles.Length + " files)");
+                lines.Add(L("安装包缺少 " + files + "，请重新解压完整安装包。",
+                    "Package file missing: " + files + ". Extract the complete package again."));
+            }
+            foreach (var hint in backend.Hints ?? new string[0])
+            {
+                switch (hint)
+                {
+                    case "lmxxf-weights": lines.Add(L("缺少 lmxxf 权重。请将完整的 native-game-tiled-assets 文件夹放到安装包目录。", "lmxxf weights are missing. Place the complete native-game-tiled-assets folder beside Setup.bat.")); break;
+                    case "mochi-source": lines.Add(L("缺少 Mochi 模型。请将 nvngx_dlssnr.dll 放到安装包目录。", "Mochi models are missing. Place nvngx_dlssnr.dll beside Setup.bat.")); break;
+                    case "mochi-preparable": lines.Add(L("已找到模型来源，安装时准备。", "Model source found. Models will be prepared during installation.")); break;
+                    case "mochi-versions": lines.Add(L("310.9.16 支持新旧模型；310.8.0 仅支持原始模型。", "310.9.16: both models. 310.8.0: original only.")); break;
+                    case "mochi-unsupported-source": lines.Add(L("此 nvngx_dlssnr.dll 不受支持，请更换版本。", "Unsupported nvngx_dlssnr.dll. Supply a supported version.")); break;
+                    case "daniel-runtime": lines.Add(L("缺少 Daniel 运行库。请将 Daniel 的 version.dll 放到安装包目录。", "Daniel runtime is missing. Place Daniel's version.dll beside Setup.bat.")); break;
+                    case "daniel-weights": lines.Add(L("缺少 Daniel 权重。请放入 dlssnr_on_amd_weights.bin，或补齐模型提取文件。", "Daniel weights are missing. Supply dlssnr_on_amd_weights.bin or the extraction files.")); break;
+                    case "daniel-setup": lines.Add(L("请将 Daniel 的 dlssnr_on_amd_setup.exe 放到安装包目录。", "Place Daniel's dlssnr_on_amd_setup.exe beside Setup.bat.")); break;
+                    case "daniel-source": lines.Add(L("请将受支持的 nvngx_dlssnr.dll 放到安装包目录。", "Place a supported nvngx_dlssnr.dll beside Setup.bat.")); break;
+                    case "daniel-preparable": lines.Add(L("已找到提取文件，安装时准备。", "Extraction files found. Preparation will run during installation.")); break;
+                }
+            }
+            return string.Join(Environment.NewLine, lines.ToArray());
+        }
+
+        void RefreshBackendHints()
+        {
+            bool any = false;
+            foreach (var id in new[] { "mochizuki", "lmxxf", "daniel" })
+            {
+                BackendInfo backend = null;
+                if (_lastInspectResult != null && _lastInspectResult.Backends != null)
+                    foreach (var item in _lastInspectResult.Backends)
+                        if (item != null && item.Id == id) { backend = item; break; }
+                var text = backend != null ? BackendHintText(backend) : "";
+                var label = _window.FindName(id == "mochizuki" ? "MochiHint" : id == "lmxxf" ? "LmxxfHint" : "DanielHint") as TextBlock;
+                if (label != null)
+                {
+                    label.Text = text;
+                    label.Visibility = string.IsNullOrEmpty(text) ? Visibility.Collapsed : Visibility.Visible;
+                    label.ToolTip = backend != null && backend.MissingPackageFiles != null && backend.MissingPackageFiles.Length > 3
+                        ? string.Join(Environment.NewLine, backend.MissingPackageFiles) : null;
+                }
+                any |= !string.IsNullOrEmpty(text);
+            }
+            var path = _lastInspectResult != null ? _lastInspectResult.PackageRoot : null;
+            var pathLabel = _window.FindName("BackendPackagePath") as TextBlock;
+            if (pathLabel != null)
+            {
+                pathLabel.Text = L("安装包目录：", "Package folder: ") + (path ?? "");
+                pathLabel.Visibility = any && !string.IsNullOrEmpty(path) ? Visibility.Visible : Visibility.Collapsed;
+            }
         }
 
         void RefreshStatusLanguage()
@@ -815,6 +880,10 @@ namespace OptScalerNR.Launcher
             if (rec != null)
             {
                 _recentGameId = rec.RecentGameId;
+                if (rec.BackendChoices != null)
+                    foreach (var pair in rec.BackendChoices)
+                        if (pair.Value != null && pair.Value.Backends != null)
+                            _backendChoices[pair.Key] = pair.Value;
                 _isScanOnStartup = rec.ScanOnStartup;
                 if (_scanOnStartup != null) _scanOnStartup.IsChecked = _isScanOnStartup;
                 if (!string.IsNullOrEmpty(rec.PackageRoot))
@@ -836,7 +905,8 @@ namespace OptScalerNR.Launcher
                     Language = _language,
                     ScanOnStartup = _isScanOnStartup,
                     PackageRoot = _packageRoot,
-                    RecentGameId = _selectedGame != null ? _selectedGame.Id : _recentGameId
+                    RecentGameId = _selectedGame != null ? _selectedGame.Id : _recentGameId,
+                    BackendChoices = _backendChoices
                 };
                 JsonUtil.WriteFile(_settingsPath, set);
             }
@@ -884,6 +954,60 @@ namespace OptScalerNR.Launcher
             [System.Runtime.Serialization.DataMember] public bool ScanOnStartup = true;
             [System.Runtime.Serialization.DataMember] public string PackageRoot;
             [System.Runtime.Serialization.DataMember] public string RecentGameId;
+            [System.Runtime.Serialization.DataMember] public Dictionary<string, BackendChoice> BackendChoices;
+        }
+
+        [System.Runtime.Serialization.DataContract]
+        sealed class BackendChoice
+        {
+            [System.Runtime.Serialization.DataMember] public string[] Backends;
+            [System.Runtime.Serialization.DataMember] public string ActiveBackend;
+        }
+
+        string BackendChoiceKey()
+        {
+            return _selectedGame == null ? null : (!string.IsNullOrEmpty(_selectedGame.Id) ? _selectedGame.Id : _selectedGame.Exe);
+        }
+
+        BackendChoice CurrentBackendChoice()
+        {
+            BackendChoice choice;
+            var key = BackendChoiceKey();
+            return !string.IsNullOrEmpty(key) && _backendChoices.TryGetValue(key, out choice) ? choice : null;
+        }
+
+        List<string> CheckedBackends()
+        {
+            var list = new List<string>();
+            if (_mochiCheck != null && _mochiCheck.IsChecked == true) list.Add("mochizuki");
+            if (_lmxxfCheck != null && _lmxxfCheck.IsChecked == true) list.Add("lmxxf");
+            if (_danielCheck != null && _danielCheck.IsChecked == true) list.Add("daniel");
+            return list;
+        }
+
+        void SaveBackendChoice()
+        {
+            var key = BackendChoiceKey();
+            if (_loadingSettings || _updatingBackends || string.IsNullOrEmpty(key)) return;
+            var list = CheckedBackends();
+            _backendChoices[key] = new BackendChoice { Backends = list.ToArray(), ActiveBackend = list.Contains(_activeBackend) ? _activeBackend : "" };
+            SaveSettings();
+        }
+
+        void RestoreBackendChoice()
+        {
+            var choice = CurrentBackendChoice();
+            var list = new List<string>(choice != null ? choice.Backends : new string[0]);
+            _updatingBackends = true;
+            try
+            {
+                if (_mochiCheck != null) _mochiCheck.IsChecked = list.Contains("mochizuki");
+                if (_lmxxfCheck != null) _lmxxfCheck.IsChecked = list.Contains("lmxxf");
+                if (_danielCheck != null) _danielCheck.IsChecked = list.Contains("daniel");
+                _activeBackend = choice != null ? choice.ActiveBackend : "mochizuki";
+                UpdateActiveCombo();
+            }
+            finally { _updatingBackends = false; }
         }
 
         [System.Runtime.Serialization.DataContract]
@@ -1111,6 +1235,9 @@ namespace OptScalerNR.Launcher
             if (_writeBusy) return;
             _decisions.ForeignProxy.Clear();
             _selectedGame = game;
+            _lastInspectResult = null;
+            RestoreBackendChoice();
+            RefreshInspectionText();
             if (_heroTitle != null) _heroTitle.Text = game.Name;
             if (_heroMeta != null) _heroMeta.Text = game.Source + " · PC";
             if (_heroPath != null) _heroPath.Text = game.Exe;
@@ -1211,11 +1338,8 @@ namespace OptScalerNR.Launcher
 
         void UpdateActiveCombo()
         {
-            var checkedBackends = new List<string>();
-            // Match the visible card order when choosing a fallback.
-            if (_mochiCheck != null && _mochiCheck.IsChecked == true) checkedBackends.Add("mochizuki");
-            if (_lmxxfCheck != null && _lmxxfCheck.IsChecked == true) checkedBackends.Add("lmxxf");
-            if (_danielCheck != null && _danielCheck.IsChecked == true) checkedBackends.Add("daniel");
+            var checkedBackends = CheckedBackends();
+            if (checkedBackends.Count == 0) _activeBackend = "";
 
             if (_activeCombo != null)
             {
@@ -1663,78 +1787,78 @@ namespace OptScalerNR.Launcher
             // Checkbox events can temporarily fall back while capabilities are applied
             // in worker order. Resolve the preferred backend after the complete batch.
             var preferredActiveBackend = _activeBackend;
-            if (result.Backends != null)
+            var hasUserChoice = CurrentBackendChoice() != null;
+            _updatingBackends = true;
+            try
             {
-                foreach (var b in result.Backends)
+                if (result.Backends != null)
                 {
-                    if (b == null) continue;
-                    var reasonText = GetReasonText(b.ReasonCode, b.Reason, isZh);
-                    if (b.Id == "lmxxf")
+                    foreach (var b in result.Backends)
                     {
-                        if (_lmxxfCheck != null)
+                        if (b == null) continue;
+                        var reasonText = GetReasonText(b.ReasonCode, b.Reason, isZh);
+                        if (b.Id == "lmxxf")
                         {
-                            _lmxxfCheck.IsEnabled = true;
-                            _lmxxfCheck.IsChecked = b.Enabled || (_lmxxfCheck.IsChecked == true);
+                            if (_lmxxfCheck != null)
+                            {
+                                _lmxxfCheck.IsEnabled = true;
+                                if (!hasUserChoice) _lmxxfCheck.IsChecked = b.Enabled;
+                            }
+                            if (_lmxxfReason != null)
+                            {
+                                _lmxxfReason.Text = reasonText;
+                                _lmxxfReason.Foreground = b.Enabled ? ReadyBrush : MissingBrush;
+                            }
+                            if (_lmxxfBadge != null)
+                            {
+                                _lmxxfBadge.Background = b.Enabled ? ReadyBg : MissingBg;
+                                _lmxxfBadge.BorderBrush = b.Enabled ? ReadyBorder : MissingBorder;
+                            }
                         }
-                        if (_lmxxfReason != null)
+                        else if (b.Id == "daniel")
                         {
-                            _lmxxfReason.Text = reasonText;
-                            _lmxxfReason.Foreground = b.Enabled ? ReadyBrush : MissingBrush;
+                            if (_danielCheck != null)
+                            {
+                                _danielCheck.IsEnabled = true;
+                                if (!hasUserChoice) _danielCheck.IsChecked = b.Enabled;
+                            }
+                            if (_danielReason != null)
+                            {
+                                _danielReason.Text = reasonText;
+                                _danielReason.Foreground = b.Enabled ? ReadyBrush : MissingBrush;
+                            }
+                            if (_danielBadge != null)
+                            {
+                                _danielBadge.Background = b.Enabled ? ReadyBg : MissingBg;
+                                _danielBadge.BorderBrush = b.Enabled ? ReadyBorder : MissingBorder;
+                            }
                         }
-                        if (_lmxxfBadge != null)
+                        else if (b.Id == "mochizuki")
                         {
-                            _lmxxfBadge.Background = b.Enabled ? ReadyBg : MissingBg;
-                            _lmxxfBadge.BorderBrush = b.Enabled ? ReadyBorder : MissingBorder;
-                        }
-                    }
-                    else if (b.Id == "daniel")
-                    {
-                        if (_danielCheck != null)
-                        {
-                            _danielCheck.IsEnabled = true;
-                            _danielCheck.IsChecked = b.Enabled;
-                        }
-                        if (_danielReason != null)
-                        {
-                            _danielReason.Text = reasonText;
-                            _danielReason.Foreground = b.Enabled ? ReadyBrush : MissingBrush;
-                        }
-                        if (_danielBadge != null)
-                        {
-                            _danielBadge.Background = b.Enabled ? ReadyBg : MissingBg;
-                            _danielBadge.BorderBrush = b.Enabled ? ReadyBorder : MissingBorder;
-                        }
-                    }
-                    else if (b.Id == "mochizuki")
-                    {
-                        if (_mochiCheck != null)
-                        {
-                            _mochiCheck.IsEnabled = true;
-                            _mochiCheck.IsChecked = b.Enabled;
-                        }
-                        if (_mochiReason != null)
-                        {
-                            _mochiReason.Text = reasonText;
-                            _mochiReason.Foreground = b.Enabled ? ReadyBrush : MissingBrush;
-                        }
-                        if (_mochiBadge != null)
-                        {
-                            _mochiBadge.Background = b.Enabled ? ReadyBg : MissingBg;
-                            _mochiBadge.BorderBrush = b.Enabled ? ReadyBorder : MissingBorder;
+                            if (_mochiCheck != null)
+                            {
+                                _mochiCheck.IsEnabled = true;
+                                if (!hasUserChoice) _mochiCheck.IsChecked = b.Enabled;
+                            }
+                            if (_mochiReason != null)
+                            {
+                                _mochiReason.Text = reasonText;
+                                _mochiReason.Foreground = b.Enabled ? ReadyBrush : MissingBrush;
+                            }
+                            if (_mochiBadge != null)
+                            {
+                                _mochiBadge.Background = b.Enabled ? ReadyBg : MissingBg;
+                                _mochiBadge.BorderBrush = b.Enabled ? ReadyBorder : MissingBorder;
+                            }
                         }
                     }
                 }
-            }
 
-            if ((_lmxxfCheck == null || _lmxxfCheck.IsChecked != true) &&
-                (_danielCheck == null || _danielCheck.IsChecked != true) &&
-                (_mochiCheck == null || _mochiCheck.IsChecked != true))
-            {
-                if (_lmxxfCheck != null) _lmxxfCheck.IsChecked = true;
+                _activeBackend = preferredActiveBackend;
+                UpdateActiveCombo();
             }
-
-            _activeBackend = preferredActiveBackend;
-            UpdateActiveCombo();
+            finally { _updatingBackends = false; }
+            RefreshBackendHints();
             UpdatePrimaryButtonState();
 
             if (result.Notes != null)

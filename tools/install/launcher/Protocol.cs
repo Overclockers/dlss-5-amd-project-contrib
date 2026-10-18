@@ -54,6 +54,7 @@ namespace OptScalerNR.Launcher
         [DataMember(Name = "recommend")] public string Recommend;
         [DataMember(Name = "games")] public GameInfo[] Games;
         [DataMember(Name = "backends")] public BackendInfo[] Backends;
+        [DataMember(Name = "packageRoot")] public string PackageRoot;
     }
 
     [DataContract]
@@ -65,6 +66,8 @@ namespace OptScalerNR.Launcher
         [DataMember(Name = "enabled")] public bool Enabled;
         [DataMember(Name = "reasonCode")] public string ReasonCode;
         [DataMember(Name = "reason")] public string Reason;
+        [DataMember(Name = "hints")] public string[] Hints;
+        [DataMember(Name = "missingPackageFiles")] public string[] MissingPackageFiles;
     }
 
     [DataContract]

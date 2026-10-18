@@ -591,6 +591,7 @@
                   <!-- Hidden legacy ComboBox for protocol compatibility -->
                   <ComboBox x:Name="ActiveCombo" Visibility="Collapsed" Width="0" Height="0"/>
                 </DockPanel>
+                <TextBlock x:Name="BackendPackagePath" TextWrapping="Wrap" Foreground="#FF8E95A5" FontSize="11" Margin="0,0,0,10" Visibility="Collapsed"/>
 
                 <!-- 1. mochi Backend Card -->
                 <Border Background="#FF181C26" BorderBrush="#FF282D3A" BorderThickness="1" CornerRadius="6" Padding="14,10" Margin="0,0,0,8">
@@ -606,6 +607,7 @@
                       <Button x:Name="MochiActiveBtn" Content="设为主后端" Style="{StaticResource GhostButton}" Height="26" FontSize="11" Padding="10,0" HorizontalAlignment="Left"/>
                       <TextBlock x:Name="MochiActiveLabel" Text="★ 当前主后端" Foreground="#FFED1C24" FontWeight="SemiBold" FontSize="11" VerticalAlignment="Center" Margin="10,0,0,0" Visibility="Collapsed"/>
                     </DockPanel>
+                    <TextBlock x:Name="MochiHint" TextWrapping="Wrap" Foreground="#FFB5BDCC" FontSize="11" Margin="26,8,0,0" Visibility="Collapsed"/>
                   </StackPanel>
                 </Border>
 
@@ -623,6 +625,7 @@
                       <Button x:Name="LmxxfActiveBtn" Content="设为主后端" Style="{StaticResource GhostButton}" Height="26" FontSize="11" Padding="10,0" HorizontalAlignment="Left"/>
                       <TextBlock x:Name="LmxxfActiveLabel" Text="★ 当前主后端" Foreground="#FFED1C24" FontWeight="SemiBold" FontSize="11" VerticalAlignment="Center" Margin="10,0,0,0" Visibility="Collapsed"/>
                     </DockPanel>
+                    <TextBlock x:Name="LmxxfHint" TextWrapping="Wrap" Foreground="#FFB5BDCC" FontSize="11" Margin="26,8,0,0" Visibility="Collapsed"/>
                   </StackPanel>
                 </Border>
 
@@ -640,6 +643,7 @@
                       <Button x:Name="DanielActiveBtn" Content="设为主后端" Style="{StaticResource GhostButton}" Height="26" FontSize="11" Padding="10,0" HorizontalAlignment="Left"/>
                       <TextBlock x:Name="DanielActiveLabel" Text="★ 当前主后端" Foreground="#FFED1C24" FontWeight="SemiBold" FontSize="11" VerticalAlignment="Center" Margin="10,0,0,0" Visibility="Collapsed"/>
                     </DockPanel>
+                    <TextBlock x:Name="DanielHint" TextWrapping="Wrap" Foreground="#FFB5BDCC" FontSize="11" Margin="26,8,0,0" Visibility="Collapsed"/>
                   </StackPanel>
                 </Border>
               </StackPanel>

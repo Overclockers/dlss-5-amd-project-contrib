@@ -52,6 +52,32 @@ try {
     $a.Id = 'A'; $a.Name = 'A'; $a.Exe = ''
     $b = [Activator]::CreateInstance($gameType)
     $b.Id = 'B'; $b.Name = 'B'; $b.Exe = ''
+    foreach ($backend in $capabilities.Backends) { $backend.Enabled = $true }
+    Call 'SelectGame' @($a) | Out-Null
+    Call 'ApplyInspect' @($capabilities) | Out-Null
+    $window.FindName('DanielCheck').IsChecked = $false
+    Call 'SetActiveBackend' @('lmxxf') | Out-Null
+    Call 'SelectGame' @($b) | Out-Null
+    Call 'ApplyInspect' @($capabilities) | Out-Null
+    Check ((Field '_activeBackend') -eq 'mochizuki') 'Backend choice leaked to another game'
+    Call 'SelectGame' @($a) | Out-Null
+    $capabilities.Backends[0].Enabled = $false
+    Call 'ApplyInspect' @($capabilities) | Out-Null
+    Check ((Field '_activeBackend') -eq 'lmxxf') 'Missing files silently changed the chosen backend'
+    Check ($window.FindName('LmxxfCheck').IsChecked -eq $true) 'Inspection discarded the selected missing backend'
+    Check ($window.FindName('DanielCheck').IsChecked -eq $false) 'Inspection reselected an unchecked backend'
+    $reopened = $controllerType.GetMethod('Create', [Reflection.BindingFlags]'NonPublic,Static').Invoke($null, $arguments)
+    try {
+        $controllerType.GetMethod('SelectGame', $flags).Invoke($reopened.Tag, @($a)) | Out-Null
+        Check ($controllerType.GetField('_activeBackend', $flags).GetValue($reopened.Tag) -eq 'lmxxf') 'Restart lost the active backend'
+        Check ($reopened.FindName('DanielCheck').IsChecked -eq $false) 'Restart lost the backend checkboxes'
+    } finally { $reopened.Close() }
+    Call 'SelectGame' @($b) | Out-Null
+    Call 'ApplyInspect' @($capabilities) | Out-Null
+    foreach ($name in @('MochiCheck', 'LmxxfCheck', 'DanielCheck')) { $window.FindName($name).IsChecked = $false }
+    Call 'ApplyInspect' @($capabilities) | Out-Null
+    Check ((Call 'CheckedBackends').Count -eq 0) 'Inspection ignored the deliberate empty backend selection'
+    Check ((Field '_activeBackend') -eq '') 'Empty selection retained a misleading active marker'
     Call 'SelectGame' @($a) | Out-Null
     (Field '_decisions').ForeignProxy['dxgi.dll'] = 'backup'
     Check (Call 'TryLockTarget' @([string]$arguments[1])) 'Cannot acquire isolated target lock'

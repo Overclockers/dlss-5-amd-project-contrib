@@ -206,6 +206,92 @@ class LauncherWorkerTests(unittest.TestCase):
                 self.assertTrue(daniel["enabled"], daniel)
                 runtime.unlink()
 
+    def test_inspect_reports_all_missing_inputs_and_the_package_folder(self):
+        pkg, game, exe = self.standalone_worker()
+        code, result, events = self.invoke(pkg / WORKER.name, "inspect", exe)
+        self.assertEqual(code, 0, events + str(result))
+        self.assertEqual(Path(result["packageRoot"]), pkg)
+        backends = {b["id"]: b for b in result["backends"]}
+        self.assertEqual(backends["lmxxf"]["hints"], ["lmxxf-weights"])
+        self.assertEqual(set(backends["lmxxf"]["missingPackageFiles"]), {
+            "LmxxfNrRuntime.dll", "lmxxf-modules/", "shaders/native_codec_encode.hlsl"})
+        self.assertEqual(set(backends["daniel"]["hints"]), {
+            "daniel-runtime", "daniel-weights", "daniel-setup", "daniel-source"})
+        self.assertEqual(backends["mochizuki"]["hints"], ["mochi-source", "mochi-versions"])
+        self.assertEqual(backends["mochizuki"]["missingPackageFiles"], ["MochizukiNrRuntime.dll"])
+
+    def test_daniel_distinguishes_installer_from_ready_runtime(self):
+        pkg, game, exe = self.standalone_worker()
+        (pkg / "dlssnr_on_amd_setup.exe").write_bytes(b"fixture; never executed")
+        code, result, events = self.invoke(pkg / WORKER.name, "inspect", exe)
+        self.assertEqual(code, 0, events)
+        daniel = next(b for b in result["backends"] if b["id"] == "daniel")
+        self.assertFalse(daniel["enabled"])
+        self.assertIn("daniel-runtime", daniel["hints"])
+        self.assertNotIn("daniel-setup", daniel["hints"])
+        (pkg / "nvngx_dlssnr.dll").write_bytes(b"source presence; Daniel's setup validates it")
+        code, result, events = self.invoke(pkg / WORKER.name, "inspect", exe)
+        self.assertEqual(code, 0, events)
+        daniel = next(b for b in result["backends"] if b["id"] == "daniel")
+        self.assertFalse(daniel["enabled"])
+        self.assertEqual(daniel["runtimeState"], "preparable")
+        self.assertEqual(daniel["hints"], ["daniel-preparable"])
+        (pkg / "version.dll").write_bytes(b"runtime presence; Setup checks its hash")
+        (pkg / "dlssnr_on_amd_weights.bin").write_bytes(bytes(1024 * 1024))
+        code, result, events = self.invoke(pkg / WORKER.name, "inspect", exe)
+        self.assertEqual(code, 0, events)
+        daniel = next(b for b in result["backends"] if b["id"] == "daniel")
+        self.assertTrue(daniel["enabled"])
+        self.assertEqual(daniel["hints"], [])
+
+    def test_mochi_reuses_game_weights_but_requires_package_assets(self):
+        pkg, game, exe = self.standalone_worker()
+        (pkg / "MochizukiNrRuntime.dll").write_bytes(b"runtime fixture")
+        (pkg / "mochizuki-owned.txt").write_text("shaders/example.hlsl\n", encoding="utf-8")
+        for name in ("dlssnr-amd/shaders/example.hlsl", "mochizuki-int4.ps1",
+                     "model-tools/dlssnr-int4-weights.exe", "model-tools/dlssnr-int4.sha256"):
+            path = pkg / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"package asset")
+        model = game / "dlssnr-amd/dlssnr-small.bin"
+        model.parent.mkdir()
+        model.write_bytes(b"NRMODEL1" + (255).to_bytes(4, "little") + bytes(20))
+        code, result, events = self.invoke(pkg / WORKER.name, "inspect", exe)
+        self.assertEqual(code, 0, events)
+        mochi = next(b for b in result["backends"] if b["id"] == "mochizuki")
+        self.assertTrue(mochi["enabled"], mochi)
+        self.assertEqual(mochi["hints"], [])
+        self.assertEqual(mochi["missingPackageFiles"], [])
+        (pkg / "dlssnr-amd/shaders/example.hlsl").unlink()
+        code, result, events = self.invoke(pkg / WORKER.name, "inspect", exe)
+        self.assertEqual(code, 0, events)
+        mochi = next(b for b in result["backends"] if b["id"] == "mochizuki")
+        self.assertFalse(mochi["enabled"])
+        self.assertEqual(mochi["missingPackageFiles"], ["dlssnr-amd/shaders/example.hlsl"])
+        self.assertEqual(mochi["hints"], [])
+
+    def test_mochi_source_must_match_an_accepted_hash(self):
+        pkg, game, exe = self.standalone_worker()
+        (pkg / "nvngx_dlssnr.dll").write_bytes(b"unsupported source")
+        code, result, events = self.invoke(pkg / WORKER.name, "inspect", exe)
+        self.assertEqual(code, 0, events)
+        mochi = next(b for b in result["backends"] if b["id"] == "mochizuki")
+        self.assertEqual(mochi["hints"], ["mochi-unsupported-source", "mochi-versions"])
+        self.assertEqual(mochi["modelState"], "missing")
+        # Substitute a trusted source only in the isolated capability fixture.
+        source = b"trusted extraction source fixture; never loaded"
+        (game / "nvngx_dlssnr.dll").write_bytes(source)
+        capability = pkg / "install-capabilities.ps1"
+        text = capability.read_text(encoding="utf-8-sig").replace(
+            "2bc19bc09a7b89dd44f73e2ac0108fcc586e2154bdd0830f242f4f040e28789f",
+            hashlib.sha256(source).hexdigest())
+        capability.write_text(text, encoding="utf-8-sig")
+        code, result, events = self.invoke(pkg / WORKER.name, "inspect", exe)
+        self.assertEqual(code, 0, events)
+        mochi = next(b for b in result["backends"] if b["id"] == "mochizuki")
+        self.assertEqual(mochi["modelState"], "preparable")
+        self.assertEqual(mochi["hints"], ["mochi-preparable"])
+
     def test_requested_package_selects_its_own_scripts(self):
         pkg, game, exe = self.standalone_worker()
         update = pkg.parent / "requested update"

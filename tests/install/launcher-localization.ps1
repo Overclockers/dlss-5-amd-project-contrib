@@ -56,6 +56,19 @@ function Save-Preview($window, [string]$name, [bool]$settings = $false) {
     $stream = [IO.File]::Create((Join-Path $output $name))
     try { $encoder.Save($stream) } finally { $stream.Dispose() }
 }
+function Save-BackendPreview($window, [string]$name) {
+    $section = $window.FindName('MochiHint').Parent.Parent.Parent.Parent
+    $bitmap = New-Object Windows.Media.Imaging.RenderTargetBitmap ([int][Math]::Ceiling($section.ActualWidth)), ([int][Math]::Ceiling($section.ActualHeight)), 96, 96, ([Windows.Media.PixelFormats]::Pbgra32)
+    $visual = New-Object Windows.Media.DrawingVisual
+    $drawing = $visual.RenderOpen()
+    $drawing.DrawRectangle((New-Object Windows.Media.VisualBrush $section), $null, (New-Object Windows.Rect 0, 0, $section.ActualWidth, $section.ActualHeight))
+    $drawing.Close()
+    $bitmap.Render($visual)
+    $encoder = New-Object Windows.Media.Imaging.PngBitmapEncoder
+    $encoder.Frames.Add([Windows.Media.Imaging.BitmapFrame]::Create($bitmap))
+    $stream = [IO.File]::Create((Join-Path $output $name))
+    try { $encoder.Save($stream) } finally { $stream.Dispose() }
+}
 
 try {
     # Includes simplified, traditional, neutral and legacy Windows Chinese cultures.
@@ -156,6 +169,35 @@ try {
                 Assert-True ($dialog.Tag -eq 'small') 'Localized model label changed the protocol value'
             } finally { $dialog.Close() }
         }
+        # Missing inputs are localized without reapplying detection or losing user choices.
+        $result.PackageRoot = Join-Path $fixture 'package with spaces'
+        foreach ($backend in $result.Backends) { $backend.Enabled = $false; $backend.ReasonCode = 'missing-model' }
+        $result.Backends[0].ReasonCode = 'missing-runtime'
+        $result.Backends[1].ReasonCode = 'missing-runtime'
+        $result.Backends[0].Hints = [string[]]@('lmxxf-weights')
+        $result.Backends[0].MissingPackageFiles = [string[]]@('LmxxfNrRuntime.dll', 'lmxxf-modules/')
+        $result.Backends[1].Hints = [string[]]@('daniel-runtime', 'daniel-weights', 'daniel-setup', 'daniel-source')
+        $result.Backends[2].Hints = [string[]]@('mochi-source', 'mochi-versions')
+        Invoke-Controller $window 'ApplyInspect' @($result)
+        Invoke-Controller $window 'SetLanguage' @('en')
+        Assert-English $window 'missing input hints'
+        Assert-True ($window.FindName('DanielHint').Text.Contains("Daniel's version.dll")) "Daniel's runtime hint missing"
+        Assert-True (-not $window.FindName('DanielHint').Text.Contains("author's")) 'Unapproved Daniel wording'
+        Assert-True ($window.FindName('MochiHint').Text.Contains('nvngx_dlssnr.dll beside Setup.bat')) 'Mochi source hint missing'
+        Assert-True ($window.FindName('BackendPackagePath').Text.Contains($result.PackageRoot)) 'Actual package directory missing'
+        Assert-True ($window.FindName('LmxxfHint').Text.Contains('LmxxfNrRuntime.dll')) 'Missing package filename not displayed'
+        Invoke-Controller $window 'SwitchTab' @($false)
+        Save-Preview $window 'english-backend-hints.png'
+        Save-BackendPreview $window 'english-backend-cards.png'
+        Invoke-Controller $window 'SetLanguage' @('zh')
+        Assert-True ($window.FindName('MochiHint').Text.Contains('缺少 Mochi 模型')) 'Chinese source hint missing'
+        Save-Preview $window 'chinese-backend-hints.png'
+        Save-BackendPreview $window 'chinese-backend-cards.png'
+        foreach ($backend in $result.Backends) { $backend.Hints = [string[]]@(); $backend.MissingPackageFiles = [string[]]@() }
+        Invoke-Controller $window 'ApplyInspect' @($result)
+        Assert-True ($window.FindName('MochiHint').Visibility -eq 'Collapsed') 'Ready backend retained stale hints'
+        Assert-True ($window.FindName('BackendPackagePath').Visibility -eq 'Collapsed') 'Empty hint section retained the package path'
+
         # Progress text changes language as well; diagnostic event strings stay in the log.
         Invoke-Controller $window 'SetLanguage' @('zh')
         Invoke-Controller $window 'OnEvent' @('validate', 'fixture diagnostic')

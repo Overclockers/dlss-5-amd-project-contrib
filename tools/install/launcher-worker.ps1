@@ -36,6 +36,7 @@ function New-Result([string]$status, [string]$error) {
         partial = $script:partial
         recommend = $script:recommend
         backends = $script:backends
+        packageRoot = $script:packageRoot
     }
 }
 function Fail-Result([string]$status, [string]$error, [int]$code) {
