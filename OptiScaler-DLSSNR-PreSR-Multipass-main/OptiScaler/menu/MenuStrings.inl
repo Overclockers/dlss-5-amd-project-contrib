@@ -1188,3 +1188,12 @@
 {"0 means OptiScaler's FPS limit, or without one just under the display\nrefresh rate (116 at 120 Hz). A target above the FPS limit uses the limit.", "0 表示使用 OptiScaler 帧率上限，未设上限时略低于显示器刷新率（120Hz 下为 116）。\n高于帧率上限的目标将使用该上限。"},
 {"How the multiplier the target asks for (target / real frame rate) is rounded.\nIt changes only when clearly off, so the frame rate can sit under the target.\nDown: stays under the target (2X from 61% of it).\nNearest: around the target (2X from 71%, 6X from 88%).\nUp: reaches the target (2X from 87%, 6X from 95%).", "目标所需倍率（目标帧率 / 真实帧率）的取整方式。\n仅在偏差明显时切换，实际帧率可能略低于目标。\n向下：保持低于目标（2X 约 61% 起）。\n最近：围绕目标（2X 约 71%，6X 约 88% 起）。\n向上：优先到目标（2X 约 87%，6X 约 95% 起）。"},
 {"Lets Dynamic MFG turn frame generation off (1X) when the game alone\nis close enough to the target (to nearest: from 56% of it).\nTurning it back on shows one real frame without generated frames.", "当游戏原生帧率已接近目标（最近取整下约 56% 起）时，允许动态关闭帧生成（1X）。\n重新开启的首帧仅显示真实帧。"},
+
+{"Original (71 blocks)", "Original（71 块）"},
+{"Small (310.9.16, 31 blocks)", "Small（310.9.16，31 块）"},
+{"Small runs once. Pass settings below are retained for Original.", "Small 运行一次，下方层数设置为 Original 保留。"},
+{"Small uses a different trained model and one network pass. Original retains your 1-3 pass preference.\nRequires matching small weights in native-game-tiled-assets/small. Missing assets or incompatible options use Original with a status message.\nINI: LmxxfNetworkModel (0 Original, 1 Small). Changing models rebuilds the network next frame.", "Small 使用独立训练的模型，运行一次。Original 保留原来的 1–3 层设置。\n需要 native-game-tiled-assets/small 中的对应权重。权重缺失或选项不兼容时使用 Original，并显示原因。\nINI：LmxxfNetworkModel（0 为 Original，1 为 Small）。切换在下一帧生效，首次可能稍有停顿。"},
+{"Small assets are missing or damaged. Using Original; rerun model setup and restart the game.", "Small 权重缺失或损坏，当前使用 Original。请重新准备模型并重启游戏。"},
+{"Temporal modes 2/3 currently require Original. Select Off or Native history to use Small.", "时序模式 2/3 目前需要 Original。关闭时序或选择原生历史即可使用 Small。"},
+{"Current advanced kernel settings require Original. Restore compatible model defaults to use Small.", "当前高级内核设置需要 Original。恢复兼容的模型默认值后可使用 Small。"},
+{"Network passes", "网络层数"},

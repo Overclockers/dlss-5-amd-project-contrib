@@ -9,11 +9,13 @@ int main(int argc, char **argv)
          useExposure = false, badExposure = false, ultrawide = false, subrect = false,
          upstreamControls = false, controls040 = false, controls041 = false, rgba32 = false;
     unsigned inputWidth = 0, inputHeight = 0;
+    bool models044=false;
     unsigned activeWidth = 1280, activeHeight = 720;
     const char *dumpPath = nullptr;
     for (int i = 3; i < argc; ++i)
     {
-        if (!std::strcmp(argv[i], "--queue-mismatch"))
+        if (!std::strcmp(argv[i], "--044-models")) models044=outputHash=true;
+        else if (!std::strcmp(argv[i], "--queue-mismatch"))
             queueMismatch = true;
         else if (!std::strcmp(argv[i], "--resize"))
             resize = true;
@@ -479,6 +481,41 @@ int main(int argc, char **argv)
                     frame.color_width, frame.color_height);
     if (dumpPath && outs == LMXXF_NR_OK && job.private_output)
         DumpTexture(device, submitQueue, static_cast<ID3D12Resource *>(job.private_output), dumpPath);
+
+    if (models044) {
+        Require(outs==LMXXF_NR_OK,"Original baseline output");
+        const auto original=HashTexture(device,submitQueue,static_cast<ID3D12Resource*>(job.private_output));
+        uint64_t small720=0;
+        const struct {const char* model;const char* tier;const char* passes;} cases[]={
+            {"1","720","3"},{"1","900","3"},{"1","1080","3"},
+            {"0","720","1"},{"1","720","3"},{"0","720","1"}};
+        for(const auto& c:cases) {
+            SetEnvironmentVariableA("DLSS5_NETWORK_MODEL",c.model);
+            SetEnvironmentVariableA("DLSS5_NETWORK_HEIGHT",c.tier);
+            SetEnvironmentVariableA("DLSS5_MULTI_PASS",c.passes);
+            uint64_t first=0;
+            for(int repeat=0;repeat<2;++repeat) {
+                WaitQueue(device,submitQueue);Check(alloc->Reset(),"model allocator");Check(list->Reset(alloc,nullptr),"model input list");
+                LmxxfNrJob next{};next.struct_size=sizeof next;
+                auto rc=api.PrepareFrame(ctx,&frame,&next);
+                if(rc){char error[1024]{};api.GetLastError(error,sizeof error);std::fprintf(stderr,"model prepare: %s\n",error);}
+                Require(rc==0,"model prepare");
+                char status[1536]{};Require(api.GetStatus(ctx,status,sizeof status)==0,"model status");
+                Require(std::strstr(status,c.model[0]=='1'?"model=small requested_model=small model_reason=small-ready":"model=original requested_model=original")!=nullptr,"effective model matches requested");
+                Require(std::strstr(status,"passes=1 network_passes=1")!=nullptr,"Small runs once and Original preference restores");
+                Require(api.RecordInputs(ctx,next.handle,list)==0,"model inputs");Check(list->Close(),"model input close");submitQueue->ExecuteCommandLists(1,lists);
+                Require(api.EnqueueHip(ctx,next.handle,submitQueue)==0,"model HIP");WaitQueue(device,submitQueue);
+                Check(outAlloc->Reset(),"model output allocator");Check(list->Reset(outAlloc,nullptr),"model output list");
+                Require(api.RecordOutputs(ctx,next.handle,list)==0,"model output");Check(list->Close(),"model output close");submitQueue->ExecuteCommandLists(1,lists);
+                Require(api.Retire(ctx,next.handle)==0,"model retire");
+                auto hash=HashTexture(device,submitQueue,static_cast<ID3D12Resource*>(next.private_output));
+                if(!repeat)first=hash;Require(hash==first,"model repeat deterministic");
+                if(c.model[0]=='0')Require(hash==original,"Original restored bit exactly after model switches");
+                else {Require(hash!=original,"Small has its own learned output");if(!std::strcmp(c.tier,"720")){if(!small720)small720=hash;else Require(hash==small720,"Small restored bit exactly");}}
+                std::printf("model044 model=%s tier=%s repeat=%d hash=%016llx %s\n",c.model,c.tier,repeat,static_cast<unsigned long long>(hash),status);
+            }
+        }
+    }
 
     if (upstreamControls)
     {

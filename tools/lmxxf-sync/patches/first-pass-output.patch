@@ -1,8 +1,6 @@
 --- a/Development/HIP/hip_reference_network.h
 +++ b/Development/HIP/hip_reference_network.h
-@@ -190,6 +190,7 @@
- inline std::atomic<int> AdaptivePreviewState{0};
- class Network {friend class D3D12Bridge;
+@@ -212,4 +212,5 @@
   Tensor native_post_row;void* native_post_output=nullptr;
 + void* first_pass_output=nullptr;
   bool sp1440_ready=false;bool final_direct_compatible=false;bool pool64_byte_available=false;

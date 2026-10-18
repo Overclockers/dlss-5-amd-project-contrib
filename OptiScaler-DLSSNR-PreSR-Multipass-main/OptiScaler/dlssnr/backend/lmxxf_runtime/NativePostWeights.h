@@ -1,5 +1,8 @@
 #pragma once
 #include <vector>
+#include <filesystem>
+#include <fstream>
+#include "native_lab_paths.h"
 // Fourth post projection in the HIP feature order. The unique column mapping
 // exactly matches all three existing RGB rows; no model coefficients are tuned.
 // Float32 row SHA256: 8c8a821c6c258eb07368ad2c36769e1e9debcb53f8786fbcaa1c82029d223952
@@ -13,3 +16,15 @@ inline std::vector<float> LmxxfNativePostWeights(){ return {
     3.26232910156250000e-02f, -1.60217285156250000e-02f, 4.85595703125000000e-01f, -7.54547119140625000e-03f,
     -1.30615234375000000e-02f, -1.80912017822265625e-03f, -4.81262207031250000e-02f, 1.04751586914062500e-02f
 }; }
+
+// The Small row is generated from the same verified model as its RGB weights.
+inline std::vector<float> LmxxfNativePostWeights(const std::wstring& assets,bool useSmall) {
+    if(!useSmall)return LmxxfNativePostWeights();
+    std::ifstream f(std::filesystem::path(assets)/L"small"/L"post70-history-head.f16",std::ios::binary);
+    std::vector<uint16_t> half(32);
+    if(!f.read(reinterpret_cast<char*>(half.data()),64)||f.peek()!=EOF)
+        throw std::runtime_error("Small model history row missing; reinstall Small assets");
+    std::vector<float> row;row.reserve(32);
+    for(auto h:half)row.push_back(NativeHalfToFloat(h));
+    return row;
+}

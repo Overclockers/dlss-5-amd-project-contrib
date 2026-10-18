@@ -37,8 +37,10 @@ cbuffer Params : register(b0) {
     float historyStrength; uint logitOffset, depthInverted, hasDepth;
     uint4 reserved;
 };
+uint WorkWidth() { return reserved.z ? reserved.z : width; }
 uint2 Mirror(uint i) {
-    uint2 p=uint2(i%width,i/width);
+    uint2 p=uint2(i%WorkWidth(),i/WorkWidth());
+    if(p.x>=width)p.x=2*width-p.x-2;
     if(p.y>=height)p.y=2*height-p.y-2;
     return p;
 }
@@ -59,8 +61,8 @@ float4 LinearHistory(float2 centre) {
     float2 p=clamp(centre-.5,float2(viewX,viewY),float2(viewX+viewWidth-1,viewY+viewHeight-1));
     uint2 lo=uint2(floor(p)),hi=min(lo+1,uint2(viewX+viewWidth-1,viewY+viewHeight-1));
     float2 f=p-lo;
-    float4 a=PreviousModel[lo.y*width+lo.x],b=PreviousModel[lo.y*width+hi.x];
-    float4 c=PreviousModel[hi.y*width+lo.x],d=PreviousModel[hi.y*width+hi.x];
+    float4 a=PreviousModel[lo.y*WorkWidth()+lo.x],b=PreviousModel[lo.y*WorkWidth()+hi.x];
+    float4 c=PreviousModel[hi.y*WorkWidth()+lo.x],d=PreviousModel[hi.y*WorkWidth()+hi.x];
     float4 value=lerp(lerp(a,b,f.x),lerp(c,d,f.x),f.y);
     // Alpha is validity, not blend weight. Ignore zero-weight bilinear taps.
     bool valid=(a.w>0 || (1-f.x)*(1-f.y)==0) && (b.w>0 || f.x*(1-f.y)==0) &&
@@ -84,8 +86,8 @@ bool HistoryCompatible(float2 centre,float3 raw,float depth) {
     // integration guard around the native blend, not a new smoothing strength.
     float2 p=clamp(centre-.5,float2(viewX,viewY),float2(viewX+viewWidth-1,viewY+viewHeight-1));
     uint2 lo=uint2(floor(p)),hi=min(lo+1,uint2(viewX+viewWidth-1,viewY+viewHeight-1));float2 f=p-lo;
-    float4 a=PreviousRaw[lo.y*width+lo.x],b=PreviousRaw[lo.y*width+hi.x];
-    float4 c=PreviousRaw[hi.y*width+lo.x],d=PreviousRaw[hi.y*width+hi.x];
+    float4 a=PreviousRaw[lo.y*WorkWidth()+lo.x],b=PreviousRaw[lo.y*WorkWidth()+hi.x];
+    float4 c=PreviousRaw[hi.y*WorkWidth()+lo.x],d=PreviousRaw[hi.y*WorkWidth()+hi.x];
     float3 old=lerp(lerp(a.rgb,b.rgb,f.x),lerp(c.rgb,d.rgb,f.x),f.y);
     if(!all(isfinite(old))||any(abs(old-raw)>.08))return false;
     if(hasDepth) {
@@ -120,14 +122,14 @@ void ReprojectPixel(uint i,out float4 preValue,out float4 postValue) {
 }
 [numthreads(64,1,1)]
 void Reproject(uint3 id:SV_DispatchThreadID) {
-    if(id.x>=width||id.y>=processingHeight)return;
-    uint i=id.y*width+id.x;float4 pre,post;ReprojectPixel(i,pre,post);
+    if(id.x>=WorkWidth()||id.y>=processingHeight)return;
+    uint i=id.y*WorkWidth()+id.x;float4 pre,post;ReprojectPixel(i,pre,post);
     PreOut[i]=pre;PostOut[i]=post;
 }
 [numthreads(64,1,1)]
 void Finish(uint3 id:SV_DispatchThreadID) {
-    if(id.x>=width||id.y>=processingHeight)return;
-    uint i=id.y*width+id.x;
+    if(id.x>=WorkWidth()||id.y>=processingHeight)return;
+    uint i=id.y*WorkWidth()+id.x;
     uint2 pixel=Mirror(i);float depth=hasDepth?GetDepth(ViewUV(pixel)):0;
     depth=depthInverted?depth:1-depth;
     RawOut[i]=float4(Raw[i].rgb,InView(pixel)?depth:-1);
@@ -139,7 +141,7 @@ void Finish(uint3 id:SV_DispatchThreadID) {
     if(good&&useHistory&&old.w>0) {
         float logit=Network[logitOffset+i*2];
         if(isfinite(logit)) {
-            float weight=saturate(historyStrength)*.73974609375/(1+exp(-logit));
+            float weight=saturate(historyStrength)*(reserved.y ? asfloat(reserved.y) : .73974609375)/(1+exp(-logit));
             value=lerp(value,old.rgb,weight);
             Network[i*3]=value.x;Network[i*3+1]=value.y;Network[i*3+2]=value.z;
         }else good=false;
@@ -164,7 +166,7 @@ class History
     ID3D12Resource *postWarp{}, *previousModel{}, *preWarp{}, *previousRaw{};
     ID3D12RootSignature *root{};
     ID3D12PipelineState *reproject{}, *finish{};
-    UINT width{}, height{}, processingHeight{};
+    UINT width{}, height{}, processingHeight{}, processingWidth{};
     D3D12_RESOURCE_STATES preState=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 
     static ID3D12Resource *Buffer(ID3D12Device *device, UINT64 bytes)
@@ -202,23 +204,24 @@ public:
         if(reproject) reproject->Release();
         if(finish) finish->Release();
     }
-    bool Matches(UINT w,UINT h,UINT ph) const { return width==w && height==h && processingHeight==ph; }
-    void Create(ID3D12Device *device, UINT w, UINT h, UINT ph, ID3D12Resource* sharedPre=nullptr,NativeShaderCompiler* compiler=nullptr)
+    bool Matches(UINT w,UINT h,UINT ph,UINT pw=0) const { return width==w && height==h && processingHeight==ph && processingWidth==(pw?pw:w); }
+    void Create(ID3D12Device *device, UINT w, UINT h, UINT ph, ID3D12Resource* sharedPre=nullptr,NativeShaderCompiler* compiler=nullptr,UINT pw=0)
     {
-        if(root||postWarp||!device||!w||!h||ph<h||UINT64(ph)>=UINT64(h)*2||UINT64(w)*ph>UINT_MAX/16)
+        if(!pw)pw=w;
+        if(pw<w||UINT64(pw)>=UINT64(w)*2||root||postWarp||!device||!w||!h||ph<h||UINT64(ph)>=UINT64(h)*2||UINT64(pw)*ph>UINT_MAX/16)
             throw std::runtime_error("fast history initialization/geometry contract");
-        width=w; height=h; processingHeight=ph;
-        postWarp=Buffer(device,UINT64(w)*ph*16);
-        previousRaw=Buffer(device,UINT64(w)*ph*16);
-        previousModel=Buffer(device,UINT64(w)*ph*16);
+        width=w; height=h; processingHeight=ph; processingWidth=pw;
+        postWarp=Buffer(device,UINT64(pw)*ph*16);
+        previousRaw=Buffer(device,UINT64(pw)*ph*16);
+        previousModel=Buffer(device,UINT64(pw)*ph*16);
         if(sharedPre) {
             // The bridge owns the HIP mapping; this extra reference survives
             // every recording lease. COMMON is the D3D12/HIP handoff boundary.
             auto d=sharedPre->GetDesc();
-            if(d.Dimension!=D3D12_RESOURCE_DIMENSION_BUFFER||d.Width<UINT64(w)*ph*16||
+            if(d.Dimension!=D3D12_RESOURCE_DIMENSION_BUFFER||d.Width<UINT64(pw)*ph*16||
                !(d.Flags&D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS))throw std::runtime_error("history shared pre buffer");
             preWarp=sharedPre;preWarp->AddRef();preState=D3D12_RESOURCE_STATE_COMMON;
-        } else preWarp=Buffer(device,UINT64(w)*ph*16);
+        } else preWarp=Buffer(device,UINT64(pw)*ph*16);
         D3D12_DESCRIPTOR_RANGE range{D3D12_DESCRIPTOR_RANGE_TYPE_SRV,2,0,0,0};
         D3D12_ROOT_PARAMETER params[12]{};
         params[0].ParameterType=D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; params[0].DescriptorTable={1,&range};
@@ -271,7 +274,7 @@ public:
         Transition(cmd,preWarp,preState,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         Transition(cmd,postWarp,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         // Keep each dispatch axis below D3D12's 65535-group limit, including 4K.
-        Bind(cmd,raw,output,p,heap,control); cmd->SetPipelineState(reproject); cmd->Dispatch((width+63)/64,processingHeight,1);
+        Bind(cmd,raw,output,p,heap,control); cmd->SetPipelineState(reproject); cmd->Dispatch((processingWidth+63)/64,processingHeight,1);
         Transition(cmd,preWarp,D3D12_RESOURCE_STATE_UNORDERED_ACCESS,preState);
         Transition(cmd,postWarp,D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         Transition(cmd,motion,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,ms,0);
@@ -282,7 +285,7 @@ public:
     {
         Transition(cmd,depth,ds,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,0);
         for(auto *r:{previousRaw,previousModel,output}) Transition(cmd,r,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        Bind(cmd,raw,output,p,heap,control); cmd->SetPipelineState(finish); cmd->Dispatch((width+63)/64,processingHeight,1);
+        Bind(cmd,raw,output,p,heap,control); cmd->SetPipelineState(finish); cmd->Dispatch((processingWidth+63)/64,processingHeight,1);
         for(auto *r:{previousRaw,previousModel,output}) Transition(cmd,r,D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         Transition(cmd,depth,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,ds,0);
     }

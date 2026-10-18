@@ -1,5 +1,9 @@
 # lmxxf 上游同步与接入审阅
 
+0.44 的Small、decoder/down W16和默认/热键消费边界见[消费审阅](../../docs/lmxxf-044-consumer-review.md)。
+`consumer-model-mode.patch`允许产品为每条新建网络显式指定模型，避免继承addon全局热切状态。
+产品仅通过菜单选择模型，不接入F9；Original仍为默认。
+
 当前还增加显式 `inline-side-queue.patch`，仅在录制租约和产品许可下允许同设备独立队列提交；
 输入捕获、有限等待与双队列完成证明由宿主管理，见 [内联执行](../../docs/architecture/nr-inline-recording.md)。
 `inline-ahead-capture.patch` 允许下一帧在上一笔执行尚未结束时写入独立的捕获相位，并只在该帧有序入队时才武装桥接。

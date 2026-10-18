@@ -806,9 +806,10 @@ void RenderMenu(Config* config, float menuResScale)
             view.beforeSr = order == 0;
             if (isLmxxf) {
                 view.input = config->LmxxfNetworkFreeRes.value_or_default() ? "Native input resolution" : MenuLocale::Translate("Network tier: ") + config->LmxxfNetworkHeight.value_or_default();
-                view.model = MenuLocale::Translate("Style ") + std::to_string(config->LmxxfStyle.value_or_default()) +
-                    std::string(" / ") + std::to_string(config->LmxxfMultiPass.value_or_default()) + MenuLocale::Translate(" pass(es)");
-                if (config->LmxxfMultiPass.value_or_default() == 3 && config->LmxxfMultiPassPredict.value_or_default())
+                view.model = (config->LmxxfNetworkModel.value_or_default() == 1 ? std::string("Small / 1") + MenuLocale::Translate(" pass(es)") :
+                    MenuLocale::Translate("Style ") + std::to_string(config->LmxxfStyle.value_or_default()) +
+                    std::string(" / ") + std::to_string(config->LmxxfMultiPass.value_or_default()) + MenuLocale::Translate(" pass(es)"));
+                if (config->LmxxfNetworkModel.value_or_default() == 0 && config->LmxxfMultiPass.value_or_default() == 3 && config->LmxxfMultiPassPredict.value_or_default())
                     view.model += MenuLocale::Translate(" (2 real + prediction)");
             } else if (kind == Backend::Kind::Mochizuki) {
                 view.input = MenuLocale::Translate("Model resolution: ") + std::to_string(int(std::lround(config->MochizukiModelScale.value_or_default() * 100))) + "%";
@@ -1071,6 +1072,8 @@ void RenderMenu(Config* config, float menuResScale)
             auto resetModel = [&]() {
                 if (isLmxxf) {
                     resetOption(config->LmxxfMultiPass); resetOption(config->LmxxfFastNumeric);
+                    resetOption(config->LmxxfNetworkModel);
+                    CfgKey::PutEnvString(CfgKey::LmxxfNetworkModel, std::to_string(config->LmxxfNetworkModel.value_or_default()).c_str());
                     resetOption(config->LmxxfMultiPassPredict); resetOption(config->LmxxfMultiPassSkinProtect);
                     CfgKey::PutEnvAlias(CfgKey::MultiPassPredict, config->LmxxfMultiPassPredict.value_or_default());
                     CfgKey::PutEnvAlias(CfgKey::MultiPassSkinProtect, config->LmxxfMultiPassSkinProtect.value_or_default());
@@ -1360,6 +1363,26 @@ void RenderMenu(Config* config, float menuResScale)
             };
             auto renderModel = [&]() {
                 if (isLmxxf) {
+                    int networkModel = std::clamp(int(config->LmxxfNetworkModel.value_or_default()), 0, 1);
+                    if (MenuUi::Combo("Network model##lmxxf", &networkModel, "Original (71 blocks)\0Small (310.9.16, 31 blocks)\0")) {
+                        config->LmxxfNetworkModel = uint32_t(networkModel);
+                        CfgKey::PutEnvString(CfgKey::LmxxfNetworkModel, std::to_string(networkModel).c_str());
+                        AmdBridge::InvalidateHistory();
+                    }
+                    HelpMarker("Small uses a different trained model and one network pass. Original retains your 1-3 pass preference."
+                               "\nRequires matching small weights in native-game-tiled-assets/small. Missing assets or incompatible options use Original with a status message."
+                               "\nINI: LmxxfNetworkModel (0 Original, 1 Small). Changing models rebuilds the network next frame.");
+                    if (networkModel == 1) MenuUi::TextWrapped("Small runs once. Pass settings below are retained for Original.");
+                    if (networkModel == 1 && status.find("model=original requested_model=small") != std::string::npos) {
+                        const char* reason = status.find("model_reason=missing-small-assets") != std::string::npos ?
+                            "Small assets are missing or damaged. Using Original; rerun model setup and restart the game." :
+                            status.find("model_reason=low-frequency-requires-original") != std::string::npos ?
+                            "Temporal modes 2/3 currently require Original. Select Off or Native history to use Small." :
+                            "Current advanced kernel settings require Original. Restore compatible model defaults to use Small.";
+                        MenuUi::TextWrapped("%s", MenuLocale::Translate(reason));
+                    }
+
+                    ImGui::BeginDisabled(networkModel == 1);
                     float pass = static_cast<float>(config->LmxxfMultiPass.value_or_default());
                     if (RebuildSlider("Network passes", &pass, 1.f, 3.f, true)) {
                         config->LmxxfMultiPass = static_cast<uint32_t>(pass);
@@ -1389,6 +1412,7 @@ void RenderMenu(Config* config, float menuResScale)
                     HelpMarker("Default off. At 2/3 passes, blend skin-coloured regions toward pass 1."
                                "\nColour heuristic: may select warm scenery or miss skin under coloured lighting. Ignored with one pass."
                                "\nINI: DLSS5_MULTI_PASS_SKIN_PROTECT. Changes rebuild the network next frame.");
+                    ImGui::EndDisabled();
                     bool fast = config->LmxxfFastNumeric.value_or_default();
                     if (MenuUi::Checkbox("Fast numeric approximation", &fast)) {
                         config->LmxxfFastNumeric = fast;

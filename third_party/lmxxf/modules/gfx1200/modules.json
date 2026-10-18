@@ -167,8 +167,8 @@
     "defines": "HIP_ISA_HALF 1; HIP_FMED3_CLAMP 1; HIP_FFN_LINE_STORES 1",
     "sources": "multihead_fast_padded.hip",
     "opts": "",
-    "sha256": "AA7351497EADD42A6AA5177D842A285E946378B9078ABD8F5864923AE8CE200F",
-    "source_sha256": "16a064ca8a966809f095865c2f17d26b78214000306e11009b4d4099984c090f"
+    "sha256": "B785F6AC048087F579A2C099352F4A8D28FBDF52E01897748BD75EB3B40A2A1D",
+    "source_sha256": "c9e9d3502de6a80fe320f51995b33ff7ab7d7f2fd8aed0e201f340b3de4d30f0"
   },
   {
     "target": "gfx1200",
@@ -185,8 +185,8 @@
     "defines": "HIP_ISA_HALF 1",
     "sources": "deep_fast.hip",
     "opts": "",
-    "sha256": "025C7F60DFC98470405CA3CBF2E3B46B1E2D8C33530CFCBAE972011AB8C12A62",
-    "source_sha256": "6b7fa44e944017e70bf21b925b50eb2534929022e0ff48765cbfc6090250cae2"
+    "sha256": "E3829F99A92184DC41FEAB28A92EE6BBD7AE56047FED5DAFEAFD1C6781EC866E",
+    "source_sha256": "b47df54fee34deeecd4660fb07d32ce07c519fd609a8517670acaaa29140bc74"
   },
   {
     "target": "gfx1200",
@@ -194,8 +194,8 @@
     "defines": "HIP_ISA_HALF 1; HIP_PREPACKED_WEIGHTS 1; HIP_DEC_WIDE 1; HIP_VIT_ATTN_NATIVE_HALF 1; HIP_VIT_ATTN_PROB_PAIR 1; HIP_VIT_ATTN_TRANSPOSED_AV 1; HIP_VIT_ATTN_TRANSPOSED_SCORE 1; HIP_BRANCHLESS_F 1; C512_F_MASK 1; C512_T8_TAIL_VEC 1; HIP_BYTE_F_ADD0 1; HIP_VIT_ATTN_RCP 1",
     "sources": "deep_fast.hip",
     "opts": "",
-    "sha256": "824BA04EB560C0DFD13175CE3B7E215777E496E4F719A216A6173B800146F520",
-    "source_sha256": "1e57dff11923be9736a67e37b3e121399e102fe8e1f606406d139a69c5d9810b"
+    "sha256": "1D2631E6F45304D305FC748539C7204E4F9C55472BA1BBF40F47D1CCE5DAD651",
+    "source_sha256": "1e4e318926a3da1484d3b41b73a6e1baa02f7248a2d7f2c3873bcbec7cb7774b"
   },
   {
     "target": "gfx1200",
@@ -212,8 +212,8 @@
     "defines": "HIP_ISA_HALF 1; HIP_PREPACKED_WEIGHTS 1; MH_POOL_HALF_IN 1; C512_HEAD_GROUP 1; HIP_C512_HOIST_RES 1; HIP_FFN_HOIST_RES 2; HIP_FFN_LINE_STORES 1; HIP_FMED3_CLAMP 1; HIP_POOL32_B8 1",
     "sources": "multihead_fast_padded.hip+c512_head_group.inc",
     "opts": "",
-    "sha256": "2FEEE445F8129D8ECCCF9E15BF33B46D7142EB35D2ADBA30A1501FB0EB4C920F",
-    "source_sha256": "588c698e50aed747d14716835bbfd978372ac40168337747dd4bd072339c0156"
+    "sha256": "2863F80853E01125418D1CCCBFF77288329E0FB4826EDBD2A07EB580806B1788",
+    "source_sha256": "77018bd8796fb9b9b51c865c80d3632e0843104925d6f097b2f6362527d8a1ae"
   },
   {
     "target": "gfx1200",
@@ -244,9 +244,9 @@
         "-target-feature",
         "-Xclang",
         "-real-true16",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/sources/c32-wave1/probe.hip",
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/sources/c32-wave1/probe.hip",
         "-o",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c32-wave1.bc"
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c32-wave1.bc"
       ],
       [
         "/home/kenny/work/external/llvm23/LLVM-23.1.2-Linux-X64/bin/clang",
@@ -264,9 +264,9 @@
         "-mllvm",
         "-amdgpu-sched-strategy=max-ilp",
         "-S",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c32-wave1.bc",
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c32-wave1.bc",
         "-o",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c32-wave1.hsaco.s"
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c32-wave1.hsaco.s"
       ],
       [
         "/home/kenny/work/external/llvm23/LLVM-23.1.2-Linux-X64/bin/clang",
@@ -286,18 +286,18 @@
         "-c",
         "-mllvm",
         "-amdgpu-internalize-symbols",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c32-wave1.bc",
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c32-wave1.bc",
         "-o",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c32-wave1.o"
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c32-wave1.o"
       ],
       [
         "/home/kenny/work/external/llvm23/LLVM-23.1.2-Linux-X64/bin/ld.lld",
         "--no-undefined",
         "-shared",
         "-plugin-opt=mcpu=gfx1200",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c32-wave1.o",
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c32-wave1.o",
         "-o",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c32-wave1.hsaco"
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c32-wave1.hsaco"
       ]
     ],
     "source_sha256": "f037bd8e7004065847a00093868c644d40279f7b7170e7765684b5a0afc47bcb"
@@ -331,9 +331,9 @@
         "-target-feature",
         "-Xclang",
         "-real-true16",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/sources/c32-wave1-rtz/probe.hip",
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/sources/c32-wave1-rtz/probe.hip",
         "-o",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c32-wave1-rtz.bc"
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c32-wave1-rtz.bc"
       ],
       [
         "/home/kenny/work/external/llvm23/LLVM-23.1.2-Linux-X64/bin/clang",
@@ -351,9 +351,9 @@
         "-mllvm",
         "-amdgpu-sched-strategy=max-ilp",
         "-S",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c32-wave1-rtz.bc",
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c32-wave1-rtz.bc",
         "-o",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c32-wave1-rtz.hsaco.s"
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c32-wave1-rtz.hsaco.s"
       ],
       [
         "/home/kenny/work/external/llvm23/LLVM-23.1.2-Linux-X64/bin/clang",
@@ -373,18 +373,18 @@
         "-c",
         "-mllvm",
         "-amdgpu-internalize-symbols",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c32-wave1-rtz.bc",
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c32-wave1-rtz.bc",
         "-o",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c32-wave1-rtz.o"
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c32-wave1-rtz.o"
       ],
       [
         "/home/kenny/work/external/llvm23/LLVM-23.1.2-Linux-X64/bin/ld.lld",
         "--no-undefined",
         "-shared",
         "-plugin-opt=mcpu=gfx1200",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c32-wave1-rtz.o",
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c32-wave1-rtz.o",
         "-o",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c32-wave1-rtz.hsaco"
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c32-wave1-rtz.hsaco"
       ]
     ],
     "source_sha256": "87010db56a03ced39d9991563808698f0769fe37185bfaf8d67ae7364a9672c7"
@@ -395,7 +395,7 @@
     "defines": "HIP_ISA_HALF 1; W2_UP_FUSED 1; W2_FFN_QT_SMALL_MASK 3; W2_FFN_QT_BATCH 4; W2_BOUNDED_RCP 1; HIP_PREPACKED_WEIGHTS 1; HIP_FFN_HOIST_RES 2; HIP_PDL_KERNELS 0; W2_FRAGMENT_WEIGHTS 1; W2_LAUNDER_QKV 1; W2_SCHED_FENCE 1; W2_ROLL_QUERY 1; W2_HIDDEN_TILES 2; W2_PACK8 6; HIP_FMED3_CLAMP 1; W2_BYTE_INPUT_LOADS 1; W2_RTZ_PAIR 1; W2_DIRECT_COORDS 1; W2_Q8_MASK 1; W2_FFN_W16 1; W2_HOIST_LOADS 15; W2_UP_LOW_BYTES 1; W2_DOWN_HALF 1; W2_UP_VEC 1; W2_QKV_FUSE 3; HIP_BARRIER_FENCE 1",
     "sources": "multihead_fast_padded.hip+wave_owned_mh.inc+wave_owned_attention_setup.inc+@wave-owned-attention-body+wave_owned_attention_exports.inc",
     "opts": "llvm23 prebuilt ",
-    "sha256": "EC8C837B8E43822BE831C9EE0B7FCF04035632F57767DCDC52455FC60186E0C6",
+    "sha256": "CB98C2FAD00CBF3C98D5ADBB3DA4D8269DBF241ED00D363399D40797E4436638",
     "compiler_version": "clang version 23.1.2 (https://github.com/llvm/llvm-project 85ac560262434c9ccfc0c183ec22d4138ed647fb)\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: /home/kenny/work/external/llvm23/LLVM-23.1.2-Linux-X64/bin\n",
     "commands": [
       [
@@ -406,7 +406,7 @@
         "-x",
         "hip",
         "--offload-device-only",
-        "-cuid=9CADF09D8C6262F436F03B3F182D6D0D562E0A0655A0D7837A542E9714676D93",
+        "-cuid=FDF74D6970BA059AB3F6044E99E4DC9E9508F9CECBC53F5894C9DF4327927A34",
         "-c",
         "-emit-llvm",
         "-fshort-wchar",
@@ -418,9 +418,9 @@
         "-target-feature",
         "-Xclang",
         "-real-true16",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/sources/c64-wave2/probe.hip",
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/sources/c64-wave2/probe.hip",
         "-o",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c64-wave2.bc"
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c64-wave2.bc"
       ],
       [
         "/home/kenny/work/external/llvm23/LLVM-23.1.2-Linux-X64/bin/clang",
@@ -434,9 +434,9 @@
         "-Xclang",
         "-real-true16",
         "-S",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c64-wave2.bc",
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c64-wave2.bc",
         "-o",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c64-wave2.hsaco.s"
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c64-wave2.hsaco.s"
       ],
       [
         "/home/kenny/work/external/llvm23/LLVM-23.1.2-Linux-X64/bin/clang",
@@ -452,21 +452,21 @@
         "-c",
         "-mllvm",
         "-amdgpu-internalize-symbols",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c64-wave2.bc",
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c64-wave2.bc",
         "-o",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c64-wave2.o"
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c64-wave2.o"
       ],
       [
         "/home/kenny/work/external/llvm23/LLVM-23.1.2-Linux-X64/bin/ld.lld",
         "--no-undefined",
         "-shared",
         "-plugin-opt=mcpu=gfx1200",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c64-wave2.o",
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c64-wave2.o",
         "-o",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c64-wave2.hsaco"
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c64-wave2.hsaco"
       ]
     ],
-    "source_sha256": "fdcd52efb2dbd83bf10c1b15370a58a336045c2572174a01bff671c3b1ef5f33"
+    "source_sha256": "f1aa63e6c0c4b6a881fa4de6dcf3cc139c30942f337145055a66350b7be850a6"
   },
   {
     "target": "gfx1200",
@@ -497,9 +497,9 @@
         "-target-feature",
         "-Xclang",
         "-real-true16",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/sources/c32-wave1-fast/probe.hip",
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/sources/c32-wave1-fast/probe.hip",
         "-o",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c32-wave1-fast.bc"
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c32-wave1-fast.bc"
       ],
       [
         "/home/kenny/work/external/llvm23/LLVM-23.1.2-Linux-X64/bin/clang",
@@ -517,9 +517,9 @@
         "-mllvm",
         "-amdgpu-sched-strategy=max-ilp",
         "-S",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c32-wave1-fast.bc",
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c32-wave1-fast.bc",
         "-o",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c32-wave1-fast.hsaco.s"
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c32-wave1-fast.hsaco.s"
       ],
       [
         "/home/kenny/work/external/llvm23/LLVM-23.1.2-Linux-X64/bin/clang",
@@ -539,18 +539,18 @@
         "-c",
         "-mllvm",
         "-amdgpu-internalize-symbols",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c32-wave1-fast.bc",
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c32-wave1-fast.bc",
         "-o",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c32-wave1-fast.o"
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c32-wave1-fast.o"
       ],
       [
         "/home/kenny/work/external/llvm23/LLVM-23.1.2-Linux-X64/bin/ld.lld",
         "--no-undefined",
         "-shared",
         "-plugin-opt=mcpu=gfx1200",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c32-wave1-fast.o",
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c32-wave1-fast.o",
         "-o",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c32-wave1-fast.hsaco"
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c32-wave1-fast.hsaco"
       ]
     ],
     "source_sha256": "e722ae3b07090796a94d598592da9530ff7e79160b8ace9c28d3f4d798c9e65d"
@@ -584,9 +584,9 @@
         "-target-feature",
         "-Xclang",
         "-real-true16",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/sources/c32-wave1-fast-norm900/probe.hip",
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/sources/c32-wave1-fast-norm900/probe.hip",
         "-o",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c32-wave1-fast-norm900.bc"
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c32-wave1-fast-norm900.bc"
       ],
       [
         "/home/kenny/work/external/llvm23/LLVM-23.1.2-Linux-X64/bin/clang",
@@ -604,9 +604,9 @@
         "-mllvm",
         "-amdgpu-sched-strategy=max-ilp",
         "-S",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c32-wave1-fast-norm900.bc",
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c32-wave1-fast-norm900.bc",
         "-o",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c32-wave1-fast-norm900.hsaco.s"
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c32-wave1-fast-norm900.hsaco.s"
       ],
       [
         "/home/kenny/work/external/llvm23/LLVM-23.1.2-Linux-X64/bin/clang",
@@ -626,18 +626,18 @@
         "-c",
         "-mllvm",
         "-amdgpu-internalize-symbols",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c32-wave1-fast-norm900.bc",
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c32-wave1-fast-norm900.bc",
         "-o",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c32-wave1-fast-norm900.o"
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c32-wave1-fast-norm900.o"
       ],
       [
         "/home/kenny/work/external/llvm23/LLVM-23.1.2-Linux-X64/bin/ld.lld",
         "--no-undefined",
         "-shared",
         "-plugin-opt=mcpu=gfx1200",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c32-wave1-fast-norm900.o",
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c32-wave1-fast-norm900.o",
         "-o",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c32-wave1-fast-norm900.hsaco"
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c32-wave1-fast-norm900.hsaco"
       ]
     ],
     "source_sha256": "fc370925bdbd71b5458437ae64d1c58a748872b3f2626b5c4c394a02a3f02223"
@@ -648,7 +648,7 @@
     "defines": "HIP_ISA_HALF 1; W2_UP_FUSED 1; W2_FFN_QT_SMALL_MASK 3; W2_FFN_QT_BATCH 4; W2_BOUNDED_RCP 1; HIP_PREPACKED_WEIGHTS 1; HIP_FFN_HOIST_RES 2; HIP_PDL_KERNELS 0; W2_FRAGMENT_WEIGHTS 1; W2_LAUNDER_QKV 1; W2_SCHED_FENCE 1; W2_ROLL_QUERY 1; W2_HIDDEN_TILES 2; W2_PACK8 6; HIP_FMED3_CLAMP 1; W2_BYTE_INPUT_LOADS 1; W2_RTZ_PAIR 1; W2_DIRECT_COORDS 1; W2_Q8_MASK 1; W2_FFN_W16 1; W2_HOIST_LOADS 15; W2_UP_LOW_BYTES 1; W2_DOWN_HALF 1; W2_UP_VEC 1; W2_QKV_FUSE 3; W2_FAST_NUM 3; HIP_BARRIER_FENCE 1",
     "sources": "multihead_fast_padded.hip+wave_owned_mh.inc+wave_owned_attention_setup.inc+@wave-owned-attention-body+wave_owned_attention_exports.inc",
     "opts": "llvm23 prebuilt ",
-    "sha256": "6594F94738938CF528A3D59C63ACDFB59E432A5D074121896FA18CB89B95D93A",
+    "sha256": "DC10C540748AD40725A1EE7241DA69857A0680046099CCB121A951C0616705B3",
     "compiler_version": "clang version 23.1.2 (https://github.com/llvm/llvm-project 85ac560262434c9ccfc0c183ec22d4138ed647fb)\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: /home/kenny/work/external/llvm23/LLVM-23.1.2-Linux-X64/bin\n",
     "commands": [
       [
@@ -659,7 +659,7 @@
         "-x",
         "hip",
         "--offload-device-only",
-        "-cuid=BE4B5814AC970326BDC3D64C5300CAEE17BC14A66C9210879A21475DA1A1D247",
+        "-cuid=68C199FA39800E26B990126B06B75D94AF8A41E1578C1320DD61A278D4EDB23E",
         "-c",
         "-emit-llvm",
         "-fshort-wchar",
@@ -671,9 +671,9 @@
         "-target-feature",
         "-Xclang",
         "-real-true16",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/sources/c64-wave2-fast/probe.hip",
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/sources/c64-wave2-fast/probe.hip",
         "-o",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c64-wave2-fast.bc"
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c64-wave2-fast.bc"
       ],
       [
         "/home/kenny/work/external/llvm23/LLVM-23.1.2-Linux-X64/bin/clang",
@@ -687,9 +687,9 @@
         "-Xclang",
         "-real-true16",
         "-S",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c64-wave2-fast.bc",
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c64-wave2-fast.bc",
         "-o",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c64-wave2-fast.hsaco.s"
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c64-wave2-fast.hsaco.s"
       ],
       [
         "/home/kenny/work/external/llvm23/LLVM-23.1.2-Linux-X64/bin/clang",
@@ -705,21 +705,21 @@
         "-c",
         "-mllvm",
         "-amdgpu-internalize-symbols",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c64-wave2-fast.bc",
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c64-wave2-fast.bc",
         "-o",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c64-wave2-fast.o"
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c64-wave2-fast.o"
       ],
       [
         "/home/kenny/work/external/llvm23/LLVM-23.1.2-Linux-X64/bin/ld.lld",
         "--no-undefined",
         "-shared",
         "-plugin-opt=mcpu=gfx1200",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c64-wave2-fast.o",
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c64-wave2-fast.o",
         "-o",
-        "/home/kenny/work/lmxxf-llvm23-042-3a1be68c/gfx1200/c64-wave2-fast.hsaco"
+        "/home/kenny/work/lmxxf-llvm23-044-d50cde4b/gfx1200/c64-wave2-fast.hsaco"
       ]
     ],
-    "source_sha256": "75822007120a71d1ca18393f2ba7a91e15106d621c58d9f789aef36a0f7b331b"
+    "source_sha256": "1fe336224c7fb4ecac905148f85137e737ab8ef45ee64157fb0a2d8531138998"
   },
   {
     "target": "gfx1200",
@@ -727,8 +727,8 @@
     "defines": "HIP_ISA_HALF 1; HIP_DEC_WIDE 1; HIP_VIT_ATTN_NATIVE_HALF 1; HIP_VIT_ATTN_PROB_PAIR 1; HIP_VIT_ATTN_TRANSPOSED_AV 1; HIP_VIT_ATTN_TRANSPOSED_SCORE 1; HIP_BRANCHLESS_F 1; C512_F_MASK 1; C512_T8_TAIL_VEC 1; HIP_BYTE_F_ADD0 1; HIP_VIT_ATTN_RCP 1; VIT_FAST_NUM 15",
     "sources": "deep_fast.hip",
     "opts": "",
-    "sha256": "324A59139D401AF9C950640CDEAED72E1A6F438B0040DE6FBE752A51ABD584F1",
-    "source_sha256": "8c2c105f1097bb7b91af150d0b2a18c5c70949930eac783169607a91ebd37c20"
+    "sha256": "625B9D65C8658171B09E96EE78278F65903C6E7C637DDCE889BAC0C6B957D863",
+    "source_sha256": "ece4d45dcec0d2ba768df3bf287db06b56abe5e7fcb4c5a46de01b9a6591c602"
   },
   {
     "target": "gfx1200",
@@ -736,8 +736,8 @@
     "defines": "HIP_ISA_HALF 1; VIT_CONTRACT_BYTE_EDGE 1; HIP_PREPACKED_WEIGHTS 1; HIP_BRANCHLESS_F 1; HIP_VIT_STREAM_KERNELS 1; HIP_VIT_QKV_W5 1; VIT_CONTRACT_OCC_LDS 4096; VIT_QKV_F8W 1; HIP_BYTE_F_ADD0 1; VIT_FAST_NUM 4",
     "sources": "deep_fast.hip+vit_stream.inc",
     "opts": "",
-    "sha256": "84CB1D858500FC00D9388FCB4E7A701352F6521398DEC412B6DC05CA2DC6F7A0",
-    "source_sha256": "a2a6a27a75ed67db6affea7a38439def35fa063894b642860cc99056027ed017"
+    "sha256": "6FB074282A1C6E57C18A9B119583418A65CF20FFAA4AFDAF4BAD5118C6F1336F",
+    "source_sha256": "de2e5adf9aaf419367dc6c5cd1c9b53d4f56e6c45fa2582206438b45bcb136a4"
   },
   {
     "target": "gfx1200",
@@ -745,8 +745,8 @@
     "defines": "HIP_ISA_HALF 1; C512_COMPACT_QKV_ATTN 1; C512_FUSED_QKV_ATTN 1; HIP_PREPACKED_WEIGHTS 1; HIP_FFN_HOIST_RES 2; HIP_PDL_KERNELS 0; HIP_FMED3_CLAMP 1; C512_COMPACT_NOF 1; C512_COMPACT_RCP 1; C512_COMPACT_FUSEQKV 1; C512_COMPACT_QKV_DEEP 4; C512_COMPACT_QKV_SCHED 1",
     "sources": "multihead_fast_padded.hip+c512_m32_mh.inc+c512_qkv_attention_fused.inc+c512_qkv_attention_compact.inc",
     "opts": "",
-    "sha256": "CB5C87D11AB81D944E81F3A121637D580F719FE492B6BF5BD08DA797338F3481",
-    "source_sha256": "4dd215d6f3c9434beb70a24347f165a5ac7fa3df84c80912516b2006abc34bfc"
+    "sha256": "90B02D674BF9C81457429361626EFF75C091F9C3C4B9A1FCCBB82F5E6B34D096",
+    "source_sha256": "14c4bc25d69bcdae8817ec98812f6a110a3e6e5cc756c695868381ad6fbe7f18"
   },
   {
     "target": "gfx1200",
@@ -754,8 +754,8 @@
     "defines": "HIP_ISA_HALF 1; C512_DIRECT_PACK 3; HIP_PREPACKED_WEIGHTS 1; HIP_BRANCHLESS_F 1; C512_MIX_OCC_LDS 4096; C512_F_MASK 1; HIP_BYTE_F_ADD0 1; C512_FFN_ONE 2; C512_FFN_F8W 1",
     "sources": "deep_fast.hip+c512_m32_deep.inc",
     "opts": "-mllvm=-amdgpu-sched-strategy=max-ilp",
-    "sha256": "ABB6F9867C50560ACA8FC1B17006181B562E795F7C6A8288745A9E997AB299B0",
-    "source_sha256": "fe7df5ae2b31631f190b41385a7790913bd351757a7efeab9281c94e9c257a18"
+    "sha256": "96988ECEDDF3B5BF77AEF83A39FC05F9D7B56E8D465263B6B7E668F612AE50DB",
+    "source_sha256": "d82c432f2a89e57af95f5f2e95f62430d2e3b703c7a5f077fda0a31ce390696e"
   },
   {
     "target": "gfx1200",
@@ -763,8 +763,8 @@
     "defines": "HIP_ISA_HALF 1; VIT_CONTRACT_BYTE_EDGE 1; HIP_PREPACKED_WEIGHTS 1; HIP_BRANCHLESS_F 1; HIP_VIT_STREAM_KERNELS 1; HIP_VIT_QKV_W5 1; VIT_CONTRACT_OCC_LDS 4096; VIT_QKV_F8W 1; HIP_BYTE_F_ADD0 1",
     "sources": "deep_fast.hip+vit_stream.inc",
     "opts": "",
-    "sha256": "DFDBF73A1E0DFE568EE5614A5084E5ED09F38465AA62603AAE41E9C266D0E1F2",
-    "source_sha256": "847f3d42700d8c025f0233d873a271cf6d8c3b762a52fecaa89017f93521b4c2"
+    "sha256": "EEBB88795B248B16AB2A029204E507B079C4885C1A93030787B9AD491E8B5874",
+    "source_sha256": "8e6f9ccd589e28bcc307dad1f100b9e93856fc92c9827e3c90e902abbc32c232"
   },
   {
     "target": "gfx1200",
@@ -772,8 +772,8 @@
     "defines": "HIP_ISA_HALF 1; HIP_PREPACKED_WEIGHTS 1; HIP_BRANCHLESS_F 1",
     "sources": "deep_fast.hip+vit_wide_deep.inc",
     "opts": "",
-    "sha256": "E1AC1056166C55709C3FD1AC8A2585C455F995C367D964EDDE19528C43DE8508",
-    "source_sha256": "0f90f24773bfc4d8e6426b627848b313ec579958c642c901b15641a4648e7903"
+    "sha256": "E4D3445DCDE60D6AC8EE34DCE14564C61FAAFD3C7313C1EA88AD6C1E02883900",
+    "source_sha256": "3647ecb8b1ee5fe2188e78ae1002973cd76bbfd73430ac046d2993eeb69923fc"
   },
   {
     "target": "gfx1200",
@@ -799,8 +799,8 @@
     "defines": "HIP_ISA_HALF 1; W2_UP_FUSED 1; W2_FFN_QT_SMALL_MASK 3; W2_FFN_QT_BATCH 2; W2_BOUNDED_RCP 1; HIP_PREPACKED_WEIGHTS 1; HIP_FFN_HOIST_RES 2; HIP_PDL_KERNELS 0; W2_FRAGMENT_WEIGHTS 1; W2_LAUNDER_QKV 1; W2_SCHED_FENCE 1; W2_ROLL_QUERY 1; W2_HIDDEN_TILES 2; W2_PACK8 6; HIP_FMED3_CLAMP 1; W2_BYTE_INPUT_LOADS 1; W2_RTZ_PAIR 1; W2_DIRECT_COORDS 1; W2_Q8_MASK 1; W2_FFN_W16 1; W2_EXPLICIT_WINDOW 1; W2_NO_EXPORTS 1; HIP_SWIN_PERSISTENT_KERNELS 1",
     "sources": "multihead_fast_padded.hip+wave_owned_mh.inc+@swin-persistent-types+swin_persistent.inc",
     "opts": "",
-    "sha256": "85D400B88ABF525E11FBC4FD921F7AFCB90E6D0BA358EE8B5BAC3C799F202F16",
-    "source_sha256": "39aa913b6b50d635e617b792a446d1995c5c3c16565f4aad4641cd340866f70b"
+    "sha256": "2EE7915698E82271F27A013B3C49B59979659A7100FE6AA39308990ABFD068EB",
+    "source_sha256": "223ba5eb5d6b396f84654da2a43cdcfc15c5d414373a7c7a2506f1d392886d29"
   },
   {
     "target": "gfx1200",
@@ -808,7 +808,7 @@
     "defines": "HIP_ISA_HALF 1; W2_UP_FUSED 1; W2_FFN_QT_SMALL_MASK 3; W2_FFN_QT_BATCH 2; W2_BOUNDED_RCP 1; HIP_PREPACKED_WEIGHTS 1; HIP_FFN_HOIST_RES 2; HIP_PDL_KERNELS 0; W2_FRAGMENT_WEIGHTS 1; W2_LAUNDER_QKV 1; W2_SCHED_FENCE 1; W2_ROLL_QUERY 1; W2_HIDDEN_TILES 2; W2_PACK8 6; HIP_FMED3_CLAMP 1; W2_BYTE_INPUT_LOADS 1; W2_RTZ_PAIR 1; W2_DIRECT_COORDS 1; W2_Q8_MASK 1; W2_FFN_W16 1; W2_EXPLICIT_WINDOW 1; W2_NO_EXPORTS 1; HIP_SWIN_PERSISTENT_KERNELS 1; W2_FAST_NUM 3",
     "sources": "multihead_fast_padded.hip+wave_owned_mh.inc+@swin-persistent-types+swin_persistent.inc",
     "opts": "",
-    "sha256": "DFE053B71579D1384FE14A23E8F5EEFDB4374EA2F9E2B9C9C5C32D9BD6C19B0B",
-    "source_sha256": "5fed00910e34bbd4945c7ab0104ea500c1c3cc393ff86bb7b11052a134a0a8f5"
+    "sha256": "CA87F8D6AA72353FFB2F61D522DF5D2B8945BF44DA3E6091C44290F6A8A3B38B",
+    "source_sha256": "8cc31f145aeeccf5e98636b3f38222097d55400dfdc68029580d21259977990a"
   }
 ]

@@ -34,9 +34,16 @@ set "RT_INC=%REPO%\OptiScaler-DLSSNR-PreSR-Multipass-main\OptiScaler\dlssnr\back
 set "INC=%REPO%\OptiScaler-DLSSNR-PreSR-Multipass-main\OptiScaler\include"
 set "DETOURS=%REPO%\OptiScaler-DLSSNR-PreSR-Multipass-main\OptiScaler\library\detours\detours.lib"
 set "MODS=%REPO%\third_party\lmxxf\modules"
+if defined LMXXF_TEST_MODULES set "MODS=%LMXXF_TEST_MODULES%"
 set "CXX=cl /nologo /std:c++20 /EHsc /W4 /utf-8"
 set "D3D=d3d12.lib dxgi.lib dxguid.lib uuid.lib"
+if /i "%TIER%"=="model-gpu" goto model-gpu
+if /i "%TIER%"=="model" goto model
 if /i "%TIER%"=="abi" goto abi
+if /i "%TIER%"=="native-temporal" (
+  call :RunNativeTemporal || goto fail
+  goto pass
+)
 if /i "%TIER%"=="warp" goto warp
 if /i "%TIER%"=="release" goto release
 if /i "%TIER%"=="device" goto device
@@ -52,6 +59,31 @@ if /i "%TIER%"=="wait-profile" goto slots
 if /i "%TIER%"=="split-state" goto split-state
 echo usage: tests\lmxxf\run.cmd abi^|warp^|device^|inline^|inline-discard^|inline-gpu^|slots^|wait-profile^|split-state^|early-unity^|hip-passthrough^|gpu [out-dir]
 exit /b 2
+
+:model-gpu
+if not defined LMXXF_ASSETS goto fail
+set "LMXXF_WEIGHTS_DIR=%LMXXF_ASSETS%"
+set "DLSS5_NETWORK_MODEL=0"
+set "DLSS5_NETWORK_HEIGHT=720"
+set "DLSS5_NETWORK_FREE_RES=0"
+set "DLSS5_MULTI_PASS=1"
+set "DLSS5_SKIP_BLOCKS=none"
+set "DLSS5_FAST_NUMERIC=1"
+call :Runtime || goto fail
+%CXX% tests\lmxxf\lmxxf_nr_gpu.cpp /Fe"%OUT%\lmxxf_nr_gpu.exe" /Fo"%OUT%\lmxxf_nr_gpu.obj" /link d3d12.lib dxgi.lib || goto fail
+"%OUT%\lmxxf_nr_gpu.exe" "%LMXXF_TEST_RUNTIME%" "%MODS%" --044-models || goto fail
+set "DLSS5_NETWORK_MODEL=1"
+set "DLSS5_NETWORK_HEIGHT=auto"
+%CXX% tests\lmxxf\lmxxf_native_history_gpu.cpp /Fe"%OUT%\lmxxf_native_history_gpu.exe" /Fo"%OUT%\lmxxf_native_history_gpu.obj" /link %D3D% d3dcompiler.lib || goto fail
+"%OUT%\lmxxf_native_history_gpu.exe" "%LMXXF_TEST_RUNTIME%" "%MODS%" --small || goto fail
+"%OUT%\lmxxf_native_history_gpu.exe" "%LMXXF_TEST_RUNTIME%" "%MODS%" --small-inline || goto fail
+goto pass
+
+:model
+"%AMD_TEST_PYTHON%" -B tests\lmxxf\test_small_assets.py || goto fail
+%CXX% /I"%REPO%\third_party\lmxxf\Development\HIP" /I"%REPO%\third_party\lmxxf\src" tests\lmxxf\lmxxf_model_options.cpp /Fe"%OUT%\lmxxf_model_options.exe" /Fo"%OUT%\lmxxf_model_options.obj" /link user32.lib || goto fail
+"%OUT%\lmxxf_model_options.exe" || goto fail
+goto pass
 
 :abi
 %CXX% tests\lmxxf\hip_runtime_load.cpp /Fe"%OUT%\hip_runtime_load.exe" /Fo"%OUT%\hip_runtime_load.obj" || goto fail

@@ -225,6 +225,7 @@ inline constexpr char kDefaultSkipBlocks[] = "none";
 inline constexpr const char *NetworkFreeRes = "DLSS5_NETWORK_FREE_RES";
 inline constexpr const char *FastNumeric = "DLSS5_FAST_NUMERIC";
 inline constexpr const char *MultiPass = "DLSS5_MULTI_PASS";
+inline constexpr const char *LmxxfNetworkModel = "LmxxfNetworkModel";
 inline constexpr const char *MultiPassPredict = "DLSS5_MULTI_PASS_PREDICT";
 inline constexpr const char *MultiPassSkinProtect = "DLSS5_MULTI_PASS_SKIN_PROTECT";
 inline constexpr const char *MultiPassSkipBlocks = "DLSS5_MULTI_PASS_SKIP_BLOCKS";
@@ -528,6 +529,7 @@ inline constexpr const char *const kKnown[] = {
     NetworkFreeRes,
     FastNumeric,
     MultiPass,
+    LmxxfNetworkModel,
     MultiPassPredict,
     MultiPassSkinProtect,
     MultiPassSkipBlocks,
@@ -678,6 +680,8 @@ inline const char *EnvAlias(const char *iniKey)
 {
     if (!iniKey)
         return nullptr;
+    if (std::strcmp(iniKey, LmxxfNetworkModel) == 0)
+        return "DLSS5_NETWORK_MODEL";
     if (std::strncmp(iniKey, "DLSS5_", 6) == 0)
         return iniKey;
     return nullptr;

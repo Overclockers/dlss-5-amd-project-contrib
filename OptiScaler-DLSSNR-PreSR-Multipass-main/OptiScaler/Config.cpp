@@ -696,6 +696,10 @@ bool Config::Reload(std::filesystem::path iniPath)
                 CfgKey::PutEnvAlias(CfgKey::NetworkFreeRes, LmxxfNetworkFreeRes.value_or_default());
                 CfgKey::PutEnvAlias(CfgKey::FastNumeric, LmxxfFastNumeric.value_or_default());
                 auto passes = readUInt(CfgKey::kSection, CfgKey::MultiPass).value_or(1);
+                const auto networkModel = readUInt(CfgKey::kSection, CfgKey::LmxxfNetworkModel).value_or(0);
+                LmxxfNetworkModel.set_from_config(networkModel <= 1 ? networkModel : 0);
+                CfgKey::PutEnvString(CfgKey::LmxxfNetworkModel,
+                                    std::to_string(LmxxfNetworkModel.value_or_default()).c_str());
                 if (passes < 1 || passes > 3) {
                     LOG_WARN("DlssNr.{} must be 1..3; using 1", CfgKey::MultiPass);
                     passes = 1;
@@ -2045,6 +2049,7 @@ bool Config::SaveIni()
     ini.SetValue(CfgKey::kSection, CfgKey::NetworkFreeRes, GetBoolValue(Instance()->LmxxfNetworkFreeRes.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::FastNumeric, GetBoolValue(Instance()->LmxxfFastNumeric.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::MultiPass, std::to_string(Instance()->LmxxfMultiPass.value_or_default()).c_str());
+    ini.SetValue(CfgKey::kSection, CfgKey::LmxxfNetworkModel, std::to_string(Instance()->LmxxfNetworkModel.value_or_default()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::MultiPassPredict, GetBoolValue(Instance()->LmxxfMultiPassPredict.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::MultiPassSkinProtect, GetBoolValue(Instance()->LmxxfMultiPassSkinProtect.value_for_config()).c_str());
     ini.SetValue(CfgKey::kSection, CfgKey::MultiPassSkipBlocks, Instance()->LmxxfMultiPassSkipBlocks.value_or_default().c_str());

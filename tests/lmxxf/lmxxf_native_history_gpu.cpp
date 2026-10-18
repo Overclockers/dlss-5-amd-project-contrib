@@ -12,8 +12,10 @@ struct Recording {
     ComPtr<ID3D12Fence> fence;UINT64 value=0;
 };
 int main(int argc,char** argv)try {
-    Require(argc==3||(argc==4&&(!std::strcmp(argv[3],"--inline")||!std::strcmp(argv[3],"--history-excludes-adaptive")||!std::strcmp(argv[3],"--history-900"))),"runtime DLL, modules directory, optional --history-excludes-adaptive or --history-900");
-    const bool inlineMode=argc==4&&!std::strcmp(argv[3],"--inline");
+    const bool smallModel=argc==4&&(!std::strcmp(argv[3],"--small")||!std::strcmp(argv[3],"--small-inline"));
+    if(smallModel){SetEnvironmentVariableA("DLSS5_NETWORK_MODEL","1");_putenv_s("DLSS5_NETWORK_MODEL","1");}
+    Require(argc==3||(argc==4&&(smallModel||!std::strcmp(argv[3],"--inline")||!std::strcmp(argv[3],"--history-excludes-adaptive")||!std::strcmp(argv[3],"--history-900"))),"runtime DLL, modules directory, optional --history-excludes-adaptive or --history-900");
+    const bool inlineMode=argc==4&&(!std::strcmp(argv[3],"--inline")||!std::strcmp(argv[3],"--small-inline"));
     const bool adaptive=argc==4&&!std::strcmp(argv[3],"--history-excludes-adaptive");
     const bool norm900=argc==4&&!std::strcmp(argv[3],"--history-900");
     if(norm900)for(auto kv:{std::pair{"DLSS5_FAST_NUMERIC","1"},{"DLSS5_NETWORK_FREE_RES","1"},{"DLSS5_SKIP_BLOCKS","none"}}){
@@ -119,6 +121,15 @@ int main(int argc,char** argv)try {
             "unchanged input actually reuses ViT after turning history off");
     }
     Require(run(first,other.Get())==prime,"old chain replay after history-off rebuild");
+    if(smallModel) {
+        status("model=small requested_model=small model_reason=small-ready");
+        SetEnvironmentVariableA("DLSS5_NETWORK_MODEL","0");_putenv_s("DLSS5_NETWORK_MODEL","0");
+        auto* originalModel=record(8);status("model=original requested_model=original");
+        auto originalHash=run(originalModel,g.queue.Get());Require(originalHash!=prime,"distinct Original model output");
+        Require(run(first,other.Get())==prime,"retained Small recording replays across Original rebuild");
+        SetEnvironmentVariableA("DLSS5_NETWORK_MODEL","1");_putenv_s("DLSS5_NETWORK_MODEL","1");
+        Require(run(record(9),g.queue.Get())==prime,"Small restoration primes the same output");
+    } else {
     SetEnvironmentVariableA("DLSS5_MULTI_PASS","2");_putenv_s("DLSS5_MULTI_PASS","2");
     auto* multi=record(8);status("history=ready");auto multiPrime=run(multi,g.queue.Get());status("history=priming");status("passes=2");
     auto* multiNext=record(9);auto multiActive=run(multiNext,other.Get());status("history=active");
@@ -136,6 +147,7 @@ int main(int argc,char** argv)try {
         // Even maximally permissive gates cannot enable reuse while history is requested.
         for(auto key:{"DLSS5_VIT_REUSE_GLOBAL","DLSS5_VIT_REUSE_LOCAL","DLSS5_VIT_REUSE_IMAGE"}){SetEnvironmentVariableA(key,"1000000");_putenv_s(key,"1000000");}
         run(record(15),g.queue.Get());
+    }
     }
     auto collect=[&](){for(auto& r:frames){r->p.Reset();r->c.Reset();ok(api.InvalidateRecording(session,r->token),"invalidate");ok(api.CollectRecording(session,r->token),"collect");}frames.clear();};
     if(norm900){

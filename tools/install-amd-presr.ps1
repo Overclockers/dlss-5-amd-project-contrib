@@ -1824,6 +1824,19 @@ if ($installLmxxf) {
     } else {
         Write-Host 'NOTE: native-game-tiled-assets not found in package. If using lmxxf, place native-game-tiled-assets in the game folder.' -ForegroundColor DarkYellow
     }
+    if ($mochizukiSmallModel) {
+        $smallHelper = Find-FirstFile @((Join-Path $Root 'lmxxf-small.ps1'), (Join-Path $PSScriptRoot 'install/lmxxf-small.ps1'))
+        if ($smallHelper) {
+            try {
+                . $smallHelper
+                Initialize-LmxxfSmall -Pack $mochizukiSmallModel -Output (Join-Path $gameWeights 'small')
+            } catch {
+                Write-Host $_.Exception.Message -ForegroundColor Yellow
+                Write-Host 'Original remains available. Rerun Setup before selecting lmxxf Small.' -ForegroundColor Yellow
+            }
+        }
+    }
+
 
 
 }

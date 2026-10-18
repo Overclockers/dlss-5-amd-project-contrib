@@ -13,6 +13,8 @@
 #include "LmxxfHipRuntimeLoad.h"
 #define HIP_PROBE_RUNTIME_MODULE(version) LmxxfHipRuntimeLoad::Load(version)
 #include "LmxxfProductionOptions.h"
+#include "LmxxfModelOptions.h"
+#include "LmxxfSmallAssets.h"
 #include "LmxxfExposureMeter.h"
 #include "native_device_identity.h"
 #include "native_game_codec.h"
@@ -1167,6 +1169,10 @@ struct Session
     unsigned netW = 0;
     unsigned netH = 0;
     unsigned netProcessingH = 0;
+    unsigned netProcessingW = 0;
+    bool requestedSmall = false, smallModel = false;
+    std::string modelReason = "original";
+    int smallAssetsValid = 0; // Session cache: install assets before starting the game.
     float networkStyle = -1.f;
     std::string networkOptions;
     // Adaptive reuse reads live env, but byte stream is baked into the network.
@@ -1774,7 +1780,7 @@ void PrepareHistory(Session* s,const LmxxfNrFrameInfo* info,RecordingJob& j)
     auto ng=NativeCurrentNetworkGeometry();auto& chain=*j.chain;
     if(!chain.history){
         auto history=std::make_unique<LmxxfNativeTemporal::History>();
-        history->Create(s->device,ng.valid_width,ng.valid_height,ng.processing_height,s->bridge->DirectHistory(),LmxxfCompiler());
+        history->Create(s->device,ng.valid_width,ng.valid_height,ng.processing_height,s->bridge->DirectHistory(),LmxxfCompiler(),ng.processing_width);
         if(!chain.control.Resource())chain.control.Create(s->device);
         chain.history=std::move(history);
     }
@@ -1785,7 +1791,10 @@ void PrepareHistory(Session* s,const LmxxfNrFrameInfo* info,RecordingJob& j)
     p.viewX=g.x;p.viewY=g.y;p.viewWidth=g.fit_width;p.viewHeight=g.fit_height;
     p.renderWidth=j.width;p.renderHeight=j.height;p.motionWidth=info->motion_width;p.motionHeight=info->motion_height;
     p.scaleX=info->motion_scale_x/float(info->motion_width);p.scaleY=info->motion_scale_y/float(info->motion_height);
-    p.historyStrength=1;p.logitOffset=ng.valid_width*ng.processing_height*3;p.hasDepth=1;
+    p.historyStrength=1;p.logitOffset=ng.processing_width*ng.processing_height*3;p.hasDepth=1;
+    p.reserved[2]=ng.processing_width;
+    const float blend=s->smallModel?.76708984375f:.73974609375f;
+    std::memcpy(&p.reserved[1],&blend,sizeof blend);
     p.depthInverted=(info->temporal_flags&LMXXF_NR_TEMPORAL_DEPTH_INVERTED)?1:0;
     j.temporal=true;s->historyStatus="ready";
 }
@@ -1945,8 +1954,33 @@ int32_t PrepareFrame(void *context, const LmxxfNrFrameInfo *info, LmxxfNrJob *jo
                 SetError(tierMsg);
             }
         }
+        if (LmxxfSmallRequested() && !session->smallAssetsValid) {
+            bool valid=true;
+            const auto root=JoinPath(session->weightsDir,L"small");
+            for (const auto& asset:kLmxxfSmallAssets) {
+                std::string hash;
+                std::error_code ec;
+                const auto path=JoinPath(root,asset.name);
+                // Upstream ReadWeights prefers f32. Reject an unverified alternate
+                // instead of letting it shadow the pinned half file.
+                auto alternate=std::filesystem::path(path);alternate.replace_extension(L".f32");
+                if (std::filesystem::path(path).extension()==L".f16" && std::filesystem::exists(alternate,ec)) {valid=false;break;}
+                if (!IsPathSafelyContained(session->weightsDir,JoinPath(L"small",asset.name)) ||
+                    std::filesystem::file_size(path,ec)!=asset.bytes || ec ||
+                    !CachedFileSha256(path,&hash) || hash!=asset.sha256) { valid=false;break; }
+            }
+            valid=valid&&hip_reference::SmallAssetsAvailable(Utf8(root));
+            session->smallAssetsValid=valid?1:-1;
+        }
+        auto model = LmxxfResolveModel(Utf8(session->modulesDir), Utf8(session->weightsDir),session->smallAssetsValid>0);
+        NativeSmallGeometryEnabled() = model.useSmall;
         auto resolvedGeo = NativeResolveNetworkGeometry(info->color_width, info->color_height);
+        model.options.width = resolvedGeo.processing_width;
+        model.options.height = resolvedGeo.processing_height;
         std::string requestedOptions;
+        requestedOptions += model.useSmall ? "small=1;" : "small=0;";
+        session->requestedSmall = model.requestedSmall;
+        session->modelReason = model.reason;
         for (const char* key : {CfgKey::MultiPass, CfgKey::MultiPassPredict, CfgKey::MultiPassSkinProtect,
                                CfgKey::MultiPassSkipBlocks, CfgKey::FastNumeric,
                                CfgKey::NetworkFreeRes, CfgKey::SkipBlocks}) {
@@ -1978,8 +2012,7 @@ int32_t PrepareFrame(void *context, const LmxxfNrFrameInfo *info, LmxxfNrJob *jo
         if (!session->hipPrepared)
         {
             auto geo = NativeCurrentNetworkGeometry();
-            auto opt = LmxxfProductionOptions(geo.processing_width, geo.processing_height,
-                                              Utf8(session->modulesDir), Utf8(session->weightsDir));
+            auto opt = model.options;
             if (opt.graph)
                 return Fail(LMXXF_NR_FAILED, "PrepareFrame: graph must stay off");
             session->InstallBridge(new hip_reference::D3D12Bridge());
@@ -1990,7 +2023,7 @@ int32_t PrepareFrame(void *context, const LmxxfNrFrameInfo *info, LmxxfNrJob *jo
                 hip_reference::WaveOwnedCompatible(opt) && opt.post_merge_fold && opt.post_head_fused)
             {
                 session->bridge->RequestDirectHistory();
-                session->bridge->RequestPostAuxiliary(LmxxfNativePostWeights());
+                session->bridge->RequestPostAuxiliary(LmxxfNativePostWeights(session->weightsDir, model.useSmall));
             }
             session->bridge->Create(session->queue, opt, {});
             session->bridge->SetAdaptiveReuseAllowed(!requestAnyTemporal);
@@ -2002,6 +2035,8 @@ int32_t PrepareFrame(void *context, const LmxxfNrFrameInfo *info, LmxxfNrJob *jo
             session->netW = geo.valid_width;
             session->netH = geo.valid_height;
             session->netProcessingH = geo.processing_height;
+            session->netProcessingW = geo.processing_width;
+            session->smallModel = model.useSmall;
             session->networkStyle = requestedStyle;
             session->networkOptions = requestedOptions;
             session->CaptureBridgeDiagnostics();
@@ -2223,7 +2258,8 @@ int32_t PrepareFrame(void *context, const LmxxfNrFrameInfo *info, LmxxfNrJob *jo
         const bool tierChanged = session->encode &&
                                  (session->netW != resolvedGeo.valid_width ||
                                   session->netH != resolvedGeo.valid_height ||
-                                  session->netProcessingH != resolvedGeo.processing_height);
+                                  session->netProcessingH != resolvedGeo.processing_height ||
+                                  session->netProcessingW != resolvedGeo.processing_width);
         const bool styleChanged = session->hipPrepared && (session->networkStyle != requestedStyle || session->networkOptions != requestedOptions);
         const char *vitByte = std::getenv(CfgKey::VitByteStream);
         const bool vitByteStreamChanged = session->hipPrepared &&
@@ -2280,8 +2316,7 @@ int32_t PrepareFrame(void *context, const LmxxfNrFrameInfo *info, LmxxfNrJob *jo
             if (!session->bridge)
             {
                 auto geo = NativeCurrentNetworkGeometry();
-                auto opt = LmxxfProductionOptions(geo.processing_width, geo.processing_height,
-                                                  Utf8(session->modulesDir), Utf8(session->weightsDir));
+                auto opt = model.options;
                 if (opt.graph)
                     return Fail(LMXXF_NR_FAILED, "PrepareFrame: graph must stay off");
                 session->InstallBridge(new hip_reference::D3D12Bridge());
@@ -2292,7 +2327,7 @@ int32_t PrepareFrame(void *context, const LmxxfNrFrameInfo *info, LmxxfNrJob *jo
                     hip_reference::WaveOwnedCompatible(opt) && opt.post_merge_fold && opt.post_head_fused)
                 {
                     session->bridge->RequestDirectHistory();
-                    session->bridge->RequestPostAuxiliary(LmxxfNativePostWeights());
+                    session->bridge->RequestPostAuxiliary(LmxxfNativePostWeights(session->weightsDir, model.useSmall));
                 }
                 session->bridge->Create(session->queue, opt, {});
                 session->bridge->SetAdaptiveReuseAllowed(!requestAnyTemporal);
@@ -2304,8 +2339,10 @@ int32_t PrepareFrame(void *context, const LmxxfNrFrameInfo *info, LmxxfNrJob *jo
                 session->netW = geo.valid_width;
                 session->netH = geo.valid_height;
                 session->netProcessingH = geo.processing_height;
+                session->netProcessingW = geo.processing_width;
+                session->smallModel = model.useSmall;
                 session->networkStyle = requestedStyle;
-            session->networkOptions = requestedOptions;
+                session->networkOptions = requestedOptions;
                 session->CaptureBridgeDiagnostics();
                 char geoMsg[192] {};
                 std::snprintf(geoMsg, sizeof geoMsg,
@@ -3282,7 +3319,7 @@ int32_t GetStatus(void *context, char *buf, uint32_t buf_chars)
         if (session)
         {
             const size_t historyUsed=std::strlen(text);
-            std::snprintf(text+historyUsed,sizeof(text)-historyUsed," history=%s",session->historyStatus.c_str());
+            std::snprintf(text+historyUsed,sizeof(text)-historyUsed," model=%s requested_model=%s model_reason=%s history=%s",session->smallModel?"small":"original",session->requestedSmall?"small":"original",session->modelReason.c_str(),session->historyStatus.c_str());
             if (session->job.hip_passthrough && session->bridge)
             {
                 const size_t used = std::strlen(text);

@@ -1,0 +1,20 @@
+--- a/Development/HIP/hip_reference_network.h
++++ b/Development/HIP/hip_reference_network.h
+@@ -146,6 +146,8 @@
+ inline bool FastPrefixFromEnvironment(){const char*v=std::getenv("DLSS5_HIP_FAST");if(!v)return false;if(std::strcmp(v,"0")&&std::strcmp(v,"1"))throw std::runtime_error("DLSS5_HIP_FAST must be 0 or 1");return !std::strcmp(v,"1");}
+ // Consumer-owned policy. Empty overrides preserve the addon/environment behavior.
+ struct IntegrationOptions {
++ // Optional consumer-owned model mode; -1 preserves the upstream environment policy.
++ int model_mode=-1;
+  bool allow_vit_hotkey=true,allow_input_poll=true,allow_small_model=true;
+  bool override_multi_pass_skip=false;std::set<U> multi_pass_skip;
+  // Called only during module selection. Return a module stem without .hsaco.
+@@ -925,7 +927,7 @@
+  static U Shift(U block){static constexpr U s[]={0,3,1,2,0,3,1,2,0,3,1,2,0,3,1,2,1,2,0,3,1,2,0,3,1,2,0,3,1,2};if(block<40||block>69)throw std::runtime_error("decoder shift");return s[block-40];}
+ public:
+  Network(const Network&)=delete;Network&operator=(const Network&)=delete;
+- explicit Network(Options o):api(o.runtime),pulse_ops{int(o.device),&stream,api.hipSetDevice,api.hipEventCreate,api.hipEventRecord,api.hipStreamSynchronize,api.hipEventDestroy},pulse_lease(pulse_ops),opt(std::move(o)),W(opt.width),H(opt.height){api.style_feature=StyleFeatureFromEnvironment();{const char*v=std::getenv("DLSS5_OVERLAP");final_direct_compatible=HIP_FINAL_OUTPUT_DIRECT&&!opt.graph&&(!v||!*v||!std::strcmp(v,"0"));}assets_root=opt.assets;SelectModel(dlss5_mode::Requested());multi_pass=MultiPassFromEnvironment();multi_predict=MultiPredictFromEnvironment();multi_skin=MultiSkinFromEnvironment();multi_skip=opt.integration.override_multi_pass_skip?opt.integration.multi_pass_skip:MultiPassSkipFromEnvironment();std::fprintf(stderr,"multi_pass=%u multi_pass_predict=%u actual_network_passes=%u\n",multi_pass,unsigned(multi_predict),multi_predict&&multi_pass==3?2:multi_pass);fast_numeric=FastNumericFromEnvironment();if(opt.experimental_temporal){
++ explicit Network(Options o):api(o.runtime),pulse_ops{int(o.device),&stream,api.hipSetDevice,api.hipEventCreate,api.hipEventRecord,api.hipStreamSynchronize,api.hipEventDestroy},pulse_lease(pulse_ops),opt(std::move(o)),W(opt.width),H(opt.height){api.style_feature=StyleFeatureFromEnvironment();{const char*v=std::getenv("DLSS5_OVERLAP");final_direct_compatible=HIP_FINAL_OUTPUT_DIRECT&&!opt.graph&&(!v||!*v||!std::strcmp(v,"0"));}assets_root=opt.assets;SelectModel(opt.integration.model_mode>=0?U(opt.integration.model_mode):dlss5_mode::Requested());multi_pass=dlss5_mode::Passes(requested_mode);multi_predict=MultiPredictFromEnvironment();multi_skin=MultiSkinFromEnvironment();multi_skip=opt.integration.override_multi_pass_skip?opt.integration.multi_pass_skip:MultiPassSkipFromEnvironment();std::fprintf(stderr,"multi_pass=%u multi_pass_predict=%u actual_network_passes=%u\n",multi_pass,unsigned(multi_predict),multi_predict&&multi_pass==3?2:multi_pass);fast_numeric=FastNumericFromEnvironment();if(opt.experimental_temporal){
+   const std::string tap=fast_numeric?"c32-wave1-temporal-fast":"c32-wave1-temporal";
+   bool assets=std::ifstream(opt.modules+"/"+tap+".hsaco").good()&&std::ifstream(opt.modules+"/temporal-history.hsaco").good()&&std::ifstream(opt.assets+"/post70-history-head.f16").good()&&std::ifstream(opt.assets+"/native-temporal-sigmoid.f32").good();
+   if(!NativeExperimentalTemporalCompatible()||!assets||opt.graph||multi_pass!=1||multi_skin||!opt.temporal_valid_height||opt.temporal_valid_height>H){opt.experimental_temporal=false;std::fprintf(stderr,"history_experiment requested=1 active=0 reason=incompatible_or_missing_assets\n");}

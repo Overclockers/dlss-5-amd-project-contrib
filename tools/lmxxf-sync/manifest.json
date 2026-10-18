@@ -6,6 +6,7 @@
     "Development/HIP/hip_device_properties.h",
     "Development/HIP/hip_reference_network.h",
     "Development/HIP/packed_weights.h",
+    "Development/HIP/small_model_assets.h",
     "Development/HIP/submit_pulse.h",
     "Development/HIP/submit_pulse_hip.h",
     "Development/HIP/swin_persistent_network.h",
@@ -24,6 +25,7 @@
     "src/native_input_geometry.h",
     "src/native_lab_paths.h",
     "src/native_low_frequency_shader.h",
+    "src/native_model_mode.h",
     "src/native_network_geometry.h",
     "src/native_pinned_resource.h",
     "src/native_pso.h",
@@ -41,7 +43,9 @@
     "inline-side-queue.patch",
     "hip-runtime-loader.patch",
     "inline-ahead-capture.patch",
-    "inline-compute-recording.patch"
+    "inline-compute-recording.patch",
+    "consumer-model-mode.patch",
+    "powershell-utf8-bom.patch"
   ],
   "hip_files": [
     "build-modules.ps1",

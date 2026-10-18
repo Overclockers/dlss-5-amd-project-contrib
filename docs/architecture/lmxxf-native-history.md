@@ -2,7 +2,10 @@
 
 Native history reprojects the preceding model output into the current input grid,
 then combines the new network result with a separately reprojected history using
-its fourth post-projection row. The blend is `sigmoid(logit) * 0.73974609375`.
+its fourth post-projection row. The blend is `sigmoid(logit) * 0.73974609375`
+for Original and `sigmoid(logit) * 0.76708984375` for Small, with separate trained rows.
+Small history buffers use processing width, including reflected X padding; see the
+[0.44 consumer review](../lmxxf-044-consumer-review.md#geometry-history).
 Pre motion uses nearest-depth selection; post motion uses the centre vector.
 Both use normalized five-tap Catmull–Rom sampling and raw/depth rejection.
 The stored feedback is the model result, before downstream output effects.

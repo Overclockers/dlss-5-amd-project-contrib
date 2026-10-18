@@ -19,6 +19,7 @@ if /i "%~1"=="release" goto release
 "%AMD_TEST_PYTHON%" -B tests\install\test_launcher_worker.py --failfast || goto fail
 "%AMD_TEST_PYTHON%" -B tests\install\test_launcher_package.py --failfast || goto fail
 "%AMD_TEST_PYTHON%" -B tests\install\test_launcher_startup.py --failfast || goto fail
+"%AMD_TEST_PYTHON%" -B tests\install\test_lmxxf_small.py || goto fail
 "%AMD_TEST_PYTHON%" -B tests\install\test_module_packages.py --failfast || goto fail
 "%PS51%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests\install\amd_uninstall.ps1 || goto fail
 "%AMD_TEST_PYTHON%" -B tests\install\test_release_upload.py || goto fail

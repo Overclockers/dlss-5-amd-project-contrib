@@ -1,4 +1,5 @@
 #pragma once
+#include "native_model_mode.h"
 #include "native_lab_paths.h"
 #include <windows.h>
 #include <atomic>
@@ -14,7 +15,7 @@
      DLSS5_STRENGTH   transfer,colour (0..3) or auto  -- decoder blend after the network, not the network itself
      DLSS5_NOTICE     on-screen status line (0/1/2)
      DLSS5_SHOW_FPS   FPS text in that line (0/1)
-     DLSS5_MULTI_PASS pass count 1/2/3 (2026-10-03; HIP network, applied before the next network frame; invalid/absent = 1)
+     DLSS5_MULTI_PASS model mode 0.5/1/2/3 (2026-10-03; HIP network, applied before the next network frame; invalid/absent = 0.5)
      DLSS5_MULTI_PASS_PREDICT 0/1; default 1; only active with 3 passes (LOSSY)
      DLSS5_MULTI_PASS_SKIN_PROTECT 0/1; default 0; skin-color heuristic blend at N>1
    Everything else (network height, skip blocks, HIP kernels/modules, FP8/wave/tiling switches, DIRECT_IO, PRE_UPSCALE, FIT_*, ASYNC,
@@ -40,8 +41,8 @@ class NativeHotFlags{
    if(sscanf(line,"DLSS5_NOTICE=%u",&n)==1)v.notice=int(n);if(sscanf(line,"DLSS5_SHOW_FPS=%u",&n)==1)v.fps=int(n);sscanf(line,"DLSS5_STRENGTH=%47s",strength);
    if(!strncmp(line,"DLSS5_MULTI_PASS_PREDICT=",25)){const char*m=line+25;v.multi_pass_predict=(!*m||!strcmp(m,"1"))?1:!strcmp(m,"0")?0:(std::fprintf(stderr,"DLSS5_MULTI_PASS_PREDICT=%s invalid (0/1), using 0\n",m),0);}
    if(!strncmp(line,"DLSS5_MULTI_PASS_SKIN_PROTECT=",30)){const char*m=line+30;v.multi_pass_skin_protect=(!*m||!strcmp(m,"0"))?0:!strcmp(m,"1")?1:(std::fprintf(stderr,"DLSS5_MULTI_PASS_SKIN_PROTECT=%s invalid (0/1), using 0\n",m),0);}
-   if(!strncmp(line,"DLSS5_MULTI_PASS=",17)){const char*m=line+17;v.multi_pass=(!*m||!strcmp(m,"1"))?1:!strcmp(m,"2")?2:!strcmp(m,"3")?3:(std::fprintf(stderr,"DLSS5_MULTI_PASS=%s invalid (1/2/3), using 1\n",m),1);}}}
-  if(v.multi_pass<0)v.multi_pass=1; /* key gone from every layer: built-in default */
+   if(!strncmp(line,"DLSS5_MULTI_PASS=",17)){const char*m=line+17;v.multi_pass=int(dlss5_mode::Parse(m));}}}
+  if(v.multi_pass<0)v.multi_pass=0; /* key gone from every layer: built-in default */
   if(v.multi_pass_predict<0)v.multi_pass_predict=1; /* key removed: built-in default */
   if(v.multi_pass_skin_protect<0)v.multi_pass_skin_protect=0; /* key removed: built-in default */
   float a=1.f,b=1.f;if(sscanf(strength,"%f,%f",&a,&b)==2&&a>=0.f&&a<=3.f&&b>=0.f&&b<=3.f){v.strength=true;v.transfer=a;v.color=b;}
@@ -93,7 +94,7 @@ public:
  static unsigned CycleMultiPass(unsigned current,bool allow_cycle=true){
   // Consume the key edge before rejecting: never persist an unsupported pass count.
   if(!allow_cycle){if(FILE*f=_wfopen(NativeLabPath(L"logs\\native-game-oneshot.txt").c_str(),L"ab")){fprintf(f,"pid=%lu tick=%llu event=multi_pass_hotkey_blocked reason=active_temporal_mode_requires_MP1\n",GetCurrentProcessId(),GetTickCount64());fclose(f);}return 0;}
-  const unsigned next=current%3+1;const std::string n=std::to_string(next);
+  const unsigned next=dlss5_mode::Next(current);const std::string n=dlss5_mode::Name(next);
   const bool custom=RewriteKey(L"custom-config.txt","DLSS5_MULTI_PASS",n,true);
   std::string native;bool native_has=false;
   if(NativeConfigReadFile(NativeLabPath(L"native-game-flags.txt"),native))native_has=NativeConfigFind(NativeConfigParseText(native),"DLSS5_MULTI_PASS")!=nullptr;
@@ -105,3 +106,11 @@ public:
   return next;}
  static NativeHotFlags&Instance(){static NativeHotFlags*h=new NativeHotFlags;return *h;}
 };
+
+// Called before choosing per-frame geometry so a model hot switch can rebuild its buffers.
+inline unsigned NativePollRequestedModelMode(bool allow=true){
+ auto&hot=NativeHotFlags::Instance();if(NativeHotFlags::Enabled()||NativeHotFlags::HotkeyCode()){
+  hot.PollMultiPassHotkey(dlss5_mode::Requested(),allow);auto v=hot.Get();
+  if(v.multi_pass>=0)dlss5_mode::Request(unsigned(v.multi_pass));
+ }return dlss5_mode::Requested();
+}

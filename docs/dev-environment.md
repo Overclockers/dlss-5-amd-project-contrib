@@ -103,6 +103,8 @@ tests\run-all.cmd --tier release|ci|device|gpu|all [--out 目录] [--skip-sync] 
 - `tools/build/mochizuki-manifest.py`：源码及可分发产物哈希验证。
 - `tools/mochizuki-sync/check.py --upstream <本地官方克隆>`：只读复核固定 SHA、六项接口补丁与 vendor 闭包；工作流见该目录 README。
 - `tools/install/mochizuki-model.py`：仅从用户提供的指定版本 DLL 提取模型。
+- `tools/install/lmxxf-model.py`、`lmxxf-small-manifest.json`、`lmxxf-small.ps1`：离线将已验证Small pack转换成lmxxf布局，93项SHA验证后原子安装；用法见[lmxxf Small](lmxxf-small-model.md)。
+- `tools/dev/generate-lmxxf-small-header.py [--check]`：从固定manifest生成/检查Runtime资产哈希allowlist，不包含模型系数。
 - `tools/install/mochizuki-python.ps1`：Setup 与独立模型工具共用的 Python 3.10+ 探测；缺失或不可用时提示到 Windows 商店搜索 Python 安装。
 - `tests/mochizuki/run.cmd abi|gpu`：无 GPU ABI 与实际 D3D12/Vulkan 生命周期回归。
 

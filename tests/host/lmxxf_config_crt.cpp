@@ -87,14 +87,14 @@ int main(int argc, char **argv)
     {
         if (!CfgKey::EnvAlias(key))
             continue;
-        expect(key, "1");
+        expect(CfgKey::EnvAlias(key), "1");
         CfgKey::PutEnvAlias(key, false);
-        expect(key, "1"); // Publishing to Win32 alone leaves the private CRT stale.
+        expect(CfgKey::EnvAlias(key), "1"); // Publishing to Win32 alone leaves the private CRT stale.
         sync();
-        expect(key, "0");
+        expect(CfgKey::EnvAlias(key), "0");
         CfgKey::PutEnvAlias(key, true);
         sync();
-        expect(key, "1");
+        expect(CfgKey::EnvAlias(key), "1");
     }
 
     // Exercise the string path used by network tier and reuse sliders as well.

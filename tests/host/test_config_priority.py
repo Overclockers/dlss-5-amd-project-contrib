@@ -204,6 +204,7 @@ int main() {
                 "NrTimingLog",
                 "NrFrameDiag",
                 "NrGameWaitDiag",  # Host-owned game-thread timing diag.
+                "LmxxfNetworkModel",  # Product model key aliases DLSS5_NETWORK_MODEL.
                 "LmxxfModelHistory",  # Host-owned FrameInfo flag, not an upstream environment key.
                 "NrStabilizerEnabled", "NrStabilizerAlpha", "NrStabilizerThreshold",
                 "NrOverallIntensity",  # Shared final-output blend, no runtime environment alias.

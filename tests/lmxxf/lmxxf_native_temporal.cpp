@@ -23,9 +23,10 @@ static double Reference5(const std::vector<float>& rgb,unsigned w,unsigned h,dou
 // Exercise the real pre/post shaders over every pixel, including reflected rows.
 // The large surfaces exceeded the old one-dimensional dispatch limit. The narrow
 // case catches missing per-row bounds checks in a partially filled thread group.
-static void CheckDispatchCoverage(Gpu& g,unsigned w,unsigned h,unsigned ph,bool direct=false)
+static void CheckDispatchCoverage(Gpu& g,unsigned w,unsigned h,unsigned ph,bool direct=false,unsigned pw=0,float blend=.73974609375f)
 {
-    const unsigned n=w*ph;
+    if(!pw)pw=w;
+    const unsigned n=pw*ph;
     auto motion=g.Texture(1,1,DXGI_FORMAT_R32G32_FLOAT),depth=g.Texture(1,1,DXGI_FORMAT_R32_FLOAT);
     g.Upload(motion.Get(),{0,0});g.Upload(depth.Get(),{.5f});
     auto raw=g.Buffer(UINT64(n)*16),output=g.Buffer(UINT64(n)*20);
@@ -34,7 +35,7 @@ static void CheckDispatchCoverage(Gpu& g,unsigned w,unsigned h,unsigned ph,bool 
         g.Upload(raw.Get(),colour);
     }
     const auto expected=[&](unsigned i,unsigned c){
-        unsigned x=i%w,y=i/w;if(y>=h)y=2*h-y-2;
+        unsigned x=i%pw,y=i/pw;if(x>=w)x=2*w-x-2;if(y>=h)y=2*h-y-2;
         // A smooth field isolates dispatch coverage from subpixel roundoff at
         // discontinuities; every row, column and channel still has its own value.
         return .25f+float(x)/(8*w)+float(y)/(8*h)+float(c)/64;
@@ -47,7 +48,9 @@ static void CheckDispatchCoverage(Gpu& g,unsigned w,unsigned h,unsigned ph,bool 
     uploadNetwork(true);
     auto shared=g.Buffer(UINT64(n)*16);
     g.Run([&](auto*cmd){LmxxfTemporal::Transition(cmd,shared.Get(),ReadState,D3D12_RESOURCE_STATE_COMMON);});
-    LmxxfNativeTemporal::History hist;hist.Create(g.device.Get(),w,h,ph,direct?shared.Get():nullptr);
+    LmxxfNativeTemporal::History hist;hist.Create(g.device.Get(),w,h,ph,direct?shared.Get():nullptr,nullptr,pw);
+    Require(hist.Matches(w,h,ph,pw),"padded history geometry");
+    if(pw!=w)Require(!hist.Matches(w,h,ph),"width changes require fresh history");
     auto binding=hist.Binding(g.device.Get(),motion.Get(),depth.Get());
     const auto readWarp=[&](ID3D12Resource* r){
         if(r==shared.Get())g.Run([&](auto*cmd){LmxxfTemporal::Transition(cmd,r,D3D12_RESOURCE_STATE_COMMON,ReadState);});
@@ -58,7 +61,7 @@ static void CheckDispatchCoverage(Gpu& g,unsigned w,unsigned h,unsigned ph,bool 
     LmxxfRuntime::TemporalControl control;control.Create(g.device.Get());
     std::vector<std::shared_ptr<LmxxfRuntime::RecordingCompletion>> jobs,chain;
     LmxxfNativeTemporal::Parameters p{};p.width=w;p.height=h;p.processingHeight=ph;p.viewWidth=w;p.viewHeight=h;
-    p.renderWidth=p.renderHeight=p.motionWidth=p.motionHeight=1;p.hasDepth=0;p.logitOffset=n*3;
+    p.renderWidth=p.renderHeight=p.motionWidth=p.motionHeight=1;p.hasDepth=0;p.logitOffset=n*3;p.reserved[2]=pw;std::memcpy(&p.reserved[1],&blend,4);
     const auto inputs=[&]{control.Submit(g.device.Get(),g.queue.Get(),&p,sizeof(p),jobs,chain);
         g.Run([&](auto*cmd){hist.RecordInputs(cmd,raw.Get(),output.Get(),motion.Get(),depth.Get(),ReadState,ReadState,p,binding.Get(),control.Address());});};
     const auto finish=[&]{control.Submit(g.device.Get(),g.queue.Get(),&p,sizeof(p),jobs,chain);
@@ -83,14 +86,14 @@ static void CheckDispatchCoverage(Gpu& g,unsigned w,unsigned h,unsigned ph,bool 
         }
     }
     uploadNetwork(false);finish();
-    const float weight=.73974609375f*.5f;
+    const float weight=blend*.5f;
     {
         const auto pixels=g.Read(output.Get());
         for(unsigned i=0;i<n;++i)for(unsigned c=0;c<3;++c)
             Require(std::abs(pixels[i*3+c]-(.8f+weight*(expected(i,c)-.8f)))<2e-6f,"post dispatch blends every output pixel");
         for(size_t i=size_t(n)*3;i<pixels.size();++i)Require(pixels[i]==0,"post dispatch preserves logits");
     }
-    g.NoErrors();std::printf("native temporal dispatch coverage PASS %ux%u processing=%ux%u direct=%d\n",w,h,w,ph,int(direct));
+    g.NoErrors();std::printf("native temporal dispatch coverage PASS %ux%u processing=%ux%u direct=%d\n",w,h,pw?pw:w,ph,int(direct));
 }
 static void CheckLowFrequencyMode2AndMode3(Gpu& g)
 {
@@ -235,6 +238,7 @@ int main(int argc,char** argv)try
     std::fill(network.begin(),network.begin()+n*3,.6f);reset();inputs();post=g.Read(hist.PostWarped());Require(std::abs(post[target*4]-.6f)<2e-6,"reset primes fresh model");
     // A fitted viewport: boundaries must not read letterbox pixels.
     p.viewX=2;p.viewWidth=4;reset();inputs();pre=g.Read(hist.Warped());Require(pre[3]==0&&pre[2*4+3]==1&&pre[6*4+3]==0,"fit viewport validity");
+    CheckDispatchCoverage(g,65,3,4,true,72,.76708984375f); // Small X reflection, stride and learned blend.
     CheckDispatchCoverage(g,65,3,4);
     CheckDispatchCoverage(g,65,3,4,true);
     CheckDispatchCoverage(g,3456,1440,1472,true); // Free-resolution 3440x1440 input.

@@ -433,6 +433,7 @@ class Config
     CustomOptional<bool> LmxxfNetworkFreeRes { true };
     CustomOptional<bool> LmxxfFastNumeric { true };
     CustomOptional<uint32_t> LmxxfMultiPass { 1 };
+    CustomOptional<uint32_t> LmxxfNetworkModel { 0 }; // Original=0, 310.9.16 Small=1; passes remain independent.
     CustomOptional<bool> LmxxfMultiPassPredict { true };
     CustomOptional<bool> LmxxfMultiPassSkinProtect { false };
     CustomOptional<std::string> LmxxfMultiPassSkipBlocks { "none" };
