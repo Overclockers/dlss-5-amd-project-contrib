@@ -146,9 +146,9 @@ inline float StyleFeatureFromEnvironment(){const char*v=std::getenv("DLSS5_STYLE
 inline bool FastPrefixFromEnvironment(){const char*v=std::getenv("DLSS5_HIP_FAST");if(!v)return false;if(std::strcmp(v,"0")&&std::strcmp(v,"1"))throw std::runtime_error("DLSS5_HIP_FAST must be 0 or 1");return !std::strcmp(v,"1");}
 // Consumer-owned policy. Empty overrides preserve the addon/environment behavior.
 struct IntegrationOptions {
+ bool allow_vit_hotkey=true,allow_input_poll=true,allow_small_model=true,allow_model_prewarm=true;
  // Optional consumer-owned model mode; -1 preserves the upstream environment policy.
  int model_mode=-1;
- bool allow_vit_hotkey=true,allow_input_poll=true,allow_small_model=true;
  bool override_multi_pass_skip=false;std::set<U> multi_pass_skip;
  // Called only during module selection. Return a module stem without .hsaco.
  // The consumer owns its supported twin list and exact-module policy.
@@ -207,9 +207,9 @@ inline bool SwinRunCompatible(const Options&o){
 }
 inline std::atomic<int> AdaptivePreviewState{0};
 class Network {friend class D3D12Bridge;
- bool small_active=false;U requested_mode=1;std::string assets_root;
+ bool small_active=false,small_assets_ready=false;U requested_mode=1;std::string assets_root;
  bool SmallCompatible()const{return opt.integration.allow_small_model&&WaveOwnedCompatible(opt)&&C512M32Compatible(opt)&&VitProjN64Compatible(opt)&&(opt.small_geometry||(W==1920&&H==1152))&&!opt.graph&&!opt.experimental_temporal&&!opt.temporal_feature_tap&&opt.skip_blocks.empty();}
- void SelectModel(U mode){requested_mode=mode;const bool available=mode==0&&SmallAssetsAvailable(assets_root+"/small");small_active=mode==0&&available&&SmallCompatible();opt.assets=small_active?assets_root+"/small":assets_root;std::fprintf(stderr,"model requested=%sx effective=%sx blocks=%u assets=%s reason=%s\n",dlss5_mode::Name(mode),small_active?"0.5":dlss5_mode::Name(mode?mode:1),small_active?31u:71u,opt.assets.c_str(),mode?"original":!available?"missing-small-assets":!SmallCompatible()?"small-geometry-or-option-not-yet-supported":"small-ready");}
+ void SelectModel(U mode){requested_mode=mode;const bool available=mode==0&&small_assets_ready;small_active=mode==0&&available&&SmallCompatible();opt.assets=small_active?assets_root+"/small":assets_root;std::fprintf(stderr,"model requested=%sx effective=%sx blocks=%u assets=%s reason=%s\n",dlss5_mode::Name(mode),small_active?"0.5":dlss5_mode::Name(mode?mode:1),small_active?31u:71u,opt.assets.c_str(),mode?"original":!available?"missing-small-assets":!SmallCompatible()?"small-geometry-or-option-not-yet-supported":"small-ready");}
  static U Round4(U v){return (v+3)&~3u;}
  U DeepWidth()const{return small_active?Round4((W+31)/32):W/32;}
  U DeepHeight()const{return small_active?Round4((H+31)/32):H/32;}
@@ -292,7 +292,7 @@ class Network {friend class D3D12Bridge;
  friend struct LayerBenchmark;
  unsigned diagnostic_kernel_repeats=1;
 #endif
- Api api;Handle stream{};HipSubmitPulseOps pulse_ops;SubmitPulseLease<HipSubmitPulseOps> pulse_lease;bool pulse_fallback_logged=false,pulse_runtime_reported=false,pulse_frame_history=false,pulse_ordered_down_c256=false,pulse_platform_scope=false,pulse_driver_validated=false,pulse_capabilities_ok=false,pulse_bridge_diagnostics=false;unsigned long long pulse_site_visits=0,pulse_record_attempts=0,pulse_record_accepted=0;unsigned pulse_last_reject_mask=0,pulse_frame_pdl_start=0;std::map<std::string,Handle>modules,functions;std::set<std::string>missing_functions;std::map<std::string,Tensor>weights;Options opt;
+ Api api;Handle stream{};HipSubmitPulseOps pulse_ops;SubmitPulseLease<HipSubmitPulseOps> pulse_lease;bool pulse_fallback_logged=false,pulse_runtime_reported=false,pulse_frame_history=false,pulse_ordered_down_c256=false,pulse_platform_scope=false,pulse_driver_validated=false,pulse_capabilities_ok=false,pulse_bridge_diagnostics=false;unsigned long long pulse_site_visits=0,pulse_record_attempts=0,pulse_record_accepted=0;unsigned pulse_last_reject_mask=0,pulse_frame_pdl_start=0;std::map<std::string,Handle>modules,functions;std::set<std::string>missing_functions;std::map<std::string,Tensor>weights,inactive_model_weights;Tensor inactive_model_gain,inactive_model_post_row;bool external_input_wait=false;unsigned long long weight_uploads=0;std::set<unsigned> prepared_input_profiles;Options opt;
  struct Timing{std::string name;Handle begin{},end{};};std::vector<Timing>timings;
  std::map<std::string,std::pair<double,unsigned>>wall_timings;
  Handle captured_graph{},graph_exec{};void*graph_input{},*graph_history{},*graph_output{};U graph_seed{};bool graph_warmed{},graph_capturing{};unsigned graph_builds{},graph_replays{};
@@ -315,7 +315,7 @@ class Network {friend class D3D12Bridge;
   if(pad>valid)api.Check(api.hipMemsetAsync(static_cast<char*>(t->ptr)+valid*ch*(byte_elem?1:4),0xff,(pad-valid)*ch*(byte_elem?1:4),stream),"pad16 poison"); /* diagnostic: NaN pad rows must not change any output */
 #endif
   return t;}
- Tensor Upload(const void*p,size_t bytes,bool persistent=false){if(!bytes||bytes%4)throw std::runtime_error("upload size");Tensor t;if(persistent){
+ Tensor Upload(const void*p,size_t bytes,bool persistent=false){if(external_input_wait)throw std::runtime_error("synchronous HIP upload forbidden after external producer wait");++weight_uploads;if(!bytes||bytes%4)throw std::runtime_error("upload size");Tensor t;if(persistent){
 #if HIP_ADDR_SKEW
   Allocation::SkewPersistent()=true;t=std::make_shared<Allocation>(api,bytes);Allocation::SkewPersistent()=false;
 #else
@@ -927,7 +927,7 @@ class Network {friend class D3D12Bridge;
  static U Shift(U block){static constexpr U s[]={0,3,1,2,0,3,1,2,0,3,1,2,0,3,1,2,1,2,0,3,1,2,0,3,1,2,0,3,1,2};if(block<40||block>69)throw std::runtime_error("decoder shift");return s[block-40];}
 public:
  Network(const Network&)=delete;Network&operator=(const Network&)=delete;
- explicit Network(Options o):api(o.runtime),pulse_ops{int(o.device),&stream,api.hipSetDevice,api.hipEventCreate,api.hipEventRecord,api.hipStreamSynchronize,api.hipEventDestroy},pulse_lease(pulse_ops),opt(std::move(o)),W(opt.width),H(opt.height){api.style_feature=StyleFeatureFromEnvironment();{const char*v=std::getenv("DLSS5_OVERLAP");final_direct_compatible=HIP_FINAL_OUTPUT_DIRECT&&!opt.graph&&(!v||!*v||!std::strcmp(v,"0"));}assets_root=opt.assets;SelectModel(opt.integration.model_mode>=0?U(opt.integration.model_mode):dlss5_mode::Requested());multi_pass=dlss5_mode::Passes(requested_mode);multi_predict=MultiPredictFromEnvironment();multi_skin=MultiSkinFromEnvironment();multi_skip=opt.integration.override_multi_pass_skip?opt.integration.multi_pass_skip:MultiPassSkipFromEnvironment();std::fprintf(stderr,"multi_pass=%u multi_pass_predict=%u actual_network_passes=%u\n",multi_pass,unsigned(multi_predict),multi_predict&&multi_pass==3?2:multi_pass);fast_numeric=FastNumericFromEnvironment();if(opt.experimental_temporal){
+ explicit Network(Options o):api(o.runtime),pulse_ops{int(o.device),&stream,api.hipSetDevice,api.hipEventCreate,api.hipEventRecord,api.hipStreamSynchronize,api.hipEventDestroy},pulse_lease(pulse_ops),opt(std::move(o)),W(opt.width),H(opt.height){api.style_feature=StyleFeatureFromEnvironment();{const char*v=std::getenv("DLSS5_OVERLAP");final_direct_compatible=HIP_FINAL_OUTPUT_DIRECT&&!opt.graph&&(!v||!*v||!std::strcmp(v,"0"));}assets_root=opt.assets;small_assets_ready=SmallAssetsAvailable(assets_root+"/small");SelectModel(opt.integration.model_mode>=0?U(opt.integration.model_mode):dlss5_mode::Requested());multi_pass=dlss5_mode::Passes(requested_mode);multi_predict=MultiPredictFromEnvironment();multi_skin=MultiSkinFromEnvironment();multi_skip=opt.integration.override_multi_pass_skip?opt.integration.multi_pass_skip:MultiPassSkipFromEnvironment();std::fprintf(stderr,"multi_pass=%u multi_pass_predict=%u actual_network_passes=%u\n",multi_pass,unsigned(multi_predict),multi_predict&&multi_pass==3?2:multi_pass);fast_numeric=FastNumericFromEnvironment();if(opt.experimental_temporal){
   const std::string tap=fast_numeric?"c32-wave1-temporal-fast":"c32-wave1-temporal";
   bool assets=std::ifstream(opt.modules+"/"+tap+".hsaco").good()&&std::ifstream(opt.modules+"/temporal-history.hsaco").good()&&std::ifstream(opt.assets+"/post70-history-head.f16").good()&&std::ifstream(opt.assets+"/native-temporal-sigmoid.f32").good();
   if(!NativeExperimentalTemporalCompatible()||!assets||opt.graph||multi_pass!=1||multi_skin||!opt.temporal_valid_height||opt.temporal_valid_height>H){opt.experimental_temporal=false;std::fprintf(stderr,"history_experiment requested=1 active=0 reason=incompatible_or_missing_assets\n");}
@@ -1006,7 +1006,7 @@ if(opt.experimental_temporal){
 }
 
 if(wave_owned_active)HasFn("c32_wave1","c32_wave1_post_b8_rgba");if(multi_predict||std::ifstream(opt.modules+"/multi-pass-predict.hsaco").good())EnsurePredictModule();if(multi_pass>1)PrepareMultiPassFeeds();if(multi_skin)PrepareSkin();}catch(...){if(!pulse_lease.Close()){std::fprintf(stderr,"submit_pulse ctor cleanup retained owner stream\n");throw;}if(pdl_flags){api.hipStreamSynchronize(stream);api.hipFree(pdl_flags);pdl_flags=nullptr;}for(auto&m:modules)api.hipModuleUnload(m.second);api.hipStreamDestroy(stream);throw;}}
- ~Network(){if(!pulse_lease.Close()){std::fprintf(stderr,"submit_pulse direct destructor retained owner stream; bridge must preclose\n");return;}std::fprintf(stderr,"submit_pulse resources create=%llu create_ok=%llu record=%llu record_ok=%llu destroy=%llu destroy_ok=%llu drain=%llu site_visits=%llu accepted=%llu reject_mask=%u lifetime_pdl_calls=%u\n",pulse_ops.create_calls,pulse_ops.create_ok,pulse_ops.record_calls,pulse_ops.record_ok,pulse_ops.destroy_calls,pulse_ops.destroy_ok,pulse_ops.drain_calls,pulse_site_visits,pulse_record_accepted,pulse_last_reject_mask,pdl_calls);{size_t wsum=0;for(auto&kv:weights)if(kv.second&&kv.second->owned)wsum+=kv.second->capacity;std::fprintf(stderr,"C512_W16_SUMMARY mode=%d w16_blocks=%llu stock_blocks=%llu ffn_mode=%d ffn_w16_blocks=%llu ffn_stock_blocks=%llu c32_mode=%d c32_w16_calls=%llu c32_stock_calls=%llu vit_mode=%d vit_w16_calls=%llu vit_stock_calls=%llu vit_contract_w16=%u vit_proj_w16=%u vit_inter_byte=%d vit_inter_byte_calls=%llu weights_count=%zu weights_bytes=%zu\n",C512W16Mode(),c512_w16_calls,c512_stock_calls,C512FfnW16Mode(),c512_ffn_w16_calls,c512_ffn_stock_calls,C32W16Mode(),c32_w16_calls,c32_stock_calls,VitW16Mode(),vit_w16_calls,vit_stock_calls,unsigned(compact_contract_w16),unsigned(compact_projection_w16),VitInterByteMode(),vit_inter_byte_calls,weights.size(),wsum);}api.hipSetDevice(int(opt.device));api.hipStreamSynchronize(stream);native_post_row.reset();experimental_history.reset();experimental_prefix.reset();experimental_raw.reset();experimental_logit.reset();experimental_weights.reset();experimental_sig.reset();experimental_recip.reset();temporal_features.reset();SpReport();pdl_keep.clear();if(pdl_flags){api.hipFree(pdl_flags);pdl_flags=nullptr;}if(opt.graph)std::printf("graph_stats builds=%u replays=%u\n",graph_builds,graph_replays);ClearGraph();for(auto&t:timings){api.hipEventDestroy(t.begin);api.hipEventDestroy(t.end);}adaptive_image_anchor.reset();adaptive_image_signature.reset();adaptive_image_delta.reset();adaptive_anchor_in.reset();adaptive_anchor_out.reset();adaptive_gain.reset();adaptive_stats.reset();adaptive_state.reset();device_noise.reset();gather_maps[0].clear();gather_maps[1].clear();weights.clear();pool.clear();for(auto&m:modules)api.hipModuleUnload(m.second);api.hipStreamDestroy(stream);}
+ ~Network(){if(!pulse_lease.Close()){std::fprintf(stderr,"submit_pulse direct destructor retained owner stream; bridge must preclose\n");return;}std::fprintf(stderr,"submit_pulse resources create=%llu create_ok=%llu record=%llu record_ok=%llu destroy=%llu destroy_ok=%llu drain=%llu site_visits=%llu accepted=%llu reject_mask=%u lifetime_pdl_calls=%u\n",pulse_ops.create_calls,pulse_ops.create_ok,pulse_ops.record_calls,pulse_ops.record_ok,pulse_ops.destroy_calls,pulse_ops.destroy_ok,pulse_ops.drain_calls,pulse_site_visits,pulse_record_accepted,pulse_last_reject_mask,pdl_calls);{size_t wsum=0;for(auto&kv:weights)if(kv.second&&kv.second->owned)wsum+=kv.second->capacity;std::fprintf(stderr,"C512_W16_SUMMARY mode=%d w16_blocks=%llu stock_blocks=%llu ffn_mode=%d ffn_w16_blocks=%llu ffn_stock_blocks=%llu c32_mode=%d c32_w16_calls=%llu c32_stock_calls=%llu vit_mode=%d vit_w16_calls=%llu vit_stock_calls=%llu vit_contract_w16=%u vit_proj_w16=%u vit_inter_byte=%d vit_inter_byte_calls=%llu weights_count=%zu weights_bytes=%zu\n",C512W16Mode(),c512_w16_calls,c512_stock_calls,C512FfnW16Mode(),c512_ffn_w16_calls,c512_ffn_stock_calls,C32W16Mode(),c32_w16_calls,c32_stock_calls,VitW16Mode(),vit_w16_calls,vit_stock_calls,unsigned(compact_contract_w16),unsigned(compact_projection_w16),VitInterByteMode(),vit_inter_byte_calls,weights.size(),wsum);}api.hipSetDevice(int(opt.device));api.hipStreamSynchronize(stream);native_post_row.reset();experimental_history.reset();experimental_prefix.reset();experimental_raw.reset();experimental_logit.reset();experimental_weights.reset();experimental_sig.reset();experimental_recip.reset();temporal_features.reset();SpReport();pdl_keep.clear();if(pdl_flags){api.hipFree(pdl_flags);pdl_flags=nullptr;}if(opt.graph)std::printf("graph_stats builds=%u replays=%u\n",graph_builds,graph_replays);ClearGraph();for(auto&t:timings){api.hipEventDestroy(t.begin);api.hipEventDestroy(t.end);}adaptive_image_anchor.reset();adaptive_image_signature.reset();adaptive_image_delta.reset();adaptive_anchor_in.reset();adaptive_anchor_out.reset();adaptive_gain.reset();adaptive_stats.reset();adaptive_state.reset();device_noise.reset();gather_maps[0].clear();gather_maps[1].clear();weights.clear();inactive_model_weights.clear();inactive_model_gain.reset();inactive_model_post_row.reset();pool.clear();for(auto&m:modules)api.hipModuleUnload(m.second);api.hipStreamDestroy(stream);}
  void PrintMemory(){size_t bytes=0,free=0,total=0;std::set<void*>seen;auto add=[&](const Tensor&t){if(t&&t->owned&&seen.insert(t->ptr).second)bytes+=t->capacity;};for(auto&t:pool)add(t);for(auto&w:weights)add(w.second);for(auto&maps:gather_maps)for(auto&m:maps)add(m.second);add(device_noise);api.Check(api.hipMemGetInfo(&free,&total),"memory stats");std::printf("memory owned_MiB=%.1f allocations=%zu device_free_MiB=%.1f total_MiB=%.1f\n",bytes/1048576.,seen.size(),free/1048576.,total/1048576.);}
  /* DLSS5_HIP_MEMORY=1 (diagnostic): device memory by category after the pool has warmed — weights by key, pool tensors by capacity, gather maps, noise, and the runtime's free/total. */
  void MemoryReport(FILE*f){std::set<void*>seen;size_t wsum=0,psum=0,gsum=0,nsum=0;std::vector<std::pair<size_t,std::string>>w,p;
@@ -1125,7 +1125,15 @@ if(wave_owned_active)HasFn("c32_wave1","c32_wave1_post_b8_rgba");if(multi_predic
   // replace an optimized upstream module with a different numerical route.
   Fn("c32_wave1","c32_wave1_post_logit");Fn("c32_wave1","c32_wave1_post_b8_logit");
   native_post_row=Upload(row.data(),128,true);native_post_output=aux.data;
+  if(opt.integration.allow_model_prewarm&&small_assets_ready&&SmallCompatible()){
+   auto other=ReadWeights(assets_root+(small_active?"/":"/small/")+"post70-history-head.f32");
+   if(other.size()!=32||std::any_of(other.begin(),other.end(),[](float v){return !std::isfinite(v);}))throw std::runtime_error("alternate model post row shape");
+   inactive_model_post_row=Upload(other.data(),128,true);
+  }
  }
+#ifdef DLSS5_BENCH_BRIDGE_ISOLATE
+ std::vector<float> DiagnosticPostRow(){std::vector<float>v(32);Synchronize();api.Check(api.hipMemcpy(v.data(),P(native_post_row),128,2),"read active post row");return v;}
+#endif
  // Optional caller-owned packed RGB32F sink. Configure before warm-up; retain
  // through completion. No graph/experimental scheduling; defaults are unchanged.
  void EnableFirstPassOutput(void*data,size_t bytes){
@@ -1246,10 +1254,30 @@ if(wave_owned_active)HasFn("c32_wave1","c32_wave1_post_b8_rgba");if(multi_predic
  /* Pass count changed at run time (add-on hot reload / hotkey, 2026-10-03). Same value = no-op. A graph is rebuilt; feed buffers
     are allocated on the next multi-pass frame (outside capture: the warm frame). */
  void SetModelMode(U n){if(n>3||n==requested_mode)return;
-  const bool next_small=n==0&&SmallCompatible()&&SmallAssetsAvailable(assets_root+"/small");
-  if(next_small!=small_active){Synchronize();ClearGraph();graph_warmed=false;sp_plans.clear();pdl_prev={};pdl_ffn_flags=nullptr;pdl_keep.clear();weights.clear();adaptive_anchor_in.reset();adaptive_anchor_out.reset();adaptive_gain.reset();adaptive_stats.reset();adaptive_state.reset();adaptive_image_anchor.reset();adaptive_image_signature.reset();adaptive_image_delta.reset();adaptive_n=0;adaptive_dirty=true;experimental_ready=false;}
+  const bool next_small=n==0&&SmallCompatible()&&small_assets_ready;
+  if(next_small!=small_active){ClearGraph();graph_warmed=false;pdl_prev={};pdl_ffn_flags=nullptr;weights.swap(inactive_model_weights);adaptive_gain.swap(inactive_model_gain);native_post_row.swap(inactive_model_post_row);adaptive_dirty=true;experimental_ready=false;}
   SelectModel(n);SetPassCount(dlss5_mode::Passes(n));}
 
+ // All cold uploads and both AE/exact weight layouts complete before an external producer wait.
+ void PrepareForExternalInput(bool temporal){
+  const char*ae=std::getenv("DLSS5_VIT_ADAPTIVE");
+  const unsigned profile=(small_active?0:multi_pass)|(temporal?8:0)|(adaptive_allowed&&ae&&strcmp(ae,"0")?16:0)|(multi_predict?32:0)|(multi_skin?64:0);
+  if(prepared_input_profiles.count(profile))return;
+  if(external_input_wait)throw std::runtime_error("model preparation after producer wait");
+  Synchronize();void*scratch=nullptr;const size_t pixels=size_t(W)*H,bytes=pixels*(temporal?44:28);
+  api.Check(api.hipMalloc(&scratch,bytes),"cold model scratch");const bool saved_adaptive=adaptive_allowed,saved_user_disabled=adaptive_user_disabled,saved_hotkey=opt.integration.allow_vit_hotkey;adaptive_user_disabled=false;opt.integration.allow_vit_hotkey=false;
+  try{
+   api.Check(api.hipMemsetAsync(scratch,0,bytes,stream),"cold model zero");
+   auto*out=static_cast<char*>(scratch)+pixels*16;auto*hist=temporal?static_cast<char*>(scratch)+pixels*28:nullptr;
+   Enqueue(scratch,hist,out,0);Synchronize();
+   if(saved_adaptive&&ae&&strcmp(ae,"0")){SetAdaptiveReuseAllowed(false);Enqueue(scratch,hist,out,0);Synchronize();SetAdaptiveReuseAllowed(saved_adaptive);}
+   InvalidateExperimentalHistory();adaptive_dirty=true;adaptive_user_disabled=saved_user_disabled;opt.integration.allow_vit_hotkey=saved_hotkey;prepared_input_profiles.insert(profile);
+   std::fprintf(stderr,"model_prepared mode=%s profile=%u uploads=%llu active_weights=%zu retained_weights=%zu before_producer_wait=1\n",dlss5_mode::Name(requested_mode),profile,weight_uploads,weights.size(),inactive_model_weights.size());
+  }catch(...){SetAdaptiveReuseAllowed(saved_adaptive);adaptive_user_disabled=saved_user_disabled;opt.integration.allow_vit_hotkey=saved_hotkey;api.hipStreamSynchronize(stream);api.hipFree(scratch);throw;}
+  api.Check(api.hipFree(scratch),"cold model scratch free");
+ }
+ void SetExternalInputWait(bool queued){external_input_wait=queued;}
+ unsigned long long WeightUploads()const{return weight_uploads;}
  U ModelMode()const{return requested_mode;}
  U EffectiveModelMode()const{return small_active?0:multi_pass;}
  void SetMultiPass(U n){if(n>=1&&n<=3)SetModelMode(n);}

@@ -3,6 +3,8 @@
 0.44 的Small、decoder/down W16和默认/热键消费边界见[消费审阅](../../docs/lmxxf-044-consumer-review.md)。
 `consumer-model-mode.patch`允许产品为每条新建网络显式指定模型，避免继承addon全局热切状态。
 产品仅通过菜单选择模型，不接入F9；Original仍为默认。
+后续7提交的冷上传/producer等待修复与双模型预热权限见[hotfix审阅](../../docs/lmxxf-044-hotfix-consumer-review.md)。
+产品显式关闭 `allow_model_prewarm`，不为F9常驻备用模型或预读备用history head。
 
 当前还增加显式 `inline-side-queue.patch`，仅在录制租约和产品许可下允许同设备独立队列提交；
 输入捕获、有限等待与双队列完成证明由宿主管理，见 [内联执行](../../docs/architecture/nr-inline-recording.md)。

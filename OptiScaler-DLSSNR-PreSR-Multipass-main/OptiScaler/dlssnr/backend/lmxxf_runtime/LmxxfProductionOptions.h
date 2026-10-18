@@ -93,6 +93,8 @@ inline hip_reference::Options LmxxfProductionOptions(unsigned processing_w, unsi
     // Product input ownership and module bundle policy, never upstream defaults.
     o.integration.allow_vit_hotkey = false;
     o.integration.allow_input_poll = false;
+    // Menu changes rebuild a recording chain; do not retain/prewarm an F9 twin.
+    o.integration.allow_model_prewarm = false;
     std::string extraSkipped = CfgKey::kDefaultSkipBlocks;
     if (const char *value = std::getenv(CfgKey::MultiPassSkipBlocks))
         CfgKey::NormalizeSkipBlocks(value, extraSkipped);

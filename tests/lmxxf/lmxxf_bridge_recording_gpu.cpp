@@ -4,6 +4,7 @@
 #include <dxgi1_4.h>
 #include "third_party/lmxxf/Development/HIP/hip_reference_network.h"
 #include "third_party/lmxxf/src/native_device_identity.h"
+#include "third_party/lmxxf/src/native_network_geometry.h"
 #define DLSS5_BENCH_BRIDGE_ISOLATE
 #include "third_party/lmxxf/Development/HIP/hip_d3d12_bridge.h"
 #include "OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/dlssnr/backend/lmxxf_runtime/LmxxfProductionOptions.h"
@@ -11,6 +12,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <thread>
+#include <atomic>
 #include <cmath>
 
 namespace hip_reference {
@@ -128,6 +130,9 @@ int main(int argc, char** argv)
 {
     if (argc != 3 && argc != 4) return 2;
     const bool adaptive = argc == 4 && (std::strcmp(argv[3], "--adaptive-reset") == 0 || std::strcmp(argv[3], "--adaptive-reset-1080") == 0);
+    const bool cold = argc == 4 && std::strcmp(argv[3], "--cold-producer") == 0;
+    const char* passMode = std::getenv("DLSS5_MULTI_PASS");
+    const bool useSmall = cold && passMode && std::strcmp(passMode, "0.5") == 0;
     unsigned blockingCalls = 0;
     if (adaptive) {
         _putenv_s("DLSS5_VIT_ADAPTIVE", "1");
@@ -150,15 +155,23 @@ int main(int argc, char** argv)
     Check(device->CreateCommandQueue(&qd, IID_PPV_ARGS(&creation)), "creation queue");
     Check(device->CreateCommandQueue(&qd, IID_PPV_ARGS(&actual)), "actual queue");
     const bool large = adaptive && std::strcmp(argv[3], "--adaptive-reset-1080") == 0;
-    const UINT width = adaptive ? (large ? 1920 : 1280) : 512, height = adaptive ? (large ? 1152 : 768) : 512;
+    const auto smallGeometry = NativeNetworkGeometry::Small(1280, 720, true);
+    const UINT width = useSmall ? smallGeometry.processing_width : adaptive || cold ? (large ? 1920 : 1280) : 512;
+    const UINT height = useSmall ? smallGeometry.processing_height : adaptive || cold ? (large ? 1152 : 768) : 512;
     const UINT64 pixels = UINT64(width) * height, bytes = pixels * 12;
     hip_reference::Options options; options.width = width; options.height = height;
     options.assets = argv[1]; options.modules = argv[2]; options.wmma = options.wave = options.pooled = true;
     options.fast_prefix = true;
-    if (adaptive) options = LmxxfProductionOptions(width, height, argv[2], argv[1]);
+    if (adaptive || cold) options = LmxxfProductionOptions(width, height, argv[2], argv[1]);
+    if (cold) {
+        options.small_geometry = useSmall;
+        options.integration.model_mode = useSmall ? 0 : passMode ? int(dlss5_mode::Parse(passMode)) : 1;
+    }
     try {
         hip_reference::D3D12Bridge bridge; bridge.Create(creation, options, {});
-        bridge.PrepareStagedKernels(); bridge.EnableRecordingLeases();
+        if (cold) Require((bridge.DiagnosticNetwork().EffectiveModelMode() == 0) == useSmall, "requested cold model executes");
+        if (!cold) bridge.PrepareStagedKernels();
+        bridge.EnableRecordingLeases();
         auto* input = Buffer(device, D3D12_HEAP_TYPE_DEFAULT, pixels * 16, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         auto* readback = Buffer(device, D3D12_HEAP_TYPE_READBACK, bytes, D3D12_RESOURCE_STATE_COPY_DEST);
         ID3D12CommandAllocator *pa = nullptr, *ca = nullptr;
@@ -198,8 +211,30 @@ int main(int argc, char** argv)
         for (unsigned pass = 0; pass < 11; ++pass) {
             ID3D12CommandQueue* q = pass % 2 ? creation : actual;
             bridge.BeginRecordedExecution(q);
+            ID3D12Fence* gate = nullptr;
+            if (cold && pass == 0) {
+                Check(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&gate)), "cold producer gate");
+                Check(q->Wait(gate, 1), "withhold producer until enqueue returns");
+            }
             ID3D12CommandList* first[] = {producer}; q->ExecuteCommandLists(1, first);
-            if (adaptive) {
+            if (gate) {
+                HANDLE returned = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+                Require(returned != nullptr, "cold enqueue return event");
+                std::atomic<bool> rescued {false};
+                std::thread rescue([&] {
+                    if (WaitForSingleObject(returned, 15000) != WAIT_OBJECT_0) {
+                        rescued = true; gate->Signal(1);
+                    }
+                });
+                try { bridge.EnqueueAfterProducer(q, 1); }
+                catch (...) {
+                    gate->Signal(1); SetEvent(returned); rescue.join(); CloseHandle(returned); gate->Release(); throw;
+                }
+                SetEvent(returned); Check(gate->Signal(1), "release producer after enqueue");
+                rescue.join(); CloseHandle(returned); gate->Release();
+                Require(!rescued, "cold uploads must complete before the withheld producer wait");
+                std::puts("cold producer returned without rescue PASS");
+            } else if (adaptive) {
                 // Cover idle reset, seed invalidation, mode change and disable/re-enable.
                 if (pass == 0 || pass == 3) Sleep(600);
                 _putenv_s("DLSS5_VIT_ADAPTIVE", pass == 5 ? "0" : pass == 4 ? "2" : "1");

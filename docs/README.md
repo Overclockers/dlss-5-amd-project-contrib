@@ -25,6 +25,7 @@
 | [lmxxf-039-consumer-review.md](lmxxf-039-consumer-review.md) | 0.39 完整上游审阅：实际生成配方、配置差异、验证范围和暂缓项 |
 | [lmxxf-041-consumer-review.md](lmxxf-041-consumer-review.md) | 0.41：预测三层、肤色保护、76模块、布局优化与本地验证 |
 | [lmxxf-044-consumer-review.md](lmxxf-044-consumer-review.md) | 0.44：Small31、decoder/down W16、菜单与资产接入、实际验证及暂缓 |
+| [lmxxf-044-hotfix-consumer-review.md](lmxxf-044-hotfix-consumer-review.md) | 0.44后续7提交：冷上传/producer等待、菜单策略及F9消费边界 |
 | [lmxxf-small-model.md](lmxxf-small-model.md) | lmxxf Small菜单选择、离线模型转换和回退说明 |
 | [backends/lmxxf.md](backends/lmxxf.md) | lmxxf 后端专页 |
 | [games/](games/) | 各游戏的兼容说明、已修复案例和排查入口 |

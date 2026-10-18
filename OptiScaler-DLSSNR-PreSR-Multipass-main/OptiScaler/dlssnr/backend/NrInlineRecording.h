@@ -297,7 +297,9 @@ private:
         list->SetComputeRootUnorderedAccessView(0, (op == 1 || op == 3 || op == 6 || op == 7 || op == 8 || op >= 11 ? capture : control)->GetGPUVirtualAddress());
         list->SetComputeRootUnorderedAccessView(1, target->GetGPUVirtualAddress());
         const bool abortable = op == 14 && abortChannel;
-        list->SetComputeRootUnorderedAccessView(3, (abortable ? abortChannel->buffer : sample)->GetGPUVirtualAddress());
+        // Only abortable op 14 reads u2. Bind the already-used target otherwise;
+        // binding the side-queue sample here creates an unrelated cross-queue UAV dependency.
+        list->SetComputeRootUnorderedAccessView(3, (abortable ? abortChannel->buffer.Get() : target)->GetGPUVirtualAddress());
         const UINT args[] {op, iterations, op == 4 || op == 7 || op == 13 || op == 14 ? spinPollDelay : 0u, abortable ? claimGen : 0u};
         list->SetComputeRoot32BitConstants(2, 4, args, 0);
         list->Dispatch(1, 1, 1);

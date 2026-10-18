@@ -35,8 +35,9 @@ index b33c3119..af545ec7 100644
   void ListContract(ID3D12GraphicsCommandList*c)const{
    if(!c||c->GetType()!=queue->GetDesc().Type)throw std::runtime_error("bridge command list type mismatch");
    ID3D12Device*owner{};Check(c->GetDevice(IID_PPV_ARGS(&owner)),"command list device");bool same=NativeSameDevice(owner,device);owner->Release();if(!same)throw std::runtime_error("bridge command list device mismatch");
-@@ -305,15 +313,15 @@ private:
+@@ -305,17 +313,17 @@ private:
     api.Check(api.hipSetDevice(hip_device),"select HIP device for enqueue");
+    if(!hip_passthrough)network->PrepareForExternalInput(temporal);
     pending=true;network->pulse_bridge_diagnostics=timing_on||span_probe||poll||poll_inline;
     if(poll_inline?(poll_recorded&&!poll_off):false){const unsigned target=poll_recorded_target,slot=target-1;poll_recorded=false;
 -    Check(queue->Signal(poll_fence,++poll_value),"poll marker signal");
@@ -51,6 +52,7 @@ index b33c3119..af545ec7 100644
      {std::lock_guard<std::mutex> lk(poll_mutex);poll_armed={true,poll_value,poll_evt[slot],target};}poll_frame++;}
 -   else{Check(queue->Signal(fence,++value),"D3D input signal");hip_probe::WaitParams wait{};wait.params.fence.value=value;api.Check(api.hipWaitExternalSemaphoresAsync(&semaphore,&wait,1,network->Stream()),"HIP input wait");}
 +   else{Check(producer->Signal(fence,++value),"D3D input signal");hip_probe::WaitParams wait{};wait.params.fence.value=value;api.Check(api.hipWaitExternalSemaphoresAsync(&semaphore,&wait,1,network->Stream()),"HIP input wait");}
+    network->SetExternalInputWait(true);
     if(span_probe){if(span_pending){float ms=-1;int sync=api.hipEventSynchronize(span_end),status=api.hipEventElapsedTime(&ms,span_begin,span_end);fprintf(stderr,"hip_span gpu_ms=%.3f cpu_enqueue_ms=%.3f sync=%d status=%d\n",ms,span_cpu,sync,status);span_pending=false;}api.Check(api.hipEventRecord(span_begin,network->Stream()),"span begin");}
     const bool timed=!hip_passthrough&&TimingBegin();
     auto start=std::chrono::steady_clock::now();

@@ -24,4 +24,5 @@ python tools/install/lmxxf-model.py --dll C:/path/to/nvngx_dlssnr.dll --output C
 Small 支持720/900/1080和自由尺寸、Off/Native history。
 Temporal Mode2/3或不兼容的高级内核组合会使用Original，菜单显示原因。
 缺失/损坏资产同样回退Original；修复模型后重启。
-安装脚本不会替用户更改模型偏好。来源和验证边界见[消费审阅](lmxxf-044-consumer-review.md)。
+安装脚本不会替用户更改模型偏好。来源和验证边界见[消费审阅](lmxxf-044-consumer-review.md)
+及[后续冷启动修复审阅](lmxxf-044-hotfix-consumer-review.md)。

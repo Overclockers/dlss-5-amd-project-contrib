@@ -2,6 +2,13 @@
 
 采用固定目标d50cde4b的31块Small网络、独立几何/历史头及decoder/down W16优化。复用Mochizuki离线Small pack与提取流程，转换为lmxxf布局并逐项验证93个SHA；不移植Mochizuki网络算子。模型只通过菜单切换，不引入F9；默认Original，保留其1..3遍偏好。Small不兼容选项/缺损资产/Mode2或3时回退Original并显示原因。模型切换重建录制链，不热改在用权重。80个双架构模块从固定源码重编，RX9070XT各档、往返切换和History专项通过；游戏、长时、gfx1200实机和Small低频适配仍有明确暂缓。详见[lmxxf 0.44消费审阅](lmxxf-044-consumer-review.md)和[模型安装](lmxxf-small-model.md)。没有准备或发布版本包。
 
+## 2026-10-18 — lmxxf 0.44 hotfix跟进，模型仍只经菜单切换
+
+追加接入到固定00a7d047的7提交；采用bridge在producer等待前准备冷上传的修复。
+显式禁止F9双模型预热与备用head加载，不调用热切setter。自适应许可属于每条录制链，
+时域策略变化通过重建生效，避免前帧执行时Prepare重复设置bridge策略。
+内核与配方未变，沿用本日固定源码重建的80模块；详见[hotfix审阅](lmxxf-044-hotfix-consumer-review.md)。
+
 ## 2026-10-16 — lmxxf 3a1be68 完整同步（80 模块重编 + Temporal Mode 2/3），回收只剪多余几何
 
 - **决定**：将 `lmxxf` 完整推进至 `3a1be68c35dbac7d7edeb2073723e82076bb1a39`。使用 WSL LLVM 23.1.2 预编译 12 个 wave1/wave2 模块并配合 COMGR 重编全部 80 个 `gfx1200`/`gfx1201` `.hsaco` 模块，使 W16（`HIP_C512_W16=2`、`HIP_C512_FFN_W16=1`、`HIP_C32_W16=1`、`HIP_VIT_W16=7`）、`HIP_VIT_INTER_BYTE=15`、`HIP_BYTE_F_ADD0=1` 与紧凑 QKV 布局在运行时正式生效。同时在调用方录制命令列表上接入 Temporal Mode 2（低频时间稳定）与 Mode 3（单遍残差增强 + 强度 0..2），由宿主统一枚举 `LmxxfTemporalMode`（默认 1 即完整模型历史，Mode 2/3 显式可选）与 `LmxxfTemporalEnhanceStrength`（默认 1.0）管理；Mode 0/1 零低频额外开销，Mode 2/3 仅在 `MultiPass() == 1` 时启用（层数不为 1 时状态设为 `low-freq-requires-mp1` 并跳过历史）。上游已停止的实验与 addon Mode 1 保持不接入。

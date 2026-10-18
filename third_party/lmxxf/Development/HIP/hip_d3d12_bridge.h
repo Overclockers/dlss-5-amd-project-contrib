@@ -244,6 +244,11 @@ probe.Check(probe.hipSetDevice(chosen),"select device");size_t total=0;if(probe.
   const bool pulse_validated=SUCCEEDED(pulse_driver_status)&&static_cast<unsigned long long>(pulse_driver.QuadPart)==0x00200000791f0800ull;
   std::fprintf(stderr,"submit_pulse device_scope arch=%s runtime=%d driver_query=%08x driver=%016llx validated=%u\n",architecture.c_str(),runtime_version,unsigned(pulse_driver_status),static_cast<unsigned long long>(pulse_driver.QuadPart),unsigned(pulse_validated));
   network->pulse_bridge_diagnostics=timing_on||span_probe||poll||poll_inline;network->ConfigureSubmitPulse(pulse_arch,pulse_validated);
+  // The default 1080 Small session keeps both trained models resident before gameplay.
+  // First F9 therefore needs neither asset I/O nor a synchronous weight upload.
+  if(network->opt.integration.allow_model_prewarm&&network->EffectiveModelMode()==0&&network->W==1920&&network->H==1152&&post_auxiliary_row.empty()){
+   network->PrepareForExternalInput(false);network->SetModelMode(1);network->PrepareForExternalInput(false);network->SetModelMode(0);
+  }
  }
  ID3D12Resource*Output()const{return output.resource;}
  void RequestFirstPassOutput(){if(network||queue)throw std::runtime_error("first pass output must precede Create");first_output_requested=true;}
@@ -325,6 +330,7 @@ private:
   auto&api=network->Runtime();
   try{
    api.Check(api.hipSetDevice(hip_device),"select HIP device for enqueue");
+   if(!hip_passthrough)network->PrepareForExternalInput(temporal);
    pending=true;network->pulse_bridge_diagnostics=timing_on||span_probe||poll||poll_inline;
    if(poll_inline?(poll_recorded&&!poll_off):false){const unsigned target=poll_recorded_target,slot=target-1;poll_recorded=false;
     Check(producer->Signal(poll_fence,++poll_value),"poll marker signal");
@@ -336,6 +342,7 @@ private:
     api.Check(wait_value(network->Stream(),flag.mapped,target,1/*EQ*/,0xffffffffu),"HIP input poll wait");api.Check(api.hipEventRecord(poll_evt[slot],network->Stream()),"poll event");
     {std::lock_guard<std::mutex> lk(poll_mutex);poll_armed={true,poll_value,poll_evt[slot],target};}poll_frame++;}
    else{Check(producer->Signal(fence,++value),"D3D input signal");hip_probe::WaitParams wait{};wait.params.fence.value=value;api.Check(api.hipWaitExternalSemaphoresAsync(&semaphore,&wait,1,network->Stream()),"HIP input wait");}
+   network->SetExternalInputWait(true);
    if(span_probe){if(span_pending){float ms=-1;int sync=api.hipEventSynchronize(span_end),status=api.hipEventElapsedTime(&ms,span_begin,span_end);fprintf(stderr,"hip_span gpu_ms=%.3f cpu_enqueue_ms=%.3f sync=%d status=%d\n",ms,span_cpu,sync,status);span_pending=false;}api.Check(api.hipEventRecord(span_begin,network->Stream()),"span begin");}
    const bool timed=!hip_passthrough&&TimingBegin();
    auto start=std::chrono::steady_clock::now();
@@ -349,6 +356,7 @@ private:
     // Keep the normal final device-to-shared-output copy as well as both fences.
     api.Check(api.hipMemcpyAsync(output.mapped,passthrough_rgb,pixels*12,3,network->Stream()),"HIP passthrough output copy");
    }else network->Enqueue(input.mapped,temporal?history.mapped:nullptr,output.mapped,seed);
+   network->SetExternalInputWait(false);
    if(timed)TimingEnd();
    if(span_probe){span_cpu=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();api.Check(api.hipEventRecord(span_end,network->Stream()),"span end");span_pending=true;}
    hip_probe::SignalParams signal{};signal.params.fence.value=++value;api.Check(api.hipSignalExternalSemaphoresAsync(&semaphore,&signal,1,network->Stream()),"HIP output signal");

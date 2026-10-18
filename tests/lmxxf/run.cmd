@@ -1,6 +1,6 @@
 @echo off
 rem lmxxf runtime and submission tests. Every test in tests\lmxxf belongs to exactly one tier below.
-rem Usage: tests\lmxxf\run.cmd abi^|warp^|device^|inline^|inline-discard^|inline-gpu^|slots^|wait-profile^|split-state^|early-unity^|hip-passthrough^|gpu [out-dir]
+rem Usage: tests\lmxxf\run.cmd abi^|warp^|device^|inline^|inline-discard^|inline-gpu^|cold-producer^|slots^|wait-profile^|split-state^|early-unity^|hip-passthrough^|gpu [out-dir]
 rem   abi    : lmxxf_nr_abi, lmxxf_zero_fallback_abi.c, test_runtime_validation.py (no GPU)
 rem   warp   : lmxxf_same_frame_boundary, lmxxf_color_probe (D3D12 WARP; no GPU)
 rem   split-state: focused inherited-legacy/enhanced split admission and pixel readback (also in warp).
@@ -9,6 +9,7 @@ rem            plus early Unity caller admission, retained split/Reset (hardware
 rem   early-unity: only the early caller/retained-list regression (also included in device).
 rem   hip-passthrough: focused HIP round-trip/codec comparison (also included in gpu).
 rem   slots  : private inline history/lifetime, split vs 1..5 hashes and timed GPU sweeps.
+rem   cold-producer: fresh Small/Original networks enqueue before a withheld producer fence; replay bytes.
 rem   wait-profile: 1440p old/new wait budgets, split baseline, hashes and paced/unpaced sweeps.
 rem   gpu    : runtime formats/exposure/output hashes, recording lifecycle and bridge regressions.
 rem            Bridge fixtures use /std:c++17 for upstream header compatibility.
@@ -54,10 +55,11 @@ if /i "%TIER%"=="inline" goto inline
 if /i "%TIER%"=="inline-discard" goto inline-discard
 if /i "%TIER%"=="diag-lifetime" goto diag-lifetime
 if /i "%TIER%"=="inline-gpu" goto inline-gpu
+if /i "%TIER%"=="cold-producer" goto cold-producer
 if /i "%TIER%"=="slots" goto slots
 if /i "%TIER%"=="wait-profile" goto slots
 if /i "%TIER%"=="split-state" goto split-state
-echo usage: tests\lmxxf\run.cmd abi^|warp^|device^|inline^|inline-discard^|inline-gpu^|slots^|wait-profile^|split-state^|early-unity^|hip-passthrough^|gpu [out-dir]
+echo usage: tests\lmxxf\run.cmd abi^|warp^|device^|inline^|inline-discard^|inline-gpu^|cold-producer^|slots^|wait-profile^|split-state^|early-unity^|hip-passthrough^|gpu [out-dir]
 exit /b 2
 
 :model-gpu
@@ -170,6 +172,26 @@ if /i "%TIER%"=="wait-profile" (
 %CXX% tests\lmxxf\lmxxf_native_history_gpu.cpp /Fe"%OUT%\lmxxf_native_history_gpu.exe" /Fo"%OUT%\lmxxf_native_history_gpu.obj" /link %D3D% d3dcompiler.lib || goto fail
 "%OUT%\lmxxf_native_history_gpu.exe" "%LMXXF_TEST_RUNTIME%" "%MODS%" --inline || goto fail
 %AMD_TEST_PYTHON% -B tests\lmxxf\compare_slots.py "%OUT%\nr_slots_benchmark.exe" "%LMXXF_TEST_RUNTIME%" "%MODS%" "%OUT%" || goto fail
+goto pass
+
+:cold-producer
+if not defined LMXXF_ASSETS goto fail
+cl /nologo /std:c++17 /EHsc /W4 /utf-8 /DNOMINMAX /D_WIN32_WINNT=0x0A00 /I"%REPO%\third_party\lmxxf\Development\HIP" /I"%REPO%\third_party\lmxxf\src" tests\lmxxf\lmxxf_bridge_recording_gpu.cpp /Fe"%OUT%\lmxxf_bridge_recording_gpu.exe" /Fo"%OUT%\lmxxf_bridge_recording_gpu.obj" /link d3d12.lib dxgi.lib user32.lib || goto fail
+set "DLSS5_FAST_NUMERIC=1"
+set "DLSS5_SKIP_BLOCKS=none"
+set "DLSS5_MULTI_PASS_SKIN_PROTECT=0"
+set "DLSS5_MULTI_PASS_PREDICT=1"
+set "DLSS5_VIT_ADAPTIVE=0"
+for %%M in (0.5 1 2 3) do (
+  set "DLSS5_MULTI_PASS=%%M"
+  "%OUT%\lmxxf_bridge_recording_gpu.exe" "%LMXXF_ASSETS%" "%MODS%" --cold-producer || goto fail
+)
+set "DLSS5_MULTI_PASS_PREDICT=0"
+set "DLSS5_MULTI_PASS_SKIN_PROTECT=1"
+"%OUT%\lmxxf_bridge_recording_gpu.exe" "%LMXXF_ASSETS%" "%MODS%" --cold-producer || goto fail
+set "DLSS5_MULTI_PASS=0.5"
+set "DLSS5_VIT_ADAPTIVE=1"
+"%OUT%\lmxxf_bridge_recording_gpu.exe" "%LMXXF_ASSETS%" "%MODS%" --cold-producer || goto fail
 goto pass
 
 :inline-gpu

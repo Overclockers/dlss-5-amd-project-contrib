@@ -1997,6 +1997,9 @@ int32_t PrepareFrame(void *context, const LmxxfNrFrameInfo *info, LmxxfNrJob *jo
         const bool requestModelHistory = requestedTemporalMode == NativeTemporalMode::FastHistory;
         const bool requestAnyTemporal = requestedTemporalMode != NativeTemporalMode::Off;
         requestedOptions += requestModelHistory ? "history=1;" : "history=0;";
+        // This policy belongs to the chain. A later Prepare may overlap an active
+        // recording, so changing it requires a new chain rather than a bridge setter.
+        requestedOptions += requestAnyTemporal ? "adaptive=0;" : "adaptive=1;";
         const bool requestFirst = (info->flags & LMXXF_NR_FRAME_FLAG_FIRST_PASS) && session->recordingLeases &&
             !(info->flags & (LMXXF_NR_FRAME_FLAG_CODEC_PASSTHROUGH | LMXXF_NR_FRAME_FLAG_HIP_PASSTHROUGH));
         requestedOptions += requestFirst ? "first=1;" : "first=0;";
@@ -2475,8 +2478,6 @@ int32_t PrepareFrame(void *context, const LmxxfNrFrameInfo *info, LmxxfNrJob *jo
             session->rebuildTiming.Record(ms);
             session->performance.Record(NR_CPU_REBUILD, ms, GetTickCount64(), info->frame_id);
         }
-        if (session->bridge)
-            session->bridge->SetAdaptiveReuseAllowed(!requestAnyTemporal);
         if (info->flags & LMXXF_NR_FRAME_FLAG_HIP_PASSTHROUGH)
             session->bridge->PrepareHipPassthrough();
         session->job = {};

@@ -13,6 +13,7 @@ int main() {
     auto resolve=[](bool assets=true){return LmxxfResolveModel("modules","weights",assets);};
     check(!resolve().useSmall);
     check(!resolve().options.integration.allow_vit_hotkey&&!resolve().options.integration.allow_input_poll);
+    check(!resolve().options.integration.allow_model_prewarm);
     dlss5_mode::Request(0); // Addon hot state must not override product selection.
     check(resolve().options.integration.model_mode==1);
     _putenv_s("DLSS5_MULTI_PASS","0.5");check(resolve().useSmall);
