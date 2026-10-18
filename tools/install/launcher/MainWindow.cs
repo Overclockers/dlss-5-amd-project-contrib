@@ -667,7 +667,7 @@ namespace OptScalerNR.Launcher
                 SetLabel("LocalGamesHeading", "本地游戏", "Local Games");
                 SetLabel("ProxyHeading", "注入代理 (Proxy DLL)", "Injection Proxy (DLL)");
                 SetLabel("BackendsHeading", "后端加速管线", "Backend Engines");
-                SetLabel("LmxxfCheck", "lmxxf · 0.4x", "lmxxf · 0.4x");
+                SetLabel("LmxxfCheck", "lmxxf · 0.44", "lmxxf · 0.44");
                 SetLabel("DanielCheck", "Daniel · 0.3.0-0.6.0", "Daniel · 0.3.0-0.6.0");
                 SetLabel("MochiCheck", "mochi · 0.0.6", "mochi · 0.0.6");
                 SetLabel("LmxxfDescription", "适合 RX 9000 系列", "For RX 9000 series");

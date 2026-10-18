@@ -696,10 +696,10 @@ void RenderMenu(Config* config, float menuResScale)
             const Kind active = DlssNr::Backend::ActiveKindFromConfig();
             const bool isLmxxf = (active == Kind::Lmxxf);
             // Runtime name belongs with Enable NR — tight pair, not a separate group.
-            const char* ver = active == Kind::Mochizuki ? "mochizuki 0.0.6" : isLmxxf ? "lmxxf 0.41" : DlssNr::AmdBridge::RuntimeName();
+            const char* ver = active == Kind::Mochizuki ? "mochizuki 0.0.6" : isLmxxf ? "lmxxf 0.44" : DlssNr::AmdBridge::RuntimeName();
             const bool haveVer = ver && *ver;
             HGap(0.12f);
-            MenuUi::TextDisabled("%s", haveVer ? ver : (isLmxxf ? "lmxxf 0.41" : "pass1?"));
+            MenuUi::TextDisabled("%s", haveVer ? ver : (isLmxxf ? "lmxxf 0.44" : "pass1?"));
             HelpMarker(active == Kind::Mochizuki ? "AMD NR runtime: mochizuki (native D3D12 / Vulkan bridge)." : isLmxxf ? "AMD NR runtime: lmxxf (same-frame direct execution)."
                                : (haveVer ? "AMD NR runtime: danielblnc backend."
                                           : "AMD NR runtime: pass1 not identified yet."));

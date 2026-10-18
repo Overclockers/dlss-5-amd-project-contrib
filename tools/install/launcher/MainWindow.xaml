@@ -602,7 +602,7 @@
                 <Border Background="#FF181C26" BorderBrush="#FF282D3A" BorderThickness="1" CornerRadius="6" Padding="14,10" Margin="0,0,0,8">
                   <StackPanel>
                     <DockPanel LastChildFill="False">
-                      <CheckBox x:Name="LmxxfCheck" Content="lmxxf · 0.4x" FontWeight="SemiBold" Foreground="#FFFFFFFF" VerticalAlignment="Center"/>
+                      <CheckBox x:Name="LmxxfCheck" Content="lmxxf · 0.44" FontWeight="SemiBold" Foreground="#FFFFFFFF" VerticalAlignment="Center"/>
                       <Border x:Name="LmxxfBadge" DockPanel.Dock="Right" Background="#FF17281F" BorderBrush="#FF22C55E" BorderThickness="1" CornerRadius="10" Padding="8,2" VerticalAlignment="Center">
                         <TextBlock x:Name="LmxxfReason" Text="就绪" FontSize="11" Foreground="#FF4ADE80"/>
                       </Border>
