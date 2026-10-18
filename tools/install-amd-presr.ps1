@@ -38,7 +38,6 @@ param(
     [ValidateSet('small', 'original')]
     [string]$MochizukiActiveModel,
     [string[]]$Backends,
-    [ValidateSet('lmxxf','daniel','mochizuki')]
     [string]$ActiveBackend,
     [switch]$NonInteractive,
     # Explicit opt-in for unattended clean reinstall. Otherwise unattended setup overwrites.
@@ -138,6 +137,10 @@ if (Test-Path -LiteralPath $versionFile -PathType Leaf) {
     }
 }
 Write-Host $productTitle -ForegroundColor Cyan
+Write-Host '==============================================================================' -ForegroundColor Yellow
+Write-Host '  本软件免费，如付费购买请立即退款！' -ForegroundColor Yellow
+Write-Host '  This software is free. If you paid for it, request a refund immediately!' -ForegroundColor Yellow
+Write-Host '==============================================================================' -ForegroundColor Yellow
 
 # Do not use Get-FileHash: it belongs to Microsoft.PowerShell.Utility and relies on module autoloading.
 # When PSModulePath points to PowerShell 7 module directories (e.g. launched from pwsh
@@ -912,6 +915,7 @@ if ($hasBackendSelection) {
         if ($seenBackend.ContainsKey($id)) { $activeBackend = $id; break }
     }
     if ($PSBoundParameters.ContainsKey('ActiveBackend')) {
+        if ($ActiveBackend -notin @('lmxxf','daniel','mochizuki')) { Fail 'ActiveBackend must be lmxxf, daniel, or mochizuki.' }
         if (-not $seenBackend.ContainsKey($ActiveBackend)) { Fail 'ActiveBackend is not in -Backends.' }
         $activeBackend = $ActiveBackend
     }

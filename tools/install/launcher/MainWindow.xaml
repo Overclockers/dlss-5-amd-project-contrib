@@ -1,7 +1,7 @@
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
-        Title="OptScaler NR"
+        Title="OptScaler NR - 本软件免费，如付费购买请立即退款！"
         Width="1200" Height="780"
         MinWidth="1020" MinHeight="660"
         Background="#FF0C0D12"
@@ -392,6 +392,9 @@
           <TextBlock x:Name="PageTitle" Text="游戏库" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="#FFFFFFFF"/>
           <Border x:Name="CountBadgeBorder" Background="#FF1E222E" CornerRadius="10" Padding="8,2" Margin="8,0,0,0" VerticalAlignment="Center">
             <TextBlock x:Name="CountBadge" Text="0" FontSize="11" FontWeight="SemiBold" Foreground="#FF8E95A5"/>
+          </Border>
+          <Border Background="#2BFF9800" BorderBrush="#80FF9800" BorderThickness="1" CornerRadius="4" Padding="8,2" Margin="14,0,0,0" VerticalAlignment="Center">
+            <TextBlock x:Name="RefundWarning" Text="本软件免费，如付费购买请立即退款！" FontSize="11" FontWeight="SemiBold" Foreground="#FFFFB74D"/>
           </Border>
         </StackPanel>
 

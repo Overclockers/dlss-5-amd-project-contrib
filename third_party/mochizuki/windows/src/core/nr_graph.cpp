@@ -424,7 +424,7 @@ bool open_model_pack(const std::string& file, const std::string& root, const std
     for (size_t i = 1; i < ranges.size(); ++i) {
         if (ranges[i].first < ranges[i - 1].second) { if (why) *why = "overlapping model tensors"; return false; }
     }
-    const auto* expected = count == 255 ? nr::model_profile::small : nr::model_profile::original;
+    const auto* expected = count == 255 ? nr::model_profile::small_tensors : nr::model_profile::original_tensors;
     for (uint32_t i = 0; i < count; ++i) {
         const auto it = p.index.find(expected[i].name);
         std::string digest;

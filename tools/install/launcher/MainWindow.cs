@@ -99,7 +99,7 @@ namespace OptScalerNR.Launcher
         FrameworkElement _libraryPage, _settingsPage;
         ComboBox _filterCombo, _proxyCombo, _activeCombo, _langCombo;
         ListBox _gameList;
-        TextBlock _pageTitle, _countBadge, _heroKicker, _heroTitle, _heroMeta, _heroPath, _heroPosterInitial, _injectText, _injectIcon, _injectRecommendation;
+        TextBlock _pageTitle, _countBadge, _heroKicker, _heroTitle, _heroMeta, _heroPath, _heroPosterInitial, _injectText, _injectIcon, _injectRecommendation, _refundWarning;
         TextBlock _lmxxfReason, _danielReason, _mochiReason, _statusText, _countText;
         Border _lmxxfBadge, _danielBadge, _mochiBadge;
         Button _lmxxfActiveBtn, _danielActiveBtn, _mochiActiveBtn;
@@ -159,6 +159,7 @@ namespace OptScalerNR.Launcher
             _searchBox = (TextBox)window.FindName("SearchBox");
             _pageTitle = (TextBlock)window.FindName("PageTitle");
             _countBadge = (TextBlock)window.FindName("CountBadge");
+            _refundWarning = (TextBlock)window.FindName("RefundWarning");
             _langToggle = (Button)window.FindName("LangToggle");
             _libraryTab = (Button)window.FindName("LibraryTab");
             _settingsTab = (Button)window.FindName("SettingsTab");
@@ -616,6 +617,10 @@ namespace OptScalerNR.Launcher
         void ApplyLang()
         {
             var isZh = _language == "zh";
+            if (_window != null)
+                _window.Title = isZh ? "OptScaler NR - 本软件免费，如付费购买请立即退款！" : "OptScaler NR - Free software; if purchased, request a refund immediately!";
+            if (_refundWarning != null)
+                _refundWarning.Text = isZh ? "本软件免费，如付费购买请立即退款！" : "Free software; if purchased, request a refund immediately!";
             if (_pageTitle != null) _pageTitle.Text = isZh ? "游戏库" : "Library";
             if (_langToggle != null) _langToggle.Content = isZh ? "🌐 English" : "🌐 简体中文";
             if (_libraryTab != null) _libraryTab.Content = isZh ? "游戏库" : "Library";
@@ -1611,7 +1616,31 @@ namespace OptScalerNR.Launcher
             {
                 if (!string.IsNullOrEmpty(_currentLogPath) && File.Exists(_currentLogPath))
                 {
-                    Process.Start("notepad.exe", _currentLogPath);
+                    try
+                    {
+                        var psi = new ProcessStartInfo
+                        {
+                            FileName = _currentLogPath,
+                            UseShellExecute = true
+                        };
+                        Process.Start(psi);
+                        return;
+                    }
+                    catch { }
+
+                    try
+                    {
+                        var winDir = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+                        var classicNotepad = Path.Combine(winDir, "notepad.exe");
+                        if (File.Exists(classicNotepad))
+                        {
+                            Process.Start(classicNotepad, "\"" + _currentLogPath + "\"");
+                            return;
+                        }
+                    }
+                    catch { }
+
+                    Process.Start("explorer.exe", "/select,\"" + _currentLogPath + "\"");
                 }
                 else
                 {

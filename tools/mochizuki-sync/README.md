@@ -24,6 +24,13 @@ change to the tracked tensor checksum lists, then update the patch. The runtime
 checks the selected family, exact tensor set and SHA256 contents, and keeps a
 read lease that denies file writes and renames until weight loading completes.
 
+Patch 26 adds temporary-exposure Hold, a codec-divisor transition shader, and
+independently shared 1x1 exposure state across compatible network replacements.
+It also gives generated tensor arrays macro-safe names for Windows compilation.
+`tests\mochizuki\run.cmd renodx-feed` checks the production feed decisions and
+transition shader body without a GPU; this runs in the `abi` tier too. GPU/game
+acceptance of repeated extent changes and visual continuity remains separate.
+
 | Patch | Local purpose | Upstream preparation |
 |---|---|---|
 | 01 compiler-path | Bind both shader recipes to the product's pinned glslang | Small independent CLI proposal; default path unchanged |

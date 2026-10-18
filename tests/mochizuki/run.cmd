@@ -21,6 +21,8 @@ if /i "%~1"=="source-pin" (
 )
 call tests\_lib\msvc-env.cmd || exit /b 1
 if not exist exports\mochizuki-tests mkdir exports\mochizuki-tests
+if /i "%~1"=="renodx-feed" goto renodxfeed
+if /i "%~1"=="abi" call :renodxfeed || exit /b 1
 if /i "%~1"=="exposure-recording" goto exposurerecording
 if /i "%~1"=="inline-auto-spin" goto inlineautospin
 if /i "%~1"=="pool-trim" goto pooltrim
@@ -70,6 +72,10 @@ if /i "%~1"=="gpu" (
 )
 if errorlevel 1 exit /b 1
 python -X utf8 -c "from pathlib import Path; import hashlib; p=Path('exports/mochizuki-runtime'); (p/'abi-ci.sha256').write_text(hashlib.sha256((p/'MochizukiNrRuntime.dll').read_bytes()).hexdigest()+'\n')"
+exit /b %errorlevel%
+
+:renodxfeed
+python -B tests\mochizuki\test_renodx_feed.py
 exit /b %errorlevel%
 
 :splitretain

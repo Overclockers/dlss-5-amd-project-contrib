@@ -767,6 +767,7 @@ shaders/renodx/renodx_v6_commit.spv
 shaders/renodx/renodx_v6_commit_exposure.spv
 shaders/renodx/renodx_v6_encode.spv
 shaders/renodx/renodx_v6_exposure_scale.spv
+shaders/renodx/renodx_v6_feed_transition.spv
 shaders/renodx/renodx_v6_linearize.spv
 shaders/renodx/renodx_v6_pedestal_reduce.spv
 shaders/renodx/renodx_v6_pedestal_reduce_unshaped.spv

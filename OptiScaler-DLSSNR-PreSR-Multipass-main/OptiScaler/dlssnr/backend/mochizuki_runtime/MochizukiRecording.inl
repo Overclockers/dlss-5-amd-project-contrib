@@ -171,7 +171,7 @@ int32_t BeginRecordingExecution(void* context, void* token, void* queue)
     s->exposure.Begin(r->job.meterTicket);
     s->gameTexel.Begin(r->job.texelTicket);
     r->job.enqueued = false;
-    if (r->executions++) r->job.reset = true; // A replay is a history discontinuity.
+    if (r->executions++) r->job.reset = r->job.normalizationReset = true; // replay is a discontinuity
     if (!r->inlineExecution) {
         s->executing = token;
         return LMXXF_NR_OK;
@@ -204,6 +204,8 @@ int32_t EnqueueHip(void* context, void* token, void* queue)
         r->job.controls.passes == s->historyPasses;
     const bool reset = s->resetPending.exchange(false);
     const uint32_t resetReasons = reset ? s->resetReasons.exchange(0) : 0;
+    r->job.normalizationReset |= (resetReasons & (Session::ResetQueue | Session::ResetCancel |
+        Session::ResetExternal | Session::ResetEnqueue)) != 0;
     if (r->job.reset || reset || !continuous) {
         const auto n = ++s->recordingHistoryResets;
         if (n <= 5 || n % 3600 == 0)

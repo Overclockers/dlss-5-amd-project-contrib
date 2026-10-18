@@ -12,6 +12,8 @@
 //   commit] -> the frame's output. A chain whose every pass is at zero strength leaves the frame as it is.
 //
 // Off by default; a runtime without a stage records exactly what it recorded before.
+// Product extension: temporary exposure Hold and a source-transition pass preserve the
+// actual applied divisor; compatible network replacements share only the small meter state.
 #include "nr_runtime.hpp"
 
 #include <cstdint>
@@ -147,6 +149,7 @@ struct StageFrame {
     ColourFrame colour;     // read
     ColourFrame output;     // written; may be the same image as `colour`
     bool reset = false;     // DLSSNR.Reset
+    bool preserve_normalization = false; // network/extent history reset, not a camera/queue reset
     bool after_upscale = true;
     // The game's motion vectors, for Detail stability: the region (x, y, motion.width/height) of the
     // texture and the scale that turns a texel into normalised screen units (EngineFrame's convention).
@@ -182,6 +185,13 @@ public:
     void set(const Settings&);
     // 0 SDR (legacy codec), 1 linear HDR, 2 PQ: what this frame format and flag resolve to.
     uint8_t hdr_mode() const;
+
+    // Small, independently owned GPU state. The adapter keeps it across network retirement;
+    // stages use it on the same execution queue and retain it through their GPU retirement.
+    struct ExposureState;
+    using ExposureSnapshot = std::shared_ptr<ExposureState>;
+    ExposureSnapshot exposure_state() const;
+    bool seed_from(const ExposureSnapshot& state);
 
     // The network for one pass of the stack: reads `proxy`, writes its answer into `neural` (both
     // StageConfig::nr_width x nr_height, RGBA16F); `reset` restarts that pass's history.

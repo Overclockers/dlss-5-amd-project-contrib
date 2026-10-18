@@ -886,3 +886,12 @@ lmxxf 额外多槽吞吐回落；更少的 16/8 段没有进一步收益，因�
 - RenoDX disables host person protection while retaining its saved settings. Native white-point controls are hidden; preprocessing remains functional inside the RenoDX stage.
 - Patch 09 is upstream-equivalent, including arena lifetime and barrier emission; keep the official implementation after GPU oracle comparison.
 - Detailed scope, rebase SHAs, evidence and maintainer game matrix: [Mochizuki 0.0.5 review](architecture/mochizuki-005-review.md).
+
+## 2026-10-18: Mochizuki extent and exposure continuity
+
+- Actual bucket-size shrink requests use the 300 ms extent settle window; incompatible frames pass through their own colour while waiting.
+- Temporary missing game exposure holds for at most 0.5 s of elapsed time. Source transitions start from the last applied divisor; normal game exposure tracking resumes after the transition.
+- Compatible network replacements retain independently owned 1x1 meter resources on the session execution queue. They do not copy from an already retired network or retain its large model arenas. Explicit camera/queue resets remain distinct from network history resets.
+- Preparation logs identify requested settings; submission logs identify the actual network, model and pass styles. Reference-drop logs are distinct from object destruction and process-wide VRAM measurements.
+- `mochizuki_nr.log` rotates to `mochizuki_nr.1.log` at 4 MiB to preserve the newest diagnostics while capping total log footprint at 8 MiB.
+- Vendor changes replay as patch 26. CPU coverage is `tests\mochizuki\run.cmd renodx-feed`; game/GPU acceptance of visual continuity and repeated-action performance remains outstanding.

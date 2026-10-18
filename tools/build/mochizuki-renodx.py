@@ -2,7 +2,7 @@
 from pathlib import Path
 import subprocess
 
-KERNELS = ('v6_linearize v6_autoscale v6_exposure_scale v6_encode v6_resolve '
+KERNELS = ('v6_linearize v6_autoscale v6_exposure_scale v6_feed_transition v6_encode v6_resolve '
            'v6_pedestal_reduce v6_pedestal_reduce_unshaped v6_commit v6_commit_exposure '
            'v6_resolve_commit legacy_encode legacy_decode legacy_reduce legacy_reduce_unshaped '
            'legacy_apply look_compose look_upsample look_band').split()

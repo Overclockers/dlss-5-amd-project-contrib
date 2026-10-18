@@ -23,7 +23,7 @@ def main():
                 entries.append((name.strip(), digest))
         if len(entries) != count or len({name for name, _ in entries}) != count:
             raise ValueError(f'Invalid {family} tensor inventory')
-        lines.append(f'inline constexpr Tensor {family}[] = {{')
+        lines.append(f'inline constexpr Tensor {family}_tensors[] = {{')
         lines.extend(f'    {{{json.dumps(name)}, "{digest}"}},' for name, digest in entries)
         lines.append('};')
     lines.extend(['} // namespace nr::model_profile', ''])

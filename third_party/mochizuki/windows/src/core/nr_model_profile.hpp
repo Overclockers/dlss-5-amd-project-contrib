@@ -2,7 +2,7 @@
 #pragma once
 namespace nr::model_profile {
 struct Tensor { const char* name; const char* sha256; };
-inline constexpr Tensor original[] = {
+inline constexpr Tensor original_tensors[] = {
     {"inventory/weights/block23.layer0.layer.bin", "63399444cd1c361a295167f7958cc707d8e88ec363da1cbf2ada632dcc741df5"},
     {"inventory/weights/block24.layer0.layer.bin", "0b034c80329788fe6e7047cfaf63cd6a72e4b4803cddd945f053657868908059"},
     {"inventory/weights/block25.layer0.layer.bin", "1ec87cc7deec553a343123ff6e6a2db7248e713cdf9246f1e9918132415e2427"},
@@ -603,7 +603,7 @@ inline constexpr Tensor original[] = {
     {"unpacked/block9.layer0.layer.residual_scale.bin", "e6d6e39a4a65583e8907b6df1c56f6fa30c524f70ae2c730cf2efeebaedff566"},
     {"unpacked/block9.layer0.layer.scalars_b.bin", "dfd9bf5ef683b39284428c96a3f42a0f0daf1d1354e4a21ceec9ee92e7b78fcb"},
 };
-inline constexpr Tensor small[] = {
+inline constexpr Tensor small_tensors[] = {
     {"unpacked-preblock/block0.layer0.layer.attn_out_proj.bin", "4a0ab1262dcff594132faf676c0705b35b7c45b7918be3a6a864abac77fd2634"},
     {"unpacked-preblock/block0.layer0.layer.attn_pos_bias.bin", "32b272875f13b9f34b28da93dd3f26dd2fe12d0fa2d27dd22dae606665092c86"},
     {"unpacked-preblock/block0.layer0.layer.attn_residual_scale.bin", "2f545c569372539325fcb6d575a3fcde7e08becd859d2025b9e8f22a64015c94"},

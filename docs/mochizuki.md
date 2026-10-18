@@ -229,7 +229,7 @@ input conversion and composition. Adapter buffer/image copies, D3D12 copies,
 shared output effects, upscaling, frame generation and whole-frame latency are
 outside this measurement. Display and timing log options default off; summaries
 are limited to one per ten seconds, and query reads never wait for the GPU.
-`mochizuki_nr.log` respects file logging and stops appending at 4 MiB.
+`mochizuki_nr.log` respects file logging and rotates to `mochizuki_nr.1.log` at 4 MiB.
 
 Under **Apply NR edit → After the model**, **Model enlargement**
 (`MochizukiEnlargeMode`) offers matched residual (0, default), edge-aware (1) or
