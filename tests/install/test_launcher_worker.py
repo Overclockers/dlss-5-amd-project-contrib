@@ -353,7 +353,7 @@ class LauncherWorkerTests(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["schema"], 1)
         self.assertEqual(result["effectiveGameDir"], str(d))
-        self.assertNotIn("version.dll", [c["name"] for c in result["candidates"]])
+        self.assertIn("version.dll", [c["name"] for c in result["candidates"]])
         self.assertNotIn("dinput8.dll", [c["name"] for c in result["candidates"]])
 
     def test_rejects_relative_path(self):

@@ -22,6 +22,16 @@ function Call([string]$name, [object[]]$values = @()) {
     $controllerType.GetMethod($name, $flags).Invoke($controller, $values)
 }
 function Check([bool]$condition, [string]$why) { if (-not $condition) { throw $why } }
+function Dialog-Body($node) {
+    if ($node -is [Windows.Controls.StackPanel] -and @($node.Children | Where-Object { $_ -is [Windows.Controls.TextBlock] }).Count) { return $node }
+    if ($node -is [Windows.DependencyObject]) {
+        foreach ($child in [Windows.LogicalTreeHelper]::GetChildren($node)) {
+            $found = Dialog-Body $child
+            if ($null -ne $found) { return $found }
+        }
+    }
+    return $null
+}
 try {
     $backendType = $assembly.GetType('OptScalerNR.Launcher.BackendInfo', $true)
     $resultType = $assembly.GetType('OptScalerNR.Launcher.LauncherResult', $true)
@@ -90,7 +100,7 @@ try {
     Check ($window.FindName('CompatSummary').Text.Contains('libxess_fg.dll')) 'Automatic comparison summary hidden'
     $dialog = Call 'CreateCompatibilityDialog' @($false)
     try {
-        $panel = $dialog.Content.Content
+        $panel = Dialog-Body $dialog
         $checks = @($panel.Children | Where-Object { $_ -is [Windows.Controls.CheckBox] })
         Check ($checks.Count -eq 1) 'Paired XeFG/XeLL exposed as separate choices'
         Check ($checks[0].IsChecked -ne $true) 'Repair was selected without a user choice'
@@ -115,7 +125,7 @@ try {
     Check $window.FindName('RestoreCompatButton').IsEnabled 'Restoration hidden after repair'
     $dialog = Call 'CreateCompatibilityDialog' @($true)
     try {
-        $texts = @($dialog.Content.Content.Children | Where-Object { $_ -is [Windows.Controls.TextBlock] } | ForEach-Object { $_.Text }) -join '|'
+        $texts = @((Dialog-Body $dialog).Children | Where-Object { $_ -is [Windows.Controls.TextBlock] } | ForEach-Object { $_.Text }) -join '|'
         Check ($texts.Contains('libxess_fg.dll') -and $texts.Contains('libxell.dll')) 'Restore preview omitted actual files'
         Check (-not $texts.Contains('libxess_dx11.dll')) 'Restore preview claims unrelated files'
     } finally { $dialog.Close() }

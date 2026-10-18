@@ -394,7 +394,7 @@
             <TextBlock x:Name="CountBadge" Text="0" FontSize="11" FontWeight="SemiBold" Foreground="#FF8E95A5"/>
           </Border>
           <Border Background="#2BFF9800" BorderBrush="#80FF9800" BorderThickness="1" CornerRadius="4" Padding="8,2" Margin="14,0,0,0" VerticalAlignment="Center">
-            <TextBlock x:Name="RefundWarning" Text="本软件免费，如付费购买请立即退款！" FontSize="11" FontWeight="SemiBold" Foreground="#FFFFB74D"/>
+            <TextBlock x:Name="RefundWarning" Text="本软件免费，如付费购买请立即退款！" FontSize="11" FontWeight="SemiBold" Foreground="#FFFFB74D" MaxWidth="240" TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
           </Border>
         </StackPanel>
 
@@ -413,6 +413,7 @@
         <!-- Quick Action Bar -->
         <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,10,0">
           <Button x:Name="AddButton" Content="+ 添加游戏" Style="{StaticResource GhostButton}" Height="30" Padding="12,0" Margin="0,0,6,0" WindowChrome.IsHitTestVisibleInChrome="True"/>
+          <Button x:Name="AddFolderButton" Content="+ 添加文件夹" Style="{StaticResource GhostButton}" Height="30" Padding="10,0" Margin="0,0,6,0" WindowChrome.IsHitTestVisibleInChrome="True"/>
           <Button x:Name="RefreshButton" Content="刷新" Style="{StaticResource GhostButton}" Height="30" Padding="12,0" Margin="0,0,6,0" WindowChrome.IsHitTestVisibleInChrome="True"/>
           <Button x:Name="LangToggle" Content="🌐 English" Style="{StaticResource GhostButton}" Height="30" Padding="12,0" Margin="0,0,6,0" WindowChrome.IsHitTestVisibleInChrome="True"/>
           <Button x:Name="SettingsTab" Content="设置" Style="{StaticResource GhostButton}" Height="30" Padding="12,0" WindowChrome.IsHitTestVisibleInChrome="True"/>
@@ -532,7 +533,7 @@
                   <!-- Hero Content Details -->
                   <StackPanel Grid.Column="1" Margin="14,0,0,0">
                     <TextBlock x:Name="HeroKicker" Text="已选游戏" Foreground="#FF8E95A5" FontSize="11" FontWeight="SemiBold"/>
-                    <TextBlock x:Name="HeroTitle" Text="选择一个游戏以开始" FontSize="24" FontWeight="Bold" Margin="0,4,0,0" Foreground="#FFFFFFFF"/>
+                    <TextBlock x:Name="HeroTitle" Text="选择一个游戏以开始" FontSize="24" FontWeight="Bold" Margin="0,4,0,0" Foreground="#FFFFFFFF" TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
                     <TextBlock x:Name="HeroMeta" TextWrapping="Wrap" Text="选择游戏后自动检查运行状态与注入环境" Foreground="#FF8E95A5" FontSize="12" Margin="0,4,0,0"/>
                     <TextBlock x:Name="HeroPath" Text="" Foreground="#FF6E7585" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,12"/>
 
@@ -540,6 +541,8 @@
                     <WrapPanel Margin="0,4,0,0">
                       <Button x:Name="PrimaryButton" Content="⚡ 选择一个游戏" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left" MinWidth="190" IsEnabled="False"/>
                       <Button x:Name="ChangeExeButton" Content="更换 EXE" Style="{StaticResource GhostButton}" Margin="10,0,0,0"/>
+                      <Button x:Name="ScanExeButton" Content="扫描启动程序" Style="{StaticResource GhostButton}" Margin="10,0,0,0"/>
+                      <Button x:Name="EditGameButton" Content="编辑信息" Style="{StaticResource GhostButton}" Margin="10,0,0,0"/>
                       <Button x:Name="OpenFolderButton" Content="打开目录" Style="{StaticResource GhostButton}" Margin="10,0,0,0"/>
                       <Button x:Name="UninstallButton" Content="卸载" Style="{StaticResource GhostButton}" Margin="10,0,0,0" IsEnabled="False"/>
                       <Button x:Name="RemoveGameButton" Content="从列表移除" Style="{StaticResource GhostButton}" Margin="10,0,0,0" IsEnabled="False"/>
@@ -582,6 +585,7 @@
                   <RadioButton x:Name="PillWinhttp" Content="winhttp.dll" GroupName="ProxyPills" Style="{StaticResource PillRadio}"/>
                   <RadioButton x:Name="PillWininet" Content="wininet.dll" GroupName="ProxyPills" Style="{StaticResource PillRadio}"/>
                   <RadioButton x:Name="PillDbghelp" Content="dbghelp.dll" GroupName="ProxyPills" Style="{StaticResource PillRadio}"/>
+                  <RadioButton x:Name="PillVersion" Content="version.dll" GroupName="ProxyPills" Style="{StaticResource PillRadio}"/>
                 </WrapPanel>
 
                 <!-- Recommendation Banner -->
@@ -591,6 +595,11 @@
                     <TextBlock x:Name="InjectRecommendation" TextWrapping="Wrap" Text="选择游戏后将分析 PE 导入表并自动匹配推荐代理。" Foreground="#FFCAD0DC" FontSize="12" VerticalAlignment="Center"/>
                   </DockPanel>
                 </Border>
+                <WrapPanel Margin="0,10,0,0">
+                  <Button x:Name="UseRecommendationButton" Content="使用推荐" Style="{StaticResource GhostButton}" Margin="0,0,8,0"/>
+                  <Button x:Name="RefreshProfilesButton" Content="更新推荐资料" Style="{StaticResource GhostButton}"/>
+                  <TextBlock x:Name="ProfileStatus" Foreground="#FFAFB7C8" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                </WrapPanel>
               </StackPanel>
             </Border>
 

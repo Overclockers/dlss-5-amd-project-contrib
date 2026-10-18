@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "revision": 2026101901,
+  "reviewed": "2026-10-19",
+  "proxies": ["dxgi.dll", "winmm.dll", "d3d12.dll", "winhttp.dll", "wininet.dll", "dbghelp.dll", "version.dll"],
+  "profiles": [
+    {
+      "id": "neverness-to-everness-steam-windows",
+      "names": ["Neverness to Everness", "Neverness to Everness (NTE)", "NTE", "异环"],
+      "pathSegments": ["Neverness to Everness", "NevernessToEverness", "Neverness-to-Everness", "NTE", "异环"],
+      "preferred": "version.dll",
+      "alternatives": ["winmm.dll", "winhttp.dll"],
+      "notesEn": "Wiki records version/winmm/winhttp for Windows Steam. Select Client/WindowsNoEditor/HT/Binaries/Win64. d3d12 does not enable spoofing. Upstream tested 0.9.5-pre3; this fork's NR is not certified by that report.",
+      "notesZh": "Wiki 记录 Windows Steam 版可用 version/winmm/winhttp。请选择 Client/WindowsNoEditor/HT/Binaries/Win64。d3d12 无法启用显卡伪装。上游测试版本为 0.9.5-pre3，此记录不等同于本 fork 的 NR 验证。",
+      "source": "https://github.com/optiscaler/OptiScaler/wiki/Neverness-to-Everness",
+      "sourceFormat": "asciidoc",
+      "upstreamVersion": "0.9.5-pre3"
+    },
+    {
+      "id": "forspoken",
+      "names": ["Forspoken"],
+      "pathSegments": ["Forspoken"],
+      "preferred": "d3d12.dll",
+      "alternatives": [],
+      "notesEn": "The Wiki compatibility list requires d3d12.dll to detect DLSS input. Game-specific NR behavior still requires validation.",
+      "notesZh": "Wiki 兼容列表要求使用 d3d12.dll 才能检测 DLSS 输入；本游戏的 NR 表现仍需实测。",
+      "source": "https://github.com/optiscaler/OptiScaler/wiki/Compatibility-List"
+    },
+    {
+      "id": "infinity-nikki",
+      "names": ["Infinity Nikki", "无限暖暖"],
+      "pathSegments": ["Infinity Nikki", "InfinityNikki", "无限暖暖"],
+      "preferred": "version.dll",
+      "alternatives": [],
+      "notesEn": "The Wiki lists version.dll and requires a signed build. A local signature does not certify acceptance by the game. NR compatibility still requires validation.",
+      "notesZh": "Wiki 指定 version.dll，并要求签名构建。本地签名不代表已通过游戏的加载检查；NR 兼容性仍需实测。",
+      "source": "https://github.com/optiscaler/OptiScaler/wiki/Compatibility-List"
+    },
+    {
+      "id": "dead-or-alive-6-last-round",
+      "names": ["DEAD OR ALIVE 6 Last Round"],
+      "pathSegments": ["DEAD OR ALIVE 6 Last Round"],
+      "preferred": "d3d12.dll",
+      "alternatives": ["version.dll"],
+      "notesEn": "The Wiki lists d3d12.dll or version.dll. This suggestion follows that report; NR still requires validation.",
+      "notesZh": "Wiki 列出 d3d12.dll 或 version.dll；当前建议基于该记录，NR 仍需实测。",
+      "source": "https://github.com/optiscaler/OptiScaler/wiki/Compatibility-List"
+    }
+  ]
+}

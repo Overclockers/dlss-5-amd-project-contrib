@@ -4,7 +4,7 @@
     <OutputType>WinExe</OutputType>
     <RootNamespace>OptScalerNR.Launcher</RootNamespace>
     <AssemblyName>OptScalerNR.Launcher</AssemblyName>
-    <TargetFrameworkVersion>v4.0</TargetFrameworkVersion>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
     <PlatformTarget>x64</PlatformTarget>
     <FrameworkPathOverride>C:\Windows\Microsoft.NET\Framework64\v4.0.30319</FrameworkPathOverride>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
@@ -15,6 +15,18 @@
     <Compile Include="Protocol.cs"/>
     <Compile Include="WorkerClient.cs"/>
     <Compile Include="GamePaths.cs"/>
+    <Compile Include="DialogTheme.cs"/>
+    <Compile Include="FolderGameScanner.cs"/>
+    <Compile Include="ProxyRecommendations.cs"/>
+    <Compile Include="MainController.Library.cs"/>
+    <Compile Include="MainController.Recommendations.cs"/>
+    <EmbeddedResource Include="MainWindow.xaml"><LogicalName>OptScalerNR.Launcher.MainWindow.xaml</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="App.xaml"><LogicalName>OptScalerNR.Launcher.App.xaml</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="DialogTheme.xaml"><LogicalName>OptScalerNR.Launcher.DialogTheme.xaml</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="../../../assets/compatibility/proxy-profiles.json"><LogicalName>OptScalerNR.Launcher.proxy-profiles.json</LogicalName></EmbeddedResource>
+    <Reference Include="System"/><Reference Include="System.Core"/><Reference Include="System.Xaml"/>
+    <Reference Include="System.Runtime.Serialization"/><Reference Include="WindowsBase"/>
+    <Reference Include="PresentationCore"/><Reference Include="PresentationFramework"/><Reference Include="System.Drawing"/>
   </ItemGroup>
   <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets"/>
 </Project>

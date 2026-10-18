@@ -78,6 +78,24 @@ Xbox 游戏优先读取 `Content/MicrosoftGame.Config` 中存在的 PC 游戏 EX
 不卸载或删除游戏文件；移除记录按 ID/EXE 保存在 GUI 设置中，自动刷新与重启不重新加入。
 主动“添加游戏”选择同一路径可重新加入。旧缓存仍按游戏 ID/EXE 去重，安装失败不添加条目。
 
+“添加文件夹”和拖入目录允许先保存没有 EXE 的游戏，使用稳定条目 ID，根目录与所选 EXE 分开保存。
+未选择 EXE 时不能安装，可编辑信息、打开目录、移除或扫描启动程序。
+“编辑信息”的显示名称、PNG/JPEG 封面独立于游戏身份；封面保存受控副本到
+`%LOCALAPPDATA%/OptScalerNR/Launcher/user-assets/`，不依赖原图片位置。
+“扫描启动程序”后台读取 PE 的直接/延迟导入及有界本地依赖，不执行 EXE，不跟随目录链接。
+扫描限时 10 秒、深度 8、最多 256 个 EXE 和 10000 个目录；到限展示部分结果。
+用户在结果弹窗确认程序，未识别 API 的候选通过“显示全部 EXE”查看；仅允许选择 x64。
+图形 API 证据用于排序，不保证程序身份或注入成功。确认后保留原条目的 ID、根目录和自定义信息。
+
+代理支持 `dxgi.dll`、`winmm.dll`、`d3d12.dll`、`winhttp.dll`、`wininet.dll`、`dbghelp.dll`、`version.dll`。
+推荐依次采用用户手选、精确游戏规则、已安装项目代理及 PE 导入候选；无证据时要求人工选择。
+手选按游戏保存，可点击“使用推荐”清除该覆盖。游戏规则来自审阅后的
+`assets/compatibility/proxy-profiles.json`，内嵌于启动器并随包提供，保留 Wiki 来源和版本限制。
+启动立即采用本地资料，后台一次请求共享 10 秒总期限，载荷上限 256 KiB；失败保留旧资料。
+有效缓存位于 `%LOCALAPPDATA%/OptScalerNR/Launcher/compatibility/`，不会因重新打开启动器清空。
+维护入口和资料更新规则见 [推荐资料说明](../../assets/compatibility/README.md)。
+上游 Wiki 记录不等同于本 fork 的 NR 实机验证。所有自建弹窗使用共享深色主题，系统选择器保留系统实现。
+
 用户勾选的 Mochizuki/lmxxf 缺少模型且无提取来源时，GUI 在安装前弹出本地
 `nvngx_dlssnr.dll` 选择框，重新检查所选来源后再继续模型选择。来源路径经 DecisionJson
 传给安装器，离线提取直接读取所选文件；不要求用户手动剪切 DLL，也不把来源缺失当成
@@ -232,5 +250,5 @@ lmxxf/Mochizuki 仅在目标目录或文件不存在时回存，已有内容（�
 
 - **不往 `WindowsApps` 写。** 路径含 `\WindowsApps\` 时安装器拒绝（ACL/TrustedInstaller）。商店版游戏装到可写的 `Content\` 之类目录。
 - 本项目的代理与作者原生的 `version.dll` 注入互斥，不要在同一目录双注入；安装器不在游戏目录留下作者的 `version.dll`，而是复制成 `dlssnr_amd_pass1-3.dll`。
-- 代理默认 `dxgi.dll`，交互时可选 `winmm.dll` / `d3d12.dll` / `winhttp.dll` / `wininet.dll` / `dbghelp.dll`。
+- 命令行代理默认 `dxgi.dll`，交互时可选 `winmm.dll` / `d3d12.dll` / `winhttp.dll` / `wininet.dll` / `dbghelp.dll` / `version.dll`；GUI 按上述证据推荐，无证据不自动选 dxgi。
 - 含中文的 `.ps1` 必须是 UTF-8 BOM + CRLF，否则 Windows PowerShell 5.1 按 GBK 解析（见 [dev-environment.md](../dev-environment.md)）。

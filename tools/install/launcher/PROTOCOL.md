@@ -71,6 +71,12 @@ file never overwrites a concurrently created path; interrupted moves remain reco
 
 ## Events (`-EventsJsonl`, append-only JSONL)
 
+Launcher library records additionally retain `root`, optional `exe`, `customName`
+and `customCover`. Manual entries use a stable `manual:<GUID>` ID. Display overrides
+never change canonical game identity or recommendation matching. Folder-only entries
+remain local until an executable is explicitly selected; worker write requests still
+require `gameExe`. Per-game proxy overrides live in GUI `settings.json/ProxyChoices`.
+
 ```json
 {"schema":1,"requestId":"...","stage":"inspect","message":"..."}
 ```

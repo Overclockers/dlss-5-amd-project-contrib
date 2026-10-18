@@ -771,6 +771,8 @@ Copy-Item -LiteralPath (Join-Path $root 'tools/lmxxf-module-package.ps1') -Desti
 $launcherExe = Join-Path $root 'exports/launcher/OptScalerNR.Launcher.exe'
 if (!(Test-Path -LiteralPath $launcherExe)) { throw "Launcher EXE was not produced" }
 Copy-Item -LiteralPath $launcherExe -Destination (Join-Path $stage 'OptScalerNR.Launcher.exe') -Force
+Copy-Item -LiteralPath (Join-Path $root 'assets/compatibility/proxy-profiles.json') -Destination $stage -Force
+Copy-Item -LiteralPath (Join-Path $root 'assets/compatibility/README.md') -Destination (Join-Path $stage 'Licenses/OptiScaler-wiki-profiles.md') -Force
 Copy-Item -LiteralPath (Join-Path $root 'tools/install/launcher-worker.ps1') -Destination $stage -Force
 Copy-Item -LiteralPath (Join-Path $root 'tools/install/xess-compat.ps1') -Destination $stage -Force
 Copy-Item -LiteralPath (Join-Path $root 'tools/install/proxy-probe.ps1') -Destination $stage -Force
@@ -910,7 +912,7 @@ try {
             finally { $stream.Dispose(); $sha.Dispose() }
             if ($actual -ne $expectedEntries[$relative]) { throw "Archive checksum mismatch: $relative" }
         }
-        foreach ($required in @('OptiScaler.dll', 'LmxxfNrRuntime.dll', 'MochizukiNrRuntime.dll', 'OptiScaler.ini', 'Setup.ps1', 'Setup.bat', 'lmxxf-module-package.ps1', 'OptScalerNR.Launcher.exe', 'launcher-worker.ps1', 'proxy-probe.ps1', 'library-scan.ps1', 'install-capabilities.ps1', 'xess-compat.ps1') + @($expectedEntries.Keys)) {
+        foreach ($required in @('OptiScaler.dll', 'LmxxfNrRuntime.dll', 'MochizukiNrRuntime.dll', 'OptiScaler.ini', 'Setup.ps1', 'Setup.bat', 'lmxxf-module-package.ps1', 'OptScalerNR.Launcher.exe', 'launcher-worker.ps1', 'proxy-probe.ps1', 'library-scan.ps1', 'install-capabilities.ps1', 'xess-compat.ps1', 'proxy-profiles.json', 'Licenses/OptiScaler-wiki-profiles.md') + @($expectedEntries.Keys)) {
             if (-not $seen.ContainsKey($required)) { throw "Package archive missing required component: $required" }
         }
     } finally {

@@ -124,11 +124,11 @@ namespace OptScalerNR.Launcher
 
     public static class PeProbe
     {
-        static readonly string[] CandidateDlls = { "dxgi.dll", "d3d12.dll", "winmm.dll", "winhttp.dll", "wininet.dll", "dbghelp.dll" };
+        static readonly string[] CandidateDlls = ProxyRecommendations.ProxyNames;
 
         public static string QuickRecommend(string exePath)
         {
-            if (string.IsNullOrEmpty(exePath) || !File.Exists(exePath)) return "dxgi.dll";
+            if (string.IsNullOrEmpty(exePath) || !File.Exists(exePath)) return null;
             try
             {
                 var dir = Path.GetDirectoryName(exePath);
@@ -160,7 +160,7 @@ namespace OptScalerNR.Launcher
                 }
             }
             catch { }
-            return "dxgi.dll";
+            return null;
         }
 
         static HashSet<string> ReadImports(string exePath)

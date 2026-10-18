@@ -75,7 +75,7 @@ $script:needed = @()
 $script:notes = @()
 $script:fingerprint = $null
 $script:partial = $false
-$allowedProxy = @('dxgi.dll','winmm.dll','d3d12.dll','winhttp.dll','wininet.dll','dbghelp.dll')
+$allowedProxy = @($CandidateNames)
 $allowedAction = @('inspect','install','update','uninstall','scan','repairXess','restoreXess','keepXess')
 $allowedBackend = @('auto','daniel','lmxxf','mochizuki','all')
 if ($allowedAction -notcontains [string]$req.action) { throw "invalid action $($req.action)" }

@@ -10,7 +10,7 @@ $script:MaxDepth = 8
 $script:MaxBytes = 8MB
 $script:MaxMs = 5000
 
-$CandidateNames = @('dxgi.dll','winmm.dll','d3d12.dll','winhttp.dll','wininet.dll','dbghelp.dll')
+$CandidateNames = @('dxgi.dll','winmm.dll','d3d12.dll','winhttp.dll','wininet.dll','dbghelp.dll','version.dll')
 
 function Read-UInt16([byte[]]$b, [int]$o) {
     if ($o -lt 0 -or ($o + 2) -gt $b.Length) { throw 'truncated uint16' }

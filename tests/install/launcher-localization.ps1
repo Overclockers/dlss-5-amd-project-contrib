@@ -39,6 +39,12 @@ function Get-UiStrings($element) {
         }
     }
 }
+function Dialog-Radios($node) {
+    if ($node -is [Windows.Controls.RadioButton]) { $node }
+    if ($node -is [Windows.DependencyObject]) {
+        foreach ($child in [Windows.LogicalTreeHelper]::GetChildren($node)) { Dialog-Radios $child }
+    }
+}
 function Assert-English($window, [string]$context) {
     $han = @(Get-UiStrings $window | Where-Object { $_ -match '[\u3400-\u9fff]' })
     Assert-True ($han.Count -eq 0) ("Chinese text in English $context : " + ($han -join ' | '))
@@ -163,7 +169,7 @@ try {
                     Invoke-Controller $window 'SwitchTab' @($false)
                     Save-Preview $window 'chinese-library.png'
                 }
-                $radios = @($dialog.Content.Children | Where-Object { $_ -is [Windows.Controls.RadioButton] })
+                $radios = @(Dialog-Radios $dialog)
                 Assert-True (@($radios | Where-Object { $_.IsChecked }).Count -eq 0) 'Model dialog silently selected an option'
                 $radios[1].IsChecked = $true
                 Assert-True ($dialog.Tag -eq 'small') 'Localized model label changed the protocol value'

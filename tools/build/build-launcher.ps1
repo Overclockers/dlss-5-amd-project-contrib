@@ -7,6 +7,19 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $src = Join-Path $root 'tools/install/launcher'
+$profileCatalog = Get-Content -LiteralPath (Join-Path $root 'assets/compatibility/proxy-profiles.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+# The embedded catalog is authoritative. Keep PowerShell's parameter/probe aliases in contract.
+$profileExpected = @($profileCatalog.proxies | Sort-Object)
+foreach ($proxyContract in @(
+    @{ Path = 'tools/install/proxy-probe.ps1'; Pattern = '^\$CandidateNames\s*=' },
+    @{ Path = 'tools/install-amd-presr.ps1'; Pattern = 'ValidateSet.*dxgi\.dll' },
+    @{ Path = 'tools/uninstall-amd-presr.ps1'; Pattern = '^\$proxyNames\s*=' }
+)) {
+    $proxyLine = Get-Content -LiteralPath (Join-Path $root $proxyContract.Path) -Encoding UTF8 |
+        Where-Object { $_ -match $proxyContract.Pattern } | Select-Object -First 1
+    $proxyActual = @([regex]::Matches([string]$proxyLine, "'([^']+\.dll)'") | ForEach-Object { $_.Groups[1].Value } | Sort-Object)
+    if (($proxyActual -join '|') -ne ($profileExpected -join '|')) { throw "Proxy catalog mismatch: $($proxyContract.Path)" }
+}
 if (-not $OutDir) { $OutDir = Join-Path $root 'exports/launcher' }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
@@ -21,7 +34,9 @@ $exe = Join-Path $OutDir 'OptScalerNR.Launcher.exe'
 $obj = Join-Path $OutDir 'obj'
 New-Item -ItemType Directory -Force -Path $obj | Out-Null
 $cs = @(
-    'Program.cs', 'MainWindow.cs', 'Protocol.cs', 'WorkerClient.cs', 'GamePaths.cs'
+    'Program.cs', 'MainWindow.cs', 'Protocol.cs', 'WorkerClient.cs', 'GamePaths.cs',
+    'DialogTheme.cs', 'FolderGameScanner.cs', 'ProxyRecommendations.cs',
+    'MainController.Library.cs', 'MainController.Recommendations.cs'
 ) | ForEach-Object { Join-Path $src $_ }
 $refs = @(
     (Join-Path $fw 'mscorlib.dll'),
@@ -37,7 +52,9 @@ $refs = @(
 $win32 = Join-Path $fw 'Microsoft.Build.Tasks.v4.0.dll'
 $res = @(
     "/resource:`"$(Join-Path $src 'App.xaml')`",OptScalerNR.Launcher.App.xaml",
-    "/resource:`"$(Join-Path $src 'MainWindow.xaml')`",OptScalerNR.Launcher.MainWindow.xaml"
+    "/resource:`"$(Join-Path $src 'MainWindow.xaml')`",OptScalerNR.Launcher.MainWindow.xaml",
+    "/resource:`"$(Join-Path $src 'DialogTheme.xaml')`",OptScalerNR.Launcher.DialogTheme.xaml",
+    "/resource:`"$(Join-Path $root 'assets/compatibility/proxy-profiles.json')`",OptScalerNR.Launcher.proxy-profiles.json"
 )
 $argFile = Join-Path $obj 'csc.rsp'
 $lines = @(
@@ -68,6 +85,7 @@ foreach ($name in @('lmxxf-small.ps1','lmxxf-small-manifest.json')) {
     Copy-Item -LiteralPath (Join-Path $root "tools/install/$name") -Destination $OutDir -Force
 }
 $srcFiles = Get-ChildItem -LiteralPath $src -File | Where-Object { $_.Extension -match '\.(cs|xaml|manifest|md|ps1)$' }
+$srcFiles += Get-Item -LiteralPath (Join-Path $root 'assets/compatibility/proxy-profiles.json')
 $srcFiles += Get-Item -LiteralPath (Join-Path $root 'tools/install/launcher-worker.ps1')
 $srcFiles += Get-Item -LiteralPath (Join-Path $root 'tools/install/proxy-probe.ps1')
 $srcFiles += Get-Item -LiteralPath (Join-Path $root 'tools/install/library-scan.ps1')

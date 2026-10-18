@@ -68,6 +68,8 @@ Add-Type -TypeDefinition 'public static class PackageFixture { public static int
                      'install/lmxxf-small.ps1', 'install/lmxxf-small-manifest.json'):
             shutil.copy2(REPO / 'tools' / name, self.root / 'tools' / name)
         shutil.copytree(REPO / 'tools/install/launcher', self.root / 'tools/install/launcher')
+        shutil.copytree(REPO / 'assets/compatibility', self.root / 'assets/compatibility')
+        shutil.copy2(REPO / 'tools/install/xess-compat.ps1', self.root / 'tools/install/xess-compat.ps1')
         for name in ('LICENSE', 'NOTICE', 'OptiScaler-DLSSNR-PreSR-Multipass-main/LICENSE',
                      'third_party/lmxxf/LICENSE', 'third_party/onnxruntime/LICENSE',
                      'third_party/onnxruntime/YOLO11_AGPL-3.0.txt',

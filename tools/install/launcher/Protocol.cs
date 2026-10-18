@@ -116,7 +116,15 @@ namespace OptScalerNR.Launcher
         [DataMember(Name = "installed")] public bool Installed;
         [DataMember(Name = "cover")] public string Cover;
         [DataMember(Name = "hero")] public string Hero;
+        [DataMember(Name = "root", EmitDefaultValue = false)] public string Root;
+        [DataMember(Name = "customName", EmitDefaultValue = false)] public string CustomName;
+        [DataMember(Name = "customCover", EmitDefaultValue = false)] public string CustomCover;
         [DataMember(Name = "exeOverride", EmitDefaultValue = false)] public bool? ExeOverride;
+        public string DisplayName { get { return string.IsNullOrWhiteSpace(CustomName) ? Name : CustomName; } }
+        public string DisplayCover { get { return !string.IsNullOrEmpty(CustomCover) && File.Exists(CustomCover) ? CustomCover : Cover; } }
+        public string DisplayHero { get { return !string.IsNullOrEmpty(CustomCover) && File.Exists(CustomCover) ? CustomCover : Hero; } }
+        public string RootDirectory { get { try { return !string.IsNullOrEmpty(Root) ? Root : !string.IsNullOrEmpty(Exe) ? Path.GetDirectoryName(Exe) : null; } catch { return null; } } }
+        public bool HasExecutable { get { return !string.IsNullOrEmpty(Exe) && GamePaths.CanUse(Exe); } }
     }
 
     [DataContract]

@@ -27,7 +27,7 @@ param(
     # Empty = open a folder picker (double-click Setup.bat).
     [string]$GameDir = '',
     # dinput8 is NOT a valid proxy for this OptiScaler build (no DirectInput8Create export).
-    [ValidateSet('dxgi.dll','winmm.dll','d3d12.dll','winhttp.dll','wininet.dll','dbghelp.dll')]
+    [ValidateSet('dxgi.dll','winmm.dll','d3d12.dll','winhttp.dll','wininet.dll','dbghelp.dll','version.dll')]
     [string]$Proxy = 'dxgi.dll',
     [string]$Root,
     [string]$AuthorDll,
@@ -630,7 +630,8 @@ if (-not $NonInteractive -and -not $PSBoundParameters.ContainsKey('Proxy')) {
         'd3d12.dll',
         'winhttp.dll',
         'wininet.dll',
-        'dbghelp.dll'
+        'dbghelp.dll',
+        'version.dll'
     )
     $pi = Ask-Choice 'Which proxy DLL should OptiScaler install as?' $proxyOptions
     $Proxy = ($proxyOptions[$pi - 1] -split '\s+')[0]

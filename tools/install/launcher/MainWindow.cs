@@ -26,7 +26,7 @@ namespace OptScalerNR.Launcher
         public bool IsZh { get; set; }
         public ImageSource IconSource { get; set; }
 
-        public string Name { get { return Info != null ? Info.Name : ""; } }
+        public string Name { get { return Info != null ? Info.DisplayName : ""; } }
         public string Initial
         {
             get
@@ -40,6 +40,7 @@ namespace OptScalerNR.Launcher
         {
             get
             {
+                if (Info != null && !Info.HasExecutable) return IsZh ? "◇ 待选择 EXE" : "◇ Select EXE";
                 if (Info != null && Info.Installed)
                     return IsZh ? "● 已安装" : "● Installed";
                 return IsZh ? "○ 未安装" : "○ Not Installed";
@@ -54,7 +55,7 @@ namespace OptScalerNR.Launcher
                 return (Brush)new BrushConverter().ConvertFromString("#FF8E95A5");
             }
         }
-        public string Cover { get { return Info != null ? Info.Cover : null; } }
+        public string Cover { get { return Info != null ? Info.DisplayCover : null; } }
         public bool HasCover
         {
             get
@@ -88,10 +89,10 @@ namespace OptScalerNR.Launcher
 
         public Visibility CoverVisibility { get { return (HasCover || IconSource != null) ? Visibility.Visible : Visibility.Collapsed; } }
         public Visibility InitialVisibility { get { return (HasCover || IconSource != null) ? Visibility.Collapsed : Visibility.Visible; } }
-        public string Hero { get { return Info != null ? Info.Hero : null; } }
+        public string Hero { get { return Info != null ? Info.DisplayHero : null; } }
     }
 
-    public sealed class MainController
+    public sealed partial class MainController
     {
         readonly Window _window;
         TextBox _searchBox, _logView, _packageRootBox;
@@ -163,6 +164,7 @@ namespace OptScalerNR.Launcher
             Window window;
             using (var stream = Program.OpenXaml("MainWindow.xaml"))
                 window = (Window)XamlReader.Load(stream);
+            window.Resources.MergedDictionaries.Add(DialogTheme.Resources());
             var controller = new MainController(window, args, settingsDirectory);
             window.Tag = controller;
             return window;
@@ -254,6 +256,8 @@ namespace OptScalerNR.Launcher
             _settingsDir = settingsDirectory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OptScalerNR", "Launcher");
             _settingsPath = Path.Combine(_settingsDir, "settings.json");
             _libraryPath = Path.Combine(_settingsDir, "library.json");
+            InitLibraryActions();
+            InitRecommendations();
 
             _decisions.ExistingInstall = "overwrite";
             _decisions.ExistingIni = "overwrite";
@@ -303,13 +307,14 @@ namespace OptScalerNR.Launcher
             if (_proxyCombo != null)
             {
                 _proxyCombo.Items.Add("请选择");
-                foreach (var name in new[] { "dxgi.dll", "winmm.dll", "d3d12.dll", "winhttp.dll", "wininet.dll", "dbghelp.dll" })
+                foreach (var name in ProxyRecommendations.ProxyNames)
                     _proxyCombo.Items.Add(name);
                 _proxyCombo.SelectedIndex = 0;
                 _proxyCombo.SelectionChanged += (s, e) =>
                 {
                     var selected = Convert.ToString(_proxyCombo.SelectedItem);
                     SelectProxyPillOnly(selected);
+                    RememberProxyChoice();
                     UpdatePrimaryButtonState();
                 };
             }
@@ -393,6 +398,8 @@ namespace OptScalerNR.Launcher
             if (_pillWinhttp != null) _proxyPills["winhttp.dll"] = _pillWinhttp;
             if (_pillWininet != null) _proxyPills["wininet.dll"] = _pillWininet;
             if (_pillDbghelp != null) _proxyPills["dbghelp.dll"] = _pillDbghelp;
+            var versionPill = (RadioButton)_window.FindName("PillVersion");
+            if (versionPill != null) _proxyPills["version.dll"] = versionPill;
 
             foreach (var kvp in _proxyPills)
             {
@@ -412,6 +419,7 @@ namespace OptScalerNR.Launcher
                         }
                     }
                     UpdatePrimaryButtonState();
+                    RememberProxyChoice();
                 };
             }
         }
@@ -430,6 +438,9 @@ namespace OptScalerNR.Launcher
 
         void SelectProxy(string dllName)
         {
+            var previousSelectionMode = _selectingProxy;
+            _selectingProxy = true;
+            try {
             if (string.IsNullOrEmpty(dllName))
             {
                 if (_proxyPills != null)
@@ -457,6 +468,7 @@ namespace OptScalerNR.Launcher
                 }
             }
             UpdatePrimaryButtonState();
+            } finally { _selectingProxy = previousSelectionMode; }
         }
 
         string CurrentSelectedProxy
@@ -588,6 +600,7 @@ namespace OptScalerNR.Launcher
                 }
             }
 
+            RefreshProfiles();
             if (_isScanOnStartup)
             {
                 RunScan();
@@ -664,6 +677,7 @@ namespace OptScalerNR.Launcher
             try
             {
                 var isZh = _language == "zh";
+                _window.Language = XmlLanguage.GetLanguage(isZh ? "zh-CN" : "en-US");
                 if (_window != null)
                     _window.Title = "OptScaler NR" + _productVersion + (isZh ? " - 本软件免费，如付费购买请立即退款！" : " - Free software; if purchased, request a refund immediately!");
                 if (_refundWarning != null)
@@ -735,6 +749,8 @@ namespace OptScalerNR.Launcher
                 UpdateActiveUI();
                 UpdatePrimaryButtonState();
                 RefreshInspectionText();
+                RefreshLibraryActions();
+                UpdateProxyRecommendation();
                 RefreshStatusLanguage();
                 RefreshGameListView();
             }
@@ -757,6 +773,14 @@ namespace OptScalerNR.Launcher
             // Refresh presentation only. Reapplying inspection would reset the user's choices.
             var result = _lastInspectResult;
             var failed = result != null && !string.IsNullOrEmpty(result.Status) && result.Status != "success";
+            if (_selectedGame != null && !_selectedGame.HasExecutable) {
+                if (_injectText != null) _injectText.Text = L("尚未定位启动程序。可以保留文件夹条目，扫描或选择 EXE 后再安装。", "Executable not selected. Keep this folder entry and find or choose its EXE before installing.");
+                UpdateProxyRecommendation();
+                foreach (var label in new[] { _lmxxfReason, _danielReason, _mochiReason }) if (label != null) label.Text = L("待选择 EXE", "Select EXE first");
+                foreach (var badge in new[] { _lmxxfBadge, _danielBadge, _mochiBadge }) if (badge != null) { badge.Background = MissingBg; badge.BorderBrush = MissingBorder; }
+                RefreshBackendHints();
+                return;
+            }
             if (_injectText != null) _injectText.Text = failed
                 ? L("检查失败，请重新选择游戏以重试。", "Inspection failed. Select the game again to retry.")
                 : result != null
@@ -769,8 +793,8 @@ namespace OptScalerNR.Launcher
                 : result == null
                 ? L("选择游戏后将分析 PE 导入表并自动匹配推荐代理。", "Select a game to inspect its imports and recommend a proxy.")
                 : (!string.IsNullOrEmpty(result.Recommend)
-                    ? L("检测到程序导入 " + result.Recommend + "，推荐使用该代理。", "Detected import for " + result.Recommend + "; this proxy is recommended.")
-                    : L("无法从导入表判断首选 DLL，建议优先尝试 dxgi.dll。", "Cannot determine the preferred DLL. Try dxgi.dll first."));
+                    ? L("导入表候选：" + result.Recommend + "，实际可用性待确认。", "Import candidate: " + result.Recommend + "; compatibility is unverified.")
+                    : L("没有足够证据推荐代理，请手动选择。", "Insufficient evidence to recommend a proxy. Choose manually."));
             foreach (var id in new[] { "lmxxf", "daniel", "mochizuki" })
             {
                 BackendInfo capability = null;
@@ -783,6 +807,7 @@ namespace OptScalerNR.Launcher
                 if (label != null) label.Text = reason;
             }
             RefreshBackendHints();
+            if (!failed) UpdateProxyRecommendation();
         }
 
         string BackendHintText(BackendInfo backend)
@@ -906,6 +931,8 @@ namespace OptScalerNR.Launcher
             if (rec != null)
             {
                 _recentGameId = rec.RecentGameId;
+                if (rec.ProxyChoices != null)
+                    foreach (var pair in rec.ProxyChoices) if (ProxyRecommendations.Supports(pair.Value)) _proxyChoices[pair.Key] = pair.Value;
                 if (rec.HiddenGames != null)
                     foreach (var pair in rec.HiddenGames) _hiddenGames[pair.Key] = pair.Value;
                 if (rec.BackendChoices != null)
@@ -935,7 +962,8 @@ namespace OptScalerNR.Launcher
                     PackageRoot = _packageRoot,
                     RecentGameId = _selectedGame != null ? _selectedGame.Id : _recentGameId,
                     BackendChoices = _backendChoices,
-                    HiddenGames = _hiddenGames
+                    HiddenGames = _hiddenGames,
+                    ProxyChoices = _proxyChoices
                 };
                 JsonUtil.WriteFile(_settingsPath, set);
             }
@@ -952,15 +980,20 @@ namespace OptScalerNR.Launcher
                 if (rec != null && rec.Games != null)
                 {
                     _allGames.Clear();
+                    bool migrated = false;
                     foreach (var g in rec.Games)
                     {
-                        if (g != null && !string.IsNullOrEmpty(g.Exe) && !IsHiddenGame(g) &&
-                            (g.ExeOverride == true || g.Source == "Manual" || GamePaths.CanUse(g.Exe)))
+                        if (g != null && (!string.IsNullOrEmpty(g.Exe) || !string.IsNullOrEmpty(g.Root)) && !IsHiddenGame(g) &&
+                            (g.ExeOverride == true || g.Source == "Manual" || g.HasExecutable))
+                        {
+                            if (string.IsNullOrEmpty(g.Id)) { g.Id = "manual:" + Guid.NewGuid().ToString("N"); migrated = true; }
+                            if (string.IsNullOrEmpty(g.Root) && !string.IsNullOrEmpty(g.Exe)) { g.Root = Path.GetDirectoryName(g.Exe); migrated = true; }
                             _allGames.Add(g);
+                        }
                     }
                     var count = _allGames.Count;
                     MergeScannedGames(new GameInfo[0]);
-                    if (_allGames.Count != count) SaveLibraryCache();
+                    if (_allGames.Count != count || migrated) SaveLibraryCache();
                 }
             }
             catch { }
@@ -983,6 +1016,7 @@ namespace OptScalerNR.Launcher
         [System.Runtime.Serialization.DataContract]
         sealed class GuiSettings
         {
+            [System.Runtime.Serialization.DataMember] public Dictionary<string, string> ProxyChoices;
             [System.Runtime.Serialization.DataMember] public Dictionary<string, string> HiddenGames;
             [System.Runtime.Serialization.DataMember] public string Language;
             [System.Runtime.Serialization.DataMember] public bool ScanOnStartup = true;
@@ -1115,6 +1149,13 @@ namespace OptScalerNR.Launcher
             }
             if (found == null)
             {
+                foreach (var candidate in _allGames)
+                    if (!candidate.HasExecutable && !string.IsNullOrEmpty(candidate.RootDirectory) &&
+                        norm.StartsWith(candidate.RootDirectory.TrimEnd('\\','/') + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) &&
+                        (found == null || candidate.RootDirectory.Length > found.RootDirectory.Length)) found = candidate;
+            }
+            if (found == null)
+            {
                 var dir = Path.GetDirectoryName(norm);
                 var folderName = Path.GetFileName(dir);
                 var name = Path.GetFileNameWithoutExtension(norm);
@@ -1125,9 +1166,10 @@ namespace OptScalerNR.Launcher
                 }
                 found = new GameInfo
                 {
-                    Id = "custom:" + norm.ToLowerInvariant(),
+                    Id = "manual:" + Guid.NewGuid().ToString("N"),
                     Name = name,
                     Exe = norm,
+                    Root = dir,
                     Source = "Manual",
                     Installed = File.Exists(Path.Combine(dir, "amd-presr-install.txt"))
                 };
@@ -1135,7 +1177,9 @@ namespace OptScalerNR.Launcher
             }
 
             // Picking an existing scanned entry is also an explicit EXE choice.
+            found.Exe = norm;
             found.ExeOverride = true;
+            found.Installed = File.Exists(Path.Combine(Path.GetDirectoryName(norm), "amd-presr-install.txt"));
             SaveLibraryCache();
             RefreshGameListView();
             SelectGame(found);
@@ -1144,26 +1188,19 @@ namespace OptScalerNR.Launcher
         void ChangeExe()
         {
             if (_selectedGame == null) return;
-            var picked = GamePaths.PickExe(_language == "zh", Path.GetDirectoryName(_selectedGame.Exe));
+            var picked = GamePaths.PickExe(_language == "zh", _selectedGame.HasExecutable ? Path.GetDirectoryName(_selectedGame.Exe) : _selectedGame.RootDirectory);
             if (string.IsNullOrEmpty(picked)) return;
             var norm = GamePaths.Normalize(picked);
             if (string.IsNullOrEmpty(norm) || !GamePaths.CanUse(norm)) return;
 
-            _selectedGame.Exe = norm;
-            _selectedGame.ExeOverride = true;
-            var dir = Path.GetDirectoryName(norm);
-            _selectedGame.Installed = File.Exists(Path.Combine(dir, "amd-presr-install.txt"));
-            SaveLibraryCache();
-
-            RefreshGameListView();
-            SelectGame(_selectedGame);
+            BindExecutable(_selectedGame, norm);
         }
 
         bool IsHiddenGame(GameInfo game)
         {
             if (!string.IsNullOrEmpty(game.Id) && _hiddenGames.ContainsKey(game.Id)) return true;
             foreach (var path in _hiddenGames.Values)
-                if (string.Equals(path, game.Exe, StringComparison.OrdinalIgnoreCase)) return true;
+                if (SamePath(path, EntryLocation(game))) return true;
             return false;
         }
 
@@ -1171,7 +1208,7 @@ namespace OptScalerNR.Launcher
         {
             if (_selectedGame == null || _writeBusy || (_session != null && _session.IsRunning)) return;
             var removed = _selectedGame;
-            _hiddenGames[removed.Id ?? ("custom:" + removed.Exe.ToLowerInvariant())] = removed.Exe;
+            _hiddenGames[removed.Id ?? ("custom:" + EntryLocation(removed).ToLowerInvariant())] = EntryLocation(removed);
             _allGames.RemoveAll(g => SameLibraryGame(g, removed));
             SelectGame(null);
             SaveSettings();
@@ -1183,10 +1220,10 @@ namespace OptScalerNR.Launcher
 
         void OpenSelectedFolder()
         {
-            if (_selectedGame == null || string.IsNullOrEmpty(_selectedGame.Exe)) return;
+            if (_selectedGame == null) return;
             try
             {
-                var dir = Path.GetDirectoryName(_selectedGame.Exe);
+                var dir = _selectedGame.RootDirectory;
                 if (Directory.Exists(dir))
                 {
                     Process.Start("explorer.exe", dir);
@@ -1203,8 +1240,8 @@ namespace OptScalerNR.Launcher
             var path = files[0];
             if (Directory.Exists(path))
             {
-                var exes = Directory.GetFiles(path, "*.exe", SearchOption.TopDirectoryOnly);
-                if (exes.Length > 0) path = exes[0];
+                AddFolderFromPath(path);
+                return;
             }
             if (path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
             {
@@ -1215,7 +1252,7 @@ namespace OptScalerNR.Launcher
         static ImageSource GetOrExtractIcon(GameInfo g)
         {
             if (g == null || string.IsNullOrEmpty(g.Exe)) return null;
-            if (!string.IsNullOrEmpty(g.Cover) && File.Exists(g.Cover)) return null;
+            if (!string.IsNullOrEmpty(g.DisplayCover) && File.Exists(g.DisplayCover)) return null;
             try
             {
                 if (File.Exists(g.Exe))
@@ -1249,7 +1286,7 @@ namespace OptScalerNR.Launcher
                 if (filterIdx == 2 && g.Installed) continue;
                 if (!string.IsNullOrEmpty(query))
                 {
-                    var matchName = g.Name != null && g.Name.ToLowerInvariant().Contains(query);
+                    var matchName = (g.DisplayName ?? "").ToLowerInvariant().Contains(query) || (g.Name ?? "").ToLowerInvariant().Contains(query);
                     var matchExe = g.Exe != null && g.Exe.ToLowerInvariant().Contains(query);
                     if (!matchName && !matchExe) continue;
                 }
@@ -1297,6 +1334,8 @@ namespace OptScalerNR.Launcher
         void SelectGame(GameInfo game)
         {
             if (_writeBusy) return;
+            if (_folderScan != null) _folderScan.Cancel();
+            SelectProxy(null);
             _decisions.ForeignProxy.Clear();
             _resumeInstallAction = "";
             if (game == null || _selectedGame == null || !SameLibraryGame(game, _selectedGame)) _decisions.ModelSourceDll = null;
@@ -1315,20 +1354,20 @@ namespace OptScalerNR.Launcher
             }
             RestoreBackendChoice();
             RefreshInspectionText();
-            if (_heroTitle != null) _heroTitle.Text = game.Name;
+            if (_heroTitle != null) _heroTitle.Text = game.DisplayName;
             if (_heroMeta != null) _heroMeta.Text = game.Source + " · PC";
-            if (_heroPath != null) _heroPath.Text = game.Exe;
+            if (_heroPath != null) _heroPath.Text = EntryLocation(game);
 
             if (_heroBgImage != null)
             {
-                if (!string.IsNullOrEmpty(game.Hero) && File.Exists(game.Hero))
+                if (!string.IsNullOrEmpty(game.DisplayHero) && File.Exists(game.DisplayHero))
                 {
                     try
                     {
                         var bi = new BitmapImage();
                         bi.BeginInit();
                         bi.CacheOption = BitmapCacheOption.OnLoad;
-                        bi.UriSource = new Uri(game.Hero, UriKind.Absolute);
+                        bi.UriSource = new Uri(game.DisplayHero, UriKind.Absolute);
                         bi.EndInit();
                         _heroBgImage.Source = bi;
                     }
@@ -1343,7 +1382,7 @@ namespace OptScalerNR.Launcher
             if (_heroPosterImage != null && _heroPosterInitial != null)
             {
                 bool loaded = false;
-                if (!string.IsNullOrEmpty(game.Cover) && File.Exists(game.Cover))
+                if (!string.IsNullOrEmpty(game.DisplayCover) && File.Exists(game.DisplayCover))
                 {
                     try
                     {
@@ -1351,7 +1390,7 @@ namespace OptScalerNR.Launcher
                         bi.BeginInit();
                         bi.CacheOption = BitmapCacheOption.OnLoad;
                         bi.DecodePixelWidth = 180;
-                        bi.UriSource = new Uri(game.Cover, UriKind.Absolute);
+                        bi.UriSource = new Uri(game.DisplayCover, UriKind.Absolute);
                         bi.EndInit();
                         _heroPosterImage.Source = bi;
                         _heroPosterImage.Visibility = Visibility.Visible;
@@ -1377,7 +1416,7 @@ namespace OptScalerNR.Launcher
                 {
                     _heroPosterImage.Source = null;
                     _heroPosterImage.Visibility = Visibility.Collapsed;
-                    _heroPosterInitial.Text = string.IsNullOrEmpty(game.Name) ? "?" : game.Name.Substring(0, 1).ToUpperInvariant();
+                    _heroPosterInitial.Text = string.IsNullOrEmpty(game.DisplayName) ? "?" : game.DisplayName.Substring(0, 1).ToUpperInvariant();
                     _heroPosterInitial.Visibility = Visibility.Visible;
                 }
             }
@@ -1389,6 +1428,7 @@ namespace OptScalerNR.Launcher
         void UpdatePrimaryButtonState()
         {
             UpdateCompatibilitySummary();
+            RefreshLibraryActions();
             if (_removeGameButton != null) _removeGameButton.IsEnabled = _selectedGame != null && !_writeBusy && (_session == null || !_session.IsRunning);
             if (_primaryButton == null) return;
             var isZh = _language == "zh";
@@ -1406,11 +1446,17 @@ namespace OptScalerNR.Launcher
 
             var proxyChosen = !string.IsNullOrEmpty(CurrentSelectedProxy);
             var isBusy = _session != null && _session.IsRunning;
+            if (!_selectedGame.HasExecutable) {
+                _primaryButton.Content = L("扫描 / 选择启动程序", "Find / choose game EXE");
+                _primaryButton.IsEnabled = !isBusy && !_writeBusy && _folderScan == null;
+                if (_uninstallButton != null) _uninstallButton.IsEnabled = false;
+                return;
+            }
 
             _primaryButton.Content = _selectedGame.Installed
                 ? (isZh ? "⚡ 更新 OptScaler NR" : "⚡ Update OptScaler NR")
                 : (isZh ? "⚡ 安装 OptScaler NR" : "⚡ Install OptScaler NR");
-            _primaryButton.IsEnabled = !isBusy && hasBackend && proxyChosen;
+            _primaryButton.IsEnabled = !isBusy && !_writeBusy && _folderScan == null && hasBackend && proxyChosen;
             if (_uninstallButton != null)
                 _uninstallButton.IsEnabled = !isBusy && _selectedGame.Installed;
         }
@@ -1479,7 +1525,8 @@ namespace OptScalerNR.Launcher
         {
             return (!string.IsNullOrEmpty(a.Id) && !string.IsNullOrEmpty(b.Id) &&
                     string.Equals(a.Id, b.Id, StringComparison.OrdinalIgnoreCase)) ||
-                   string.Equals(a.Exe, b.Exe, StringComparison.OrdinalIgnoreCase);
+                   SamePath(a.Exe, b.Exe) ||
+                   ((string.IsNullOrEmpty(a.Exe) || string.IsNullOrEmpty(b.Exe)) && SamePath(a.RootDirectory, b.RootDirectory));
         }
 
         static bool IsAuxiliaryExe(string path)
@@ -1507,22 +1554,28 @@ namespace OptScalerNR.Launcher
             var merged = new List<GameInfo>();
             foreach (var cached in _allGames)
             {
-                if (cached == null || string.IsNullOrEmpty(cached.Exe) || IsHiddenGame(cached)) continue;
+                if (cached == null || (string.IsNullOrEmpty(cached.Exe) && string.IsNullOrEmpty(cached.Root)) || IsHiddenGame(cached)) continue;
                 var index = merged.FindIndex(g => SameLibraryGame(g, cached));
                 if (index < 0) merged.Add(cached);
                 else
                 {
                     var existing = merged[index];
+                    if (string.IsNullOrEmpty(existing.CustomName)) existing.CustomName = cached.CustomName;
+                    if (string.IsNullOrEmpty(existing.CustomCover)) existing.CustomCover = cached.CustomCover;
                     var explicitChoice = cached.ExeOverride == true || cached.Source == "Manual";
                     var existingExplicit = existing.ExeOverride == true || existing.Source == "Manual";
                     if ((explicitChoice && !existingExplicit) ||
                         (explicitChoice == existingExplicit && KeepCachedExe(cached) && !KeepCachedExe(existing)))
+                    {
+                        if (string.IsNullOrEmpty(cached.CustomName)) cached.CustomName = existing.CustomName;
+                        if (string.IsNullOrEmpty(cached.CustomCover)) cached.CustomCover = existing.CustomCover;
                         merged[index] = cached;
+                    }
                 }
             }
             foreach (var incoming in scanned)
             {
-                if (incoming == null || string.IsNullOrEmpty(incoming.Exe) || IsHiddenGame(incoming)) continue;
+                if (incoming == null || (string.IsNullOrEmpty(incoming.Exe) && string.IsNullOrEmpty(incoming.Root)) || IsHiddenGame(incoming)) continue;
                 var existing = merged.Find(g => SameLibraryGame(g, incoming));
                 if (existing == null)
                 {
@@ -1531,13 +1584,13 @@ namespace OptScalerNR.Launcher
                     continue;
                 }
                 var samePath = string.Equals(existing.Exe, incoming.Exe, StringComparison.OrdinalIgnoreCase);
-                if (!KeepCachedExe(existing))
+                if (!KeepCachedExe(existing) || (!existing.HasExecutable && incoming.HasExecutable))
                 {
                     existing.Exe = incoming.Exe;
                     existing.ExeOverride = false;
                     samePath = true;
                 }
-                existing.Installed = samePath ? incoming.Installed :
+                existing.Installed = samePath ? incoming.Installed : existing.HasExecutable &&
                     File.Exists(Path.Combine(Path.GetDirectoryName(existing.Exe), "amd-presr-install.txt"));
                 if (existing.Source != "Manual" && string.Equals(existing.Id, incoming.Id, StringComparison.OrdinalIgnoreCase))
                 {
@@ -1594,7 +1647,7 @@ namespace OptScalerNR.Launcher
         void InspectGame(GameInfo game)
         {
             if (_writeBusy) return;
-            if (game == null || string.IsNullOrEmpty(game.Exe)) return;
+            if (game == null || !game.HasExecutable) { RefreshInspectionText(); return; }
             if (_session != null && _session.IsRunning)
             {
                 if (_session.CanKill)
@@ -1612,17 +1665,7 @@ namespace OptScalerNR.Launcher
 
             _lastInspectResult = null;
             var fastProxy = PeProbe.QuickRecommend(game.Exe);
-            if (!string.IsNullOrEmpty(fastProxy))
-            {
-                SelectProxy(fastProxy);
-                if (_injectIcon != null) { _injectIcon.Text = "✓"; _injectIcon.Foreground = ReadyBrush; }
-                if (_injectRecommendation != null)
-                {
-                    _injectRecommendation.Text = _language == "zh"
-                        ? ("检测到程序导入 " + fastProxy + "，已自动选定为推荐代理。")
-                        : ("Detected import for " + fastProxy + ", recommended proxy auto-selected.");
-                }
-            }
+            UpdateProxyRecommendation(fastProxy);
 
             SetBusy(true, "inspect");
             _pendingAction = "inspect";
@@ -1660,20 +1703,21 @@ namespace OptScalerNR.Launcher
         void OnPrimaryAction()
         {
             if (_selectedGame == null) return;
+            if (!_selectedGame.HasExecutable) { ScanExecutables(); return; }
             var action = _selectedGame.Installed ? "update" : "install";
             ExecuteAction(action);
         }
 
         void OnUninstall()
         {
-            if (_selectedGame == null) return;
+            if (_selectedGame == null || !_selectedGame.HasExecutable) return;
             var dir = Path.GetDirectoryName(_selectedGame.Exe);
             var isZh = _language == "zh";
             var msg = isZh
                 ? ("确定要从以下目录卸载 OptScaler NR 吗？\n" + dir + "\n\n仅删除属于本项目的组件与代理文件。游戏原有文件和第三方插件会被完整保留。")
                 : ("Uninstall OptScaler NR from:\n" + dir + "\n\nOwned files are removed. Unowned plugins and the original game files stay.");
 
-            var confirm = MessageBox.Show(_window, msg, _window.Title, MessageBoxButton.OKCancel, MessageBoxImage.Warning);
+            var confirm = DialogTheme.Show(_window, msg, _window.Title, MessageBoxButton.OKCancel, MessageBoxImage.Warning);
             if (confirm != MessageBoxResult.OK) return;
 
             ExecuteAction("uninstall");
@@ -1726,6 +1770,7 @@ namespace OptScalerNR.Launcher
                 WindowStartupLocation = WindowStartupLocation.CenterOwner, ResizeMode = ResizeMode.NoResize,
                 ShowInTaskbar = false, Background = new SolidColorBrush(Color.FromRgb(32,35,43)), Foreground = Brushes.White
             };
+            DialogTheme.Apply(dialog, _window);
             var panel = new StackPanel { Margin = new Thickness(24) };
             Action<string> text = value => panel.Children.Add(new TextBlock { Text = value, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0,0,0,12) });
             text(_selectedGame == null ? "" : _selectedGame.Exe);
@@ -1736,6 +1781,7 @@ namespace OptScalerNR.Launcher
             if (report != null && !string.IsNullOrEmpty(report.Error)) text(report.Error);
             var canRestore = restore && report != null && report.Active && !string.IsNullOrEmpty(report.Fingerprint);
             var proceed = new Button { Content = restore ? L("恢复原文件", "Restore originals") : L("备份并尝试修复", "Back up and try repair"), IsEnabled = canRestore, MinWidth = 150, Margin = new Thickness(4) };
+            DialogTheme.Primary(dialog, proceed);
             if (restore && report != null && report.RestoreFiles != null) text(string.Join("\n", report.RestoreFiles));
             if (!restore && report != null && report.Groups != null) foreach (var group in report.Groups) {
                 if (!restore) {
@@ -1777,7 +1823,7 @@ namespace OptScalerNR.Launcher
                 dialog.Tag = chosen.ToArray(); dialog.DialogResult = true;
             };
             buttons.Children.Add(proceed); panel.Children.Add(buttons);
-            dialog.Content = new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+            DialogTheme.SetContent(dialog, panel);
             return dialog;
         }
 
@@ -1806,6 +1852,7 @@ namespace OptScalerNR.Launcher
                 ResizeMode = ResizeMode.NoResize, ShowInTaskbar = false,
                 Background = new SolidColorBrush(Color.FromRgb(32, 35, 43)), Foreground = Brushes.White
             };
+            DialogTheme.Apply(dialog, _window);
             var panel = new StackPanel { Margin = new Thickness(24) };
             panel.Children.Add(new TextBlock
             {
@@ -1819,6 +1866,7 @@ namespace OptScalerNR.Launcher
                 Margin = new Thickness(0, 0, 0, 16)
             });
             var proceed = new Button { Content = L("继续", "Continue"), IsEnabled = false, MinWidth = 100, Margin = new Thickness(4) };
+            DialogTheme.Primary(dialog, proceed);
             var values = new[] { "both", "small", "original" };
             var labels = new[] { L("两个模型（推荐）", "Both models (recommended)"), L("仅新模型", "New model only"), L("仅原始模型", "Original model only") };
             for (var i = 0; i < values.Length; i++)
@@ -1834,7 +1882,7 @@ namespace OptScalerNR.Launcher
             buttons.Children.Add(cancel);
             buttons.Children.Add(proceed);
             panel.Children.Add(buttons);
-            dialog.Content = panel;
+            DialogTheme.SetContent(dialog, panel);
             return dialog;
         }
 
@@ -1852,6 +1900,7 @@ namespace OptScalerNR.Launcher
                 ResizeMode = ResizeMode.NoResize, ShowInTaskbar = false,
                 Background = new SolidColorBrush(Color.FromRgb(32,35,43)), Foreground = Brushes.White
             };
+            DialogTheme.Apply(dialog, _window);
             var panel = new StackPanel { Margin = new Thickness(24) };
             panel.Children.Add(new TextBlock { Text = L("请选择要安装的模型。现有的另一套模型会保留。", "Choose the models to install. Other installed models are retained."), TextWrapping = TextWrapping.Wrap });
             panel.Children.Add(new TextBlock { Text = "Original: " + (original ? L("就绪", "Ready") : L("缺失", "Missing")) + "  |  Small: " +
@@ -1859,6 +1908,7 @@ namespace OptScalerNR.Launcher
             if (capability != null && !string.IsNullOrEmpty(BackendHintText(capability)))
                 panel.Children.Add(new TextBlock { Text = BackendHintText(capability), TextWrapping = TextWrapping.Wrap, Foreground = Brushes.Orange, Margin = new Thickness(0,0,0,10) });
             var proceed = new Button { Content = L("继续", "Continue"), IsEnabled = false, MinWidth = 100, Margin = new Thickness(4) };
+            DialogTheme.Primary(dialog, proceed);
             var values = new[] { "both", "small", "original" };
             var needsSmallPreparation = capability != null && capability.SmallState == "preparable";
             var labels = new[] {
@@ -1875,7 +1925,7 @@ namespace OptScalerNR.Launcher
             var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
             var cancel = new Button { Content = L("取消", "Cancel"), IsCancel = true, MinWidth = 100, Margin = new Thickness(4) };
             proceed.Click += delegate { if (dialog.Tag != null) dialog.DialogResult = true; };
-            buttons.Children.Add(cancel); buttons.Children.Add(proceed); panel.Children.Add(buttons); dialog.Content = panel;
+            buttons.Children.Add(cancel); buttons.Children.Add(proceed); panel.Children.Add(buttons); DialogTheme.SetContent(dialog, panel);
             return dialog;
         }
 
@@ -1897,7 +1947,7 @@ namespace OptScalerNR.Launcher
                 }
             if (!needsSource) return true;
             if (!string.IsNullOrEmpty(_decisions.ModelSourceDll))
-                MessageBox.Show(_window, L("所选 DLL 无法提供需要的模型。请选择受支持的 nvngx_dlssnr.dll；Small 需要 310.9.16。", "The selected DLL cannot supply the required model. Choose a supported nvngx_dlssnr.dll; Small requires 310.9.16."), _window.Title);
+                DialogTheme.Show(_window, L("所选 DLL 无法提供需要的模型。请选择受支持的 nvngx_dlssnr.dll；Small 需要 310.9.16。", "The selected DLL cannot supply the required model. Choose a supported nvngx_dlssnr.dll; Small requires 310.9.16."), _window.Title);
             var directory = Path.GetDirectoryName(_selectedGame.Exe);
             var picker = new OpenFileDialog {
                 Title = L("缺少模型来源：选择 nvngx_dlssnr.dll（用于离线提取）", "Model source missing: select nvngx_dlssnr.dll for offline extraction"),
@@ -1916,10 +1966,10 @@ namespace OptScalerNR.Launcher
         void ExecuteAction(string action, bool keepModelChoice = false, string compatibilityFingerprint = null)
         {
             var installing = action == "install" || action == "update";
-            if (_selectedGame == null || string.IsNullOrEmpty(_selectedGame.Exe)) return;
-            if (_writeBusy || (_session != null && _session.IsRunning))
+            if (_selectedGame == null || !_selectedGame.HasExecutable) return;
+            if (_writeBusy || _folderScan != null || (_session != null && _session.IsRunning))
             {
-                MessageBox.Show(_window, _language == "zh" ? "操作正在进行中…" : "An operation is already in progress.", _window.Title);
+                DialogTheme.Show(_window, _language == "zh" ? "操作正在进行中…" : "An operation is already in progress.", _window.Title);
                 return;
             }
 
@@ -1936,7 +1986,7 @@ namespace OptScalerNR.Launcher
             var proxy = CurrentSelectedProxy;
             if (installing && string.IsNullOrEmpty(proxy))
             {
-                MessageBox.Show(_window, _language == "zh" ? "请先选择要注入的代理 DLL。" : "Please select a proxy DLL to inject first.", _window.Title);
+                DialogTheme.Show(_window, _language == "zh" ? "请先选择要注入的代理 DLL。" : "Please select a proxy DLL to inject first.", _window.Title);
                 ReleaseLock();
                 return;
             }
@@ -1948,7 +1998,7 @@ namespace OptScalerNR.Launcher
 
             if (installing && checkedBackends.Count == 0)
             {
-                MessageBox.Show(_window, _language == "zh" ? "请至少勾选一个可安装的后端。" : "Please select at least one backend to install.", _window.Title);
+                DialogTheme.Show(_window, _language == "zh" ? "请至少勾选一个可安装的后端。" : "Please select at least one backend to install.", _window.Title);
                 ReleaseLock();
                 return;
             }
@@ -2073,7 +2123,7 @@ namespace OptScalerNR.Launcher
                 {
                     if (action == "repairXess" || action == "restoreXess" || action == "keepXess") {
                         if (_lastInspectResult != null) _lastInspectResult.Compatibility = result.Compatibility;
-                        MessageBox.Show(_window, action == "repairXess"
+                        DialogTheme.Show(_window, action == "repairXess"
                             ? L("已备份并替换所选 XeSS 文件。请启动游戏测试；无改善可回到这里点“恢复游戏原文件”。", "Selected XeSS files were backed up and replaced. Start the game to test. If it did not help, return here and choose Restore game files.")
                             : action == "keepXess"
                             ? L("已保留当前游戏文件并结束旧修复，全部备份仍保留。现在可以重新选择组件修复。", "Current game files and all backups were kept. The old repair is finished; you can now select components for a new repair.")
@@ -2108,7 +2158,7 @@ namespace OptScalerNR.Launcher
                     var detail = result.Error ?? "";
                     if (detail.Length > 1200) detail = detail.Substring(0, 1200) + "…";
                     if (_statusLed != null) _statusLed.Fill = WarningBrush;
-                    MessageBox.Show(_window, L("操作失败：", "Operation failed: ") + detail +
+                    DialogTheme.Show(_window, L("操作失败：", "Operation failed: ") + detail +
                         "\n\n" + L("完整日志：", "Full log: ") + _currentLogPath, _window.Title, MessageBoxButton.OK, MessageBoxImage.Error);
                 }
             }));
@@ -2124,32 +2174,7 @@ namespace OptScalerNR.Launcher
                 return;
             }
             var isZh = _language == "zh";
-
-            if (!string.IsNullOrEmpty(result.Recommend))
-            {
-                if (_injectIcon != null) { _injectIcon.Text = "✓"; _injectIcon.Foreground = ReadyBrush; }
-                if (_injectRecommendation != null)
-                {
-                    _injectRecommendation.Text = isZh
-                        ? ("检测到程序导入 " + result.Recommend + "，已自动选定为推荐代理。")
-                        : ("Detected import for " + result.Recommend + ", recommended proxy auto-selected.");
-                }
-                SelectProxy(result.Recommend);
-            }
-            else
-            {
-                if (_injectIcon != null) { _injectIcon.Text = "ℹ"; _injectIcon.Foreground = WarningBrush; }
-                if (_injectRecommendation != null)
-                {
-                    _injectRecommendation.Text = isZh
-                        ? "无法从导入表判断首选 DLL，建议优先尝试 dxgi.dll。"
-                        : "Cannot determine preferred DLL, recommend trying dxgi.dll.";
-                }
-                if (string.IsNullOrEmpty(CurrentSelectedProxy))
-                {
-                    SelectProxy("dxgi.dll");
-                }
-            }
+            UpdateProxyRecommendation();
 
             if (_injectText != null)
             {
@@ -2250,7 +2275,7 @@ namespace OptScalerNR.Launcher
                 {
                     var prompt = L(d.File + " 已存在，且不属于本项目。\n\n是 = 备份后替换，否 = 保留，取消 = 停止操作。",
                         d.File + " exists and is not this project.\n\nYes = backup, No = keep, Cancel = abort.");
-                    var pick = MessageBox.Show(_window, prompt, _window.Title, MessageBoxButton.YesNoCancel, MessageBoxImage.Warning);
+                    var pick = DialogTheme.Show(_window, prompt, _window.Title, MessageBoxButton.YesNoCancel, MessageBoxImage.Warning);
                     if (_decisions.ForeignProxy == null) _decisions.ForeignProxy = new Dictionary<string, string>();
                     if (pick == MessageBoxResult.Yes) _decisions.ForeignProxy[d.File] = "backup";
                     else if (pick == MessageBoxResult.No) _decisions.ForeignProxy[d.File] = "keep";
@@ -2315,12 +2340,12 @@ namespace OptScalerNR.Launcher
                 }
                 else
                 {
-                    MessageBox.Show(_window, _language == "zh" ? "当前尚无可用日志。" : "No log file available yet.", _window.Title);
+                    DialogTheme.Show(_window, _language == "zh" ? "当前尚无可用日志。" : "No log file available yet.", _window.Title);
                 }
             }
             catch (Exception ex)
             {
-                MessageBox.Show(_window, ex.Message, _window.Title);
+                DialogTheme.Show(_window, ex.Message, _window.Title);
             }
         }
 
@@ -2366,6 +2391,7 @@ namespace OptScalerNR.Launcher
             {
                 foreach (var p in _proxyPills.Values) p.IsEnabled = !busy;
             }
+            RefreshLibraryActions();
         }
 
         void Detach(WorkerSession session)
@@ -2406,7 +2432,11 @@ namespace OptScalerNR.Launcher
                     e.Cancel = true;
                 }
             }
-            if (!e.Cancel) ReleaseLock();
+            if (!e.Cancel) {
+                if (_folderScan != null) _folderScan.Cancel();
+                if (_recommendations != null) _recommendations.Dispose();
+                ReleaseLock();
+            }
         }
     }
 }

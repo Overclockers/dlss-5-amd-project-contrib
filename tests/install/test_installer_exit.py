@@ -1356,7 +1356,7 @@ class InstallerExitTests(unittest.TestCase):
     def test_setup_overwrite_moves_other_opti_proxy_without_reprompt(self):
         self.ready_legacy_install()
         (self.game / "dxgi.dll").rename(self.game / "winmm.dll")
-        code, output = self.run_batch(stdin="N\n")
+        code, output = self.run_batch(stdin="N\n3\n1\n")
         self.assertEqual(code, 0, output)
         self.assertFalse((self.game / "winmm.dll").exists())
         self.assertEqual((self.game / "dxgi.dll").read_bytes(), b"fixture proxy")
