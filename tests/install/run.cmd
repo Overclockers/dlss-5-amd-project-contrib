@@ -18,6 +18,7 @@ if /i "%~1"=="release" goto release
 "%AMD_TEST_PYTHON%" -B -m unittest discover -s tests\install -p test_proxy_probe.py --failfast || goto fail
 "%AMD_TEST_PYTHON%" -B -m unittest discover -s tests\install -p test_launcher_worker.py --failfast || goto fail
 "%PS51%" -NoProfile -NonInteractive -STA -ExecutionPolicy Bypass -File tests\install\launcher-localization.ps1 || goto fail
+"%PS51%" -NoProfile -NonInteractive -STA -ExecutionPolicy Bypass -File tests\install\launcher-state.ps1 || goto fail
 "%AMD_TEST_PYTHON%" -B -m unittest discover -s tests\install -p test_launcher_package.py --failfast || goto fail
 "%AMD_TEST_PYTHON%" -B -m unittest discover -s tests\install -p test_launcher_startup.py --failfast || goto fail
 "%AMD_TEST_PYTHON%" -B tests\install\test_lmxxf_small.py || goto fail

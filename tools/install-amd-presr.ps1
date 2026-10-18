@@ -1144,19 +1144,20 @@ if ($installMochizuki) {
             Fail 'Model preparation failed: Model extractor missing. Re-extract the complete OptiScaler package.'
         }
         $modelOutput = Join-Path $Root 'dlssnr-amd/dlssnr.bin'
-        Write-Host "Extracting Mochizuki models ($MochizukiModels); validating tensors. This may take a few minutes..." -ForegroundColor Cyan
-        & $python -X utf8 $modelTool $mochizukiNv $modelOutput --models $MochizukiModels
+        $extractModels = if ($needExtractOriginal -and $needExtractSmall) { 'both' } elseif ($needExtractSmall) { 'small' } else { 'original' }
+        Write-Host "Extracting Mochizuki models ($extractModels); validating tensors. This may take a few minutes..." -ForegroundColor Cyan
+        & $python -X utf8 $modelTool $mochizukiNv $modelOutput --models $extractModels
         $code = $LASTEXITCODE
         if ($code -ne 0) {
             Fail "Model preparation failed (exit code $code). The existing installation was preserved."
         }
-        if ($MochizukiModels -in @('both', 'original')) {
+        if ($needExtractOriginal) {
             if (-not (Test-MochizukiModelFile $modelOutput 599)) {
                 Fail 'Model preparation failed: dlssnr.bin verification failed. The existing installation was preserved.'
             }
             $mochizukiModel = $modelOutput
         }
-        if ($MochizukiModels -in @('both', 'small')) {
+        if ($needExtractSmall) {
             $smallOutput = Join-Path $Root 'dlssnr-amd/dlssnr-small.bin'
             if (-not (Test-MochizukiModelFile $smallOutput 255)) {
                 Fail 'Model preparation failed: dlssnr-small.bin verification failed. The existing installation was preserved.'
@@ -2198,7 +2199,6 @@ try {
         [void][IO.Directory]::CreateDirectory($resolvedPluginsDir)
     }
     $gameFullPrefix = [IO.Path]::GetFullPath($game).TrimEnd('\', '/') + '\'
-    $customAsiInstalled = 0
     foreach ($srcPluginDir in @((Join-Path $release 'plugins'), (Join-Path $release 'OptiScaler\plugins'))) {
         if (-not (Test-Path -LiteralPath $srcPluginDir -PathType Container)) { continue }
         if ([IO.Path]::GetFullPath($srcPluginDir).TrimEnd('\', '/') -ieq [IO.Path]::GetFullPath($resolvedPluginsDir).TrimEnd('\', '/')) { continue }
@@ -2218,16 +2218,18 @@ try {
             } else {
                 Copy-Item -LiteralPath $_.FullName -Destination $destFile -Force
             }
-            if ($_.Extension -ieq '.asi') { $customAsiInstalled++ }
         }
     }
-    if ($customAsiInstalled -gt 0 -and (Test-Path -LiteralPath $gameIni -PathType Leaf)) {
+    # Replacing the INI can reset loading to auto while user ASIs remain in place.
+    $customAsiPresent = @(Get-ChildItem -LiteralPath $resolvedPluginsDir -File -Filter '*.asi' -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notmatch '(?i)OptiPatcher.*\.asi$' }).Count
+    if ($customAsiPresent -gt 0 -and (Test-Path -LiteralPath $gameIni -PathType Leaf)) {
         $loadAsi = Get-IniSetting $gameIni 'Plugins' 'LoadAsiPlugins'
         if ([string]::IsNullOrWhiteSpace($loadAsi) -or $loadAsi -ieq 'auto') {
             Set-IniSettings $gameIni 'Plugins' ([ordered]@{ 'LoadAsiPlugins' = 'true' })
-            Write-Host "Enabled LoadAsiPlugins=true in OptiScaler.ini ($customAsiInstalled custom ASI plugin(s) installed)." -ForegroundColor Green
+            Write-Host "Enabled LoadAsiPlugins=true in OptiScaler.ini ($customAsiPresent custom ASI plugin(s) present)." -ForegroundColor Green
         } else {
-            Write-Host "Keeping explicit LoadAsiPlugins=$loadAsi; custom plugins were copied without changing this setting."
+            Write-Host "Keeping explicit LoadAsiPlugins=$loadAsi; custom plugins do not change this setting."
         }
     }
 } catch {
@@ -2284,13 +2286,14 @@ try {
 
 # Cache game models even when their backend was not selected for this install.
 # Publish only complete copies; never merge into or replace an existing package model.
-function Save-GameModelForNextInstall([ValidateSet('lmxxf', 'mochizuki')][string]$Kind) {
+function Save-GameModelForNextInstall([ValidateSet('lmxxf', 'mochizuki', 'mochizuki-small')][string]$Kind) {
     $stage = $null
     try {
         $packageRoot = [IO.Path]::GetFullPath($Root)
         $gameRoot = [IO.Path]::GetFullPath($game)
         if ($packageRoot.TrimEnd('\', '/') -ieq $gameRoot.TrimEnd('\', '/')) { return }
-        $relative = if ($Kind -eq 'lmxxf') { 'native-game-tiled-assets' } else { 'dlssnr-amd/dlssnr.bin' }
+        $relative = if ($Kind -eq 'lmxxf') { 'native-game-tiled-assets' } elseif ($Kind -eq 'mochizuki-small') { 'dlssnr-amd/dlssnr-small.bin' } else { 'dlssnr-amd/dlssnr.bin' }
+        $entries = if ($Kind -eq 'mochizuki-small') { 255 } else { 599 }
         $destination = Join-Path $packageRoot $relative
         if (Test-Path -LiteralPath $destination) { return }
         $source = Assert-LmxxfUnlinkedPath (Join-Path $gameRoot $relative)
@@ -2302,7 +2305,7 @@ function Save-GameModelForNextInstall([ValidateSet('lmxxf', 'mochizuki')][string
                 $packageRoot -ieq $source) { throw 'Package folder is inside the source model directory.' }
             $files = @(Get-LmxxfUnlinkedFiles $source)
         } else {
-            if (-not (Test-MochizukiModelHeader $source)) { return }
+            if (-not (Test-MochizukiModelHeader $source $entries)) { return }
             $files = @(Get-Item -LiteralPath $source -ErrorAction Stop)
         }
         $stage = Join-Path $packageRoot ('.amd-presr-model-' + [guid]::NewGuid().ToString('N'))
@@ -2318,7 +2321,7 @@ function Save-GameModelForNextInstall([ValidateSet('lmxxf', 'mochizuki')][string
             Copy-Item -LiteralPath $file.FullName -Destination $copy -ErrorAction Stop
             if ((Get-Sha256 $copy) -ne $hash) { throw "Model copy checksum mismatch: $($file.FullName)" }
         }
-        if ($Kind -eq 'mochizuki' -and -not (Test-MochizukiModelHeader $payload)) {
+        if ($Kind -ne 'lmxxf' -and -not (Test-MochizukiModelHeader $payload $entries)) {
             throw 'Copied Mochizuki model has an invalid header.'
         }
         $destination = Assert-LmxxfUnlinkedPath $destination
@@ -2347,6 +2350,7 @@ function Save-GameModelForNextInstall([ValidateSet('lmxxf', 'mochizuki')][string
 }
 Save-GameModelForNextInstall 'lmxxf'
 Save-GameModelForNextInstall 'mochizuki'
+Save-GameModelForNextInstall 'mochizuki-small'
 
 # Keep reusable danielblnc files in the package folder for the next game.
 # Never write them into the game folder — that would re-inject danielblnc version.dll next to OptiScaler.

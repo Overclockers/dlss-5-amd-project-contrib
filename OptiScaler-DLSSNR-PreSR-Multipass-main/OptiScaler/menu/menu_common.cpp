@@ -4161,7 +4161,9 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                                    static_cast<unsigned long long>(multiplier->requested) + 1, multiplier->target + 1);
         }
 
-        if (XeFGProxy::Version().major >= 3)
+        // XeSS product and XeFG API versions differ (XeFG 1.3.1 supports live MFG).
+        // Match the runtime controller's capability check instead of a product version.
+        if (liveMultiplier)
         {
             ImGui::BeginDisabled(maxInterpolationCount <= 1);
             bool dynamicMfg = config->FGXeFGDynamicMFG.value_or_default();
@@ -4174,6 +4176,13 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                            "only if it raises the frame rate enough: each generated frame\n"
                            "costs GPU time.");
             ImGui::EndDisabled();
+
+            if (maxInterpolationCount <= 1)
+            {
+                MenuUi::TextWrapped("Dynamic MFG unavailable: XeFG currently reports a 2X limit.");
+                if (!config->LoadAsiPlugins.value_or_default())
+                    MenuUi::TextWrapped("ASI plugin loading is off. Enable LoadAsiPlugins in OptiScaler.ini and restart the game.");
+            }
 
             if (dynamicMfg && maxInterpolationCount > 1)
             {

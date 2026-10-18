@@ -19,6 +19,99 @@ BUILD = REPO / "tools/build/build-launcher.ps1"
 
 
 @unittest.skipUnless(os.name == "nt" and PS.exists(), "requires Windows PowerShell 5.1")
+class LibraryScanTests(unittest.TestCase):
+    def setUp(self):
+        output = REPO / "exports/tests/library-scan"
+        output.mkdir(parents=True, exist_ok=True)
+        self.work = tempfile.TemporaryDirectory(prefix="case-", dir=output)
+        self.addCleanup(self.work.cleanup)
+        self.root = Path(self.work.name) / "Baldur's Gate 3" / "Content"
+        self.root.mkdir(parents=True)
+
+    def exe(self, relative):
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"scan fixture; never executed")
+        return path
+
+    def scan(self, function="Get-OptScalerXboxExes"):
+        env = dict(os.environ, OPTSCALER_SCAN_TEST_ROOT=str(self.root),
+                   OPTSCALER_SCAN_TEST_SCRIPT=str(REPO / "tools/install/library-scan.ps1"))
+        script = (
+            "$ErrorActionPreference='Stop'; "
+            ". $env:OPTSCALER_SCAN_TEST_SCRIPT; "
+            f"ConvertTo-Json -InputObject @({function} $env:OPTSCALER_SCAN_TEST_ROOT) -Depth 4"
+        )
+        p = subprocess.run([str(PS), "-NoProfile", "-NonInteractive", "-Command", script],
+                           env=env, capture_output=True, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stderr.decode("utf-8", "replace"))
+        return json.loads(p.stdout.decode("utf-8-sig"))
+
+    def manifest(self, entries, namespace=""):
+        (self.root / "MicrosoftGame.Config").write_text(
+            f'<Game {namespace}><ExecutableList>{entries}</ExecutableList></Game>', encoding="utf-8"
+        )
+
+    def test_gdk_entry_beats_helpers_and_alphabetical_guess(self):
+        expected = self.exe("bin/bg3.exe")
+        self.exe("aaa.exe")
+        self.exe("GameLaunchHelper.exe")
+        self.exe("person-model/person-worker.exe")
+        (self.root / "appxmanifest.xml").write_text(
+            '<Package><Applications><Application Executable="GameLaunchHelper.exe"/></Applications></Package>',
+            encoding="utf-8",
+        )
+        self.manifest('<Executable Name="bin\\bg3.exe" Id="Game" TargetDeviceFamily="PC"/>')
+        self.assertEqual([Path(c["path"]) for c in self.scan()], [expected])
+
+    def test_namespaced_manifest_filters_non_pc_dev_missing_and_duplicate_entries(self):
+        expected = self.exe("game.exe")
+        self.exe("console.exe")
+        self.exe("dev.exe")
+        self.manifest(
+            '<Executable Name="console.exe" TargetDeviceFamily="XboxOne"/>'
+            '<Executable Name="dev.exe" IsDevOnly="true"/>'
+            '<Executable Name="missing.exe"/>'
+            '<Executable Name="game.exe"/><Executable Name="GAME.exe"/>',
+            'xmlns="urn:gdk-fixture"',
+        )
+        self.assertEqual([Path(c["path"]) for c in self.scan()], [expected])
+
+    def test_invalid_metadata_falls_back_without_selecting_auxiliary_exes(self):
+        expected = self.exe("game.exe")
+        outside = self.root.parent / "outside.exe"
+        outside.write_bytes(b"outside the game")
+        self.exe("GameLaunchHelper.exe")
+        self.exe("person-worker.exe")
+        self.exe("OptiScaler/a-worker.exe")
+        self.exe("person-model/a-worker.exe")
+        self.exe("_CommonRedist/a-redist.exe")
+        invalid = (
+            None, "<broken", '<Game><ExecutableList><Executable Name="missing.exe"/></ExecutableList></Game>',
+            '<Game><ExecutableList><Executable Name="..\\outside.exe"/></ExecutableList></Game>',
+            f'<Game><ExecutableList><Executable Name="{outside}"/></ExecutableList></Game>',
+            '<!DOCTYPE Game [<!ENTITY target "outside.exe">]><Game><ExecutableList>'
+            '<Executable Name="&target;"/></ExecutableList></Game>',
+        )
+        config = self.root / "MicrosoftGame.Config"
+        for content in invalid:
+            with self.subTest(manifest=content):
+                if content is None:
+                    config.unlink(missing_ok=True)
+                else:
+                    config.write_text(content, encoding="utf-8")
+                self.assertEqual([Path(c["path"]) for c in self.scan()], [expected])
+
+    def test_shipping_exe_not_lost_after_eight_generic_candidates(self):
+        for i in range(12):
+            self.exe(f"utility{i:02}.exe")
+        expected = self.exe("Game/Binaries/WinGDK/Game-WinGDK-Shipping.exe")
+        candidates = self.scan("Get-OptScalerPrimaryExes")
+        self.assertEqual(Path(candidates[0]["path"]), expected)
+        self.assertEqual(len(candidates), 8)
+
+
+@unittest.skipUnless(os.name == "nt" and PS.exists(), "requires Windows PowerShell 5.1")
 class LauncherWorkerTests(unittest.TestCase):
     def invoke(self, script, action, exe, decisions=None, proxy=None, package_root=None,
                backends=None, active_backend=None, language=None):

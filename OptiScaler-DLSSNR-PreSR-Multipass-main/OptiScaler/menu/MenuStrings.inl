@@ -301,6 +301,8 @@
 {"Extended sliders limit for quality presets\n\nUsing this option changes resolution detection logic\nand might cause issues and crashes!", "放宽画质档位滑块范围，同时改变分辨率检测逻辑，可能导致错误或崩溃。"},
 {"External FG is active. Set the multiplier in the game or unlocker, not OptiScaler.", "当前由外部控制帧生成，请在游戏或解锁工具中设置倍率。"},
 {"External frame generation / MFG unlocker", "外部帧生成 / 多帧生成解锁工具"},
+{"Dynamic MFG unavailable: XeFG currently reports a 2X limit.", "动态多帧生成不可用：XeFG 当前报告的上限仅为 2X。"},
+{"ASI plugin loading is off. Enable LoadAsiPlugins in OptiScaler.ini and restart the game.", "ASI 插件加载已关闭。请在 OptiScaler.ini 中将 LoadAsiPlugins 设为 true，然后重启游戏。"},
 {"Extra shaders:", "额外着色器："},
 {"Extra skipped blocks in passes 2/3", "第 2/3 层追加跳块"},
 {"FFX FG", "FFX 帧生成"},

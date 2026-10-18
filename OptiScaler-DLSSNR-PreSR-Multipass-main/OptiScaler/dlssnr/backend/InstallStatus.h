@@ -8,6 +8,11 @@
 #include <windows.h>
 
 namespace DlssNr::Backend {
+inline bool HasMochizukiSelectedModel(const std::filesystem::path& dir, uint32_t model) {
+    std::error_code ec;
+    return std::filesystem::is_regular_file(dir / (model == 0 ? L"dlssnr-amd/dlssnr.bin"
+                                                            : L"dlssnr-amd/dlssnr-small.bin"), ec);
+}
 inline bool NonemptyFile(const std::filesystem::path& path) {
     std::error_code ec;
     return std::filesystem::is_regular_file(path, ec) && std::filesystem::file_size(path, ec) > 0 && !ec;

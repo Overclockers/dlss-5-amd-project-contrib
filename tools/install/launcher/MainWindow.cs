@@ -128,8 +128,9 @@ namespace OptScalerNR.Launcher
         bool _isScanOnStartup = true;
         string _packageRoot = "";
         string _pendingAction = "";
+        bool _writeBusy;
         string _currentLogPath = "";
-        string _activeBackend = "lmxxf";
+        string _activeBackend = "mochizuki";
         DateTime _shownUtc;
 
         readonly List<GameInfo> _allGames = new List<GameInfo>();
@@ -1107,6 +1108,8 @@ namespace OptScalerNR.Launcher
 
         void SelectGame(GameInfo game)
         {
+            if (_writeBusy) return;
+            _decisions.ForeignProxy.Clear();
             _selectedGame = game;
             if (_heroTitle != null) _heroTitle.Text = game.Name;
             if (_heroMeta != null) _heroMeta.Text = game.Source + " · PC";
@@ -1209,9 +1212,10 @@ namespace OptScalerNR.Launcher
         void UpdateActiveCombo()
         {
             var checkedBackends = new List<string>();
+            // Match the visible card order when choosing a fallback.
+            if (_mochiCheck != null && _mochiCheck.IsChecked == true) checkedBackends.Add("mochizuki");
             if (_lmxxfCheck != null && _lmxxfCheck.IsChecked == true) checkedBackends.Add("lmxxf");
             if (_danielCheck != null && _danielCheck.IsChecked == true) checkedBackends.Add("daniel");
-            if (_mochiCheck != null && _mochiCheck.IsChecked == true) checkedBackends.Add("mochizuki");
 
             if (_activeCombo != null)
             {
@@ -1321,6 +1325,7 @@ namespace OptScalerNR.Launcher
 
         void InspectGame(GameInfo game)
         {
+            if (_writeBusy) return;
             if (game == null || string.IsNullOrEmpty(game.Exe)) return;
             if (_session != null && _session.IsRunning)
             {
@@ -1454,12 +1459,14 @@ namespace OptScalerNR.Launcher
         void ExecuteAction(string action, bool keepModelChoice = false)
         {
             if (_selectedGame == null || string.IsNullOrEmpty(_selectedGame.Exe)) return;
-            if (_session != null && _session.IsRunning)
+            if (_writeBusy || (_session != null && _session.IsRunning))
             {
                 MessageBox.Show(_window, _language == "zh" ? "操作正在进行中…" : "An operation is already in progress.", _window.Title);
                 return;
             }
 
+            // Decisions are valid only for this attempt and its explicit needsInput retries.
+            if (!keepModelChoice) _decisions.ForeignProxy.Clear();
             var dir = Path.GetDirectoryName(_selectedGame.Exe);
             if (!TryLockTarget(dir))
             {
@@ -1653,6 +1660,9 @@ namespace OptScalerNR.Launcher
                     : "Analysis complete, please confirm proxy DLL and backends:";
             }
 
+            // Checkbox events can temporarily fall back while capabilities are applied
+            // in worker order. Resolve the preferred backend after the complete batch.
+            var preferredActiveBackend = _activeBackend;
             if (result.Backends != null)
             {
                 foreach (var b in result.Backends)
@@ -1723,6 +1733,7 @@ namespace OptScalerNR.Launcher
                 if (_lmxxfCheck != null) _lmxxfCheck.IsChecked = true;
             }
 
+            _activeBackend = preferredActiveBackend;
             UpdateActiveCombo();
             UpdatePrimaryButtonState();
 
@@ -1758,6 +1769,7 @@ namespace OptScalerNR.Launcher
                 }
                 else if (d.Id == "reinspect")
                 {
+                    _decisions.ForeignProxy.Clear();
                     if (_selectedGame != null) InspectGame(_selectedGame);
                     return true;
                 }
@@ -1834,6 +1846,10 @@ namespace OptScalerNR.Launcher
 
         void SetBusy(bool busy, string action)
         {
+            _writeBusy = busy && action != "inspect" && action != "scan";
+            if (_gameList != null) _gameList.IsEnabled = !_writeBusy;
+            if (_packageBrowse != null) _packageBrowse.IsEnabled = !_writeBusy;
+            if (_packageRootBox != null) _packageRootBox.IsEnabled = !_writeBusy;
             if (busy) _eventStage = action;
             if (_addButton != null) _addButton.IsEnabled = !busy;
             if (_changeExeButton != null) _changeExeButton.IsEnabled = !busy;
@@ -1866,6 +1882,13 @@ namespace OptScalerNR.Launcher
 
         void OnClosing(object sender, System.ComponentModel.CancelEventArgs e)
         {
+            // Keep the target mutex until the write completion callback has run,
+            // even if the process has exited but its result is still queued.
+            if (_writeBusy) {
+                e.Cancel = true;
+                if (_statusText != null) _statusText.Text = L("安装或卸载正在进行，请等待完成后关闭。", "Installation or removal is in progress. Wait for completion before closing.");
+                return;
+            }
             if (_session != null && _session.IsRunning)
             {
                 if (_session.CanKill)
@@ -1876,11 +1899,7 @@ namespace OptScalerNR.Launcher
                 }
                 else
                 {
-                    var msg = _language == "zh"
-                        ? "写入操作正在进行中。强制关闭可能会中断文件更新。确定要关闭吗？"
-                        : "A write is in progress. Closing now leaves the worker running until it finishes a safe step. Close anyway?";
-                    var r = MessageBox.Show(_window, msg, _window.Title, MessageBoxButton.OKCancel, MessageBoxImage.Warning);
-                    if (r != MessageBoxResult.OK) e.Cancel = true;
+                    e.Cancel = true;
                 }
             }
             if (!e.Cancel) ReleaseLock();

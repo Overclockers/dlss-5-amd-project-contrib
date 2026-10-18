@@ -457,6 +457,17 @@
             </DockPanel>
             <ListBox x:Name="GameList" Background="Transparent" BorderThickness="0"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+              <!-- Keep the dark surface when installation disables game selection. -->
+              <ListBox.Template>
+                <ControlTemplate TargetType="{x:Type ListBox}">
+                  <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                          BorderThickness="{TemplateBinding BorderThickness}" SnapsToDevicePixels="true">
+                    <ScrollViewer x:Name="PART_ScrollViewer" Focusable="false" Padding="{TemplateBinding Padding}">
+                      <ItemsPresenter SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}"/>
+                    </ScrollViewer>
+                  </Border>
+                </ControlTemplate>
+              </ListBox.Template>
               <ListBox.ItemTemplate>
                 <DataTemplate>
                   <Grid Margin="2,3">

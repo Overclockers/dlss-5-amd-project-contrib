@@ -21,6 +21,11 @@
 
 在 [XeFG_DynamicCount.h](../OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/framegen/xefg/XeFG_DynamicCount.h) 与 [XeFG_Dx12.cpp](../OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/framegen/xefg/XeFG_Dx12.cpp) 中，宿主实现了基于目标帧率的动态多帧生成控制器：
 
+使用宿主的动态倍率控制时保持 `[FrameGen] External=false`；解锁插件负责提高倍率上限，
+OptiScaler 负责每帧选择倍率。菜单按 `xefgSwapChainSetNumInterpolatedFrames` 接口是否存在
+显示 Dynamic MFG，多帧上限大于 1 时可选。不要用 XeSS 产品版本判断 XeFG API 主版本；
+本地包的 XeFG 1.3.1 已提供该接口。仅安装插件不会自动开启 `DynamicMFG`。
+
 - **配置项（`[XeFG]`）**：
   - `DynamicMFG`（菜单：`Dynamic MFG`）：启用动态多帧生成（默认 `false`）。
   - `FramerateTargetDMFG`（菜单：`DMFG FPS Target`）：目标显示帧率（菜单 0～360 FPS，默认 `0`；0 跟随 FPS 限制，无限制时取略低于屏幕刷新率的目标）。

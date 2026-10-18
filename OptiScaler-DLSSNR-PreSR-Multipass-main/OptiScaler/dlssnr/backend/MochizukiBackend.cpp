@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "MochizukiBackend.h"
+#include "InstallStatus.h"
 #include "LmxxfRecordingOwner.h"
 #include "../NrFrameDiagHost.h"
 #include <resource.h>
@@ -130,8 +131,8 @@ struct MochizukiBackend::Impl
             }
         }
         setLogging((Config::Instance()->LogToFile.value_or_default() || Config::Instance()->NrFlickerDiag.value_or_default()));
-        if (!std::filesystem::is_regular_file(directory / L"dlssnr-amd/dlssnr.bin"))
-        { Status("mochizuki: model missing; run the Mochizuki model installer (see docs/mochizuki.md)"); return false; }
+        if (!HasMochizukiSelectedModel(directory, Config::Instance()->MochizukiNetworkModel.value_or_default()))
+        { Status("mochizuki: selected model missing; run Setup to install the selected model (see docs/mochizuki.md)"); return false; }
         LmxxfNrCreateInfo ci {sizeof ci, device.Get(), queue.Get(), directory.c_str(),
                             LMXXF_NR_CREATE_FLAG_RECORDING_LEASES | LMXXF_NR_CREATE_FLAG_INLINE_QUEUE};
         void* session = nullptr;

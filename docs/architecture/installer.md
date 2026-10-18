@@ -29,6 +29,10 @@ GUI 使用 `backends` 数组明确指定安装范围，经 DecisionJson 交给�
 活动后端均拒绝。参数 `$ActiveBackend` 与内部结果 `$selectedActiveBackend` 分开保存，
 避免 PowerShell 变量名不区分大小写导致参数被清空或覆盖。
 
+GUI 首次选择主后端按卡片顺序优先 Mochizuki，再 lmxxf、Daniel；就绪后端会自动勾选。
+能力检测完成后统一确定主后端，避免检测结果的返回顺序改变默认值。
+用户手动选择的主后端仍在勾选范围内时，后续检测保留该选择。
+
 worker 执行所选安装包目录中的安装/卸载脚本，不从旁边另一份包补脚本。能力检测按包内
 `lmxxf-modules/`、runtime 与 shader 文件判断 lmxxf 组件；游戏目录仅供复用模型，不能补齐
 更新包的 lmxxf 代码。Daniel 检测同时识别安装器、包内 `version.dll` 及已有 pass1 runtime。
@@ -42,6 +46,23 @@ worker 执行所选安装包目录中的安装/卸载脚本，不从旁边另一
 的 `Language` 字段（`zh` / `en`）。已有有效偏好优先，手动切换后后续启动不再自动改选。
 切换同时刷新游戏库、设置、后端状态和模型对话框，不重置所选代理、后端或 INI 处理方式。
 GUI 安装将语言传给 worker，免费提示使用同一语言；原始安装日志及第三方/系统错误保留原文。
+
+### 游戏库扫描
+
+Xbox 游戏优先读取 `Content/MicrosoftGame.Config` 中存在的 PC 游戏 EXE；
+`appxmanifest.xml` 可能只指向 `GameLaunchHelper.exe`，不作为实际游戏程序的依据。
+配置缺失、无效或入口已不存在时，回退到限定深度与扫描数量的候选搜索。
+排除安装器、崩溃工具、Xbox 启动辅助程序和本包的人物识别 worker；跳过本包组件及常见运行库目录。
+回退搜索在排序后才截取前八个候选，优先 GDK/Win64 Shipping 程序。
+启发式搜索仍不能保证识别所有游戏的渲染进程，可通过“更换 EXE”指定。
+同目录选错程序虽然通常不改变文件安装位置，仍会影响基于 EXE 导入表的代理推荐。
+
+### 用户 ASI 插件
+
+安装后检查解析出的插件目录，包括本次复制和原有保留的用户 ASI。
+存在自定义 ASI 且 `[Plugins] LoadAsiPlugins` 缺失或为 `auto` 时启用加载，
+避免替换 INI 后插件文件仍在但不再加载。显式 `true` / `false` 保持原值；
+插件自己的配置文件也保留。OptiPatcher 仍由其独立安装选择处理。
 
 daniel runtime 白名单覆盖 0.3.0 / 0.3.1 / 0.3.2 / 0.3.3 / 0.4.0 / 0.4.1 / 0.4.2 / 0.4.3 / 0.5.0 的完整 SHA256（`$expectedAuthor`），与 `AmdLayout.h` 的 `kAmd*` 行对应；未知 SHA 一律拒绝（fail closed）。加新版本时两处一起改，并验证「同尺寸改 1 字节」的文件会被拒。
 

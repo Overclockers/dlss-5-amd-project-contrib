@@ -605,6 +605,95 @@ class InstallerExitTests(unittest.TestCase):
         self.assertFalse((self.package / 'native-game-tiled-assets/block0-ffn.f16').exists())
         self.assertFalse(list(self.package.glob('.amd-presr-model-*')))
 
+    def test_small_cache_with_existing_original_installs_next_game(self):
+        self.ready_mochizuki(model=True)
+        small = b'NRMODEL1' + (255).to_bytes(4, 'little') + bytes(20)
+        source = self.game / 'dlssnr-amd/dlssnr-small.bin'
+        source.parent.mkdir(parents=True)
+        source.write_bytes(small)
+        (self.package / 'OptiScaler.ini').write_text('[DlssNr]\n', encoding='utf-8')
+        original = (self.package / 'dlssnr-amd/dlssnr.bin').read_bytes()
+        flags = ('-NonInteractive', '-Backend', 'mochizuki', '-MochizukiModels', 'both')
+        code, output = self.run_direct(flags=flags)
+        self.assertEqual(code, 0, output)
+        self.assertEqual((self.package / 'dlssnr-amd/dlssnr-small.bin').read_bytes(), small)
+        self.assertEqual((self.package / 'dlssnr-amd/dlssnr.bin').read_bytes(), original)
+        other = self.root / 'next game'
+        other.mkdir()
+        code, output = self.run_direct(game=other, flags=flags)
+        self.assertEqual(code, 0, output)
+        self.assertEqual((other / 'dlssnr-amd/dlssnr-small.bin').read_bytes(), small)
+        self.assertEqual((other / 'dlssnr-amd/dlssnr.bin').read_bytes(), original)
+        self.assertNotIn('Extracting Mochizuki', output)
+        self.assertFalse(list(self.package.glob('.amd-presr-model-*')))
+
+    def test_small_cache_validates_and_preserves_existing_destination(self):
+        self.ready_install()
+        source = self.game / 'dlssnr-amd/dlssnr-small.bin'
+        source.parent.mkdir(parents=True)
+        source.write_bytes(b'corrupt small model')
+        dest = self.package / 'dlssnr-amd/dlssnr-small.bin'
+        code, output = self.run_direct(flags=('-NonInteractive', '-Backend', 'daniel'))
+        self.assertEqual(code, 0, output)
+        self.assertFalse(dest.exists())
+        source.write_bytes(b'NRMODEL1' + (255).to_bytes(4, 'little') + bytes(20))
+        code, output = self.run_direct(flags=('-NonInteractive', '-Backend', 'daniel'))
+        self.assertEqual(code, 0, output)
+        self.assertEqual(dest.read_bytes(), source.read_bytes())
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b'user existing model')
+        code, output = self.run_direct(flags=('-NonInteractive', '-Backend', 'daniel'))
+        self.assertEqual(code, 0, output)
+        self.assertEqual(dest.read_bytes(), b'user existing model')
+
+    def test_small_only_install_needs_no_original(self):
+        self.ready_mochizuki()
+        small = b'NRMODEL1' + (255).to_bytes(4, 'little') + bytes(20)
+        (self.package / 'dlssnr-amd/dlssnr-small.bin').write_bytes(small)
+        (self.package / 'OptiScaler.ini').write_text('[DlssNr]\n', encoding='utf-8')
+        code, output = self.run_direct(flags=('-NonInteractive', '-Backend', 'mochizuki', '-MochizukiModels', 'small'))
+        self.assertEqual(code, 0, output)
+        self.assertIn('Install SUCCEEDED.', output)
+        self.assertFalse((self.game / 'dlssnr-amd/dlssnr.bin').exists())
+        self.assertEqual((self.game / 'dlssnr-amd/dlssnr-small.bin').read_bytes(), small)
+        self.assertRegex((self.game / 'OptiScaler.ini').read_text(encoding='utf-8-sig'), r'MochizukiNetworkModel\s*=\s*1')
+
+    def test_both_extracts_only_missing_original_with_legacy_source(self):
+        self.ready_supported_mochizuki_source()
+        small = b'NRMODEL1' + (255).to_bytes(4, 'little') + bytes(20)
+        existing = self.game / 'dlssnr-amd/dlssnr-small.bin'
+        existing.parent.mkdir(parents=True)
+        existing.write_bytes(small)
+        (self.package / 'mochizuki-model.py').write_text(
+            "import sys\nfrom pathlib import Path\n"
+            "assert sys.argv[3:] == ['--models', 'original'], sys.argv\n"
+            "p=Path(sys.argv[2]); p.parent.mkdir(parents=True,exist_ok=True)\n"
+            "p.write_bytes(b'NRMODEL1'+(599).to_bytes(4,'little')+bytes(20))\n", encoding='utf-8')
+        code, output = self.run_direct(flags=('-NonInteractive', '-Backend', 'mochizuki', '-MochizukiModels', 'both'))
+        self.assertEqual(code, 0, output)
+        self.assertEqual(existing.read_bytes(), small)
+        self.assertTrue((self.game / 'dlssnr-amd/dlssnr.bin').is_file())
+
+    def test_both_extracts_only_missing_small_preserving_game_original(self):
+        self.ready_supported_mochizuki_source()
+        script = self.package / 'Setup.ps1'
+        source_hash = hashlib.sha256((self.package / 'nvngx_dlssnr.dll').read_bytes()).hexdigest()
+        write_ps(script, re.sub(r"(\$mochizukiNewNvSha\s*=\s*)'[a-f0-9]{64}'",
+                               r"\g<1>'" + source_hash + "'", script.read_text(encoding='utf-8-sig')))
+        original = b'NRMODEL1' + (599).to_bytes(4, 'little') + bytes(20)
+        existing = self.game / 'dlssnr-amd/dlssnr.bin'
+        existing.parent.mkdir(parents=True)
+        existing.write_bytes(original)
+        (self.package / 'mochizuki-model.py').write_text(
+            "import sys\nfrom pathlib import Path\n"
+            "assert sys.argv[3:] == ['--models', 'small'], sys.argv\n"
+            "p=Path(sys.argv[2]).with_name('dlssnr-small.bin'); p.parent.mkdir(parents=True,exist_ok=True)\n"
+            "p.write_bytes(b'NRMODEL1'+(255).to_bytes(4,'little')+bytes(20))\n", encoding='utf-8')
+        code, output = self.run_direct(flags=('-NonInteractive', '-Backend', 'mochizuki', '-MochizukiModels', 'both'))
+        self.assertEqual(code, 0, output)
+        self.assertEqual(existing.read_bytes(), original)
+        self.assertTrue((self.game / 'dlssnr-amd/dlssnr-small.bin').is_file())
+
     def test_game_model_cache_package_is_game_skips_copy_and_cleans_temporary_runtime(self):
         self.ready_install()
         expected = self.ready_game_models()
@@ -929,7 +1018,7 @@ class InstallerExitTests(unittest.TestCase):
         code, output = self.run_direct(flags=('-NonInteractive', '-Backend', 'mochizuki', '-MochizukiModels', 'original'))
         self.assertEqual(code, 0, output)
         self.assertIn('Install SUCCEEDED.', output)
-        self.assertIn('Renamed mismatched Mochizuki model', output)
+        self.assertIn('Backed up mismatched or invalid model', output)
         self.assertEqual(model.read_bytes(), (self.package / 'dlssnr-amd/dlssnr.bin').read_bytes())
         backups = list(model.parent.glob('dlssnr.bin.mismatch-*'))
         self.assertEqual(len(backups), 1)
@@ -1458,6 +1547,32 @@ class InstallerExitTests(unittest.TestCase):
         self.assertEqual(snapshot_files(self.game), before)
         self.assertFalse(list(self.game.glob(".lmxxf-stage-*")))
 
+
+    def test_retained_custom_asi_enables_only_automatic_loading_after_ini_replacement(self):
+        self.ready_install()
+        for index, (setting, expected, plugin) in enumerate((
+            ('auto', 'true', 'MFGUnlocker.asi'),
+            ('false', 'false', 'MFGUnlocker.asi'),
+            ('true', 'true', 'MFGUnlocker.asi'),
+            ('auto', 'auto', None),
+        )):
+            with self.subTest(setting=setting, plugin=plugin):
+                game = self.root / f'retained-asi-{index}'
+                target = game / 'OptiScaler/plugins'
+                target.mkdir(parents=True)
+                if plugin:
+                    (target / plugin).write_bytes(b'user plugin; never executed')
+                (self.package / 'OptiScaler.ini').write_text(
+                    '[Plugins]\nLoadAsiPlugins=' + setting + '\n', encoding='utf-8')
+                (game / 'OptiScaler.ini').write_text(
+                    '[Plugins]\nLoadAsiPlugins=true\nUserSentinel=old\n', encoding='utf-8')
+                code, output = self.run_direct(game=game)
+                self.assertEqual(code, 0, output)
+                actual = (game / 'OptiScaler.ini').read_text(encoding='utf-8-sig')
+                self.assertNotIn('UserSentinel', actual)
+                self.assertRegex(actual, r'LoadAsiPlugins\s*=\s*' + expected)
+                if plugin:
+                    self.assertEqual((target / plugin).read_bytes(), b'user plugin; never executed')
 
     def test_custom_plugins_keep_configs_readme_and_explicit_loader_setting(self):
         self.ready_install()
