@@ -1334,6 +1334,7 @@ namespace OptScalerNR.Launcher
         void SelectGame(GameInfo game)
         {
             if (_writeBusy) return;
+            if (_session != null && _session.CanKill && _session.Action == "inspect") CancelReadSession();
             if (_folderScan != null) _folderScan.Cancel();
             SelectProxy(null);
             _decisions.ForeignProxy.Clear();
@@ -1644,24 +1645,26 @@ namespace OptScalerNR.Launcher
             }));
         }
 
+        void CancelReadSession()
+        {
+            var old = _session;
+            _session = null; // Invalidate even a completion already queued on the dispatcher.
+            _pendingAction = "";
+            old.CancelInspect();
+            Detach(old);
+            SetBusy(false, "");
+            if (_progress != null) _progress.IsIndeterminate = false;
+        }
+
         void InspectGame(GameInfo game)
         {
             if (_writeBusy) return;
-            if (game == null || !game.HasExecutable) { RefreshInspectionText(); return; }
-            if (_session != null && _session.IsRunning)
+            if (_session != null)
             {
-                if (_session.CanKill)
-                {
-                    var old = _session;
-                    old.EventReceived -= OnEvent;
-                    old.Completed -= OnCompleted;
-                    old.Completed -= OnScanCompleted;
-                    old.CancelInspect();
-                    Detach(old);
-                    _session = null;
-                }
+                if (_session.CanKill) CancelReadSession();
                 else return;
             }
+            if (game == null || !game.HasExecutable) { RefreshInspectionText(); return; }
 
             _lastInspectResult = null;
             var fastProxy = PeProbe.QuickRecommend(game.Exe);
@@ -2084,6 +2087,13 @@ namespace OptScalerNR.Launcher
                 Detach(source);
                 _session = null;
                 ReleaseLock();
+
+                if (action == "inspect" && (_selectedGame == null || !_selectedGame.HasExecutable ||
+                    !SamePath(source.GameExe, _selectedGame.Exe))) {
+                    _resumeInstallAction = "";
+                    UpdatePrimaryButtonState();
+                    return;
+                }
 
                 if (result != null && !string.IsNullOrEmpty(result.LogPath))
                     _currentLogPath = result.LogPath;

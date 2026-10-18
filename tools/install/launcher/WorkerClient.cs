@@ -24,6 +24,7 @@ namespace OptScalerNR.Launcher
         public bool IsRunning { get { return _process != null && !_process.HasExited; } }
         public bool CanKill { get; private set; }
         public string Action { get; private set; }
+        public string GameExe { get; private set; }
 
         WorkerSession(Process process, string action, string eventsPath, string resultPath, bool canKill)
         {
@@ -80,7 +81,9 @@ namespace OptScalerNR.Launcher
                 failure.Data["logPath"] = stderrPath;
                 throw failure;
             }
-            return new WorkerSession(proc, request != null ? request.Action : "", eventsPath, resultPath, canKill);
+            return new WorkerSession(proc, request != null ? request.Action : "", eventsPath, resultPath, canKill) {
+                GameExe = request != null ? request.GameExe : null
+            };
         }
 
         static void AppendOutput(string path, string line, object sync)

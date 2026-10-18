@@ -69,8 +69,10 @@ namespace OptScalerNR.Launcher
             if(string.IsNullOrEmpty(game.Root))game.Root=Path.GetDirectoryName(normal);
             game.Exe=normal;game.ExeOverride=true;
             game.Installed=File.Exists(Path.Combine(Path.GetDirectoryName(normal),"amd-presr-install.txt"));
+            RestoreHiddenPath(normal);
+            if(!string.IsNullOrEmpty(game.Id))_hiddenGames.Remove(game.Id);
             // Keep the existing ID, including legacy custom IDs, and every display override.
-            SaveLibraryCache();RefreshGameListView();SelectGame(game);
+            SaveSettings();SaveLibraryCache();RefreshGameListView();SelectGame(game);
         }
         static BitmapImage ReadCover(string path)
         {

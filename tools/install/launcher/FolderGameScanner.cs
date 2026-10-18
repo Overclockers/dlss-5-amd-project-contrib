@@ -158,7 +158,7 @@ namespace OptScalerNR.Launcher
         static int Priority(string path)
         {
             var name=System.IO.Path.GetFileName(path).ToLowerInvariant();
-            return new[] {"binaries","win64","wingdk","windowsnoeditor","client","bin"}.Contains(name) ? 0 : name=="engine" ? 1 : 2;
+            return new[] {"binaries","win64","wingdk","windowsnoeditor","client","bin"}.Contains(name) ? 0 : name=="engine" || name=="content" ? 1 : 2;
         }
         public static async Task<FolderScanResult> ScanAsync(string directory,CancellationToken cancellation,Action<int,int> progress)
         {
@@ -188,7 +188,10 @@ namespace OptScalerNR.Launcher
                         foreach(var dir in Directory.EnumerateDirectories(item.Path)) {
                             if(token.IsCancellationRequested || timer.ElapsedMilliseconds>=10000)break;
                             var name=System.IO.Path.GetFileName(dir).ToLowerInvariant();
-                            if(new[] {"content","paks","shadercache",".git","node_modules","optiscaler","person-model","dlssnr-amd","redist","_commonredist","__installer"}.Contains(name))continue;
+                            // Xbox installs put their actual executables under Content. Keep
+                            // the root Content folder and identified Xbox packages searchable.
+                            if(name=="content" && item.Depth>0 && !File.Exists(System.IO.Path.Combine(dir,"MicrosoftGame.Config")))continue;
+                            if(new[] {"paks","shadercache",".git","node_modules","optiscaler","person-model","dlssnr-amd","redist","_commonredist","__installer"}.Contains(name))continue;
                             if(todo.Count+seen.Count>=10000) {lock(state.Gate)state.Limited=true;break;}
                             if(!Linked(dir))todo.Add(new DirectoryItem {Path=dir,Depth=item.Depth+1,Priority=Priority(dir)});
                         }
