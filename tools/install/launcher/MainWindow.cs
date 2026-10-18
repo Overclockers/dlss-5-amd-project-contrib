@@ -925,9 +925,13 @@ namespace OptScalerNR.Launcher
                     _allGames.Clear();
                     foreach (var g in rec.Games)
                     {
-                        if (g != null && !string.IsNullOrEmpty(g.Exe) && GamePaths.CanUse(g.Exe))
+                        if (g != null && !string.IsNullOrEmpty(g.Exe) &&
+                            (g.ExeOverride == true || g.Source == "Manual" || GamePaths.CanUse(g.Exe)))
                             _allGames.Add(g);
                     }
+                    var count = _allGames.Count;
+                    MergeScannedGames(new GameInfo[0]);
+                    if (_allGames.Count != count) SaveLibraryCache();
                 }
             }
             catch { }
@@ -1093,9 +1097,11 @@ namespace OptScalerNR.Launcher
                     Installed = File.Exists(Path.Combine(dir, "amd-presr-install.txt"))
                 };
                 _allGames.Add(found);
-                SaveLibraryCache();
             }
 
+            // Picking an existing scanned entry is also an explicit EXE choice.
+            found.ExeOverride = true;
+            SaveLibraryCache();
             RefreshGameListView();
             SelectGame(found);
         }
@@ -1109,6 +1115,7 @@ namespace OptScalerNR.Launcher
             if (string.IsNullOrEmpty(norm) || !GamePaths.CanUse(norm)) return;
 
             _selectedGame.Exe = norm;
+            _selectedGame.ExeOverride = true;
             var dir = Path.GetDirectoryName(norm);
             _selectedGame.Installed = File.Exists(Path.Combine(dir, "amd-presr-install.txt"));
             SaveLibraryCache();
@@ -1395,6 +1402,88 @@ namespace OptScalerNR.Launcher
             }
         }
 
+        static bool SameLibraryGame(GameInfo a, GameInfo b)
+        {
+            return (!string.IsNullOrEmpty(a.Id) && !string.IsNullOrEmpty(b.Id) &&
+                    string.Equals(a.Id, b.Id, StringComparison.OrdinalIgnoreCase)) ||
+                   string.Equals(a.Exe, b.Exe, StringComparison.OrdinalIgnoreCase);
+        }
+
+        static bool IsAuxiliaryExe(string path)
+        {
+            var name = Path.GetFileName(path);
+            return string.Equals(name, "gamelaunchhelper.exe", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(name, "person-worker.exe", StringComparison.OrdinalIgnoreCase) ||
+                   path.IndexOf("\\person-model\\", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   path.IndexOf("\\OptiScaler\\", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        static bool KeepCachedExe(GameInfo game)
+        {
+            if (game.ExeOverride == true || game.Source == "Manual") return true;
+            // Legacy caches have no provenance. Correct clear helper/missing paths,
+            // but preserve a plausible existing EXE that could have been chosen by hand.
+            return !game.ExeOverride.HasValue && GamePaths.CanUse(game.Exe) && !IsAuxiliaryExe(game.Exe);
+        }
+
+        bool MergeScannedGames(GameInfo[] scanned)
+        {
+            var previousSelection = _selectedGame;
+            var previousExe = previousSelection != null ? previousSelection.Exe : null;
+            var previousName = previousSelection != null ? previousSelection.Name : null;
+            var merged = new List<GameInfo>();
+            foreach (var cached in _allGames)
+            {
+                if (cached == null || string.IsNullOrEmpty(cached.Exe)) continue;
+                var index = merged.FindIndex(g => SameLibraryGame(g, cached));
+                if (index < 0) merged.Add(cached);
+                else
+                {
+                    var existing = merged[index];
+                    var explicitChoice = cached.ExeOverride == true || cached.Source == "Manual";
+                    var existingExplicit = existing.ExeOverride == true || existing.Source == "Manual";
+                    if ((explicitChoice && !existingExplicit) ||
+                        (explicitChoice == existingExplicit && KeepCachedExe(cached) && !KeepCachedExe(existing)))
+                        merged[index] = cached;
+                }
+            }
+            foreach (var incoming in scanned)
+            {
+                if (incoming == null || string.IsNullOrEmpty(incoming.Exe)) continue;
+                var existing = merged.Find(g => SameLibraryGame(g, incoming));
+                if (existing == null)
+                {
+                    incoming.ExeOverride = false;
+                    merged.Add(incoming);
+                    continue;
+                }
+                var samePath = string.Equals(existing.Exe, incoming.Exe, StringComparison.OrdinalIgnoreCase);
+                if (!KeepCachedExe(existing))
+                {
+                    existing.Exe = incoming.Exe;
+                    existing.ExeOverride = false;
+                    samePath = true;
+                }
+                existing.Installed = samePath ? incoming.Installed :
+                    File.Exists(Path.Combine(Path.GetDirectoryName(existing.Exe), "amd-presr-install.txt"));
+                if (existing.Source != "Manual" && string.Equals(existing.Id, incoming.Id, StringComparison.OrdinalIgnoreCase))
+                {
+                    existing.Name = incoming.Name;
+                    existing.Source = incoming.Source;
+                }
+                if (!string.IsNullOrEmpty(incoming.Cover)) existing.Cover = incoming.Cover;
+                if (!string.IsNullOrEmpty(incoming.Hero)) existing.Hero = incoming.Hero;
+            }
+            _allGames.Clear();
+            _allGames.AddRange(merged);
+            if (previousSelection != null)
+                _selectedGame = merged.Find(g => SameLibraryGame(g, previousSelection)) ?? previousSelection;
+            return previousSelection != null &&
+                (!ReferenceEquals(previousSelection, _selectedGame) ||
+                 !string.Equals(previousExe, _selectedGame.Exe, StringComparison.OrdinalIgnoreCase) ||
+                 previousName != _selectedGame.Name);
+        }
+
         void OnScanCompleted(WorkerSession source, LauncherResult result, int code)
         {
             _window.Dispatcher.BeginInvoke(new Action(() =>
@@ -1409,29 +1498,10 @@ namespace OptScalerNR.Launcher
                 SetBusy(false, "");
                 if (_progress != null) _progress.IsIndeterminate = false;
 
+                var selectionChanged = false;
                 if (result != null && result.Games != null)
                 {
-                    var map = new Dictionary<string, GameInfo>(StringComparer.OrdinalIgnoreCase);
-                    foreach (var g in _allGames)
-                    {
-                        if (g != null && !string.IsNullOrEmpty(g.Exe))
-                            map[g.Exe] = g;
-                    }
-                    foreach (var g in result.Games)
-                    {
-                        if (g == null || string.IsNullOrEmpty(g.Exe)) continue;
-                        if (!map.ContainsKey(g.Exe))
-                        {
-                            map[g.Exe] = g;
-                            _allGames.Add(g);
-                        }
-                        else
-                        {
-                            map[g.Exe].Installed = g.Installed;
-                            if (!string.IsNullOrEmpty(g.Cover)) map[g.Exe].Cover = g.Cover;
-                            if (!string.IsNullOrEmpty(g.Hero)) map[g.Exe].Hero = g.Hero;
-                        }
-                    }
+                    selectionChanged = MergeScannedGames(result.Games);
                     SaveLibraryCache();
                     RefreshGameListView();
                 }
@@ -1440,7 +1510,8 @@ namespace OptScalerNR.Launcher
                 if (_statusText != null)
                     _statusText.Text = _language == "zh" ? "游戏库已更新" : "Library updated";
 
-                if (_selectedGame == null && _allGames.Count > 0 && _gameList != null && _gameList.Items.Count > 0)
+                if (selectionChanged) SelectGame(_selectedGame);
+                else if (_selectedGame == null && _allGames.Count > 0 && _gameList != null && _gameList.Items.Count > 0)
                 {
                     _gameList.SelectedIndex = 0;
                 }

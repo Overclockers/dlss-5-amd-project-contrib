@@ -80,6 +80,7 @@ namespace OptScalerNR.Launcher
         [DataMember(Name = "installed")] public bool Installed;
         [DataMember(Name = "cover")] public string Cover;
         [DataMember(Name = "hero")] public string Hero;
+        [DataMember(Name = "exeOverride", EmitDefaultValue = false)] public bool? ExeOverride;
     }
 
     [DataContract]

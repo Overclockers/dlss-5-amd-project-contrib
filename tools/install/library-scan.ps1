@@ -98,6 +98,7 @@ function Add-OptScalerGame($list, $seen, [string]$name, [string]$exe, [string]$s
         source = $source
         installed = [bool]$installed
         selectionRequired = $false
+        exeOverride = $false
         cover = $cover
         hero = $hero
     })
