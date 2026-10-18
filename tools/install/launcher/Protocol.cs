@@ -31,6 +31,7 @@ namespace OptScalerNR.Launcher
         [DataMember(Name = "existingIni")] public string ExistingIni;
         [DataMember(Name = "missingMochizukiModel")] public string MissingMochizukiModel;
         [DataMember(Name = "mochizukiModels")] public string MochizukiModels;
+        [DataMember(Name = "lmxxfModels")] public string LmxxfModels;
         [DataMember(Name = "shortFileContinue")] public string ShortFileContinue;
         [DataMember(Name = "foreignProxy")] public Dictionary<string, string> ForeignProxy;
     }
@@ -63,6 +64,8 @@ namespace OptScalerNR.Launcher
         [DataMember(Name = "id")] public string Id;
         [DataMember(Name = "runtimeState")] public string RuntimeState;
         [DataMember(Name = "modelState")] public string ModelState;
+        [DataMember(Name = "originalState")] public string OriginalState;
+        [DataMember(Name = "smallState")] public string SmallState;
         [DataMember(Name = "enabled")] public bool Enabled;
         [DataMember(Name = "reasonCode")] public string ReasonCode;
         [DataMember(Name = "reason")] public string Reason;

@@ -29,6 +29,9 @@ Exit codes match `status`: 0 success, 1 failed, 2 needsInput, 3 cancelled.
 - `mochizukiModels`: `both` | `small` | `original`; required when installing Mochizuki.
   The explicit `original` selection authorizes the older model. Missing or invalid
   sources still fail validation; there is no runtime-only installation fallback.
+- `lmxxfModels`: `both` | `small` | `original`; required when installing lmxxf.
+  Original and Small sources are resolved independently from the package and game.
+  An explicit choice with missing/invalid weights fails before game-folder writes.
 - `shortFileContinue`: `continue` | `abort`
 
 Inspect never writes the game folder, never extracts weights, never downloads.

@@ -627,6 +627,7 @@ namespace OptScalerNR.Launcher
                     case "missing-runtime": return "运行库缺失";
                     case "preparable": return "需准备模型";
                     case "missing-model": return "模型缺失";
+                    case "partial": return "部分模型就绪";
                     default: return fallbackReason ?? reasonCode;
                 }
             }
@@ -639,6 +640,7 @@ namespace OptScalerNR.Launcher
                     case "missing-runtime": return "Missing Runtime";
                     case "preparable": return "Preparation Required";
                     case "missing-model": return "Missing Model";
+                    case "partial": return "Some Models Ready";
                     default: return fallbackReason ?? reasonCode;
                 }
             }
@@ -777,6 +779,9 @@ namespace OptScalerNR.Launcher
                 switch (hint)
                 {
                     case "lmxxf-weights": lines.Add(L("缺少 lmxxf 权重。请将完整的 native-game-tiled-assets 文件夹放到安装包目录。", "lmxxf weights are missing. Place the complete native-game-tiled-assets folder beside Setup.bat.")); break;
+                    case "lmxxf-original": lines.Add(L("缺少 lmxxf Original 权重。请将完整的原始模型权重放入 native-game-tiled-assets。", "lmxxf Original weights are missing. Place the complete Original weights in native-game-tiled-assets.")); break;
+                    case "lmxxf-small": lines.Add(L("缺少 lmxxf Small 权重。请补齐 native-game-tiled-assets\\small，或提供 nvngx_dlssnr.dll 310.9.16。", "lmxxf Small weights are missing. Supply native-game-tiled-assets\\small or nvngx_dlssnr.dll 310.9.16.")); break;
+                    case "lmxxf-small-preparable": lines.Add(L("已找到 Small 模型来源，安装时准备。", "Small model source found. Preparation will run during installation.")); break;
                     case "mochi-source": lines.Add(L("缺少 Mochi 模型。请将 nvngx_dlssnr.dll 放到安装包目录。", "Mochi models are missing. Place nvngx_dlssnr.dll beside Setup.bat.")); break;
                     case "mochi-preparable": lines.Add(L("已找到模型来源，安装时准备。", "Model source found. Models will be prepared during installation.")); break;
                     case "mochi-versions": lines.Add(L("310.9.16 支持新旧模型；310.8.0 仅支持原始模型。", "310.9.16: both models. 310.8.0: original only.")); break;
@@ -1637,7 +1642,7 @@ namespace OptScalerNR.Launcher
             for (var i = 0; i < values.Length; i++)
             {
                 var value = values[i];
-                var radio = new RadioButton { Content = labels[i], GroupName = "MochizukiModels", Margin = new Thickness(0, 6, 0, 6) };
+                var radio = new RadioButton { Content = labels[i], Foreground = Brushes.White, GroupName = "MochizukiModels", Margin = new Thickness(0, 6, 0, 6) };
                 radio.Checked += delegate { dialog.Tag = value; proceed.IsEnabled = true; };
                 panel.Children.Add(radio);
             }
@@ -1649,6 +1654,49 @@ namespace OptScalerNR.Launcher
             panel.Children.Add(buttons);
             dialog.Content = panel;
             return dialog;
+        }
+
+        Window CreateLmxxfModelDialog()
+        {
+            BackendInfo capability = null;
+            if (_lastInspectResult != null && _lastInspectResult.Backends != null)
+                foreach (var backend in _lastInspectResult.Backends)
+                    if (backend != null && backend.Id == "lmxxf") { capability = backend; break; }
+            var original = capability != null && capability.OriginalState == "ready";
+            var small = capability != null && (capability.SmallState == "ready" || capability.SmallState == "preparable");
+            var dialog = new Window {
+                Owner = _window.IsVisible ? _window : null, Title = L("选择 lmxxf 模型", "Select lmxxf models"), Width = 540,
+                SizeToContent = SizeToContent.Height, WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                ResizeMode = ResizeMode.NoResize, ShowInTaskbar = false,
+                Background = new SolidColorBrush(Color.FromRgb(32,35,43)), Foreground = Brushes.White
+            };
+            var panel = new StackPanel { Margin = new Thickness(24) };
+            panel.Children.Add(new TextBlock { Text = L("请选择要安装的模型。现有的另一套模型会保留。", "Choose the models to install. Other installed models are retained."), TextWrapping = TextWrapping.Wrap });
+            panel.Children.Add(new TextBlock { Text = "Original: " + (original ? L("就绪", "Ready") : L("缺失", "Missing")) + "  |  Small: " +
+                (capability != null && capability.SmallState == "preparable" ? L("待准备", "Preparation required") : small ? L("就绪", "Ready") : L("缺失", "Missing")), Margin = new Thickness(0,10,0,10) });
+            if (capability != null && !string.IsNullOrEmpty(BackendHintText(capability)))
+                panel.Children.Add(new TextBlock { Text = BackendHintText(capability), TextWrapping = TextWrapping.Wrap, Foreground = Brushes.Orange, Margin = new Thickness(0,0,0,10) });
+            var proceed = new Button { Content = L("继续", "Continue"), IsEnabled = false, MinWidth = 100, Margin = new Thickness(4) };
+            var values = new[] { "both", "small", "original" };
+            var labels = new[] { L("两个模型", "Both models"), "Small (310.9.16)", L("Original（原始模型）", "Original") };
+            var enabled = new[] { original && small, small, original };
+            for (var i = 0; i < values.Length; i++) {
+                var value = values[i];
+                var radio = new RadioButton { Content = labels[i], Foreground = enabled[i] ? Brushes.White : Brushes.Gray, IsEnabled = enabled[i], GroupName = "LmxxfModels", Margin = new Thickness(0,6,0,6) };
+                radio.Checked += delegate { dialog.Tag = value; proceed.IsEnabled = true; };
+                panel.Children.Add(radio);
+            }
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+            var cancel = new Button { Content = L("取消", "Cancel"), IsCancel = true, MinWidth = 100, Margin = new Thickness(4) };
+            proceed.Click += delegate { if (dialog.Tag != null) dialog.DialogResult = true; };
+            buttons.Children.Add(cancel); buttons.Children.Add(proceed); panel.Children.Add(buttons); dialog.Content = panel;
+            return dialog;
+        }
+
+        string SelectLmxxfModels()
+        {
+            var dialog = CreateLmxxfModelDialog();
+            return dialog.ShowDialog() == true ? dialog.Tag as string : null;
         }
 
         void ExecuteAction(string action, bool keepModelChoice = false)
@@ -1690,6 +1738,12 @@ namespace OptScalerNR.Launcher
                 return;
             }
 
+            if (action != "uninstall" && checkedBackends.Contains("lmxxf") &&
+                (!keepModelChoice || string.IsNullOrEmpty(_decisions.LmxxfModels)))
+            {
+                _decisions.LmxxfModels = SelectLmxxfModels();
+                if (string.IsNullOrEmpty(_decisions.LmxxfModels)) { ReleaseLock(); return; }
+            }
             if (action != "uninstall" && checkedBackends.Contains("mochizuki") &&
                 (!keepModelChoice || string.IsNullOrEmpty(_decisions.MochizukiModels)))
             {
@@ -1956,6 +2010,11 @@ namespace OptScalerNR.Launcher
                         if (_statusText != null) _statusText.Text = L("已取消。", "Cancelled.");
                         return false;
                     }
+                }
+                else if (d.Id == "lmxxfModels")
+                {
+                    _decisions.LmxxfModels = SelectLmxxfModels();
+                    if (string.IsNullOrEmpty(_decisions.LmxxfModels)) return false;
                 }
                 else if (d.Id == "mochizukiModels")
                 {

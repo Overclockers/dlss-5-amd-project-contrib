@@ -37,6 +37,8 @@ param(
     [string]$MochizukiModels,
     [ValidateSet('small', 'original')]
     [string]$MochizukiActiveModel,
+    [ValidateSet('both', 'small', 'original')]
+    [string]$LmxxfModels,
     [string[]]$Backends,
     [string]$ActiveBackend,
     [switch]$NonInteractive,
@@ -52,8 +54,12 @@ $ErrorActionPreference = 'Stop'
 $lmxxfStage = $null
 $setupSourceStage = $null
 $mochizukiInt4Candidate = $null
+$lmxxfSmallStage = $null
 
 function Pause-Exit([int]$code) {
+    if ($lmxxfSmallStage) {
+        try { Remove-LmxxfTemporaryTree $lmxxfSmallStage $Root } catch { Write-Warning $_.Exception.Message }
+    }
     if ($mochizukiInt4Candidate -and (Test-Path -LiteralPath $mochizukiInt4Candidate)) {
         try { Remove-Item -LiteralPath $mochizukiInt4Candidate -Force -ErrorAction Stop }
         catch { Write-Warning "INT4 staging cleanup failed: $($_.Exception.Message)" }
@@ -99,6 +105,7 @@ if ($DecisionJson) {
     $launcherDecisions = Get-Content -LiteralPath $DecisionJson -Raw -Encoding UTF8 | ConvertFrom-Json
 }
 $hasBackendSelection = $PSBoundParameters.ContainsKey('Backends')
+$lmxxfModelsExplicit = $PSBoundParameters.ContainsKey('LmxxfModels')
 if ($launcherDecisions) {
     if (-not $hasBackendSelection -and $launcherDecisions.PSObject.Properties['backends']) {
         $Backends = @($launcherDecisions.backends | ForEach-Object { [string]$_ })
@@ -109,6 +116,11 @@ if ($launcherDecisions) {
         if ($MochizukiModels -notin @('both','small','original')) {
             Fail 'DecisionJson mochizukiModels must be both, small, or original.'
         }
+    }
+    if (-not $lmxxfModelsExplicit -and $launcherDecisions.lmxxfModels) {
+        $LmxxfModels = [string]$launcherDecisions.lmxxfModels
+        if ($LmxxfModels -notin @('both','small','original')) { Fail 'DecisionJson lmxxfModels must be both, small, or original.' }
+        $lmxxfModelsExplicit = $true
     }
 }
 
@@ -728,23 +740,22 @@ foreach ($candidate in @(
     }
 }
 function Test-LmxxfWeights([string]$Directory) {
-    foreach ($name in @('block0-ffn.f16', 'block0-ffn.f32')) {
-        $file = Get-Item -LiteralPath (Join-Path $Directory $name) -ErrorAction SilentlyContinue
-        if ($file -and -not $file.PSIsContainer -and $file.Length -gt 0) { return $true }
-    }
-    return $false
+    if (-not (Get-Command Test-LmxxfModel -ErrorAction SilentlyContinue)) { return $false }
+    return Test-LmxxfModel $Directory original -Quick
 }
+$lmxxfModelHelper = Find-FirstFile @((Join-Path $Root 'lmxxf-small.ps1'), (Join-Path $PSScriptRoot 'install/lmxxf-small.ps1'))
+if ($lmxxfModelHelper) { . $lmxxfModelHelper }
 $lmxxfWeights = $null
-foreach ($candidate in @(
+$lmxxfSmallWeights = $null
+$lmxxfCandidates = @(
         (Join-Path $release 'native-game-tiled-assets'),
         (Join-Path $Root 'native-game-tiled-assets'),
         (Join-Path $Root 'DLSS5-AMD\native-game-tiled-assets'),
         (Join-Path $game 'native-game-tiled-assets')
-    )) {
-    if (Test-LmxxfWeights $candidate) {
-        $lmxxfWeights = $candidate
-        break
-    }
+    )
+foreach ($candidate in $lmxxfCandidates) {
+    if (-not $lmxxfWeights -and (Test-LmxxfWeights $candidate)) { $lmxxfWeights = $candidate }
+    if ($lmxxfModelHelper -and -not $lmxxfSmallWeights -and (Test-LmxxfModel (Join-Path $candidate 'small') small)) { $lmxxfSmallWeights = Join-Path $candidate 'small' }
 }
 
 # --- detect danielblnc components ---
@@ -864,7 +875,7 @@ $mochizukiNewNvSha = '2bc19bc09a7b89dd44f73e2ac0108fcc586e2154bdd0830f242f4f040e
 $mochizukiNvSha = 'e16bcf15e16e13f527491cdf7845b2fe6521a738d8f7c9c721866a8496e1fc8e'
 # --- Weight-check helpers; preparation runs only after backend selection ---
 # Only checks that already exist are used: Mochizuki INT4 hash pin (model-tools/dlssnr-int4.sha256),
-# Mochizuki model header and nvngx_dlssnr.dll 310.8.0 hash, lmxxf block0 tensor presence, and the
+# Mochizuki model header/source hashes, lmxxf tensor layouts/Small hashes, and the
 # danielblnc weights.bin size floor. A Failed entry removes that backend from the install.
 $weightProblems = New-Object System.Collections.Generic.List[object]
 $weightFailed = @{}
@@ -1219,18 +1230,85 @@ if ($installMochizuki) {
     }
 }
 
+$lmxxfSelectedModels = $LmxxfModels
 if ($installLmxxf) {
-    $lmxxfCandidates = @((Join-Path $release 'native-game-tiled-assets'), (Join-Path $Root 'native-game-tiled-assets'),
-        (Join-Path $Root 'DLSS5-AMD\native-game-tiled-assets'), (Join-Path $game 'native-game-tiled-assets'))
-    foreach ($candidate in $lmxxfCandidates) {
-        if ((Test-Path -LiteralPath $candidate -PathType Container) -and -not (Test-LmxxfWeights $candidate)) {
-            $en = @("[lmxxf] Wrong folder: $candidate (incomplete: no non-empty block0-ffn.f16 / block0-ffn.f32)",
-                    '  Expected:   a complete native-game-tiled-assets folder (no hash pin exists; only block0 presence is checked)')
-            if ($lmxxfWeights) {
-                $en += "  Setup will use the complete folder instead: $lmxxfWeights"
+    if (-not $lmxxfModelHelper) { Fail 'Incomplete package: lmxxf-small.ps1 is missing. Re-extract the complete package.' }
+    $lmxxfSmallPack = $null
+    foreach ($candidate in $smallModelCandidates) {
+        if (Test-MochizukiModelFile $candidate 255) { $lmxxfSmallPack = $candidate; break }
+    }
+    $lmxxfSourceDll = $null
+    if (-not $lmxxfSmallWeights -and -not $lmxxfSmallPack) {
+        foreach ($candidate in @((Join-Path $Root 'nvngx_dlssnr.dll'),(Join-Path $game 'nvngx_dlssnr.dll'))) {
+            if ((Test-Path -LiteralPath $candidate -PathType Leaf) -and (Get-Sha256 $candidate) -eq $mochizukiNewNvSha) { $lmxxfSourceDll = $candidate; break }
+        }
+    }
+    if (-not $lmxxfSelectedModels) {
+        if (-not $NonInteractive) {
+            Write-Host 'Select lmxxf models: 1 = Both, 2 = Small (310.9.16), 3 = Original'
+            do { $choice = Read-Host 'Choice'; $lmxxfSelectedModels = switch ($choice) { '1' {'both'} '2' {'small'} '3' {'original'} } } while (-not $lmxxfSelectedModels)
+            $lmxxfModelsExplicit = $true
+        } elseif ($lmxxfWeights -and ($lmxxfSmallWeights -or $lmxxfSmallPack -or $lmxxfSourceDll)) { $lmxxfSelectedModels = 'both' }
+        elseif ($lmxxfSmallWeights -or $lmxxfSmallPack -or $lmxxfSourceDll) { $lmxxfSelectedModels = 'small' }
+        elseif ($lmxxfWeights) { $lmxxfSelectedModels = 'original' }
+        else { $lmxxfSelectedModels = 'none'; Write-Host 'lmxxf models missing; installing components only. Supply complete Original or Small weights before enabling NR.' -ForegroundColor Yellow }
+    }
+    if ($lmxxfSelectedModels -in @('both','original') -and -not $lmxxfWeights) { Fail 'lmxxf Original weights are missing or incomplete. Supply complete native-game-tiled-assets before installation.' }
+    if ($lmxxfSelectedModels -eq 'none') {
+        foreach ($candidate in $lmxxfCandidates) {
+            if (Test-Path -LiteralPath $candidate -PathType Container) {
+                Add-WeightProblem 'lmxxf' $false @("[lmxxf] Wrong folder: $candidate (Original and Small are missing or incomplete)", '  Supply a complete Original or Small model before enabling lmxxf NR.')
             }
-            $en += '  Fix: delete this folder and copy a complete native-game-tiled-assets beside Setup.bat, then run Setup again.'
-            Add-WeightProblem 'lmxxf' $false $en
+        }
+    }
+    if ($lmxxfSelectedModels -in @('both','small')) {
+        if ($lmxxfSmallWeights -and -not (Test-LmxxfModel $lmxxfSmallWeights small)) { Fail 'lmxxf Small weight validation failed. The game folder was not changed.' }
+        if (-not $lmxxfSmallWeights) {
+            if (-not $lmxxfSmallPack -and -not $lmxxfSourceDll) { Fail 'lmxxf Small requires native-game-tiled-assets/small, a verified dlssnr-small.bin, or nvngx_dlssnr.dll 310.9.16.' }
+            $lmxxfSmallStage = Join-Path $Root ('.lmxxf-stage-' + [guid]::NewGuid().ToString('N'))
+            [void][IO.Directory]::CreateDirectory($lmxxfSmallStage)
+            $lmxxfSmallWeights = Join-Path $lmxxfSmallStage 'small'
+            Initialize-LmxxfSmall -Pack $lmxxfSmallPack -Dll $lmxxfSourceDll -Output $lmxxfSmallWeights
+            if (-not (Test-LmxxfModel $lmxxfSmallWeights small)) { Fail 'Prepared lmxxf Small weights failed validation.' }
+        }
+    }
+    # Keep an explicit retained model preference. Reject an unavailable combination before writing files.
+    $lmxxfRetainedModel = $null
+    $lmxxfGameIni = Join-Path $game 'OptiScaler.ini'
+    $inNrSection = $false
+    $lmxxfIniAction = $null
+    if (Test-Path -LiteralPath $lmxxfGameIni -PathType Leaf) {
+        if ($launcherDecisions -and $launcherDecisions.existingIni) {
+            $lmxxfIniAction = [string]$launcherDecisions.existingIni
+            if ($lmxxfIniAction -notin @('keep','overwrite')) { Fail 'DecisionJson existingIni must be overwrite or keep.' }
+        } elseif ($NonInteractive) { $lmxxfIniAction = 'overwrite' }
+        else {
+            $iniChoice = Ask-Choice 'OptiScaler.ini already exists in the game folder.' @('Overwrite OptiScaler.ini (Recommended: major version update!)','Keep the existing OptiScaler.ini')
+            $lmxxfIniAction = if ($iniChoice -eq 1) { 'overwrite' } else { 'keep' }
+        }
+    }
+    $keepIniChoice = $lmxxfIniAction -eq 'keep'
+    if ($keepIniChoice) {
+        foreach ($line in [IO.File]::ReadAllLines($lmxxfGameIni)) {
+            if ($line -match '^\s*\[([^\]]+)\]') { $inNrSection = $Matches[1] -ieq 'DlssNr' }
+            elseif ($inNrSection -and $line -match '^\s*LmxxfNetworkModel\s*=\s*([01])\s*$') { $lmxxfRetainedModel = $Matches[1]; break }
+        }
+        if ($lmxxfRetainedModel -eq '0' -and $lmxxfSelectedModels -eq 'small' -and -not (Test-LmxxfWeights (Join-Path $game 'native-game-tiled-assets'))) { Fail 'Kept INI selects lmxxf Original, but only Small is available. Choose both models, change LmxxfNetworkModel, or overwrite the INI.' }
+        if ($lmxxfRetainedModel -eq '1' -and $lmxxfSelectedModels -eq 'original' -and -not (Test-LmxxfModel (Join-Path $game 'native-game-tiled-assets/small') small)) { Fail 'Kept INI selects lmxxf Small, but only Original is available. Choose both models, change LmxxfNetworkModel, or overwrite the INI.' }
+    }
+    foreach ($model in @('original','small')) {
+        if ($lmxxfSelectedModels -notin @('both',$model)) { continue }
+        $source = if ($model -eq 'original') { $lmxxfWeights } else { $lmxxfSmallWeights }
+        $target = Join-Path $game 'native-game-tiled-assets'
+        if ($model -eq 'small') { $target = Join-Path $target 'small' }
+        $null = Assert-LmxxfModelPath $target
+        foreach ($file in @(Get-LmxxfModelFiles $source $model)) {
+            $path = Assert-LmxxfModelPath (Join-Path $target $file.Name)
+            if (Test-FileLocked $path) { Fail "Model destination is locked: $path. Close the game completely." }
+            if ([IO.Path]::GetExtension($path) -eq '.f16') {
+                $alternate = Assert-LmxxfModelPath ([IO.Path]::ChangeExtension($path,'.f32'))
+                if (Test-FileLocked $alternate) { Fail "Model destination is locked: $alternate. Close the game completely." }
+            }
         }
     }
 }
@@ -1414,6 +1492,10 @@ if ($uninstallFirst) {
         if ($installLmxxf) {
             $lmxxfRuntime = Save-ReinstallSource $lmxxfRuntime
             $lmxxfShaders = Save-ReinstallSource $lmxxfShaders
+            $lmxxfManifestSource = Join-Path (Split-Path -Parent $lmxxfModelHelper) 'lmxxf-small-manifest.json'
+            $lmxxfModelHelper = Save-ReinstallSource $lmxxfModelHelper
+            $null = Save-ReinstallSource $lmxxfManifestSource
+            . $lmxxfModelHelper
         }
         if ($installMochizuki) {
             $mochizukiRuntime = Save-ReinstallSource $mochizukiRuntime
@@ -1727,7 +1809,8 @@ if (Test-Path -LiteralPath $ini -PathType Leaf) {
     } else {
         # Recommended on a large version jump. -NonInteractive takes that option.
         $overwriteIni = $NonInteractive
-        if ($launcherDecisions -and $launcherDecisions.existingIni) {
+        if ($lmxxfIniAction) { $overwriteIni = $lmxxfIniAction -eq 'overwrite' }
+        elseif ($launcherDecisions -and $launcherDecisions.existingIni) {
             if ($launcherDecisions.existingIni -eq 'overwrite') { $overwriteIni = $true }
             elseif ($launcherDecisions.existingIni -eq 'keep') { $overwriteIni = $false }
             else { Fail 'DecisionJson existingIni must be overwrite or keep.' }
@@ -1820,36 +1903,13 @@ if ($installLmxxf) {
         Write-Host 'NOTE: lmxxf shaders not found in package; PrepareFrame may fail until shaders/ is beside OptiScaler.' -ForegroundColor DarkYellow
     }
     $gameWeights = Join-Path $game 'native-game-tiled-assets'
-    if (Test-LmxxfWeights $gameWeights) {
-        Write-Host 'native-game-tiled-assets already present in game folder.' -ForegroundColor Green
-    } elseif ($lmxxfWeights) {
-        if ([IO.Path]::GetFullPath($lmxxfWeights) -ine [IO.Path]::GetFullPath($gameWeights)) {
-            Write-Host "Installing native-game-tiled-assets from $lmxxfWeights..." -ForegroundColor Cyan
-            Get-ChildItem -LiteralPath $lmxxfWeights -Recurse -File | ForEach-Object {
-                $rel = Join-Path 'native-game-tiled-assets' $_.FullName.Substring($lmxxfWeights.Length).TrimStart('\','/')
-                Install-One $_.FullName $rel
-            }
-        } else {
-            Write-Host 'native-game-tiled-assets already present in game folder.' -ForegroundColor Green
-        }
-    } else {
-        Write-Host 'NOTE: native-game-tiled-assets not found in package. If using lmxxf, place native-game-tiled-assets in the game folder.' -ForegroundColor DarkYellow
+    foreach ($model in @('original','small')) {
+        if ($lmxxfSelectedModels -notin @('both',$model)) { continue }
+        $source = if ($model -eq 'original') { $lmxxfWeights } else { $lmxxfSmallWeights }
+        $target = if ($model -eq 'original') { $gameWeights } else { Join-Path $gameWeights 'small' }
+        Copy-LmxxfModel -Source $source -Destination $target -Model $model
+        Write-Host "lmxxf $model weights verified: $target" -ForegroundColor Green
     }
-    if ($mochizukiSmallModel) {
-        $smallHelper = Find-FirstFile @((Join-Path $Root 'lmxxf-small.ps1'), (Join-Path $PSScriptRoot 'install/lmxxf-small.ps1'))
-        if ($smallHelper) {
-            try {
-                . $smallHelper
-                Initialize-LmxxfSmall -Pack $mochizukiSmallModel -Output (Join-Path $gameWeights 'small')
-            } catch {
-                Write-Host $_.Exception.Message -ForegroundColor Yellow
-                Write-Host 'Original remains available. Rerun Setup before selecting lmxxf Small.' -ForegroundColor Yellow
-            }
-        }
-    }
-
-
-
 }
 
 # --- Configure OptiScaler.ini [DlssNr] ---
@@ -1979,6 +2039,9 @@ If any restoration failed, preserve the reported backups before retrying Setup.
 # copied template cannot leave NrBackend (or Enabled / RunBeforeSR) on the package placeholder.
 # Preference keys are only added when missing, so a kept ini retains model scale, every-frame,
 # encoding and FitLarge. An overwrite already replaced those with the package defaults.
+if ($installLmxxf -and $lmxxfSelectedModels -ne 'none' -and -not (Test-Path -LiteralPath $gameIni -PathType Leaf)) {
+    [IO.File]::WriteAllText($gameIni, "[DlssNr]`r`n", [Text.UTF8Encoding]::new($true))
+}
 if (Test-Path -LiteralPath $gameIni -PathType Leaf) {
     # Fill a missing canonical key from its legacy spelling before using defaults.
     # -OnlyMissing below still gives an existing canonical choice precedence.
@@ -2013,6 +2076,14 @@ if (Test-Path -LiteralPath $gameIni -PathType Leaf) {
     }
     if ($installMochizuki) {
         $dlssnrSettings['MochizukiNetworkModel'] = $targetNetworkModel.ToString()
+    }
+    if ($installLmxxf -and $lmxxfSelectedModels -ne 'none') {
+        $existingLmModel = Get-IniSetting $gameIni 'DlssNr' 'LmxxfNetworkModel'
+        if ($keepIniChoice -and $lmxxfRetainedModel -in @('0','1')) {
+            $dlssnrSettings['LmxxfNetworkModel'] = $lmxxfRetainedModel
+        } elseif (-not $keepIniChoice -or $existingLmModel -notin @('0','1')) {
+            $dlssnrSettings['LmxxfNetworkModel'] = if ($lmxxfSelectedModels -eq 'small') { '1' } else { '0' }
+        }
     }
     Set-IniSettings $gameIni 'DlssNr' $dlssnrSettings
     Set-IniSettings $gameIni 'DlssNr' ([ordered]@{
@@ -2292,43 +2363,44 @@ function Save-GameModelForNextInstall([ValidateSet('lmxxf', 'mochizuki', 'mochiz
         $packageRoot = [IO.Path]::GetFullPath($Root)
         $gameRoot = [IO.Path]::GetFullPath($game)
         if ($packageRoot.TrimEnd('\', '/') -ieq $gameRoot.TrimEnd('\', '/')) { return }
-        $relative = if ($Kind -eq 'lmxxf') { 'native-game-tiled-assets' } elseif ($Kind -eq 'mochizuki-small') { 'dlssnr-amd/dlssnr-small.bin' } else { 'dlssnr-amd/dlssnr.bin' }
+        if ($Kind -eq 'lmxxf') {
+            if (-not $lmxxfModelHelper) { return }
+            foreach ($model in @('original','small')) {
+                $relative = if ($model -eq 'original') { 'native-game-tiled-assets' } else { 'native-game-tiled-assets/small' }
+                $source = Join-Path $gameRoot $relative; $destination = Join-Path $packageRoot $relative
+                if ((Test-LmxxfModel $source $model) -and -not (Test-LmxxfModel $destination $model)) {
+                    Copy-LmxxfModel -Source $source -Destination $destination -Model $model
+                    Write-Host "Cached lmxxf $model weights: $destination"
+                }
+            }
+            return
+        }
+        $relative = if ($Kind -eq 'mochizuki-small') { 'dlssnr-amd/dlssnr-small.bin' } else { 'dlssnr-amd/dlssnr.bin' }
         $entries = if ($Kind -eq 'mochizuki-small') { 255 } else { 599 }
         $destination = Join-Path $packageRoot $relative
         if (Test-Path -LiteralPath $destination) { return }
         $source = Assert-LmxxfUnlinkedPath (Join-Path $gameRoot $relative)
         $destination = Assert-LmxxfUnlinkedPath $destination
         $packageRoot = Assert-LmxxfUnlinkedPath $packageRoot
-        if ($Kind -eq 'lmxxf') {
-            if (-not (Test-LmxxfWeights $source)) { return }
-            if ($packageRoot.StartsWith($source + '\', [StringComparison]::OrdinalIgnoreCase) -or
-                $packageRoot -ieq $source) { throw 'Package folder is inside the source model directory.' }
-            $files = @(Get-LmxxfUnlinkedFiles $source)
-        } else {
-            if (-not (Test-MochizukiModelHeader $source $entries)) { return }
-            $files = @(Get-Item -LiteralPath $source -ErrorAction Stop)
-        }
+        if (-not (Test-MochizukiModelHeader $source $entries)) { return }
+        $files = @(Get-Item -LiteralPath $source -ErrorAction Stop)
         $stage = Join-Path $packageRoot ('.amd-presr-model-' + [guid]::NewGuid().ToString('N'))
         [void][IO.Directory]::CreateDirectory($stage)
         $payload = Join-Path $stage 'model'
-        if ($Kind -eq 'lmxxf') { [void][IO.Directory]::CreateDirectory($payload) }
         foreach ($file in $files) {
-            $copy = if ($Kind -eq 'lmxxf') {
-                Join-Path $payload $file.FullName.Substring($source.Length).TrimStart('\', '/')
-            } else { $payload }
+            $copy = $payload
             [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($copy))
             $hash = Get-Sha256 $file.FullName
             Copy-Item -LiteralPath $file.FullName -Destination $copy -ErrorAction Stop
             if ((Get-Sha256 $copy) -ne $hash) { throw "Model copy checksum mismatch: $($file.FullName)" }
         }
-        if ($Kind -ne 'lmxxf' -and -not (Test-MochizukiModelHeader $payload $entries)) {
+        if (-not (Test-MochizukiModelHeader $payload $entries)) {
             throw 'Copied Mochizuki model has an invalid header.'
         }
         $destination = Assert-LmxxfUnlinkedPath $destination
         [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destination))
         # The two-argument Move APIs fail if the destination appeared during copying.
-        if ($Kind -eq 'lmxxf') { [IO.Directory]::Move($payload, $destination) }
-        else { [IO.File]::Move($payload, $destination) }
+        [IO.File]::Move($payload, $destination)
         Write-Host "Saved $relative in the package folder for the next install: $destination" -ForegroundColor Green
     } catch {
         Write-Host "NOTE: could not save $Kind game model for the next install: $($_.Exception.Message)" -ForegroundColor Yellow
@@ -2408,6 +2480,7 @@ if (Test-Path -LiteralPath $backup) {
 Write-Host "  Active Backend: $selectedActiveBackend" -ForegroundColor Cyan
 if ($installLmxxf) {
     Write-Host "  Installed:      OptScaler(NR) + lmxxf runtime (LmxxfNrRuntime.dll, modules, shaders)" -ForegroundColor Green
+    Write-Host "  lmxxf models:   $lmxxfSelectedModels"
 }
 if ($installDaniel) {
     Write-Host "  Installed:      OptScaler(NR) + danielblnc runtime (dlssnr_amd_pass1-3.dll + weights)" -ForegroundColor Green
@@ -2447,7 +2520,7 @@ if ($weightProblems.Count -gt 0) {
 }
 $mochizukiActiveValid = if ($targetNetworkModel -eq 1) { Test-MochizukiModelHeader (Join-Path $game 'dlssnr-amd/dlssnr-small.bin') 255 } else { Test-MochizukiModelHeader (Join-Path $game 'dlssnr-amd/dlssnr.bin') 599 }
 $activeModelPending = ($selectedActiveBackend -eq 'mochizuki' -and -not $mochizukiActiveValid) -or
-    ($selectedActiveBackend -eq 'lmxxf' -and -not $lmxxfWeights)
+    ($selectedActiveBackend -eq 'lmxxf' -and $lmxxfSelectedModels -eq 'none')
 if ($activeModelPending) {
     Write-Host "Installation completed, but $selectedActiveBackend cannot run yet: MODEL SETUP REQUIRED. Follow the model instructions above, then restart the game." -ForegroundColor Yellow
 } else { Write-Host 'Install SUCCEEDED. Verify backend status in Ins when the game starts.' -ForegroundColor Green }

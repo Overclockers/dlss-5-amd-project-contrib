@@ -4,8 +4,17 @@ lmxxf 菜单的 **Network model** 可选 Original（71块）和 Small（310.9.16
 默认 Original；Small 是另一套训练权重，实际执行一次网络，画面可能改变。
 切换从下一次网络重建生效，没有 F9 热键。Original 的叠层、预测和肤色偏好会保留。
 
-Setup 找到本地 `dlssnr-small.bin` 时会自动转换为游戏目录下的
-`native-game-tiled-assets/small`。需要 Python3.10+，转换只使用标准库。
+启动器安装 lmxxf 时可选 Original、Small 或两个模型。安装脚本支持
+`-LmxxfModels original|small|both`；缺少明确选择的非交互 CLI 按可用来源决定范围。
+两套权重分别从安装包和游戏目录检测、复用与补装，不删除未选中的现有模型。
+Original 检查 185 个必需张量的尺寸；Small 检查清单、尺寸与 SHA256。
+安装包已有 Original 时仍可从游戏补回 Small，反之亦然；已有有效模型不会被覆盖。
+
+只选 Small 时不要求同时安装 Original；新建或覆盖 INI 默认选 Small。
+保留 INI 时保留显式模型偏好，若缺少该偏好需要的模型，会在写入前明确拒绝。
+现成 Small 权重位于 `native-game-tiled-assets/small`，复用不需要 Python。
+选择 Small 且只有本地 `dlssnr-small.bin` 或受支持 DLL 时，安装器会先转换、校验，
+再写入游戏目录。转换需要 Python3.10+，只使用标准库，与是否安装 Mochizuki 无关。
 没有该包时，可从用户自己提供的受支持 `nvngx_dlssnr.dll`（310.9.16）离线准备：
 
 ```powershell
@@ -23,6 +32,7 @@ python tools/install/lmxxf-model.py --dll C:/path/to/nvngx_dlssnr.dll --output C
 
 Small 支持720/900/1080和自由尺寸、Off/Native history。
 Temporal Mode2/3或不兼容的高级内核组合会使用Original，菜单显示原因。
-缺失/损坏资产同样回退Original；修复模型后重启。
-安装脚本不会替用户更改模型偏好。来源和验证边界见[消费审阅](lmxxf-044-consumer-review.md)
+缺失/损坏资产同样尝试回退Original；若只安装了 Small，Original 不可用时明确报错，
+不会把缺失模型当成可用回退。修复模型后重启。
+保留 INI 时安装脚本不会替用户更改显式模型偏好。来源和验证边界见[消费审阅](lmxxf-044-consumer-review.md)
 及[后续冷启动修复审阅](lmxxf-044-hotfix-consumer-review.md)。

@@ -64,7 +64,8 @@ Add-Type -TypeDefinition 'public static class PackageFixture { public static int
                      'stage-lmxxf-beside-optiscaler.ps1', 'release/check-module-contract.ps1',
                      'release/check-release-freshness.ps1', 'release/package-signing.ps1', 'lmxxf-sync/manifest.json',
                      'build/build-launcher.ps1', 'install/launcher-worker.ps1', 'install/proxy-probe.ps1',
-                     'install/library-scan.ps1', 'install/install-capabilities.ps1'):
+                     'install/library-scan.ps1', 'install/install-capabilities.ps1',
+                     'install/lmxxf-small.ps1', 'install/lmxxf-small-manifest.json'):
             shutil.copy2(REPO / 'tools' / name, self.root / 'tools' / name)
         shutil.copytree(REPO / 'tools/install/launcher', self.root / 'tools/install/launcher')
         for name in ('LICENSE', 'NOTICE', 'OptiScaler-DLSSNR-PreSR-Multipass-main/LICENSE',

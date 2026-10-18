@@ -16,7 +16,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "_lib"))
-from lmxxf_fixtures import damage_modules, locked_file, make_modules, snapshot_files
+from lmxxf_fixtures import damage_modules, locked_file, make_modules, make_weights, snapshot_files
 from mochizuki_fixtures import int4_tools, PAYLOAD as INT4_PAYLOAD
 
 
@@ -52,6 +52,8 @@ class InstallerExitTests(unittest.TestCase):
         self.env["PATH"] = str(PS.parent) + os.pathsep + self.env.get("PATH", "")
         shutil.copy2(REPO / "tools/lmxxf-module-package.ps1", self.package)
         shutil.copy2(REPO / "tools/install/mochizuki-python.ps1", self.package)
+        for name in ('lmxxf-small.ps1', 'lmxxf-small-manifest.json'):
+            shutil.copy2(REPO / 'tools/install' / name, self.package)
         source = (REPO / "tools/release/PACKAGE_RELEASE.ps1").read_text(encoding="utf-8-sig")
         for title_name, script, file_name in (
             ("Setup", "install", "Setup"),
@@ -514,8 +516,7 @@ class InstallerExitTests(unittest.TestCase):
         (self.package / "LmxxfNrRuntime.dll").write_bytes(b"fixture lmxxf runtime")
         make_modules(self.package / "lmxxf-modules")
         weights = self.package / "native-game-tiled-assets"
-        weights.mkdir(exist_ok=True)
-        (weights / "block0-ffn.f16").write_bytes(b"fixture marker; no GPU inference")
+        make_weights(weights)
 
         shaders = self.package / "shaders"
         shaders.mkdir(parents=True, exist_ok=True)
@@ -547,10 +548,10 @@ class InstallerExitTests(unittest.TestCase):
             (shaders.parent / "dlssnr.bin").write_bytes(b"NRMODEL1" + (599).to_bytes(4, "little") + bytes(20))
 
     def ready_game_models(self):
+        make_weights(self.game / 'native-game-tiled-assets')
         files = {
-            'native-game-tiled-assets/block0-ffn.f16': b'game model marker',
-            'native-game-tiled-assets/block1-ffn.f32': b'game model tensor',
-            'native-game-tiled-assets/subdir/extra.bin': b'nested model file',
+            'native-game-tiled-assets/block0-ffn.f16': b'game model marker'.ljust(17472, b'\0'),
+            'native-game-tiled-assets/block1-ffn.f32': b'game model tensor'.ljust(34944, b'\0'),
             'dlssnr-amd/dlssnr.bin': b'NRMODEL1' + (599).to_bytes(4, 'little') + bytes(20),
         }
         for relative, data in files.items():
@@ -564,8 +565,7 @@ class InstallerExitTests(unittest.TestCase):
         self.ready_install()
         self.ready_lmxxf_dual_arch()
         self.ready_mochizuki()
-        (self.package / 'native-game-tiled-assets/block0-ffn.f16').unlink()
-        (self.package / 'native-game-tiled-assets').rmdir()
+        shutil.rmtree(self.package / 'native-game-tiled-assets')
         for name in ('version.dll', 'dlssnr_on_amd_weights.bin'):
             (self.package / name).rename(self.game / name)
         expected = self.ready_game_models()
@@ -602,7 +602,7 @@ class InstallerExitTests(unittest.TestCase):
         self.assertEqual(code, 0, output)
         for relative, data in existing.items():
             self.assertEqual((self.package / relative).read_bytes(), data)
-        self.assertFalse((self.package / 'native-game-tiled-assets/block0-ffn.f16').exists())
+        self.assertTrue((self.package / 'native-game-tiled-assets/block0-ffn.f16').exists())
         self.assertFalse(list(self.package.glob('.amd-presr-model-*')))
 
     def test_small_cache_with_existing_original_installs_next_game(self):
@@ -749,7 +749,7 @@ class InstallerExitTests(unittest.TestCase):
                          expected['native-game-tiled-assets/block0-ffn.f16'])
         self.assertFalse(list(self.package.glob('.amd-presr-model-*')))
 
-    def test_game_model_cache_rejects_linked_source_directory(self):
+    def test_game_model_cache_does_not_follow_unrelated_links(self):
         self.ready_install()
         self.ready_game_models()
         outside = self.root / 'outside model'
@@ -762,9 +762,9 @@ class InstallerExitTests(unittest.TestCase):
         self.addCleanup(link.rmdir)
         code, output = self.run_direct(flags=('-NonInteractive', '-Backend', 'daniel'))
         self.assertEqual(code, 0, output)
-        self.assertIn('could not save lmxxf game model', output)
         self.assertIn('Install SUCCEEDED.', output)
-        self.assertFalse((self.package / 'native-game-tiled-assets').exists())
+        self.assertTrue((self.package / 'native-game-tiled-assets/block0-ffn.f16').exists())
+        self.assertFalse((self.package / 'native-game-tiled-assets/linked').exists())
         self.assertEqual((outside / 'private.bin').read_bytes(), b'do not copy')
         self.assertFalse(list(self.package.glob('.amd-presr-model-*')))
 

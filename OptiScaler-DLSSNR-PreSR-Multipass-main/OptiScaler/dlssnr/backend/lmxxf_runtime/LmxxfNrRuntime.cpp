@@ -615,10 +615,14 @@ std::wstring FindShaderDir(const std::wstring &assets = {})
 
 std::wstring FindWeightsDir(const std::wstring &assets)
 {
-    if (FileExists(JoinPath(assets, L"block0-ffn.f16")) || FileExists(JoinPath(assets, L"block0-ffn.f32")))
+    const auto hasModel = [](const std::wstring &root) {
+        return FileExists(JoinPath(root, L"block0-ffn.f16")) || FileExists(JoinPath(root, L"block0-ffn.f32")) ||
+               FileExists(JoinPath(root, L"small\\model-manifest.json"));
+    };
+    if (hasModel(assets))
         return assets;
     const std::wstring sub = JoinPath(assets, L"weights");
-    if (FileExists(JoinPath(sub, L"block0-ffn.f16")) || FileExists(JoinPath(sub, L"block0-ffn.f32")))
+    if (hasModel(sub))
         return sub;
 
     // Prioritize local folders next to DLL / game executable
@@ -626,10 +630,10 @@ std::wstring FindWeightsDir(const std::wstring &assets)
     if (!dll.empty())
     {
         const std::wstring localTiled = JoinPath(dll, L"native-game-tiled-assets");
-        if (FileExists(JoinPath(localTiled, L"block0-ffn.f16")) || FileExists(JoinPath(localTiled, L"block0-ffn.f32")))
+        if (hasModel(localTiled))
             return localTiled;
         const std::wstring localWeights = JoinPath(dll, L"lmxxf-weights");
-        if (FileExists(JoinPath(localWeights, L"block0-ffn.f16")) || FileExists(JoinPath(localWeights, L"block0-ffn.f32")))
+        if (hasModel(localWeights))
             return localWeights;
     }
 
@@ -639,7 +643,7 @@ std::wstring FindWeightsDir(const std::wstring &assets)
     {
         wchar_t full[MAX_PATH] {};
         GetFullPathNameW(env, MAX_PATH, full, nullptr);
-        if (FileExists(JoinPath(full, L"block0-ffn.f16")) || FileExists(JoinPath(full, L"block0-ffn.f32")))
+        if (hasModel(full))
             return full;
     }
     return {};
@@ -1973,6 +1977,10 @@ int32_t PrepareFrame(void *context, const LmxxfNrFrameInfo *info, LmxxfNrJob *jo
             session->smallAssetsValid=valid?1:-1;
         }
         auto model = LmxxfResolveModel(Utf8(session->modulesDir), Utf8(session->weightsDir),session->smallAssetsValid>0);
+        if (!model.useSmall && !(info->flags & (LMXXF_NR_FRAME_FLAG_CODEC_PASSTHROUGH | LMXXF_NR_FRAME_FLAG_HIP_PASSTHROUGH)) &&
+            !FileExists(JoinPath(session->weightsDir, L"block0-ffn.f16")) &&
+            !FileExists(JoinPath(session->weightsDir, L"block0-ffn.f32")))
+            return Fail(LMXXF_NR_INVALID_ARGUMENT, "Original weights unavailable; select Small with compatible settings, or install Original weights.");
         NativeSmallGeometryEnabled() = model.useSmall;
         auto resolvedGeo = NativeResolveNetworkGeometry(info->color_width, info->color_height);
         model.options.width = resolvedGeo.processing_width;

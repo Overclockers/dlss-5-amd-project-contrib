@@ -1,10 +1,33 @@
-"""Small, non-executable module bundles for entrypoint and integrity tests."""
+"""Non-executable module and tensor fixtures for entrypoint and integrity tests."""
 from contextlib import contextmanager
 import ctypes
 import hashlib
 import json
 from pathlib import Path
 import shutil
+import os
+import subprocess
+from functools import lru_cache
+
+
+@lru_cache(maxsize=1)
+def original_layout():
+    helper = Path(__file__).resolve().parents[2] / 'tools/install/lmxxf-small.ps1'
+    env = dict(os.environ, LMXXF_FIXTURE_HELPER=str(helper))
+    env.pop('PSModulePath', None)
+    p = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
+                        '. $env:LMXXF_FIXTURE_HELPER; Get-LmxxfOriginalLayout | ConvertTo-Json'],
+                       env=env, capture_output=True, check=True)
+    return json.loads(p.stdout.decode('utf-8-sig'))
+
+
+def make_weights(directory):
+    """Shape-correct non-executable tensors; no model contents or GPU execution."""
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    for name, elements in original_layout().items():
+        with (directory / (name + '.f16')).open('wb') as stream:
+            stream.truncate(int(elements) * 2)
 
 
 MODULE_NAMES = (

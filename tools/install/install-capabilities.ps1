@@ -2,12 +2,8 @@
 # Shared between launcher-worker.ps1 and install-amd-presr.ps1.
 
 function Test-LmxxfWeightsDir([string]$Directory) {
-    if (-not $Directory -or -not (Test-Path -LiteralPath $Directory -PathType Container)) { return $false }
-    foreach ($name in @('block0-ffn.f16', 'block0-ffn.f32')) {
-        $file = Get-Item -LiteralPath (Join-Path $Directory $name) -ErrorAction SilentlyContinue
-        if ($file -and -not $file.PSIsContainer -and $file.Length -gt 0) { return $true }
-    }
-    return $false
+    if (-not $Directory -or -not (Get-Command Test-LmxxfModel -ErrorAction SilentlyContinue)) { return $false }
+    return Test-LmxxfModel $Directory original -Quick
 }
 
 function Test-MochizukiModelHeaderFile([string]$Path, [uint32]$Entries = 599) {
@@ -36,12 +32,15 @@ function Get-OptScalerFileSha256([string]$Path) {
 
 function Get-OptScalerBackendCapabilities([string]$pkgRoot, [string]$gameDir) {
     $backends = @()
+    $modelHelper = Join-Path $PSScriptRoot 'lmxxf-small.ps1'
+    if (Test-Path -LiteralPath $modelHelper) { . $modelHelper }
 
     # --- lmxxf ---
     $lmxxfRuntime = $null
     $lmxxfMods = $null
     $lmxxfShaders = $null
     $lmxxfWeights = $null
+    $lmxxfSmall = $null
     if ($pkgRoot) {
         $cand = Join-Path $pkgRoot 'LmxxfNrRuntime.dll'
         if (Test-Path -LiteralPath $cand -PathType Leaf) { $lmxxfRuntime = $cand }
@@ -56,24 +55,56 @@ function Get-OptScalerBackendCapabilities([string]$pkgRoot, [string]$gameDir) {
         $cand = Join-Path $gameDir 'native-game-tiled-assets'
         if (Test-LmxxfWeightsDir $cand) { $lmxxfWeights = $cand }
     }
+    if (Get-Command Test-LmxxfModel -ErrorAction SilentlyContinue) {
+        foreach ($root in @($pkgRoot, $gameDir)) {
+            if (-not $root) { continue }
+            $candidate = Join-Path $root 'native-game-tiled-assets/small'
+            if (-not $lmxxfSmall -and (Test-LmxxfModel $candidate small -Quick)) { $lmxxfSmall = $candidate }
+        }
+    }
+    $smallSource = $false
+    if (-not $lmxxfSmall) {
+        foreach ($root in @($pkgRoot, $gameDir)) {
+            if (-not $root) { continue }
+            $packs = @((Join-Path $root 'dlssnr-amd/dlssnr-small.bin'))
+            if ($root -eq $pkgRoot) { $packs += Join-Path $root 'dlssnr-small.bin' }
+            $dll = Join-Path $root 'nvngx_dlssnr.dll'
+            foreach ($pack in $packs) {
+                if (Test-MochizukiModelHeaderFile $pack 255) { $smallSource = $true; break }
+            }
+            if ($smallSource) { break }
+            if (Test-Path -LiteralPath $dll -PathType Leaf) {
+                try { if ((Get-OptScalerFileSha256 $dll) -eq '2bc19bc09a7b89dd44f73e2ac0108fcc586e2154bdd0830f242f4f040e28789f') { $smallSource = $true; break } } catch { }
+            }
+        }
+    }
     # Installed models may be reused; installed/developer code cannot fill an incomplete update.
 
-    $canLmxxfRuntime = [bool]($lmxxfRuntime -and $lmxxfMods -and $lmxxfShaders)
-    $hasLmxxfWeights = [bool]$lmxxfWeights
+    $lmxxfHelperReady = $pkgRoot -and (Test-Path -LiteralPath (Join-Path $pkgRoot 'lmxxf-small.ps1') -PathType Leaf) -and
+        (Test-Path -LiteralPath (Join-Path $pkgRoot 'lmxxf-small-manifest.json') -PathType Leaf)
+    $canLmxxfRuntime = [bool]($lmxxfRuntime -and $lmxxfMods -and $lmxxfShaders -and $lmxxfHelperReady)
+    $hasLmxxfWeights = [bool]($lmxxfWeights -or $lmxxfSmall)
     $lmxxfEnabled = $canLmxxfRuntime -and $hasLmxxfWeights
     $lmxxfReason = if (-not $canLmxxfRuntime) { 'Runtime missing' } elseif (-not $hasLmxxfWeights) { 'Weights missing' } else { 'Ready' }
     $backends += @{
         id = 'lmxxf'
         runtimeState = if ($canLmxxfRuntime) { 'ready' } else { 'missing' }
-        modelState = if ($hasLmxxfWeights) { 'ready' } else { 'missing' }
+        modelState = if ($lmxxfWeights -and $lmxxfSmall) { 'ready' } elseif ($hasLmxxfWeights) { 'partial' } elseif ($smallSource) { 'preparable' } else { 'missing' }
+        originalState = if ($lmxxfWeights) { 'ready' } else { 'missing' }
+        smallState = if ($lmxxfSmall) { 'ready' } elseif ($smallSource) { 'preparable' } else { 'missing' }
         enabled = $lmxxfEnabled
-        reasonCode = if (-not $canLmxxfRuntime) { 'missing-runtime' } elseif (-not $hasLmxxfWeights) { 'missing-weights' } else { 'ready' }
+        reasonCode = if (-not $canLmxxfRuntime) { 'missing-runtime' } elseif ($lmxxfWeights -and $lmxxfSmall) { 'ready' } elseif ($hasLmxxfWeights) { 'partial' } elseif ($smallSource) { 'preparable' } else { 'missing-weights' }
         reason = $lmxxfReason
-        hints = @(if (-not $hasLmxxfWeights) { 'lmxxf-weights' })
+        hints = @(
+            if (-not $lmxxfWeights) { 'lmxxf-original' }
+            if (-not $lmxxfSmall) { if ($smallSource) { 'lmxxf-small-preparable' } else { 'lmxxf-small' } }
+        )
         missingPackageFiles = @(
             if (-not $lmxxfRuntime) { 'LmxxfNrRuntime.dll' }
             if (-not $lmxxfMods) { 'lmxxf-modules/' }
             if (-not $lmxxfShaders) { 'shaders/native_codec_encode.hlsl' }
+            if (-not $pkgRoot -or -not (Test-Path -LiteralPath (Join-Path $pkgRoot 'lmxxf-small.ps1') -PathType Leaf)) { 'lmxxf-small.ps1' }
+            if (-not $pkgRoot -or -not (Test-Path -LiteralPath (Join-Path $pkgRoot 'lmxxf-small-manifest.json') -PathType Leaf)) { 'lmxxf-small-manifest.json' }
         )
     }
 

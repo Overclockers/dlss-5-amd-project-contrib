@@ -166,7 +166,7 @@ class LauncherWorkerTests(unittest.TestCase):
         pkg, game = root / "package", root / "game"
         pkg.mkdir()
         game.mkdir()
-        for name in ("launcher-worker.ps1", "proxy-probe.ps1", "install-capabilities.ps1"):
+        for name in ("launcher-worker.ps1", "proxy-probe.ps1", "install-capabilities.ps1", "lmxxf-small.ps1", "lmxxf-small-manifest.json"):
             shutil.copy2(REPO / "tools/install" / name, pkg / name)
         (pkg / "OptiScaler.dll").write_bytes(b"fixture")
         (pkg / "Setup.ps1").write_text("param()\nexit 0\n", encoding="utf-8")
@@ -186,7 +186,9 @@ class LauncherWorkerTests(unittest.TestCase):
         self.assertEqual(code, 0, events + str(result))
         lmxxf = next(b for b in result["backends"] if b["id"] == "lmxxf")
         self.assertEqual(lmxxf["runtimeState"], "ready", lmxxf)
-        self.assertTrue(lmxxf["enabled"], lmxxf)
+        self.assertFalse(lmxxf["enabled"], "A block0 marker alone must not claim a complete model")
+        self.assertEqual(lmxxf["originalState"], "missing")
+        self.assertEqual(lmxxf["smallState"], "missing")
         # Installed code cannot fill a missing runtime in the update package.
         (pkg / "LmxxfNrRuntime.dll").rename(game / "LmxxfNrRuntime.dll")
         code, result, events = self.invoke(pkg / WORKER.name, "inspect", exe)
@@ -212,7 +214,7 @@ class LauncherWorkerTests(unittest.TestCase):
         self.assertEqual(code, 0, events + str(result))
         self.assertEqual(Path(result["packageRoot"]), pkg)
         backends = {b["id"]: b for b in result["backends"]}
-        self.assertEqual(backends["lmxxf"]["hints"], ["lmxxf-weights"])
+        self.assertEqual(backends["lmxxf"]["hints"], ["lmxxf-original", "lmxxf-small"])
         self.assertEqual(set(backends["lmxxf"]["missingPackageFiles"]), {
             "LmxxfNrRuntime.dll", "lmxxf-modules/", "shaders/native_codec_encode.hlsl"})
         self.assertEqual(set(backends["daniel"]["hints"]), {

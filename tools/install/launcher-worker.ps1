@@ -290,6 +290,13 @@ if ($req.action -in @('install','update')) {
     }
 }
 if ($req.action -ne 'uninstall') {
+    $lmxxfAvailable = @($script:backends | Where-Object { $_.id -eq 'lmxxf' -and $_.runtimeState -eq 'ready' }).Count -gt 0
+    $lmxxfSelected = if ($hasRequestedBackends) { @($req.backends) -contains 'lmxxf' } else { $backend -eq 'lmxxf' -or (($backend -in @('auto','all','')) -and $lmxxfAvailable) }
+    if ($lmxxfSelected) {
+        $modelChoice = if ($dec) { [string]$dec.lmxxfModels } else { '' }
+        if (-not $modelChoice) { $script:needed += @{ id='lmxxfModels'; prompt='Select lmxxf Original, Small, or both models.'; options=@('both','small','original') } }
+        elseif ($modelChoice -notin @('both','small','original')) { Fail-Result 'failed' 'Invalid lmxxf models choice.' 1 }
+    }
     $mochiAvailable = @($script:backends | Where-Object { $_.id -eq 'mochizuki' -and $_.runtimeState -eq 'ready' }).Count -gt 0
     $mochiSelected = if ($hasRequestedBackends) { @($req.backends) -contains 'mochizuki' } else {
         $backend -eq 'mochizuki' -or (($backend -in @('auto','all','')) -and $mochiAvailable)
@@ -345,7 +352,7 @@ if ($req.action -eq 'uninstall') {
         language = if ($req.language -eq 'zh') { 'zh' } else { 'en' }
     }
     if ($dec) {
-        foreach ($name in @('existingInstall','existingIni','mochizukiModels','shortFileContinue','optiPatcher','foreignProxy')) {
+        foreach ($name in @('existingInstall','existingIni','mochizukiModels','lmxxfModels','shortFileContinue','optiPatcher','foreignProxy')) {
             if ($dec.PSObject.Properties[$name] -and $null -ne $dec.$name) {
                 if ($name -eq 'foreignProxy') { $payload[$name] = ConvertTo-ForeignProxyMap $dec.$name }
                 else { $payload[$name] = $dec.$name }
