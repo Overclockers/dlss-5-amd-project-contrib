@@ -38,12 +38,13 @@ namespace OptScalerNR.Launcher
             return mapped ?? path;
         }
 
-        public static string PickExe()
+        public static string PickExe(bool isZh = false)
         {
             try
             {
                 var dlg = new OpenFileDialog();
-                dlg.Filter = "Game executable (*.exe)|*.exe";
+                dlg.Title = isZh ? "选择游戏启动程序" : "Select game executable";
+                dlg.Filter = isZh ? "游戏启动程序 (*.exe)|*.exe" : "Game executable (*.exe)|*.exe";
                 dlg.CheckFileExists = false;
                 dlg.CheckPathExists = true;
                 dlg.DereferenceLinks = false;

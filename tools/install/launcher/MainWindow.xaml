@@ -452,7 +452,7 @@
         <Border Style="{StaticResource Surface}" Margin="0,0,14,0" Padding="10">
           <DockPanel>
             <DockPanel DockPanel.Dock="Top" Margin="2,0,2,8">
-              <TextBlock Text="本地游戏" Foreground="#FF8E95A5" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
+              <TextBlock x:Name="LocalGamesHeading" Text="本地游戏" Foreground="#FF8E95A5" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
               <ComboBox x:Name="FilterCombo" DockPanel.Dock="Right" Width="105" Height="26" FontSize="11"/>
             </DockPanel>
             <ListBox x:Name="GameList" Background="Transparent" BorderThickness="0"
@@ -522,16 +522,16 @@
                   <StackPanel Grid.Column="1" Margin="14,0,0,0">
                     <TextBlock x:Name="HeroKicker" Text="已选游戏" Foreground="#FF8E95A5" FontSize="11" FontWeight="SemiBold"/>
                     <TextBlock x:Name="HeroTitle" Text="选择一个游戏以开始" FontSize="24" FontWeight="Bold" Margin="0,4,0,0" Foreground="#FFFFFFFF"/>
-                    <TextBlock x:Name="HeroMeta" Text="选择游戏后自动检查运行状态与注入环境" Foreground="#FF8E95A5" FontSize="12" Margin="0,4,0,0"/>
+                    <TextBlock x:Name="HeroMeta" TextWrapping="Wrap" Text="选择游戏后自动检查运行状态与注入环境" Foreground="#FF8E95A5" FontSize="12" Margin="0,4,0,0"/>
                     <TextBlock x:Name="HeroPath" Text="" Foreground="#FF6E7585" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,12"/>
 
                     <!-- Action Buttons Row -->
-                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                    <WrapPanel Margin="0,4,0,0">
                       <Button x:Name="PrimaryButton" Content="⚡ 选择一个游戏" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left" MinWidth="190" IsEnabled="False"/>
                       <Button x:Name="ChangeExeButton" Content="更换 EXE" Style="{StaticResource GhostButton}" Margin="10,0,0,0"/>
                       <Button x:Name="OpenFolderButton" Content="打开目录" Style="{StaticResource GhostButton}" Margin="10,0,0,0"/>
                       <Button x:Name="UninstallButton" Content="卸载" Style="{StaticResource GhostButton}" Margin="10,0,0,0" IsEnabled="False"/>
-                    </StackPanel>
+                    </WrapPanel>
 
                     <!-- Progress Bar -->
                     <ProgressBar x:Name="Progress" Height="4" Margin="0,14,0,0" IsIndeterminate="False" Foreground="#FFED1C24" Background="#FF1E222E" BorderThickness="0"/>
@@ -544,7 +544,7 @@
             <Border Style="{StaticResource Surface}" Padding="18" Margin="0,12,0,0">
               <StackPanel>
                 <DockPanel Margin="0,0,0,6">
-                  <TextBlock Text="注入代理 (Proxy DLL)" FontWeight="SemiBold" FontSize="14" Foreground="#FFFFFFFF" VerticalAlignment="Center"/>
+                  <TextBlock x:Name="ProxyHeading" Text="注入代理 (Proxy DLL)" FontWeight="SemiBold" FontSize="14" Foreground="#FFFFFFFF" VerticalAlignment="Center"/>
                   <!-- Hidden legacy ComboBox for protocol compatibility -->
                   <ComboBox x:Name="ProxyCombo" Visibility="Collapsed" Width="0" Height="0"/>
                 </DockPanel>
@@ -564,10 +564,10 @@
 
                 <!-- Recommendation Banner -->
                 <Border x:Name="InjectBanner" Background="#FF181D28" BorderBrush="#FF283042" BorderThickness="1" CornerRadius="6" Padding="12,8" Margin="0,4,0,0">
-                  <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock x:Name="InjectIcon" Text="ℹ" Foreground="#FF4ADE80" FontWeight="Bold" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                    <TextBlock x:Name="InjectRecommendation" Text="选择游戏后将分析 PE 导入表并自动匹配推荐代理。" Foreground="#FFCAD0DC" FontSize="12" VerticalAlignment="Center"/>
-                  </StackPanel>
+                  <DockPanel VerticalAlignment="Center">
+                    <TextBlock DockPanel.Dock="Left" x:Name="InjectIcon" Text="ℹ" Foreground="#FF4ADE80" FontWeight="Bold" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="InjectRecommendation" TextWrapping="Wrap" Text="选择游戏后将分析 PE 导入表并自动匹配推荐代理。" Foreground="#FFCAD0DC" FontSize="12" VerticalAlignment="Center"/>
+                  </DockPanel>
                 </Border>
               </StackPanel>
             </Border>
@@ -576,21 +576,38 @@
             <Border Style="{StaticResource Surface}" Padding="18" Margin="0,12,0,0">
               <StackPanel>
                 <DockPanel Margin="0,0,0,10">
-                  <TextBlock Text="后端加速管线 (Backend Engines)" FontWeight="SemiBold" FontSize="14" Foreground="#FFFFFFFF" VerticalAlignment="Center"/>
+                  <TextBlock x:Name="BackendsHeading" Text="后端加速管线 (Backend Engines)" FontWeight="SemiBold" FontSize="14" Foreground="#FFFFFFFF" VerticalAlignment="Center"/>
                   <!-- Hidden legacy ComboBox for protocol compatibility -->
                   <ComboBox x:Name="ActiveCombo" Visibility="Collapsed" Width="0" Height="0"/>
                 </DockPanel>
 
-                <!-- 1. LMXXF Production Pipeline Card -->
+                <!-- 1. mochi Backend Card -->
                 <Border Background="#FF181C26" BorderBrush="#FF282D3A" BorderThickness="1" CornerRadius="6" Padding="14,10" Margin="0,0,0,8">
                   <StackPanel>
-                    <DockPanel>
-                      <CheckBox x:Name="LmxxfCheck" Content="lmxxf · OptiScaler 原生桥接管线" FontWeight="SemiBold" Foreground="#FFFFFFFF" VerticalAlignment="Center"/>
+                    <DockPanel LastChildFill="False">
+                      <CheckBox x:Name="MochiCheck" Content="mochi · 0.0.6" FontWeight="SemiBold" Foreground="#FFFFFFFF" VerticalAlignment="Center"/>
+                      <Border x:Name="MochiBadge" DockPanel.Dock="Right" Background="#FF1E222E" BorderBrush="#FF282D3A" BorderThickness="1" CornerRadius="10" Padding="8,2" VerticalAlignment="Center">
+                        <TextBlock x:Name="MochiReason" Text="需权重" FontSize="11" Foreground="#FF8E95A5"/>
+                      </Border>
+                    </DockPanel>
+                    <TextBlock x:Name="MochiDescription" TextWrapping="Wrap" Text="适合 RX 9000 系列" Foreground="#FF8E95A5" FontSize="11" Margin="26,4,0,6"/>
+                    <DockPanel Margin="26,0,0,0">
+                      <Button x:Name="MochiActiveBtn" Content="设为主后端" Style="{StaticResource GhostButton}" Height="26" FontSize="11" Padding="10,0" HorizontalAlignment="Left"/>
+                      <TextBlock x:Name="MochiActiveLabel" Text="★ 当前主后端" Foreground="#FFED1C24" FontWeight="SemiBold" FontSize="11" VerticalAlignment="Center" Margin="10,0,0,0" Visibility="Collapsed"/>
+                    </DockPanel>
+                  </StackPanel>
+                </Border>
+
+                <!-- 2. lmxxf Backend Card -->
+                <Border Background="#FF181C26" BorderBrush="#FF282D3A" BorderThickness="1" CornerRadius="6" Padding="14,10" Margin="0,0,0,8">
+                  <StackPanel>
+                    <DockPanel LastChildFill="False">
+                      <CheckBox x:Name="LmxxfCheck" Content="lmxxf · 0.4x" FontWeight="SemiBold" Foreground="#FFFFFFFF" VerticalAlignment="Center"/>
                       <Border x:Name="LmxxfBadge" DockPanel.Dock="Right" Background="#FF17281F" BorderBrush="#FF22C55E" BorderThickness="1" CornerRadius="10" Padding="8,2" VerticalAlignment="Center">
                         <TextBlock x:Name="LmxxfReason" Text="就绪" FontSize="11" Foreground="#FF4ADE80"/>
                       </Border>
                     </DockPanel>
-                    <TextBlock Text="AMD 生产级超分辨率重建管线，推荐配合 RX 7000/9000 系列显卡使用。" Foreground="#FF8E95A5" FontSize="11" Margin="26,4,0,6"/>
+                    <TextBlock x:Name="LmxxfDescription" TextWrapping="Wrap" Text="适合 RX 9000 系列" Foreground="#FF8E95A5" FontSize="11" Margin="26,4,0,6"/>
                     <DockPanel Margin="26,0,0,0">
                       <Button x:Name="LmxxfActiveBtn" Content="设为主后端" Style="{StaticResource GhostButton}" Height="26" FontSize="11" Padding="10,0" HorizontalAlignment="Left"/>
                       <TextBlock x:Name="LmxxfActiveLabel" Text="★ 当前主后端" Foreground="#FFED1C24" FontWeight="SemiBold" FontSize="11" VerticalAlignment="Center" Margin="10,0,0,0" Visibility="Collapsed"/>
@@ -598,36 +615,19 @@
                   </StackPanel>
                 </Border>
 
-                <!-- 2. DANIEL Pipeline Card -->
-                <Border Background="#FF181C26" BorderBrush="#FF282D3A" BorderThickness="1" CornerRadius="6" Padding="14,10" Margin="0,0,0,8">
+                <!-- 3. Daniel Backend Card -->
+                <Border Background="#FF181C26" BorderBrush="#FF282D3A" BorderThickness="1" CornerRadius="6" Padding="14,10">
                   <StackPanel>
-                    <DockPanel>
-                      <CheckBox x:Name="DanielCheck" Content="daniel · 社区优化引擎" FontWeight="SemiBold" Foreground="#FFFFFFFF" VerticalAlignment="Center"/>
+                    <DockPanel LastChildFill="False">
+                      <CheckBox x:Name="DanielCheck" Content="Daniel · 0.3.0-0.6.0" FontWeight="SemiBold" Foreground="#FFFFFFFF" VerticalAlignment="Center"/>
                       <Border x:Name="DanielBadge" DockPanel.Dock="Right" Background="#FF1E222E" BorderBrush="#FF282D3A" BorderThickness="1" CornerRadius="10" Padding="8,2" VerticalAlignment="Center">
                         <TextBlock x:Name="DanielReason" Text="检测中" FontSize="11" Foreground="#FF8E95A5"/>
                       </Border>
                     </DockPanel>
-                    <TextBlock Text="社区神经重建优化挂钩组件，针对特定游戏提供增强型管线分支。" Foreground="#FF8E95A5" FontSize="11" Margin="26,4,0,6"/>
+                    <TextBlock x:Name="DanielDescription" TextWrapping="Wrap" Text="适合 RX 6000/7000/9000 系列" Foreground="#FF8E95A5" FontSize="11" Margin="26,4,0,6"/>
                     <DockPanel Margin="26,0,0,0">
                       <Button x:Name="DanielActiveBtn" Content="设为主后端" Style="{StaticResource GhostButton}" Height="26" FontSize="11" Padding="10,0" HorizontalAlignment="Left"/>
                       <TextBlock x:Name="DanielActiveLabel" Text="★ 当前主后端" Foreground="#FFED1C24" FontWeight="SemiBold" FontSize="11" VerticalAlignment="Center" Margin="10,0,0,0" Visibility="Collapsed"/>
-                    </DockPanel>
-                  </StackPanel>
-                </Border>
-
-                <!-- 3. MOCHIZUKI Pipeline Card -->
-                <Border Background="#FF181C26" BorderBrush="#FF282D3A" BorderThickness="1" CornerRadius="6" Padding="14,10">
-                  <StackPanel>
-                    <DockPanel>
-                      <CheckBox x:Name="MochiCheck" Content="mochizuki · 权重模型加速器" FontWeight="SemiBold" Foreground="#FFFFFFFF" VerticalAlignment="Center"/>
-                      <Border x:Name="MochiBadge" DockPanel.Dock="Right" Background="#FF1E222E" BorderBrush="#FF282D3A" BorderThickness="1" CornerRadius="10" Padding="8,2" VerticalAlignment="Center">
-                        <TextBlock x:Name="MochiReason" Text="需权重" FontSize="11" Foreground="#FF8E95A5"/>
-                      </Border>
-                    </DockPanel>
-                    <TextBlock Text="神经网络权重模型推理加速器，执行自定义超分降噪算子。" Foreground="#FF8E95A5" FontSize="11" Margin="26,4,0,6"/>
-                    <DockPanel Margin="26,0,0,0">
-                      <Button x:Name="MochiActiveBtn" Content="设为主后端" Style="{StaticResource GhostButton}" Height="26" FontSize="11" Padding="10,0" HorizontalAlignment="Left"/>
-                      <TextBlock x:Name="MochiActiveLabel" Text="★ 当前主后端" Foreground="#FFED1C24" FontWeight="SemiBold" FontSize="11" VerticalAlignment="Center" Margin="10,0,0,0" Visibility="Collapsed"/>
                     </DockPanel>
                   </StackPanel>
                 </Border>
@@ -637,10 +637,10 @@
             <!-- Configuration Section 3: Preferences & Diagnostics -->
             <Border Style="{StaticResource Surface}" Padding="18" Margin="0,12,0,16">
               <StackPanel>
-                <TextBlock Text="配置与诊断" FontWeight="SemiBold" FontSize="14" Foreground="#FFFFFFFF" Margin="0,0,0,10"/>
+                <TextBlock x:Name="DiagnosticsHeading" Text="配置与诊断" FontWeight="SemiBold" FontSize="14" Foreground="#FFFFFFFF" Margin="0,0,0,10"/>
                 <CheckBox x:Name="ReplaceIni" IsChecked="True" Content="覆盖现有 OptiScaler.ini 配置文件 (推荐)" Margin="0,2,0,12"/>
                 <DockPanel Margin="0,0,0,6">
-                  <TextBlock Text="运行诊断日志" Foreground="#FF8E95A5" FontSize="12" VerticalAlignment="Center"/>
+                  <TextBlock x:Name="LogHeading" Text="运行诊断日志" Foreground="#FF8E95A5" FontSize="12" VerticalAlignment="Center"/>
                   <Button x:Name="OpenLogButton" DockPanel.Dock="Right" Content="打开完整日志" Style="{StaticResource GhostButton}" Height="28" FontSize="11" Padding="10,0"/>
                 </DockPanel>
                 <TextBox x:Name="LogView" Height="100" IsReadOnly="True" TextWrapping="Wrap"
@@ -653,11 +653,11 @@
 
       <!-- Settings Page -->
       <StackPanel x:Name="SettingsPage" Margin="28,24" Visibility="Collapsed">
-        <TextBlock Text="设置" FontSize="26" FontWeight="SemiBold" Foreground="#FFFFFFFF"/>
-        <TextBlock Text="语言 / Language" Margin="0,18,0,6" Foreground="#FF8E95A5"/>
+        <TextBlock x:Name="SettingsHeading" Text="设置" FontSize="26" FontWeight="SemiBold" Foreground="#FFFFFFFF"/>
+        <TextBlock x:Name="LanguageHeading" Text="语言 / Language" Margin="0,18,0,6" Foreground="#FF8E95A5"/>
         <ComboBox x:Name="LangCombo" Width="160" Height="34" HorizontalAlignment="Left"/>
         <CheckBox x:Name="ScanOnStartup" Content="启动时自动扫描游戏库" IsChecked="True" Margin="0,16,0,0"/>
-        <TextBlock Text="安装包目录（源码调试时选择完整解压包）" Margin="0,20,0,6" Foreground="#FF8E95A5"/>
+        <TextBlock x:Name="PackageHeading" Text="安装包目录（源码调试时选择完整解压包）" Margin="0,20,0,6" Foreground="#FF8E95A5"/>
         <DockPanel MaxWidth="600" HorizontalAlignment="Left">
           <Button x:Name="PackageBrowse" DockPanel.Dock="Right" Content="浏览…" Style="{StaticResource GhostButton}" Width="96" Margin="8,0,0,0"/>
           <TextBox x:Name="PackageRootBox" Height="34" VerticalContentAlignment="Center" Background="#FF161820" Foreground="#FFF3F4F6" BorderBrush="#FF282D3A" Padding="8,0" Width="400"/>

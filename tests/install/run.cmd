@@ -1,6 +1,6 @@
 @echo off
 rem Installer, uninstaller and packaging entrypoints. No GPU; isolated temp folders only.
-rem Usage: tests\install\run.cmd [release]  (default: full regression; release: two smoke cases)
+rem Usage: tests\install\run.cmd [release]  (default: full regression; release: focused smoke cases)
 rem   test_installer_exit.py   Setup/Uninstall launchers under Windows PowerShell 5.1
 rem   test_module_packages.py  PACKAGE_RELEASE / installer / stage on synthetic module bundles
 rem   amd_uninstall.ps1        uninstaller regression (Windows PowerShell 5.1)
@@ -15,10 +15,11 @@ if /i "%~1"=="release" goto release
 "%PS51%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests\install\plugin-paths.ps1 || goto fail
 "%PS51%" -NoProfile -NonInteractive -STA -ExecutionPolicy Bypass -File tests\install\folder-picker-dpi.ps1 || goto fail
 "%AMD_TEST_PYTHON%" -B tests\install\test_installer_exit.py --failfast || goto fail
-"%AMD_TEST_PYTHON%" -B tests\install\test_proxy_probe.py --failfast || goto fail
-"%AMD_TEST_PYTHON%" -B tests\install\test_launcher_worker.py --failfast || goto fail
-"%AMD_TEST_PYTHON%" -B tests\install\test_launcher_package.py --failfast || goto fail
-"%AMD_TEST_PYTHON%" -B tests\install\test_launcher_startup.py --failfast || goto fail
+"%AMD_TEST_PYTHON%" -B -m unittest discover -s tests\install -p test_proxy_probe.py --failfast || goto fail
+"%AMD_TEST_PYTHON%" -B -m unittest discover -s tests\install -p test_launcher_worker.py --failfast || goto fail
+"%PS51%" -NoProfile -NonInteractive -STA -ExecutionPolicy Bypass -File tests\install\launcher-localization.ps1 || goto fail
+"%AMD_TEST_PYTHON%" -B -m unittest discover -s tests\install -p test_launcher_package.py --failfast || goto fail
+"%AMD_TEST_PYTHON%" -B -m unittest discover -s tests\install -p test_launcher_startup.py --failfast || goto fail
 "%AMD_TEST_PYTHON%" -B tests\install\test_module_packages.py --failfast || goto fail
 "%PS51%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests\install\amd_uninstall.ps1 || goto fail
 "%AMD_TEST_PYTHON%" -B tests\install\test_release_upload.py || goto fail
@@ -36,10 +37,11 @@ echo install: FAIL
 exit /b 1
 
 :release
-rem One complete archive installation/uninstallation and a real overwrite/preferences path.
+rem Archive install/uninstall, overwrite/preferences, and explicit multi-backend selection.
 rem The production packager separately checks signatures, all files and hashes on the actual ZIP.
 "%AMD_TEST_PYTHON%" -B tests\install\test_module_packages.py ModulePackageTests.test_valid_actual_archive_can_install || goto fail
 "%AMD_TEST_PYTHON%" -B tests\install\test_installer_exit.py InstallerExitTests.test_kept_ini_preserves_canonical_preferences_over_legacy || goto fail
+"%AMD_TEST_PYTHON%" -B tests\install\test_installer_exit.py InstallerExitTests.test_explicit_active_backend_survives_install_update_and_reinstall || goto fail
 "%AMD_TEST_PYTHON%" -B tests\install\test_installer_exit.py InstallerExitTests.test_custom_plugins_keep_configs_readme_and_explicit_loader_setting InstallerExitTests.test_uninstall_preserves_unowned_readme_without_install_record || goto fail
 echo install release: PASS
 exit /b 0

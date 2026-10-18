@@ -20,8 +20,10 @@ BUILD = REPO / "tools/build/build-launcher.ps1"
 
 @unittest.skipUnless(os.name == "nt" and PS.exists(), "requires Windows PowerShell 5.1")
 class LauncherWorkerTests(unittest.TestCase):
-    def invoke(self, script, action, exe, decisions=None, proxy=None, package_root=None):
+    def invoke(self, script, action, exe, decisions=None, proxy=None, package_root=None,
+               backends=None, active_backend=None, language=None):
         work = Path(tempfile.mkdtemp(prefix="launcher-worker-"))
+        self.addCleanup(shutil.rmtree, work)
         req = work / "request.json"
         events = work / "events.jsonl"
         result = work / "result.json"
@@ -36,6 +38,12 @@ class LauncherWorkerTests(unittest.TestCase):
         }
         if package_root:
             payload["packageRoot"] = str(package_root)
+        if backends is not None:
+            payload["backends"] = backends
+        if active_backend is not None:
+            payload["activeBackend"] = active_backend
+        if language is not None:
+            payload["language"] = language
         req.write_text(json.dumps(payload), encoding="utf-8")
         events.write_text("", encoding="utf-8")
         cmd = [
@@ -58,6 +66,102 @@ class LauncherWorkerTests(unittest.TestCase):
         err = (p.stderr or b"").decode("utf-8", "replace")
         body = result.read_text(encoding="utf-8") if result.exists() else ""
         return p.returncode, json.loads(body) if body else {}, events.read_text(encoding="utf-8")
+
+    def standalone_worker(self):
+        root = Path(tempfile.mkdtemp(prefix="launcher-bundle-"))
+        self.addCleanup(shutil.rmtree, root)
+        pkg, game = root / "package", root / "game"
+        pkg.mkdir()
+        game.mkdir()
+        for name in ("launcher-worker.ps1", "proxy-probe.ps1", "install-capabilities.ps1"):
+            shutil.copy2(REPO / "tools/install" / name, pkg / name)
+        (pkg / "OptiScaler.dll").write_bytes(b"fixture")
+        (pkg / "Setup.ps1").write_text("param()\nexit 0\n", encoding="utf-8")
+        exe = game / "game.exe"
+        shutil.copy2(Path(os.environ["SystemRoot"]) / "System32/whoami.exe", exe)
+        return pkg, game, exe
+
+    def test_inspect_recognizes_shipped_lmxxf_layout(self):
+        pkg, game, exe = self.standalone_worker()
+        (pkg / "LmxxfNrRuntime.dll").write_bytes(b"runtime")
+        (pkg / "lmxxf-modules").mkdir()
+        (pkg / "shaders").mkdir()
+        (pkg / "shaders/native_codec_encode.hlsl").write_bytes(b"shader")
+        (game / "native-game-tiled-assets").mkdir()
+        (game / "native-game-tiled-assets/block0-ffn.f16").write_bytes(b"tensor")
+        code, result, events = self.invoke(pkg / WORKER.name, "inspect", exe)
+        self.assertEqual(code, 0, events + str(result))
+        lmxxf = next(b for b in result["backends"] if b["id"] == "lmxxf")
+        self.assertEqual(lmxxf["runtimeState"], "ready", lmxxf)
+        self.assertTrue(lmxxf["enabled"], lmxxf)
+        # Installed code cannot fill a missing runtime in the update package.
+        (pkg / "LmxxfNrRuntime.dll").rename(game / "LmxxfNrRuntime.dll")
+        code, result, events = self.invoke(pkg / WORKER.name, "inspect", exe)
+        self.assertEqual(code, 0, events + str(result))
+        lmxxf = next(b for b in result["backends"] if b["id"] == "lmxxf")
+        self.assertEqual(lmxxf["runtimeState"], "missing", lmxxf)
+
+    def test_inspect_recognizes_cached_daniel_runtime(self):
+        pkg, game, exe = self.standalone_worker()
+        (pkg / "dlssnr_on_amd_weights.bin").write_bytes(bytes(1024 * 1024))
+        for runtime in (pkg / "version.dll", game / "dlssnr_amd_pass1.dll"):
+            with self.subTest(runtime=runtime.name):
+                runtime.write_bytes(b"runtime presence; Setup verifies its hash")
+                code, result, events = self.invoke(pkg / WORKER.name, "inspect", exe)
+                self.assertEqual(code, 0, events + str(result))
+                daniel = next(b for b in result["backends"] if b["id"] == "daniel")
+                self.assertTrue(daniel["enabled"], daniel)
+                runtime.unlink()
+
+    def test_requested_package_selects_its_own_scripts(self):
+        pkg, game, exe = self.standalone_worker()
+        update = pkg.parent / "requested update"
+        update.mkdir()
+        (update / "OptiScaler.dll").write_bytes(b"new package")
+        stub = "param([string]$GameDir)\n[IO.File]::WriteAllText((Join-Path $GameDir 'used-script.txt'), $PSCommandPath)\nexit 0\n"
+        (pkg / "Uninstall_OptiScaler_NR.ps1").write_text("exit 0\n", encoding="utf-8")
+        for script_name, action in (("Setup.ps1", "install"), ("Uninstall_OptiScaler_NR.ps1", "uninstall")):
+            with self.subTest(action=action):
+                (update / script_name).write_text(stub, encoding="utf-8")
+                code, result, events = self.invoke(
+                    pkg / WORKER.name, action, exe, proxy="dxgi.dll", package_root=update
+                )
+                self.assertEqual(code, 0, events + str(result))
+                marker = game / "used-script.txt"
+                self.assertTrue(marker.exists(), events)
+                self.assertEqual(Path(marker.read_text()), update / script_name)
+                marker.unlink()
+
+    def test_empty_or_invalid_backend_selection_stops_before_setup(self):
+        pkg, game, exe = self.standalone_worker()
+        (pkg / "Setup.ps1").write_text(
+            "param([string]$GameDir)\n[IO.File]::WriteAllText((Join-Path $GameDir 'should-not-run'), 'bad')\nexit 0\n",
+            encoding="utf-8",
+        )
+        for backends, active in (([], None), (["unknown"], None), (["daniel", "daniel"], None),
+                                 (["daniel"], "lmxxf"), (["daniel"], "unknown")):
+            with self.subTest(backends=backends, active=active):
+                code, result, events = self.invoke(
+                    pkg / WORKER.name, "install", exe, proxy="dxgi.dll",
+                    backends=backends, active_backend=active
+                )
+                self.assertEqual(code, 1, events + str(result))
+                self.assertEqual(result["status"], "failed", result)
+                self.assertFalse((game / "should-not-run").exists())
+
+    def test_invalid_requested_package_does_not_fall_back_to_adjacent_package(self):
+        pkg, game, exe = self.standalone_worker()
+        stub = "param([string]$GameDir)\n[IO.File]::WriteAllText((Join-Path $GameDir 'should-not-run'), 'bad')\nexit 0\n"
+        for name in ("Setup.ps1", "Uninstall_OptiScaler_NR.ps1"):
+            (pkg / name).write_text(stub, encoding="utf-8")
+        for action in ("install", "uninstall"):
+            with self.subTest(action=action):
+                code, result, events = self.invoke(
+                    pkg / WORKER.name, action, exe, proxy="dxgi.dll", package_root=pkg / "missing"
+                )
+                self.assertEqual(code, 1, events + str(result))
+                self.assertEqual(result["status"], "failed", result)
+                self.assertFalse((game / "should-not-run").exists())
 
     def test_inspect_whoami_copy(self):
         d = Path(tempfile.mkdtemp(prefix="launcher-inspect-"))
@@ -207,20 +311,28 @@ class LauncherWorkerTests(unittest.TestCase):
         (game / "README.txt").write_text("keep me", encoding="utf-8")
         worker = pkg / "launcher-worker.ps1"
 
-        def go(action):
+        def go(action, language="en"):
             return self.invoke(
                 worker,
                 action,
                 exe,
                 {"existingIni": "keep", "foreignProxy": {"dxgi.dll": "backup"}},
                 proxy="dxgi.dll",
+                backends=["daniel"],
+                active_backend="daniel",
+                language=language,
             )
 
-        code, result, events = go("install")
+        code, result, events = go("install", language="zh")
         self.assertEqual(code, 0, events + str(result))
+        self.assertIn("本软件免费", events)
+        self.assertNotIn("This software is free.", events)
         self.assertTrue((game / "dxgi.dll").exists() or (game / "amd-presr-install.txt").exists(), result)
         code, result, events = go("update")
         self.assertEqual(code, 0, events + str(result))
+        self.assertNotIn("本软件免费", events)
+        self.assertIn("This software is free.", events)
+        self.assertRegex((game / "OptiScaler.ini").read_text(encoding="utf-8-sig"), r"NrBackend\s*=\s*daniel")
         code, result, events = go("uninstall")
         self.assertEqual(code, 0, events + str(result))
         self.assertTrue((game / "plugins" / "user.asi").exists())

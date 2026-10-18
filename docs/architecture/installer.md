@@ -24,6 +24,25 @@
 非交互 `auto/all` 安装全部可用后端，活动后端按 lmxxf、daniel、mochizuki 的顺序选取。
 mochizuki 使用独立配置，模型提取和首次编译见 [mochizuki.md](../mochizuki.md)。
 
+GUI 使用 `backends` 数组明确指定安装范围，经 DecisionJson 交给脚本；`-ActiveBackend`
+指定其中的活动后端。省略活动后端时仍按上述顺序选择；空列表、未知或重复后端、列表外的
+活动后端均拒绝。参数 `$ActiveBackend` 与内部结果 `$selectedActiveBackend` 分开保存，
+避免 PowerShell 变量名不区分大小写导致参数被清空或覆盖。
+
+worker 执行所选安装包目录中的安装/卸载脚本，不从旁边另一份包补脚本。能力检测按包内
+`lmxxf-modules/`、runtime 与 shader 文件判断 lmxxf 组件；游戏目录仅供复用模型，不能补齐
+更新包的 lmxxf 代码。Daniel 检测同时识别安装器、包内 `version.dll` 及已有 pass1 runtime。
+这些检测只提示组件存在；runtime 哈希、模块清单及模型检查仍由正式安装流程执行。
+
+### 启动器语言
+
+首次启动且没有有效语言偏好时，读取 Windows 显示语言（`CurrentUICulture`）：所有 `zh`
+区域（包括简体、繁体及港澳台）默认使用现有简体中文界面，其余默认英文；不按数字/日期
+区域格式判断，也不启动外部检测进程。结果保存在 `%LOCALAPPDATA%/OptScalerNR/Launcher/settings.json`
+的 `Language` 字段（`zh` / `en`）。已有有效偏好优先，手动切换后后续启动不再自动改选。
+切换同时刷新游戏库、设置、后端状态和模型对话框，不重置所选代理、后端或 INI 处理方式。
+GUI 安装将语言传给 worker，免费提示使用同一语言；原始安装日志及第三方/系统错误保留原文。
+
 daniel runtime 白名单覆盖 0.3.0 / 0.3.1 / 0.3.2 / 0.3.3 / 0.4.0 / 0.4.1 / 0.4.2 / 0.4.3 / 0.5.0 的完整 SHA256（`$expectedAuthor`），与 `AmdLayout.h` 的 `kAmd*` 行对应；未知 SHA 一律拒绝（fail closed）。加新版本时两处一起改，并验证「同尺寸改 1 字节」的文件会被拒。
 
 ## 安装顺序与权重分支（2026-10-15）

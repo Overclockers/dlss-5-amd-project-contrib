@@ -33,10 +33,10 @@ function Get-OptScalerBackendCapabilities([string]$pkgRoot, [string]$gameDir) {
     if ($pkgRoot) {
         $cand = Join-Path $pkgRoot 'LmxxfNrRuntime.dll'
         if (Test-Path -LiteralPath $cand -PathType Leaf) { $lmxxfRuntime = $cand }
-        $cand = Join-Path $pkgRoot 'modules'
+        $cand = Join-Path $pkgRoot 'lmxxf-modules'
         if (Test-Path -LiteralPath $cand -PathType Container) { $lmxxfMods = $cand }
         $cand = Join-Path $pkgRoot 'shaders'
-        if (Test-Path -LiteralPath $cand -PathType Container) { $lmxxfShaders = $cand }
+        if (Test-Path -LiteralPath (Join-Path $cand 'native_codec_encode.hlsl') -PathType Leaf) { $lmxxfShaders = $cand }
         $cand = Join-Path $pkgRoot 'native-game-tiled-assets'
         if (Test-LmxxfWeightsDir $cand) { $lmxxfWeights = $cand }
     }
@@ -44,27 +44,7 @@ function Get-OptScalerBackendCapabilities([string]$pkgRoot, [string]$gameDir) {
         $cand = Join-Path $gameDir 'native-game-tiled-assets'
         if (Test-LmxxfWeightsDir $cand) { $lmxxfWeights = $cand }
     }
-    if (-not $lmxxfRuntime -or -not $lmxxfMods -or -not $lmxxfShaders) {
-        $treeMods = Join-Path $PSScriptRoot '../../third_party/lmxxf/modules'
-        $treeShaders = Join-Path $PSScriptRoot '../../shaders'
-        if (Test-Path -LiteralPath $treeMods -PathType Container) { $lmxxfMods = $treeMods }
-        if (Test-Path -LiteralPath $treeShaders -PathType Container) { $lmxxfShaders = $treeShaders }
-        foreach ($candPath in @(
-            (Join-Path $PSScriptRoot '../../exports/lmxxf-runtime/LmxxfNrRuntime.dll'),
-            (Join-Path $PSScriptRoot '../../exports/release-local/LmxxfNrRuntime.dll'),
-            (Join-Path $PSScriptRoot '../../exports/launcher/LmxxfNrRuntime.dll')
-        )) {
-            if (Test-Path -LiteralPath $candPath -PathType Leaf) { $lmxxfRuntime = $candPath; break }
-        }
-        if (-not $lmxxfRuntime) {
-            $distCand = Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot '../../dist') -Filter 'LmxxfNrRuntime.dll' -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($distCand) { $lmxxfRuntime = $distCand.FullName }
-        }
-    }
-    if ($gameDir -and -not $lmxxfRuntime) {
-        $cand = Join-Path $gameDir 'LmxxfNrRuntime.dll'
-        if (Test-Path -LiteralPath $cand -PathType Leaf) { $lmxxfRuntime = $cand }
-    }
+    # Installed models may be reused; installed/developer code cannot fill an incomplete update.
 
     $canLmxxfRuntime = [bool]($lmxxfRuntime -and $lmxxfMods -and $lmxxfShaders)
     $hasLmxxfWeights = [bool]$lmxxfWeights
@@ -83,8 +63,10 @@ function Get-OptScalerBackendCapabilities([string]$pkgRoot, [string]$gameDir) {
     $danielRuntime = $null
     $danielWeights = $null
     if ($pkgRoot) {
-        $cand = Join-Path $pkgRoot 'dlssnr_on_amd_setup.exe'
-        if (Test-Path -LiteralPath $cand -PathType Leaf) { $danielRuntime = $cand }
+        foreach ($name in @('dlssnr_on_amd_setup.exe', 'version.dll', 'dlssnr_amd_pass1.dll')) {
+            $cand = Join-Path $pkgRoot $name
+            if (Test-Path -LiteralPath $cand -PathType Leaf) { $danielRuntime = $cand; break }
+        }
         $cand = Join-Path $pkgRoot 'dlssnr_on_amd_weights.bin'
         if (Test-Path -LiteralPath $cand -PathType Leaf) { $danielWeights = $cand }
     }
@@ -92,6 +74,13 @@ function Get-OptScalerBackendCapabilities([string]$pkgRoot, [string]$gameDir) {
         $cand = Join-Path $gameDir 'dlssnr_on_amd_weights.bin'
         if (Test-Path -LiteralPath $cand -PathType Leaf) { $danielWeights = $cand }
     }
+    if ($gameDir -and -not $danielRuntime) {
+        foreach ($name in @('version.dll', 'dlssnr_amd_pass1.dll')) {
+            $cand = Join-Path $gameDir $name
+            if (Test-Path -LiteralPath $cand -PathType Leaf) { $danielRuntime = $cand; break }
+        }
+    }
+    # Presence is only a capability hint; Setup validates the supported runtime SHA before installation.
     $canDanielRuntime = [bool]$danielRuntime
     $hasDanielWeights = [bool]$danielWeights
     $danielEnabled = $canDanielRuntime -and $hasDanielWeights
