@@ -1,6 +1,6 @@
 # 开发环境与工具
 
-本页收集反复踩过的工具与环境坑，以及当前 `tools/`、`tests/` 的索引。发版流程见 [release.md](release.md)，无卡回归见 [tests/RELEASE-TESTS.md](../tests/RELEASE-TESTS.md)，lmxxf sync 见 [tools/lmxxf-sync/README.md](../tools/lmxxf-sync/README.md)。
+本页收集反复踩过的工具与环境坑，以及当前 `tools/`、`tests/` 的索引。发版流程见 [release.md](release.md)，无卡回归见 [tests/RELEASE-TESTS.md](../tests/RELEASE-TESTS.md)。上游审查遵循[共用约定](dev/upstream-integration-review.md)，执行流程见 [lmxxf](../tools/lmxxf-sync/README.md) 或 [Mochizuki](../tools/mochizuki-sync/README.md) 手册。
 
 ## 工具与测试索引
 

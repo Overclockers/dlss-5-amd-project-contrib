@@ -1,5 +1,8 @@
 # Mochizuki source pin and interface patches
 
+Every source update follows the [shared upstream review agreement](../../docs/dev/upstream-integration-review.md).
+This page covers Mochizuki-specific source closure, patch replay and validation; it is not an automated staging or integration command.
+
 The runtime uses official core/shaders at the full SHA in `manifest.json`, plus
 the explicit feature patches listed in the manifest. There are no whole-file preservation overlays.
 The host loads our `MochizukiNrRuntime.dll`, which wraps that core; this does not
@@ -81,12 +84,14 @@ the host adapter. Isolation, fallback and product configuration priority belong
 to the adapter; upstream owns its ACO/cache/recovery implementation. Do not copy
 our whole header upstream or bundle internal recovery changes into an interface PR.
 
-For an update: inspect the final upstream diff by feature, review changed defaults,
-recipes, resource layouts and host-facing interfaces, and stage the new Git closure
-in an isolated worktree. Drop patches covered upstream; rebase remaining patches
-and update the closure inventory. Advance the pin only after the needed adapter
-and focused validation pass. Merely editing the SHA or passing this replay check
-does not complete integration, game acceptance or release certification.
+For an update, use an isolated worktree and follow the shared review agreement over
+the full upstream diff. Then prepare the candidate closure from `manifest.json`,
+replay the patch series in order, remove patches already covered upstream, rebase
+the remaining patches, and update the closure inventory. Review the resulting
+adapter/runtime impact and run the focused validation required by the affected
+features before advancing `manifest.json` and `third_party/mochizuki/UPSTREAM.md`.
+The current `check.py` is a read-only replay verifier: it does not fetch or stage a
+new pin, update vendor, build the Runtime, or certify game acceptance/release.
 
 See [extension decisions](../../docs/architecture/mochizuki-upstream-extensions.md)
 and [source ownership](../../third_party/mochizuki/UPSTREAM.md).

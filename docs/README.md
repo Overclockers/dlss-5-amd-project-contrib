@@ -35,6 +35,7 @@
 | [release.md](release.md) | 发版唯一入口：构建、测试产物、试包、Actions 预验证、发布核验与故障处理 |
 | [measurement.md](measurement.md) | 测量纪律：读数规则、PresentMon 列语义、开工前清单 |
 | [dev-environment.md](dev-environment.md) | 工具与测试索引、Windows / PowerShell / Git Bash 的坑、git 查证的坑、协作约定 |
+| [dev/upstream-integration-review.md](dev/upstream-integration-review.md) | 上游更新共用审查约定：变更分类、按功能追踪、接入决定与完成边界 |
 | [decisions.md](decisions.md) | 带日期的决策记录（新的在前） |
 | [workspace.md](workspace.md) | 工作区使用规划：每类东西放哪、怎么命名、留多久、清理节奏 |
 
@@ -44,6 +45,7 @@
 - [tests/RELEASE-TESTS.md](../tests/RELEASE-TESTS.md)：发版前无卡测试。
 - [third_party/lmxxf/UPSTREAM.md](../third_party/lmxxf/UPSTREAM.md)：lmxxf 上游 pin、OURS/FOLLOW、本地补丁。
 - [tools/lmxxf-sync/README.md](../tools/lmxxf-sync/README.md)：上游同步与审阅流程。
+- [tools/mochizuki-sync/README.md](../tools/mochizuki-sync/README.md)：Mochizuki 源码 pin、补丁回放与验证流程。
 - `README.md` / `README.en.md` / `README.es.md`：用户安装说明，也是包内 README。
 
 ## 本地材料
