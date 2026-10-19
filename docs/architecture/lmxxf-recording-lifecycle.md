@@ -27,6 +27,26 @@ silently certify it. Cross-queue replay waits for the previous consumer fence be
 submitting its producer. UINT64_MAX is not normal completion; confirmed device removal
 has a separate teardown path.
 
+## Missing recording proxy: menu recovery guidance
+
+`recording proxy unavailable`, lmxxf's `same-frame boundary unavailable`, and
+`recording proxy coverage too low` mean NR cannot use the offered command lists.
+The menu preserves the original status and suggests **Compatibility & Scheduling →
+Early command-list wrap → force on**, followed by **Save Settings** and a game restart.
+This changes `LmxxfEarlyExeWrap`; it is shared by lmxxf and Mochizuki. It is an opt-in
+attempt, not a guaranteed fix. Startup failures require restoring the previous INI
+value. If the error persists after restarting, collect `OptiScaler*.log` and
+`OptiScaler.ini` to identify the list's creator and startup hook coverage before
+widening interception to other modules.
+
+**Allow enhanced barriers** is the independent `LmxxfAllowEnhancedBarriers` permission.
+It does not create recording proxies. An `enhanced_barrier` / `enhanced_barriers_not_allowed`
+rejection has separate menu guidance; this permission takes effect live, and Save
+Settings persists it. Already-allowed inputs that remain rejected need diagnosis.
+Pending early-wrap preferences show a persistent save/restart notice below their
+controls. Saving does not remove the notice because existing lists are not retroactively
+wrapped; returning both preferences to their initial menu values removes it.
+
 ## DX11 companion command lists
 
 The DX11-to-DX12 upscaler companion can create its device through the original

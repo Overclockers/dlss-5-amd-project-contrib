@@ -28,6 +28,7 @@
 #include <cmath>
 #include <type_traits>
 #include <cstdio>
+#include <optional>
 
 namespace DlssNr
 {
@@ -440,6 +441,56 @@ static void RenderSharedOutputEffects(Config* config)
 
 }
 
+struct NrCompatibilityMenuBaseline
+{
+    std::optional<bool> earlyExe, earlyAny, enhancedBarriers;
+};
+
+static const NrCompatibilityMenuBaseline& CompatibilityMenuBaseline(Config* config)
+{
+    // Capture before any menu control or reset can change these preferences.
+    static const NrCompatibilityMenuBaseline initial {
+        config->LmxxfEarlyExeWrap.value_for_config(), config->LmxxfEarlyAnyModuleWrap.value_for_config(),
+        config->LmxxfAllowEnhancedBarriers.value_for_config()
+    };
+    return initial;
+}
+
+static void RenderNrCompatibilityNotice(const char* text)
+{
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.70f, 0.20f, 1.0f));
+    MenuUi::TextWrapped(text);
+    ImGui::PopStyleColor();
+}
+
+static void RenderEnhancedBarrierSaveNotice(Config* config)
+{
+    if (config->LmxxfAllowEnhancedBarriers.value_for_config() != CompatibilityMenuBaseline(config).enhancedBarriers)
+        RenderNrCompatibilityNotice("Applies immediately. Save Settings to keep this choice.");
+}
+
+static void RenderRecordingCompatibilityGuidance(Config* config, const std::string& status)
+{
+    if (!status.starts_with("lmxxf:") && !status.starts_with("mochizuki:")) return;
+    const bool missingProxy = status.find("recording proxy unavailable") != std::string::npos ||
+                              status.find("same-frame boundary unavailable") != std::string::npos ||
+                              status.find("recording proxy coverage too low") != std::string::npos;
+    if (missingProxy)
+    {
+        MenuUi::TextWrapped("Recording proxy missing: NR is bypassed; the original frame is shown.");
+        MenuUi::TextWrapped("Try Compatibility & Scheduling > Early command-list wrap = force on, then Save Settings and restart the game.");
+        MenuUi::TextWrapped("If already tried after restarting, send OptiScaler*.log and OptiScaler.ini for diagnosis. Allow enhanced barriers does not fix a missing proxy.");
+        MenuUi::TextWrapped("Early wrapping can cause startup problems. If that happens, restore the previous LmxxfEarlyExeWrap value in OptiScaler.ini before launching again.");
+    }
+    else if (status.find("enhanced_barrier") != std::string::npos)
+    {
+        if (!config->AllowEnhancedBarriersEffective())
+            MenuUi::TextWrapped("Enhanced-barrier input was rejected. Try Allow enhanced barriers = force on, then Save Settings. This permission applies immediately; early wrapping is a separate setting.");
+        else
+            MenuUi::TextWrapped("Enhanced barriers are already allowed. If rejection persists, send OptiScaler*.log and OptiScaler.ini for diagnosis.");
+    }
+}
+
 // LmxxfAllowEnhancedBarriers: auto (on for Forza) / force on / force off. Takes effect live.
 static void RenderAllowEnhancedBarriers(Config* config)
 {
@@ -478,6 +529,8 @@ static void RenderEarlyCommandListWrap(Config* config)
                "\nForce off: disable both early paths; normal post-swapchain wrapping stays enabled."
                "\nOther games are unvalidated; forcing early wrap can cause startup problems."
                "\nSave and restart to apply. INI: LmxxfEarlyExeWrap.");
+    if (config->LmxxfEarlyExeWrap.value_for_config() != CompatibilityMenuBaseline(config).earlyExe)
+        RenderNrCompatibilityNotice("Save Settings and restart the game to apply early wrapping.");
     // Independent sub-item: any-module early wrap (LmxxfEarlyAnyModuleWrap).
     std::string exeLower = State::Instance().gameExe;
     for (char& c : exeLower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -494,6 +547,8 @@ static void RenderEarlyCommandListWrap(Config* config)
                "\nOnly effective before the swapchain is created. Auto: on for Forza only."
                "\nMay crash other games; try only if the log shows many 'missing recording proxy'."
                "\nSave and restart to apply. INI: LmxxfEarlyAnyModuleWrap.");
+    if (config->LmxxfEarlyAnyModuleWrap.value_for_config() != CompatibilityMenuBaseline(config).earlyAny)
+        RenderNrCompatibilityNotice("Save Settings and restart the game to apply early wrapping.");
     ImGui::Unindent();
 }
 
@@ -663,6 +718,7 @@ static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const 
 
 void RenderMenu(Config* config, float menuResScale)
 {
+    CompatibilityMenuBaseline(config);
 
     // DLSS Neural Rendering -----------------------------
     ImGui::Spacing();
@@ -852,6 +908,7 @@ void RenderMenu(Config* config, float menuResScale)
                 MenuUi::TextWrapped("%s", summary.state.c_str());
                 if (!summary.historyIssue.empty())
                     MenuUi::TextWrapped("Temporal history unavailable: %s", summary.historyIssue.c_str());
+                RenderRecordingCompatibilityGuidance(config, status);
             }
             if (State::Instance().currentFeature && State::Instance().currentFeature->GetUpscalerType() == Upscaler::DLSSD)
                 MenuUi::TextWrapped("Native Ray Reconstruction has no supported AMD NR seam. This chart describes the Super Resolution path.");
@@ -1054,6 +1111,7 @@ void RenderMenu(Config* config, float menuResScale)
                            "\nenhanced barriers. See \"NR inline\" for details."
                            "\nAuto: on for Forza (exe name contains \"forza\"), off otherwise. Applies immediately."
                            "\nINI: LmxxfAllowEnhancedBarriers.");
+                RenderEnhancedBarrierSaveNotice(config);
             }
             if (page == PipelineUi::Section::Output) RenderSharedOutputEffects(config);
             if (kind == Backend::Kind::Mochizuki) {
@@ -1818,12 +1876,13 @@ void RenderMenu(Config* config, float menuResScale)
                     {
                         RenderAllowEnhancedBarriers(config);
                         HelpMarker("Leave off unless a game needs NR on lists that use"
-                                   "\nenhanced barriers (may corrupt state / TDR). Restart."
+                                   "\nenhanced barriers (may corrupt state / TDR)."
                                    "\nInline does not replace this: NR still reads and resets the"
                                    "\ninput layout on an inline list, so an enhanced-barrier game"
                                    "\nneeds this on with Inline as well."
                                    "\nAuto: on for Forza (exe name contains \"forza\"), off otherwise. Applies immediately."
                                    "\nINI: LmxxfAllowEnhancedBarriers.");
+                        RenderEnhancedBarrierSaveNotice(config);
                     }
                     RenderEarlyCommandListWrap(config);
                 }
