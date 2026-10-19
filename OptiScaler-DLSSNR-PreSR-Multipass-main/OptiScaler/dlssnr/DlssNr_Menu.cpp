@@ -863,8 +863,25 @@ void RenderMenu(Config* config, float menuResScale)
                        "\nMochizuki passes jittered motion through. Daniel and lmxxf use spatial NR for those vectors."
                        "\nUnsupported buffers keep the SR image and show a status message."
                        "\nINI: [DlssNr] RunBeforeSR=true / false. Save Settings to keep the selection.");
+            if (isLmxxf)
+            {
+                int networkModel = std::clamp(int(config->LmxxfNetworkModel.value_or_default()), 0, 1);
+                if (MenuUi::Combo("Network model##lmxxf", &networkModel, "Original (71 blocks)\0Small (310.9.16, 31 blocks)\0")) {
+                    config->LmxxfNetworkModel = uint32_t(networkModel);
+                    CfgKey::PutEnvString(CfgKey::LmxxfNetworkModel, std::to_string(networkModel).c_str());
+                    AmdBridge::InvalidateHistory();
+                }
+                HelpMarker("Small uses a different trained model and one network pass. Original retains your 1-3 pass preference."
+                           "\nRequires matching small weights in native-game-tiled-assets/small. Missing assets or incompatible options use Original with a status message."
+                           "\nINI: LmxxfNetworkModel (0 Original, 1 Small). Changing models rebuilds the network next frame.");
+            }
             if (kind == Backend::Kind::Mochizuki)
             {
+                int model = int(config->MochizukiNetworkModel.value_or_default());
+                if (MochizukiIntegerControl("Network model", CfgKey::MochizukiNetworkModel, &model, 0, 1)) {
+                    config->MochizukiNetworkModel = uint32_t(model);
+                    AmdBridge::InvalidateHistory();
+                }
                 auto& choice = AcoMenu();
                 if (!choice.captured)
                 {
@@ -888,11 +905,6 @@ void RenderMenu(Config* config, float menuResScale)
                 if (choice.shown != choice.session)
                     MenuUi::TextColored(ImVec4(1.f, 0.f, 0.f, 1.f),
                                         "Save Settings, then restart the game.");
-                int model = int(config->MochizukiNetworkModel.value_or_default());
-                if (MochizukiIntegerControl("Network model", CfgKey::MochizukiNetworkModel, &model, 0, 1)) {
-                    config->MochizukiNetworkModel = uint32_t(model);
-                    AmdBridge::InvalidateHistory();
-                }
                 bool int4 = config->MochizukiInt4Mixed.value_or_default();
                 if (MenuUi::Checkbox("INT4 mixed (ACO)", &int4))
                 {
@@ -1463,14 +1475,6 @@ void RenderMenu(Config* config, float menuResScale)
             auto renderModel = [&]() {
                 if (isLmxxf) {
                     int networkModel = std::clamp(int(config->LmxxfNetworkModel.value_or_default()), 0, 1);
-                    if (MenuUi::Combo("Network model##lmxxf", &networkModel, "Original (71 blocks)\0Small (310.9.16, 31 blocks)\0")) {
-                        config->LmxxfNetworkModel = uint32_t(networkModel);
-                        CfgKey::PutEnvString(CfgKey::LmxxfNetworkModel, std::to_string(networkModel).c_str());
-                        AmdBridge::InvalidateHistory();
-                    }
-                    HelpMarker("Small uses a different trained model and one network pass. Original retains your 1-3 pass preference."
-                               "\nRequires matching small weights in native-game-tiled-assets/small. Missing assets or incompatible options use Original with a status message."
-                               "\nINI: LmxxfNetworkModel (0 Original, 1 Small). Changing models rebuilds the network next frame.");
                     if (networkModel == 1) MenuUi::TextWrapped("Small runs once. Pass settings below are retained for Original.");
                     if (networkModel == 1 && status.find("model=original requested_model=small") != std::string::npos) {
                         const char* reason = status.find("model_reason=missing-small-assets") != std::string::npos ?
