@@ -423,7 +423,7 @@ class Config
     CustomOptional<bool> NrAdaptiveWaitBudget { false };
     CustomOptional<bool> NrInline { false }; // Experimental same-list execution for lmxxf/Mochizuki.
     // Wrap host CreateCommandList results before the swapchain exists.
-    // Missing = engine whitelist (Unreal + Forza). false = never. true = force for any engine.
+    // Missing = game rules (Unreal, Forza, ACMirage, 007FirstLight). false = never. true = force for any engine.
     // Other engines (e.g. Yan Yun) can crash with early ArmCreate + wrap. Restart after change.
     CustomOptional<bool, NoDefault> LmxxfEarlyExeWrap;
     // Unset = auto (on for exe names containing "forza"). Widens the pre-swapchain
@@ -1330,6 +1330,9 @@ class Config
     bool AllowEnhancedBarriersEffective();
     // The host exe's file name contains "forza" (case-insensitive). Cached.
     static bool ExeIsForza();
+    // EXE-only early wrapping; UnityPlayer and any-module policies remain independent.
+    static bool EarlyExeWrapAuto();
+    bool EarlyExeWrapEffective();
     bool SaveXeFG();
 
     void CheckUpscalerFiles();

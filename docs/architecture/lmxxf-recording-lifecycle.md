@@ -31,13 +31,24 @@ has a separate teardown path.
 
 `recording proxy unavailable`, lmxxf's `same-frame boundary unavailable`, and
 `recording proxy coverage too low` mean NR cannot use the offered command lists.
-The menu preserves the original status and suggests **Compatibility & Scheduling →
-Early command-list wrap → force on**, followed by **Save Settings** and a game restart.
+The menu preserves the original status and shows a compact hint with **Open compatibility
+options**, which expands and scrolls to **Compatibility & Scheduling**. Early wrapping
+and enhanced-barrier permission appear together there, without a duplicate Input control.
+If early wrapping is off, it suggests **Early command-list wrap → force on**, followed
+by **Save Settings** and a game restart. If already enabled, it asks for logs after a
+full restart instead of recommending an equivalent forced override.
 This changes `LmxxfEarlyExeWrap`; it is shared by lmxxf and Mochizuki. It is an opt-in
 attempt, not a guaranteed fix. Startup failures require restoring the previous INI
 value. If the error persists after restarting, collect `OptiScaler*.log` and
 `OptiScaler.ini` to identify the list's creator and startup hook coverage before
 widening interception to other modules.
+
+Early EXE auto rules include Unreal, Forza, `ACMirage.exe` and `007FirstLight.exe`;
+the latter two use exact, case-insensitive file names. Explicit true/false still wins.
+Aniimo's UnityPlayer rule remains separate. This is a targeted startup coverage fix
+based on missing-proxy reports, not validation of NR image quality or every game build.
+Any-module auto wrapping and enhanced-barrier auto permission remain Forza-only;
+missing recording proxies alone do not justify broadening either policy.
 
 **Allow enhanced barriers** is the independent `LmxxfAllowEnhancedBarriers` permission.
 It does not create recording proxies. An `enhanced_barrier` / `enhanced_barriers_not_allowed`

@@ -11,6 +11,7 @@
 #include <misc/IdentifyGpu.h>
 
 #include <SimpleIni.h>
+#include <cctype>
 
 static CSimpleIniA ini;
 
@@ -1484,6 +1485,23 @@ bool Config::ExeIsForza()
         return name.find(L"forza") != std::wstring::npos;
     }();
     return forza;
+}
+
+bool Config::EarlyExeWrapAuto()
+{
+    const auto& state = State::Instance();
+    std::string name = state.gameExe;
+    if (const auto slash = name.find_last_of("\\/"); slash != std::string::npos)
+        name.erase(0, slash + 1);
+    for (char& c : name)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return state.gameEngine == GameEngineType::Unreal || (state.gameQuirks & GameQuirk::ForceUnrealEngine) ||
+           name.find("forza") != std::string::npos || name == "acmirage.exe" || name == "007firstlight.exe";
+}
+
+bool Config::EarlyExeWrapEffective()
+{
+    return LmxxfEarlyExeWrap.has_value() ? *LmxxfEarlyExeWrap : EarlyExeWrapAuto();
 }
 
 bool Config::AllowEnhancedBarriersEffective()

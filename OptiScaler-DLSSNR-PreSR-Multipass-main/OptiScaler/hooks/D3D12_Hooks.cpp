@@ -3011,7 +3011,7 @@ static void HookToDevice(ID3D12Device* InDevice)
             else
             {
                 LOG_INFO("lmxxf ArmCreate ok; CreateCommandList ProxyWrap deferred until swapchain (graphics tracker skipped)");
-                // Whitelist: Unreal/Forza EXE calls and Aniimo's UnityPlayer calls.
+                // Game rules: Unreal/Forza/ACMirage/007FirstLight EXE calls and Aniimo's UnityPlayer calls.
                 // Other engines can crash with early ArmCreate + wrap (e.g. Yan Yun).
                 // LmxxfEarlyExeWrap=true/false forces the decision; missing keeps the whitelist.
                 {
@@ -3022,10 +3022,8 @@ static void HookToDevice(ID3D12Device* InDevice)
                     const bool isUnreal = st.gameEngine == GameEngineType::Unreal ||
                                           (st.gameQuirks & GameQuirk::ForceUnrealEngine);
                     const bool isForza = exeLower.find("forza") != std::string::npos;
-                    bool allowEarly = isUnreal || isForza;
+                    const bool allowEarly = Config::Instance()->EarlyExeWrapEffective();
                     const auto forced = Config::Instance()->LmxxfEarlyExeWrap;
-                    if (forced.has_value())
-                        allowEarly = *forced;
                     const bool allowUnityPlayer = DlssNr::Submission::Hooks::WantsEarlyUnityPlayerWrap(
                         exeLower, GetModuleHandleW(L"UnityPlayer.dll") != nullptr, forced);
                     // Forza creates boot DIRECT lists in sl.interposer.dll / the dxgi
