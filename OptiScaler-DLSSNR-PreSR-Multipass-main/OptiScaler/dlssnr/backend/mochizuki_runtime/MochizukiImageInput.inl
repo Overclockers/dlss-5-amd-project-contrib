@@ -11,6 +11,7 @@ struct ImageInput
     bool initSubmitted = false;
     UINT width = 0, height = 0;
     VkFormat format = VK_FORMAT_UNDEFINED;
+    DXGI_FORMAT sharedFormat = DXGI_FORMAT_UNKNOWN;
     VkImageUsageFlags usage = 0;
     uint32_t family = VK_QUEUE_FAMILY_IGNORED;
     UINT64 bytes = 0;
@@ -59,10 +60,22 @@ struct ImageInput
 
     // Query allocation sizes before allocating/importing the optional memory.
     // VkImage itself is only an unbound descriptor at this point.
-    D3D12_RESOURCE_DESC PlanShared(ID3D12Device* d, Vulkan& vk, UINT w, UINT h, VkFormat selected = VK_FORMAT_R16G16B16A16_SFLOAT)
+    D3D12_RESOURCE_DESC PlanShared(ID3D12Device* d, Vulkan& vk, UINT w, UINT h, VkFormat selected = VK_FORMAT_R16G16B16A16_SFLOAT,
+                                  DXGI_FORMAT typed = DXGI_FORMAT_UNKNOWN)
     {
-        if (selected != VK_FORMAT_R16G16B16A16_SFLOAT && selected != VK_FORMAT_R16G16_SFLOAT)
+        // ColourFormat owns the existing byte interpretation, including sRGB
+        // and typeless families. Motion keeps its two admitted float formats.
+        if (typed == DXGI_FORMAT_UNKNOWN) {
+            if (selected == VK_FORMAT_R16G16B16A16_SFLOAT) typed = DXGI_FORMAT_R16G16B16A16_FLOAT;
+            else if (selected == VK_FORMAT_R16G16_SFLOAT) typed = DXGI_FORMAT_R16G16_FLOAT;
+        }
+        const auto colour = ColourFormat(typed);
+        const auto motion = MotionFormat(typed);
+        if (typed == DXGI_FORMAT_UNKNOWN ||
+            !((colour.shared == typed && colour.vk == selected) ||
+              (typed == DXGI_FORMAT_R16G16_FLOAT && motion.vk == selected)))
             throw NrError(NrError::Unsupported, "shared input format is unsupported");
+        sharedFormat = typed;
         width = w; height = h; format = selected;
         usage = kImageUsage; family = vk.family;
         const auto handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT;
@@ -81,16 +94,17 @@ struct ImageInput
             w > fp.imageFormatProperties.maxExtent.width || h > fp.imageFormatProperties.maxExtent.height)
             throw NrError(NrError::Unsupported, "shared input import is unavailable");
 
-        D3D12_FEATURE_DATA_FORMAT_SUPPORT support { selected == VK_FORMAT_R16G16_SFLOAT ? DXGI_FORMAT_R16G16_FLOAT : DXGI_FORMAT_R16G16B16A16_FLOAT };
+        D3D12_FEATURE_DATA_FORMAT_SUPPORT support { typed };
         Check(d->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &support, sizeof support), "shared input format");
-        if (!(support.Support1 & D3D12_FORMAT_SUPPORT1_TEXTURE2D) ||
-            !(support.Support1 & D3D12_FORMAT_SUPPORT1_TYPED_UNORDERED_ACCESS_VIEW))
+        if (!(support.Support1 & D3D12_FORMAT_SUPPORT1_TEXTURE2D))
             throw NrError(NrError::Unsupported, "shared input texture is unavailable");
         D3D12_RESOURCE_DESC rd {};
         rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
         rd.Width = w; rd.Height = h; rd.DepthOrArraySize = rd.MipLevels = rd.SampleDesc.Count = 1;
         rd.Format = support.Format;
-        rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        // The split input is sampled and transferred, never a shader UAV.
+        // Requiring storage excludes sRGB/packed/BGRA formats unnecessarily.
+        rd.Flags = D3D12_RESOURCE_FLAG_NONE;
         const auto allocation = d->GetResourceAllocationInfo(0, 1, &rd);
         if (allocation.SizeInBytes == UINT64_MAX)
             throw NrError(NrError::Unsupported, "shared input allocation description is unsupported");

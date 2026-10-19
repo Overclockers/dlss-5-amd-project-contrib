@@ -1,3 +1,14 @@
+## 2026-10-19 — Mochizuki split 共享颜色按完整现有格式表准入
+
+共享颜色复用 `ColourFormat` 的全部 23 个 DXGI 枚举、14 种 typed 载体，不按游戏名逐个
+放行，不增加用户开关。运行时仍查询当前驱动的实际外部导入能力与预算，失败保持 buffer。
+颜色字节/编码/alpha 策略沿用现有映射：sRGB 使用 UNORM 同族，TYPELESS 使用既有 typed
+代表。BGRA/BGRX 的 carrier DXGI 身份进入缓存匹配，防止同 VkFormat 的不同资源混用。
+共享输入仅用于复制与采样，移除无用途的 UAV/storage 要求；不修改核心或放宽几何限制。
+离线矩阵自动创建全部格式，两种模型逐帧对照，并验证别名/格式切换、保留录制、跨队列、
+旁路及导入拒绝；复用现有检查，不新增跟踪测试项目。实际游戏效果与性能仍单列验收。
+详见 [split 数据传输](architecture/mochizuki-split-transport.md#全颜色格式覆盖与验证2026-10-19)。
+
 ## 2026-10-19 — Mochizuki 性能优化推进受限 split 共享输入
 
 先优化 Mochizuki 适配器的数据搬运，不重构 lmxxf，也不继续 Inline 调研或修改。

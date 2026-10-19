@@ -25,12 +25,12 @@
             j.canonicalise || geometry.canonicalise || geometry.bucketed || geometry.firstPass || j.firstPass ||
             j.controls.passes != 1 || net.scale != 1.f || j.motionPath != Job::Uploaded ||
             j.width != geometry.width || j.height != geometry.height ||
-            j.width != geometry.colourWidth || j.height != geometry.colourHeight ||
-            colourVk != VK_FORMAT_R16G16B16A16_SFLOAT)
+            j.width != geometry.colourWidth || j.height != geometry.colourHeight)
             return false;
         const auto desc = j.colour->GetDesc();
         return desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D &&
-               desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT && desc.MipLevels == 1 &&
+               ColourFormat(desc.Format).shared != DXGI_FORMAT_UNKNOWN &&
+               ColourFormat(desc.Format).vk == colourVk && desc.MipLevels == 1 &&
                desc.DepthOrArraySize == 1 && desc.SampleDesc.Count == 1;
     }
 
@@ -55,10 +55,11 @@
         if (!colourInput) return;
         if (loggedColourGeneration != colourInput->generation) {
             loggedColourGeneration = colourInput->generation;
-            nr::logf("[mochizuki] split colour input: %s generation=%llu allocation=%llu bytes family=%u frame_estimate=%llu",
+            nr::logf("[mochizuki] split colour input: %s generation=%llu allocation=%llu bytes format=%d dxgi=%u family=%u frame_estimate=%llu",
                 colourInput->Shared() ? "shared texture" : "buffer",
                 static_cast<unsigned long long>(colourInput->generation),
-                static_cast<unsigned long long>(colourInput->bytes), colourInput->family,
+                static_cast<unsigned long long>(colourInput->bytes), int(colourInput->format),
+                unsigned(colourInput->sharedFormat), colourInput->family,
                 static_cast<unsigned long long>(FrameBytes(geometry, colourInput.get(), motionInput.get())));
         }
     }
@@ -119,15 +120,16 @@
             SelectBufferColour();
             return;
         }
+        const auto typed = ColourFormat(j.colour->GetDesc().Format).shared;
         if (colourInput && colourInput->Shared()) return;
         if (!pendingColour) {
             if (auto cached = sharedColourCache.lock(); cached &&
-                cached->Matches(j.width, j.height, colourVk, kImageUsage) && cached->family == vk.family) {
+                cached->Matches(j.width, j.height, colourVk, kImageUsage) && cached->sharedFormat == typed && cached->family == vk.family) {
                 pendingColour = std::move(cached);
             }
         }
         if (pendingColour && (!pendingColour->Matches(j.width, j.height, colourVk, kImageUsage) ||
-                              pendingColour->family != vk.family))
+                              pendingColour->sharedFormat != typed || pendingColour->family != vk.family))
             pendingColour.reset();
         if (pendingColour) {
             if (pendingColour->Ready() && !sharedInputDelay) {
@@ -143,7 +145,7 @@
         if (!lock) return;
         try {
             auto made = std::make_shared<ImageInput>(vk.device);
-            const auto desc = made->PlanShared(device, vk, j.width, j.height);
+            const auto desc = made->PlanShared(device, vk, j.width, j.height, colourVk, typed);
             std::string why;
             // Incremental allocation: current usage already includes the buffer
             // route and every retained recording. Do not release them speculatively.

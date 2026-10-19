@@ -81,12 +81,18 @@ RGBA16F motion 的颜色上传区间约减少 0.142 ms，捕获约减少 0.015�
 
 ## 产品准入与回滚
 
-第一版只覆盖 RGBA16F、全尺寸单 mip/单层/单采样纹理、单遍、完整模型比例、
+当前共享颜色准入复用 `ColourFormat` 的完整现有映射（23 个 DXGI 枚举、14 种 typed
+载体），逐设备查询导入能力；全尺寸单 mip/单层/单采样纹理、单遍、完整模型比例、
 实际 motion 输入和普通 compose。canonical 转换、bucket/DRS、first-pass 导出、RenoDX、
 无 motion 及 Inline 均使用现有 buffer 路线。颜色满足上述条件后，完整尺寸、无 rescale/pad、
 RG16F 或 RGBA16F 的已上传 motion 也可独立采用共享纹理；不满足 motion 条件或申请失败时
 保留“共享颜色 + buffer motion”。输出不变，
 直接复用核心对 `colourImage` 的原地处理，不修改 vendored 核心或增加 `EngineFrame::target`。
+
+颜色格式的字节解释、是否线性及输出处理沿用原 buffer 路线。sRGB 用其 UNORM
+同族载体保持既有字节语义，TYPELESS 使用映射表指定的 typed 同族；不会为了采用快路
+更改游戏的 SDR/HDR 或 Linear 设置。共享输入只申请复制与采样用途，不要求 UAV/storage。
+BGRA/BGRX 虽然映射到同一 VkFormat，其 shared carrier DXGI 格式仍进入候选/缓存匹配。
 
 `MZ_TEST_SHARED_INPUT=0` 在进程启动前设置，可靠选择颜色和 motion 的原 buffer 路线；
 `MZ_TEST_SHARED_MOTION=0` 可单独保留 buffer motion。缺省或 `1` 仅请求
@@ -339,3 +345,56 @@ Small RG16F 本机 motion 载体从 32,505,856 降至 15,728,640 字节，稳态
 连同颜色共少约 44.31 MiB。候选峰值仍计入旧载体及在途录制，不能直接按稳态差额放行。
 未锁 GPU 时钟、HAGS 未确认；没有真实游戏、Present/FG/FSR4 或跨厂商驱动验证，
 因此不能承诺游戏 FPS、所有画面/兼容情况或用户 5% 反馈已经解决。
+
+## 全颜色格式覆盖与验证（2026-10-19）
+
+共享载体从单独的 FP16 准入扩展到适配器原有颜色格式全集，不增加原适配器从未支持的
+颜色编码。`ColourFormat` 同时给出 VkFormat、每像素字节数与 typed carrier DXGI；
+共享申请与原 buffer 共用这一信息源。所有项仍要求既有 split 几何准入及当前设备可导入，
+不代表 canonical、DRS、模型缩放、多遍等路线也全部启用共享输入。
+
+| typed 载体 | 同时覆盖的现有 DXGI 变体 |
+|---|---|
+| R16G16B16A16_FLOAT | FLOAT、TYPELESS |
+| R32G32B32A32_FLOAT | FLOAT、TYPELESS |
+| R11G11B10_FLOAT | FLOAT |
+| R10G10B10A2_UNORM | UNORM、TYPELESS |
+| R8G8B8A8_UNORM | UNORM、UNORM_SRGB、TYPELESS |
+| B8G8R8A8_UNORM | UNORM、UNORM_SRGB、TYPELESS |
+| B8G8R8X8_UNORM | UNORM、UNORM_SRGB、TYPELESS |
+| R9G9B9E5_SHAREDEXP | SHAREDEXP |
+| R16G16B16A16_UNORM | UNORM |
+| R16G16B16A16_SNORM | SNORM |
+| R8G8B8A8_SNORM | SNORM |
+| B5G6R5_UNORM | UNORM |
+| B5G5R5A1_UNORM | UNORM |
+| B4G4R4A4_UNORM | UNORM |
+
+共 23 个枚举、14 种载体。sRGB 继续使用既有 UNORM 字节解释，避免共享导入额外施加
+传递函数；这不改变用户设置的 Linear/曝光/SDR/HDR 策略。TYPELESS 不猜测为整数或
+新增编码，沿用原 buffer 的代表格式。BGRA 与 BGRX 保持各自 DXGI 同族资源，并加入
+候选缓存匹配；相同 VkFormat 并不足以证明 D3D12 CopyResource 兼容。
+
+原版的共享桥接可协商 storage 或普通采样/复制资源。产品当前 split 路线传给核心的
+usage 始终是 TRANSFER_SRC/DST + SAMPLED，写回也采用 transfer；因此去掉此前共享
+候选额外要求的 typed UAV 与 D3D12 ALLOW_UNORDERED_ACCESS，不改变核心算法。
+可选导入失败、初始化/预算/退避/双侧完成凭证及内部回滚行为沿用上一节。
+
+RX9070XT / 32.0.31041.1004 的离线夹具真实创建每一种格式，在 Small 与 Original
+两种模型下分别验证全部 23 项：每项实际采用共享载体，变化颜色与非零 motion 的
+12 帧连续序列逐字节等于 buffer 路线；包含 alpha、浮点负值/超 1 和打包布局。
+另外覆盖保留录制、两条 D3D12 队列重放及核心录制前故障的原始输入旁路。
+
+五种代表格式另在原生编译下作各自配对；两种格式注入共享句柄拒绝仍完整执行 buffer
+NR。BGRA↔BGRX、TYPELESS↔sRGB 同 VkFormat 切换时保留旧录制，验证载体身份、
+跨队列输出与恢复。FP16↔R11G11B10 切换验证 Plan A 转换期间使用 buffer，旧共享录制
+仍有效，返回原格式后重新采用共享载体。1920×1080 RGBA8 + RG16F motion 也作同样
+连续输出/回收/故障检查。完整环境对照显式核对实际生效的 ACO 模式。
+
+正式矩阵与补充场景共 15 轮、59 组，实际执行 3656 次 NR，另核对 59 次注入旁路。
+现有未插桩产品 ABI、split retained 和 GPU 检查通过；D3D12 debug ERROR/CORRUPTION
+为零，测量窗口 System/4101 无事件，没有新增跟踪测试项目。
+上述是路线、输出与生命周期验收，不是全格式性能测量；此前约 0.180 ms 的宿主收益
+对应上一轮 FP16 实现，不外推为本次每种格式的收益，资源标志改变的耗时也需单独测量。
+未启用 Vulkan validation，其他 GPU/驱动、真实硬件 device loss 与真实游戏观感/收益
+仍待实际验收；不以本机所有格式成功导入承诺全部设备都能走共享路线。
