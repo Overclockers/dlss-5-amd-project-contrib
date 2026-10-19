@@ -104,6 +104,9 @@ namespace OptScalerNR.Launcher
         TextBlock _lmxxfReason, _danielReason, _mochiReason, _statusText, _countText;
         Border _lmxxfBadge, _danielBadge, _mochiBadge;
         Button _lmxxfActiveBtn, _danielActiveBtn, _mochiActiveBtn;
+        Button _compatButton, _restoreCompatButton;
+        Button _removeGameButton;
+        TextBlock _compatSummary;
         TextBlock _lmxxfActiveLabel, _danielActiveLabel, _mochiActiveLabel;
         CheckBox _lmxxfCheck, _danielCheck, _mochiCheck, _replaceIni, _scanOnStartup;
         ProgressBar _progress;
@@ -136,6 +139,8 @@ namespace OptScalerNR.Launcher
 
         readonly List<GameInfo> _allGames = new List<GameInfo>();
         readonly Dictionary<string, BackendChoice> _backendChoices = new Dictionary<string, BackendChoice>(StringComparer.OrdinalIgnoreCase);
+        readonly Dictionary<string, string> _hiddenGames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        string _resumeInstallAction = "";
         GameInfo _selectedGame;
         LauncherResult _lastInspectResult;
         Decisions _decisions = new Decisions();
@@ -196,6 +201,10 @@ namespace OptScalerNR.Launcher
             _changeExeButton = (Button)window.FindName("ChangeExeButton");
             _openFolderButton = (Button)window.FindName("OpenFolderButton");
             _uninstallButton = (Button)window.FindName("UninstallButton");
+            _removeGameButton = (Button)window.FindName("RemoveGameButton");
+            _compatButton = (Button)window.FindName("CompatButton");
+            _restoreCompatButton = (Button)window.FindName("RestoreCompatButton");
+            _compatSummary = (TextBlock)window.FindName("CompatSummary");
             _progress = (ProgressBar)window.FindName("Progress");
 
             _injectText = (TextBlock)window.FindName("InjectText");
@@ -339,6 +348,9 @@ namespace OptScalerNR.Launcher
             if (_openFolderButton != null) _openFolderButton.Click += (s, e) => OpenSelectedFolder();
             if (_primaryButton != null) _primaryButton.Click += (s, e) => OnPrimaryAction();
             if (_uninstallButton != null) _uninstallButton.Click += (s, e) => OnUninstall();
+            if (_removeGameButton != null) _removeGameButton.Click += (s, e) => RemoveSelectedGame();
+            if (_compatButton != null) _compatButton.Click += (s, e) => OnCompatibility(false);
+            if (_restoreCompatButton != null) _restoreCompatButton.Click += (s, e) => OnCompatibility(true);
             if (_openLogButton != null) _openLogButton.Click += (s, e) => OpenLog();
             if (_refreshButton != null) _refreshButton.Click += (s, e) => RunScan();
 
@@ -666,6 +678,10 @@ namespace OptScalerNR.Launcher
                 if (_changeExeButton != null) _changeExeButton.Content = isZh ? "更换 EXE" : "Change EXE";
                 if (_openFolderButton != null) _openFolderButton.Content = isZh ? "打开目录" : "Open Folder";
                 if (_uninstallButton != null) _uninstallButton.Content = isZh ? "卸载" : "Uninstall";
+                if (_removeGameButton != null) _removeGameButton.Content = L("从列表移除", "Remove from list");
+                if (_compatButton != null) _compatButton.Content = L("兼容修复", "Compatibility repair");
+                if (_restoreCompatButton != null) _restoreCompatButton.Content = L("恢复游戏原文件", "Restore game files");
+                UpdateCompatibilitySummary();
                 if (_openLogButton != null) _openLogButton.Content = isZh ? "打开完整日志" : "Open Full Log";
                 if (_refreshButton != null) _refreshButton.Content = isZh ? "刷新" : "Refresh";
                 if (_packageBrowse != null) _packageBrowse.Content = isZh ? "浏览…" : "Browse…";
@@ -740,12 +756,17 @@ namespace OptScalerNR.Launcher
         {
             // Refresh presentation only. Reapplying inspection would reset the user's choices.
             var result = _lastInspectResult;
-            if (_injectText != null) _injectText.Text = result != null
+            var failed = result != null && !string.IsNullOrEmpty(result.Status) && result.Status != "success";
+            if (_injectText != null) _injectText.Text = failed
+                ? L("检查失败，请重新选择游戏以重试。", "Inspection failed. Select the game again to retry.")
+                : result != null
                 ? L("分析完成，请确认注入代理与后端配置：", "Analysis complete. Confirm the proxy DLL and backends:")
                 : (_selectedGame != null
                     ? L("正在检查导入与后端…", "Checking imports and backends…")
                     : L("请从下方选择游戏启动时所加载的拦截代理 DLL：", "Choose the proxy DLL to load when the game starts:"));
-            if (_injectRecommendation != null) _injectRecommendation.Text = result == null
+            if (_injectRecommendation != null) _injectRecommendation.Text = failed
+                ? L("检测未完成：", "Inspection incomplete: ") + result.Error
+                : result == null
                 ? L("选择游戏后将分析 PE 导入表并自动匹配推荐代理。", "Select a game to inspect its imports and recommend a proxy.")
                 : (!string.IsNullOrEmpty(result.Recommend)
                     ? L("检测到程序导入 " + result.Recommend + "，推荐使用该代理。", "Detected import for " + result.Recommend + "; this proxy is recommended.")
@@ -757,7 +778,7 @@ namespace OptScalerNR.Launcher
                     foreach (var candidate in result.Backends)
                         if (candidate != null && candidate.Id == id) { capability = candidate; break; }
                 var reason = capability != null ? GetReasonText(capability.ReasonCode, capability.Reason, _language == "zh")
-                    : L("未检查", "Not checked");
+                    : failed ? L("检查失败", "Check failed") : L("未检查", "Not checked");
                 var label = id == "lmxxf" ? _lmxxfReason : id == "daniel" ? _danielReason : _mochiReason;
                 if (label != null) label.Text = reason;
             }
@@ -781,7 +802,7 @@ namespace OptScalerNR.Launcher
                     case "lmxxf-weights": lines.Add(L("缺少 lmxxf 权重。请将完整的 native-game-tiled-assets 文件夹放到安装包目录。", "lmxxf weights are missing. Place the complete native-game-tiled-assets folder beside Setup.bat.")); break;
                     case "lmxxf-original": lines.Add(L("缺少 lmxxf Original 权重。请将完整的原始模型权重放入 native-game-tiled-assets。", "lmxxf Original weights are missing. Place the complete Original weights in native-game-tiled-assets.")); break;
                     case "lmxxf-small": lines.Add(L("缺少 lmxxf Small 权重。请补齐 native-game-tiled-assets\\small，或提供 nvngx_dlssnr.dll 310.9.16。", "lmxxf Small weights are missing. Supply native-game-tiled-assets\\small or nvngx_dlssnr.dll 310.9.16.")); break;
-                    case "lmxxf-small-preparable": lines.Add(L("已找到 Small 模型来源，安装时准备。", "Small model source found. Preparation will run during installation.")); break;
+                    case "lmxxf-small-preparable": lines.Add(L("Small 尚未安装；已找到提取来源。选择安装 Small 时才会提取转换，需要 Python 3.10+。", "Small is not installed; an extraction source was found. It will be extracted and converted only if you select Small, using Python 3.10+.")); break;
                     case "mochi-source": lines.Add(L("缺少 Mochi 模型。请将 nvngx_dlssnr.dll 放到安装包目录。", "Mochi models are missing. Place nvngx_dlssnr.dll beside Setup.bat.")); break;
                     case "mochi-preparable": lines.Add(L("已找到模型来源，安装时准备。", "Model source found. Models will be prepared during installation.")); break;
                     case "mochi-versions": lines.Add(L("310.9.16 支持新旧模型；310.8.0 仅支持原始模型。", "310.9.16: both models. 310.8.0: original only.")); break;
@@ -885,6 +906,8 @@ namespace OptScalerNR.Launcher
             if (rec != null)
             {
                 _recentGameId = rec.RecentGameId;
+                if (rec.HiddenGames != null)
+                    foreach (var pair in rec.HiddenGames) _hiddenGames[pair.Key] = pair.Value;
                 if (rec.BackendChoices != null)
                     foreach (var pair in rec.BackendChoices)
                         if (pair.Value != null && pair.Value.Backends != null)
@@ -911,7 +934,8 @@ namespace OptScalerNR.Launcher
                     ScanOnStartup = _isScanOnStartup,
                     PackageRoot = _packageRoot,
                     RecentGameId = _selectedGame != null ? _selectedGame.Id : _recentGameId,
-                    BackendChoices = _backendChoices
+                    BackendChoices = _backendChoices,
+                    HiddenGames = _hiddenGames
                 };
                 JsonUtil.WriteFile(_settingsPath, set);
             }
@@ -930,7 +954,7 @@ namespace OptScalerNR.Launcher
                     _allGames.Clear();
                     foreach (var g in rec.Games)
                     {
-                        if (g != null && !string.IsNullOrEmpty(g.Exe) &&
+                        if (g != null && !string.IsNullOrEmpty(g.Exe) && !IsHiddenGame(g) &&
                             (g.ExeOverride == true || g.Source == "Manual" || GamePaths.CanUse(g.Exe)))
                             _allGames.Add(g);
                     }
@@ -959,6 +983,7 @@ namespace OptScalerNR.Launcher
         [System.Runtime.Serialization.DataContract]
         sealed class GuiSettings
         {
+            [System.Runtime.Serialization.DataMember] public Dictionary<string, string> HiddenGames;
             [System.Runtime.Serialization.DataMember] public string Language;
             [System.Runtime.Serialization.DataMember] public bool ScanOnStartup = true;
             [System.Runtime.Serialization.DataMember] public string PackageRoot;
@@ -1073,6 +1098,11 @@ namespace OptScalerNR.Launcher
         {
             var norm = GamePaths.Normalize(exePath);
             if (string.IsNullOrEmpty(norm) || !GamePaths.CanUse(norm)) return;
+            var restored = new List<string>();
+            foreach (var pair in _hiddenGames)
+                if (string.Equals(pair.Value, norm, StringComparison.OrdinalIgnoreCase)) restored.Add(pair.Key);
+            foreach (var id in restored) _hiddenGames.Remove(id);
+            SaveSettings();
 
             GameInfo found = null;
             foreach (var g in _allGames)
@@ -1114,7 +1144,7 @@ namespace OptScalerNR.Launcher
         void ChangeExe()
         {
             if (_selectedGame == null) return;
-            var picked = GamePaths.PickExe(_language == "zh");
+            var picked = GamePaths.PickExe(_language == "zh", Path.GetDirectoryName(_selectedGame.Exe));
             if (string.IsNullOrEmpty(picked)) return;
             var norm = GamePaths.Normalize(picked);
             if (string.IsNullOrEmpty(norm) || !GamePaths.CanUse(norm)) return;
@@ -1127,6 +1157,28 @@ namespace OptScalerNR.Launcher
 
             RefreshGameListView();
             SelectGame(_selectedGame);
+        }
+
+        bool IsHiddenGame(GameInfo game)
+        {
+            if (!string.IsNullOrEmpty(game.Id) && _hiddenGames.ContainsKey(game.Id)) return true;
+            foreach (var path in _hiddenGames.Values)
+                if (string.Equals(path, game.Exe, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        void RemoveSelectedGame()
+        {
+            if (_selectedGame == null || _writeBusy || (_session != null && _session.IsRunning)) return;
+            var removed = _selectedGame;
+            _hiddenGames[removed.Id ?? ("custom:" + removed.Exe.ToLowerInvariant())] = removed.Exe;
+            _allGames.RemoveAll(g => SameLibraryGame(g, removed));
+            SelectGame(null);
+            SaveSettings();
+            SaveLibraryCache();
+            RefreshGameListView();
+            if (_gameList != null && _gameList.Items.Count > 0) _gameList.SelectedIndex = 0;
+            if (_statusText != null) _statusText.Text = L("已从列表移除；游戏文件未改动。可通过“添加游戏”重新添加。", "Removed from the list; game files were kept. Use Add Game to add it again.");
         }
 
         void OpenSelectedFolder()
@@ -1246,8 +1298,21 @@ namespace OptScalerNR.Launcher
         {
             if (_writeBusy) return;
             _decisions.ForeignProxy.Clear();
+            _resumeInstallAction = "";
+            if (game == null || _selectedGame == null || !SameLibraryGame(game, _selectedGame)) _decisions.ModelSourceDll = null;
             _selectedGame = game;
             _lastInspectResult = null;
+            if (game == null) {
+                _recentGameId = null;
+                if (_heroTitle != null) _heroTitle.Text = L("选择一个游戏以开始", "Select a game to begin");
+                if (_heroMeta != null) _heroMeta.Text = "";
+                if (_heroPath != null) _heroPath.Text = "";
+                if (_heroPosterImage != null) _heroPosterImage.Source = null;
+                if (_heroBgImage != null) _heroBgImage.Source = null;
+                RefreshInspectionText();
+                UpdatePrimaryButtonState();
+                return;
+            }
             RestoreBackendChoice();
             RefreshInspectionText();
             if (_heroTitle != null) _heroTitle.Text = game.Name;
@@ -1323,6 +1388,8 @@ namespace OptScalerNR.Launcher
 
         void UpdatePrimaryButtonState()
         {
+            UpdateCompatibilitySummary();
+            if (_removeGameButton != null) _removeGameButton.IsEnabled = _selectedGame != null && !_writeBusy && (_session == null || !_session.IsRunning);
             if (_primaryButton == null) return;
             var isZh = _language == "zh";
             if (_selectedGame == null)
@@ -1403,6 +1470,7 @@ namespace OptScalerNR.Launcher
             catch (Exception ex)
             {
                 SetBusy(false, "");
+                if (ex.Data.Contains("logPath")) _currentLogPath = Convert.ToString(ex.Data["logPath"]);
                 AppendLog("Scan error: " + ex.Message);
             }
         }
@@ -1439,7 +1507,7 @@ namespace OptScalerNR.Launcher
             var merged = new List<GameInfo>();
             foreach (var cached in _allGames)
             {
-                if (cached == null || string.IsNullOrEmpty(cached.Exe)) continue;
+                if (cached == null || string.IsNullOrEmpty(cached.Exe) || IsHiddenGame(cached)) continue;
                 var index = merged.FindIndex(g => SameLibraryGame(g, cached));
                 if (index < 0) merged.Add(cached);
                 else
@@ -1454,7 +1522,7 @@ namespace OptScalerNR.Launcher
             }
             foreach (var incoming in scanned)
             {
-                if (incoming == null || string.IsNullOrEmpty(incoming.Exe)) continue;
+                if (incoming == null || string.IsNullOrEmpty(incoming.Exe) || IsHiddenGame(incoming)) continue;
                 var existing = merged.Find(g => SameLibraryGame(g, incoming));
                 if (existing == null)
                 {
@@ -1570,6 +1638,7 @@ namespace OptScalerNR.Launcher
                 GameExe = game.Exe,
                 ProxyChoice = "auto",
                 BackendChoice = "auto",
+                ExplicitDecisions = _decisions,
                 PackageRoot = _packageRoot
             };
 
@@ -1583,6 +1652,7 @@ namespace OptScalerNR.Launcher
             catch (Exception ex)
             {
                 SetBusy(false, "");
+                if (ex.Data.Contains("logPath")) _currentLogPath = Convert.ToString(ex.Data["logPath"]);
                 AppendLog("Inspect failed: " + ex.Message);
             }
         }
@@ -1607,6 +1677,118 @@ namespace OptScalerNR.Launcher
             if (confirm != MessageBoxResult.OK) return;
 
             ExecuteAction("uninstall");
+        }
+
+        string XessGroupLabel(string id)
+        {
+            if (id == "fg") return L("XeSS 插帧 + XeLL（配套替换）", "XeSS frame generation + XeLL (replace together)");
+            return id == "dx11" ? L("XeSS 超分（DX11）", "XeSS upscaling (DX11)") : L("XeSS 超分（DX12 / Vulkan）", "XeSS upscaling (DX12 / Vulkan)");
+        }
+
+        void UpdateCompatibilitySummary()
+        {
+            var busy = _writeBusy || (_session != null && _session.IsRunning);
+            var report = _lastInspectResult == null ? null : _lastInspectResult.Compatibility;
+            var available = _selectedGame != null && report != null && !busy;
+            if (_compatButton != null) _compatButton.IsEnabled = available;
+            // Keep restoration reachable even when inspection reports damaged package inputs.
+            if (_restoreCompatButton != null) _restoreCompatButton.IsEnabled = available && (report.Active || !string.IsNullOrEmpty(report.Error));
+            if (_compatSummary == null) return;
+            if (_selectedGame == null || report == null) {
+                _compatSummary.Text = L("选择游戏后自动检查 XeSS 文件。", "Select a game to check its XeSS files automatically.");
+                return;
+            }
+            if (!string.IsNullOrEmpty(report.Error)) {
+                _compatSummary.Text = L("XeSS 文件检查未完成：", "XeSS inspection incomplete: ") + report.Error;
+                return;
+            }
+            if (report.Active) {
+                _compatSummary.Text = L("已有 XeSS 兼容修复备份。无改善可点“恢复游戏原文件”；游戏已更新时，也可在该窗口保留当前文件并结束旧修复，再重新修复。", "A XeSS repair backup exists. Use Restore game files if it did not help. After a game update, that dialog also lets you keep current files and finish the old repair before trying again.");
+                return;
+            }
+            var names = new List<string>();
+            if (report.Groups != null) foreach (var group in report.Groups)
+                if (group.Files != null) foreach (var file in group.Files)
+                    if (file.State == "different") names.Add(file.Name);
+            _compatSummary.Text = names.Count > 0
+                ? L("游戏目录与包内 XeSS 文件不同：", "Game and package XeSS files differ: ") + string.Join(", ", names) +
+                    L("。版本不同不等于故障。若 XeSS 不可用、插帧倍率受限或启动异常，可点“兼容修复”查看并尝试替换。", ". Different versions do not prove a fault. For unavailable XeSS, limited frame multipliers or startup problems, open Compatibility repair to review and try replacement.")
+                : L("若 XeSS 不可用、插帧倍率受限或启动异常，可点“兼容修复”检查；无需自行寻找 DLL。", "If XeSS is unavailable, frame multipliers are limited or startup fails, open Compatibility repair; no manual DLL search is needed.");
+        }
+
+        Window CreateCompatibilityDialog(bool restore)
+        {
+            var report = _lastInspectResult == null ? null : _lastInspectResult.Compatibility;
+            var dialog = new Window {
+                Owner = _window.IsVisible ? _window : null,
+                Title = restore ? L("恢复游戏原文件", "Restore game files") : L("XeSS 兼容修复", "XeSS compatibility repair"),
+                Width = 650, SizeToContent = SizeToContent.Height, MaxHeight = 720,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner, ResizeMode = ResizeMode.NoResize,
+                ShowInTaskbar = false, Background = new SolidColorBrush(Color.FromRgb(32,35,43)), Foreground = Brushes.White
+            };
+            var panel = new StackPanel { Margin = new Thickness(24) };
+            Action<string> text = value => panel.Children.Add(new TextBlock { Text = value, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0,0,0,12) });
+            text(_selectedGame == null ? "" : _selectedGame.Exe);
+            text(restore
+                ? L("关闭游戏后恢复上次修复前的文件，并移除修复时新增的文件。游戏更新过的文件不会被覆盖。若游戏已更新或希望保留现状，可选“保留当前文件并结束修复”：不恢复任何 DLL，保留全部备份，并允许再次修复。", "Close the game first. Restore files from before the last repair and remove files added by it. Files changed by game updates will be preserved. Alternatively, Keep current files and finish repair changes no DLLs, retains all backups and allows a new repair.")
+                : L("仅在该游戏出现 XeSS 或插帧问题时尝试。关闭游戏，勾选要替换的组件，再点“备份并尝试修复”。内层文件保留，INI 设置保留；修复不保证解决问题，无改善可恢复原文件。", "Try this only for XeSS or frame generation problems in this game. Close the game, select components and choose Back up and try repair. Inner-folder files and INI preferences are retained. A repair may not solve the problem; originals can be restored."));
+            var selections = new Dictionary<string, CheckBox>();
+            if (report != null && !string.IsNullOrEmpty(report.Error)) text(report.Error);
+            var canRestore = restore && report != null && report.Active && !string.IsNullOrEmpty(report.Fingerprint);
+            var proceed = new Button { Content = restore ? L("恢复原文件", "Restore originals") : L("备份并尝试修复", "Back up and try repair"), IsEnabled = canRestore, MinWidth = 150, Margin = new Thickness(4) };
+            if (restore && report != null && report.RestoreFiles != null) text(string.Join("\n", report.RestoreFiles));
+            if (!restore && report != null && report.Groups != null) foreach (var group in report.Groups) {
+                if (!restore) {
+                    var check = new CheckBox { Content = XessGroupLabel(group.Id), Foreground = Brushes.White,
+                        IsEnabled = group.Ready && !report.Active, Margin = new Thickness(0,6,0,6) };
+                    selections[group.Id] = check;
+                    RoutedEventHandler changed = (s,e) => {
+                        var any = false;
+                        foreach (var item in selections.Values) if (item.IsChecked == true) any = true;
+                        proceed.IsEnabled = any;
+                    };
+                    check.Checked += changed; check.Unchecked += changed;
+                    panel.Children.Add(check);
+                    if (!group.Ready) text(L("安装包缺少有效配套文件，请重新解压完整包。", "Valid companion files are missing from this package. Extract a complete package again."));
+                }
+                if (group.Files != null) foreach (var file in group.Files) {
+                    var gameVersion = file.State == "missing" ? L("无", "absent") : string.IsNullOrEmpty(file.GameVersion) ? L("版本未知", "unknown version") : file.GameVersion;
+                    var packageVersion = string.IsNullOrEmpty(file.PackageVersion) ? L("版本未知", "unknown version") : file.PackageVersion;
+                    text(file.Name + "\n" + L("游戏目录：", "Game folder: ") + gameVersion +
+                        L("    包内：", "    Package: ") + packageVersion +
+                        (file.State == "same" ? L("（文件相同）", " (identical)") : L("（文件不同或缺失）", " (different or absent)")));
+                }
+            }
+            if (!restore && report != null && report.Active) text(L("请先打开“恢复游戏原文件”，恢复上次修复，或保留当前文件并结束旧修复，再尝试其他组件。", "Open Restore game files first: restore the previous repair, or keep current files and finish it before trying other components."));
+            if (report != null && report.Evidence != null && report.Evidence.Length > 0) {
+                text(L("最近日志中的 XeSS 记录（可能来自之前的运行，不能单独证明本次故障）：", "XeSS entries in the latest log (may be from a previous run; not proof of the current fault):"));
+                text(string.Join("\n", report.Evidence));
+            }
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+            buttons.Children.Add(new Button { Content = L("取消", "Cancel"), IsCancel = true, MinWidth = 90, Margin = new Thickness(4) });
+            if (canRestore) {
+                var keep = new Button { Content = L("保留当前文件并结束修复", "Keep current files and finish repair"), Margin = new Thickness(4) };
+                keep.Click += delegate { dialog.Uid = "keepXess"; dialog.DialogResult = true; };
+                buttons.Children.Add(keep);
+            }
+            proceed.Click += delegate {
+                var chosen = new List<string>();
+                foreach (var item in selections) if (item.Value.IsChecked == true) chosen.Add(item.Key);
+                dialog.Tag = chosen.ToArray(); dialog.DialogResult = true;
+            };
+            buttons.Children.Add(proceed); panel.Children.Add(buttons);
+            dialog.Content = new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+            return dialog;
+        }
+
+        void OnCompatibility(bool restore)
+        {
+            if (_selectedGame == null || _lastInspectResult == null || _writeBusy || (_session != null && _session.IsRunning)) return;
+            var fingerprint = _lastInspectResult.Compatibility == null ? null : _lastInspectResult.Compatibility.Fingerprint;
+            var dialog = CreateCompatibilityDialog(restore);
+            if (dialog.ShowDialog() != true) return;
+            _decisions.XessGroups = dialog.Tag as string[];
+            ExecuteAction(dialog.Uid == "keepXess" ? "keepXess" : restore ? "restoreXess" : "repairXess", false, fingerprint);
         }
 
         string SelectMochizukiModels()
@@ -1673,12 +1855,16 @@ namespace OptScalerNR.Launcher
             var panel = new StackPanel { Margin = new Thickness(24) };
             panel.Children.Add(new TextBlock { Text = L("请选择要安装的模型。现有的另一套模型会保留。", "Choose the models to install. Other installed models are retained."), TextWrapping = TextWrapping.Wrap });
             panel.Children.Add(new TextBlock { Text = "Original: " + (original ? L("就绪", "Ready") : L("缺失", "Missing")) + "  |  Small: " +
-                (capability != null && capability.SmallState == "preparable" ? L("待准备", "Preparation required") : small ? L("就绪", "Ready") : L("缺失", "Missing")), Margin = new Thickness(0,10,0,10) });
+                (capability != null && capability.SmallState == "preparable" ? L("未安装（可提取）", "Not installed (can extract)") : small ? L("已安装", "Installed") : L("缺失", "Missing")), Margin = new Thickness(0,10,0,10) });
             if (capability != null && !string.IsNullOrEmpty(BackendHintText(capability)))
                 panel.Children.Add(new TextBlock { Text = BackendHintText(capability), TextWrapping = TextWrapping.Wrap, Foreground = Brushes.Orange, Margin = new Thickness(0,0,0,10) });
             var proceed = new Button { Content = L("继续", "Continue"), IsEnabled = false, MinWidth = 100, Margin = new Thickness(4) };
             var values = new[] { "both", "small", "original" };
-            var labels = new[] { L("两个模型", "Both models"), "Small (310.9.16)", L("Original（原始模型）", "Original") };
+            var needsSmallPreparation = capability != null && capability.SmallState == "preparable";
+            var labels = new[] {
+                needsSmallPreparation ? L("两个模型（复用 Original，提取 Small）", "Both models (reuse Original, extract Small)") : L("两个模型", "Both models"),
+                needsSmallPreparation ? L("Small（从来源提取并安装）", "Small (extract and install from source)") : "Small (310.9.16)",
+                L("Original（仅复用原始模型）", "Original (reuse existing model only)") };
             var enabled = new[] { original && small, small, original };
             for (var i = 0; i < values.Length; i++) {
                 var value = values[i];
@@ -1699,8 +1885,37 @@ namespace OptScalerNR.Launcher
             return dialog.ShowDialog() == true ? dialog.Tag as string : null;
         }
 
-        void ExecuteAction(string action, bool keepModelChoice = false)
+        bool PrepareMissingModelSource(string action, List<string> selected)
         {
+            var needsSource = false;
+            if (_lastInspectResult != null && _lastInspectResult.Backends != null)
+                foreach (var backend in _lastInspectResult.Backends) {
+                    if (backend == null || !selected.Contains(backend.Id) || backend.RuntimeState != "ready") continue;
+                    if (backend.Id == "mochizuki" && backend.ModelState == "missing") needsSource = true;
+                    if (backend.Id == "lmxxf" && backend.OriginalState != "ready" &&
+                        backend.SmallState != "ready" && backend.SmallState != "preparable") needsSource = true;
+                }
+            if (!needsSource) return true;
+            if (!string.IsNullOrEmpty(_decisions.ModelSourceDll))
+                MessageBox.Show(_window, L("所选 DLL 无法提供需要的模型。请选择受支持的 nvngx_dlssnr.dll；Small 需要 310.9.16。", "The selected DLL cannot supply the required model. Choose a supported nvngx_dlssnr.dll; Small requires 310.9.16."), _window.Title);
+            var directory = Path.GetDirectoryName(_selectedGame.Exe);
+            var picker = new OpenFileDialog {
+                Title = L("缺少模型来源：选择 nvngx_dlssnr.dll（用于离线提取）", "Model source missing: select nvngx_dlssnr.dll for offline extraction"),
+                Filter = "nvngx_dlssnr.dll|nvngx_dlssnr.dll|DLL (*.dll)|*.dll", CheckFileExists = true,
+                InitialDirectory = directory, FileName = Path.Combine(directory, "nvngx_dlssnr.dll"), RestoreDirectory = true
+            };
+            if (picker.ShowDialog(_window) != true) return false;
+            _decisions.ModelSourceDll = picker.FileName;
+            _resumeInstallAction = action;
+            ReleaseLock();
+            // Inspect the selected source before showing model choices or writing game files.
+            InspectGame(_selectedGame);
+            return false;
+        }
+
+        void ExecuteAction(string action, bool keepModelChoice = false, string compatibilityFingerprint = null)
+        {
+            var installing = action == "install" || action == "update";
             if (_selectedGame == null || string.IsNullOrEmpty(_selectedGame.Exe)) return;
             if (_writeBusy || (_session != null && _session.IsRunning))
             {
@@ -1719,7 +1934,7 @@ namespace OptScalerNR.Launcher
             }
 
             var proxy = CurrentSelectedProxy;
-            if (action != "uninstall" && string.IsNullOrEmpty(proxy))
+            if (installing && string.IsNullOrEmpty(proxy))
             {
                 MessageBox.Show(_window, _language == "zh" ? "请先选择要注入的代理 DLL。" : "Please select a proxy DLL to inject first.", _window.Title);
                 ReleaseLock();
@@ -1731,20 +1946,21 @@ namespace OptScalerNR.Launcher
             if (_danielCheck != null && _danielCheck.IsChecked == true) checkedBackends.Add("daniel");
             if (_mochiCheck != null && _mochiCheck.IsChecked == true) checkedBackends.Add("mochizuki");
 
-            if (action != "uninstall" && checkedBackends.Count == 0)
+            if (installing && checkedBackends.Count == 0)
             {
                 MessageBox.Show(_window, _language == "zh" ? "请至少勾选一个可安装的后端。" : "Please select at least one backend to install.", _window.Title);
                 ReleaseLock();
                 return;
             }
+            if (installing && !PrepareMissingModelSource(action, checkedBackends)) { ReleaseLock(); return; }
 
-            if (action != "uninstall" && checkedBackends.Contains("lmxxf") &&
+            if (installing && checkedBackends.Contains("lmxxf") &&
                 (!keepModelChoice || string.IsNullOrEmpty(_decisions.LmxxfModels)))
             {
                 _decisions.LmxxfModels = SelectLmxxfModels();
                 if (string.IsNullOrEmpty(_decisions.LmxxfModels)) { ReleaseLock(); return; }
             }
-            if (action != "uninstall" && checkedBackends.Contains("mochizuki") &&
+            if (installing && checkedBackends.Contains("mochizuki") &&
                 (!keepModelChoice || string.IsNullOrEmpty(_decisions.MochizukiModels)))
             {
                 _decisions.MochizukiModels = SelectMochizukiModels();
@@ -1766,11 +1982,12 @@ namespace OptScalerNR.Launcher
                 Language = _language,
                 GameExe = _selectedGame.Exe,
                 ProxyChoice = proxy,
-                Backends = checkedBackends.ToArray(),
-                ActiveBackend = _activeBackend,
+                Backends = installing ? checkedBackends.ToArray() : null,
+                ActiveBackend = installing ? _activeBackend : null,
                 PackageRoot = _packageRoot,
                 ExplicitDecisions = _decisions,
-                Fingerprint = (action != "inspect" && _lastInspectResult != null) ? _lastInspectResult.Fingerprint : null
+                Fingerprint = (action != "inspect" && _lastInspectResult != null) ? _lastInspectResult.Fingerprint : null,
+                CompatibilityFingerprint = compatibilityFingerprint ?? (_lastInspectResult != null && _lastInspectResult.Compatibility != null ? _lastInspectResult.Compatibility.Fingerprint : null)
             };
 
             var work = Path.Combine(Path.GetTempPath(), "OptScalerNR-launcher", req.RequestId);
@@ -1784,6 +2001,7 @@ namespace OptScalerNR.Launcher
             {
                 SetBusy(false, "");
                 ReleaseLock();
+                if (ex.Data.Contains("logPath")) _currentLogPath = Convert.ToString(ex.Data["logPath"]);
                 if (_statusText != null) _statusText.Text = ex.Message;
                 AppendLog(ex.Message);
             }
@@ -1837,12 +2055,31 @@ namespace OptScalerNR.Launcher
                     RefreshStatusLanguage();
                 }
 
+                if (result != null && result.Compatibility != null && _lastInspectResult != null &&
+                    (action == "repairXess" || action == "restoreXess" || action == "keepXess"))
+                    _lastInspectResult.Compatibility = result.Compatibility;
+
                 if (string.Equals(action, "inspect", StringComparison.OrdinalIgnoreCase))
                 {
                     ApplyInspect(result);
+                    var resume = _resumeInstallAction;
+                    _resumeInstallAction = "";
+                    if (!string.IsNullOrEmpty(resume) && code == 0 && result != null && result.Status == "success") {
+                        ExecuteAction(resume);
+                        return;
+                    }
                 }
                 else if (result != null && string.Equals(result.Status, "success", StringComparison.OrdinalIgnoreCase))
                 {
+                    if (action == "repairXess" || action == "restoreXess" || action == "keepXess") {
+                        if (_lastInspectResult != null) _lastInspectResult.Compatibility = result.Compatibility;
+                        MessageBox.Show(_window, action == "repairXess"
+                            ? L("已备份并替换所选 XeSS 文件。请启动游戏测试；无改善可回到这里点“恢复游戏原文件”。", "Selected XeSS files were backed up and replaced. Start the game to test. If it did not help, return here and choose Restore game files.")
+                            : action == "keepXess"
+                            ? L("已保留当前游戏文件并结束旧修复，全部备份仍保留。现在可以重新选择组件修复。", "Current game files and all backups were kept. The old repair is finished; you can now select components for a new repair.")
+                            : L("游戏原文件已恢复。请重新启动游戏。", "Original game files restored. Restart the game."), _window.Title);
+                        if (_selectedGame != null) InspectGame(_selectedGame);
+                    }
                     if (action == "install" || action == "update" || action == "uninstall")
                     {
                         if (action == "uninstall")
@@ -1867,6 +2104,13 @@ namespace OptScalerNR.Launcher
                 }
 
                 UpdatePrimaryButtonState();
+                if (action != "inspect" && result != null && result.Status == "failed") {
+                    var detail = result.Error ?? "";
+                    if (detail.Length > 1200) detail = detail.Substring(0, 1200) + "…";
+                    if (_statusLed != null) _statusLed.Fill = WarningBrush;
+                    MessageBox.Show(_window, L("操作失败：", "Operation failed: ") + detail +
+                        "\n\n" + L("完整日志：", "Full log: ") + _currentLogPath, _window.Title, MessageBoxButton.OK, MessageBoxImage.Error);
+                }
             }));
         }
 
@@ -1874,6 +2118,11 @@ namespace OptScalerNR.Launcher
         {
             if (result == null) return;
             _lastInspectResult = result;
+            if (!string.IsNullOrEmpty(result.Status) && result.Status != "success") {
+                RefreshInspectionText();
+                UpdatePrimaryButtonState();
+                return;
+            }
             var isZh = _language == "zh";
 
             if (!string.IsNullOrEmpty(result.Recommend))
@@ -2107,6 +2356,7 @@ namespace OptScalerNR.Launcher
             if (busy) _eventStage = action;
             if (_addButton != null) _addButton.IsEnabled = !busy;
             if (_changeExeButton != null) _changeExeButton.IsEnabled = !busy;
+            if (_removeGameButton != null) _removeGameButton.IsEnabled = !busy && _selectedGame != null;
             if (_openFolderButton != null) _openFolderButton.IsEnabled = !busy;
             if (_refreshButton != null) _refreshButton.IsEnabled = !busy;
             if (_primaryButton != null) _primaryButton.IsEnabled = !busy;

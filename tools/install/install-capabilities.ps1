@@ -1,4 +1,4 @@
-﻿# Common backend capability and weight checking for OptScaler NR.
+# Common backend capability and weight checking for OptScaler NR.
 # Shared between launcher-worker.ps1 and install-amd-presr.ps1.
 
 function Test-LmxxfWeightsDir([string]$Directory) {
@@ -30,8 +30,13 @@ function Get-OptScalerFileSha256([string]$Path) {
     }
 }
 
-function Get-OptScalerBackendCapabilities([string]$pkgRoot, [string]$gameDir) {
+function Get-OptScalerBackendCapabilities([string]$pkgRoot, [string]$gameDir, [string]$ModelSourceDll = '') {
     $backends = @()
+    $sourceDlls = @()
+    if ($ModelSourceDll) { $sourceDlls += $ModelSourceDll }
+    foreach ($root in @($pkgRoot, $gameDir)) {
+        if ($root) { $sourceDlls += Join-Path $root 'nvngx_dlssnr.dll' }
+    }
     $modelHelper = Join-Path $PSScriptRoot 'lmxxf-small.ps1'
     if (Test-Path -LiteralPath $modelHelper) { . $modelHelper }
 
@@ -68,15 +73,16 @@ function Get-OptScalerBackendCapabilities([string]$pkgRoot, [string]$gameDir) {
             if (-not $root) { continue }
             $packs = @((Join-Path $root 'dlssnr-amd/dlssnr-small.bin'))
             if ($root -eq $pkgRoot) { $packs += Join-Path $root 'dlssnr-small.bin' }
-            $dll = Join-Path $root 'nvngx_dlssnr.dll'
             foreach ($pack in $packs) {
                 if (Test-MochizukiModelHeaderFile $pack 255) { $smallSource = $true; break }
             }
             if ($smallSource) { break }
+        }
+        if (-not $smallSource) { foreach ($dll in $sourceDlls) {
             if (Test-Path -LiteralPath $dll -PathType Leaf) {
                 try { if ((Get-OptScalerFileSha256 $dll) -eq '2bc19bc09a7b89dd44f73e2ac0108fcc586e2154bdd0830f242f4f040e28789f') { $smallSource = $true; break } } catch { }
             }
-        }
+        } }
     }
     # Installed models may be reused; installed/developer code cannot fill an incomplete update.
 
@@ -134,8 +140,8 @@ function Get-OptScalerBackendCapabilities([string]$pkgRoot, [string]$gameDir) {
     $hasDanielWeights = [bool]$danielWeights
     $danielSetup = $pkgRoot -and (Test-Path -LiteralPath (Join-Path $pkgRoot 'dlssnr_on_amd_setup.exe') -PathType Leaf)
     $danielNv = $false
-    foreach ($root in @($pkgRoot, $gameDir)) {
-        if ($root -and (Test-Path -LiteralPath (Join-Path $root 'nvngx_dlssnr.dll') -PathType Leaf)) { $danielNv = $true }
+    foreach ($dll in $sourceDlls) {
+        if (Test-Path -LiteralPath $dll -PathType Leaf) { $danielNv = $true }
     }
     $danielPreparable = $danielSetup -and $danielNv -and (-not $canDanielRuntime -or -not $hasDanielWeights)
     $danielEnabled = $canDanielRuntime -and $hasDanielWeights
@@ -187,6 +193,11 @@ function Get-OptScalerBackendCapabilities([string]$pkgRoot, [string]$gameDir) {
             if (Test-Path -LiteralPath $cand -PathType Leaf) { $mochiNv = $cand }
         }
     }
+    if (-not $mochiNv) {
+        foreach ($dll in $sourceDlls) {
+            if (Test-Path -LiteralPath $dll -PathType Leaf) { $mochiNv = $dll; break }
+        }
+    }
     $missingMochiPackage = @()
     if (-not $mochiRuntime) { $missingMochiPackage += 'MochizukiNrRuntime.dll' }
     else {
@@ -210,14 +221,13 @@ function Get-OptScalerBackendCapabilities([string]$pkgRoot, [string]$gameDir) {
     if (-not $hasMochiModel -and $mochiNv) {
         # Match Setup's accepted sources; presence alone must not claim preparation is ready.
         $unsupportedMochiSource = $true
-        foreach ($root in @($pkgRoot, $gameDir)) {
-            if (-not $root) { continue }
-            $candidate = Join-Path $root 'nvngx_dlssnr.dll'
+        foreach ($candidate in $sourceDlls) {
             if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
             try { $hash = Get-OptScalerFileSha256 $candidate } catch { continue }
             if ($hash -in @('2bc19bc09a7b89dd44f73e2ac0108fcc586e2154bdd0830f242f4f040e28789f',
                            'e16bcf15e16e13f527491cdf7845b2fe6521a738d8f7c9c721866a8496e1fc8e')) {
                 $unsupportedMochiSource = $false
+                $mochiNv = $candidate
                 break
             }
         }

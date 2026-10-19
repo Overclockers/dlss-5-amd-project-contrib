@@ -11,6 +11,7 @@
 
 | 工具 | 用途 |
 |---|---|
+| `tools/install/xess-compat.ps1` | 安装器 XeSS 只读检查、按组件备份替换及哈希保护恢复；专项 `tests/install/xess-compat.ps1` |
 | `tools/build/build-release-local.cmd [--fast]` | 与 CI 对齐的发行构建，输出 `exports/release-local/`；默认跑 ci+device 层测试，`--fast` 编宿主与配套人物 Worker |
 | `tools/build/build-person-worker.cmd [输出目录]` | 独立构建人物推理 Worker，并生成源码/二进制绑定清单 |
 | `tools/release/check-person-worker.ps1 -WorkerExe <路径>` | 检查所选 Worker 与源码/构建清单匹配；纳入新鲜度及打包流程 |

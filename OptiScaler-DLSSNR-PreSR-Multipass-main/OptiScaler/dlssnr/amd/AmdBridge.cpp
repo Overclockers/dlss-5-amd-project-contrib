@@ -380,6 +380,13 @@ bool EnsureSubmissionHook(ID3D12CommandQueue *q)
     device->Release();
     return ready;
 }
+bool EnsureRecordingSubmissionHook(ID3D12CommandQueue *q)
+{
+    if (!EnsureSubmissionHook(q))
+        return false;
+    DlssNr::Submission::Hooks::EnableExpansion();
+    return true;
+}
 bool HasDanielRuntime()
 {
     return DlssNr::Backend::HasDanielInstalled();

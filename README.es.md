@@ -303,6 +303,8 @@ Variables de entorno avanzadas (sin interruptor Ins): `DLSSNR_NO_REG`, `DLSSNR_C
 
 ## 5. Solución de problemas, registros y desinstalación
 
+**XeSS no disponible, multiplicadores limitados o fallos al iniciar**: cierre el juego, abra `Setup.bat` del paquete completo, seleccione el juego y pulse **Compatibility repair** (reparación de compatibilidad). Se comparan las versiones y el contenido de los archivos XeSS. Seleccione los componentes y pulse **Back up and try repair**; XeFG y XeLL se sustituyen juntos, sin mover DLL manualmente. Una versión distinta no demuestra un fallo. Si no mejora, pulse **Restore game files** en el mismo lugar. La restauración se detiene si una actualización modificó los archivos y conserva los archivos actuales y las copias. La reparación es independiente de la desinstalación: restaure antes de desinstalar o use el instalador después. Las páginas Status / Compatibility del menú Ins muestran las rutas y versiones cargadas.
+
 ### 1. Desinstalación
 1. Abra el **directorio del juego**;
 2. Ejecute **`Uninstall_OptiScaler_NR.bat`**;

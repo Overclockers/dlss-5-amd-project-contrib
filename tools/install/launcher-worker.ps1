@@ -1,4 +1,4 @@
-﻿# Schema 1 worker. Inspect is read-only. Install/uninstall call the existing scripts.
+# Schema 1 worker. Inspect is read-only. Install/uninstall call the existing scripts.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$RequestJson,
@@ -10,6 +10,7 @@ $here = $PSScriptRoot
 . (Join-Path $here 'proxy-probe.ps1')
 
 function Write-Event([string]$stage, [string]$message) {
+    if ($null -ne $message) { $message = [string]::new($message.ToCharArray()) }
     $line = (@{ schema = 1; requestId = $script:rid; stage = $stage; message = $message } | ConvertTo-Json -Compress)
     [IO.File]::AppendAllText($EventsJsonl, $line + [Environment]::NewLine)
 }
@@ -37,6 +38,7 @@ function New-Result([string]$status, [string]$error) {
         recommend = $script:recommend
         backends = $script:backends
         packageRoot = $script:packageRoot
+        compatibility = $script:compatibility
     }
 }
 function Fail-Result([string]$status, [string]$error, [int]$code) {
@@ -74,7 +76,7 @@ $script:notes = @()
 $script:fingerprint = $null
 $script:partial = $false
 $allowedProxy = @('dxgi.dll','winmm.dll','d3d12.dll','winhttp.dll','wininet.dll','dbghelp.dll')
-$allowedAction = @('inspect','install','update','uninstall','scan')
+$allowedAction = @('inspect','install','update','uninstall','scan','repairXess','restoreXess','keepXess')
 $allowedBackend = @('auto','daniel','lmxxf','mochizuki','all')
 if ($allowedAction -notcontains [string]$req.action) { throw "invalid action $($req.action)" }
 
@@ -216,6 +218,51 @@ function Find-PackageRoot([string]$requested) {
 }
 $script:packageRoot = Find-PackageRoot ([string]$req.packageRoot)
 $pkg = $script:packageRoot
+$compatScript = Join-Path $here 'xess-compat.ps1'
+if (Test-Path -LiteralPath $compatScript -PathType Leaf) {
+    . $compatScript
+    function Read-XessCompatibilityReport {
+        try { return Get-XessCompatibility $script:gameDir $pkg }
+        catch {
+            $failure = $_.Exception.Message
+            $recovery = @{ active = $false; transaction = ''; fingerprint = ''; restoreFiles = @() }
+            try { $recovery = Get-XessRecoveryInfo $script:gameDir } catch { }
+            $recovery.error = $failure
+            $recovery.groups = @()
+            return $recovery
+        }
+    }
+    $script:compatibility = Read-XessCompatibilityReport
+} else {
+    $script:compatibility = @{ error = 'Complete package required: xess-compat.ps1 is missing. Extract the full package again.'; groups = @(); active = $false }
+}
+if ($req.action -in @('repairXess','restoreXess','keepXess')) {
+    if (-not (Test-Path -LiteralPath $compatScript -PathType Leaf)) { Fail-Result 'failed' 'Complete package required: xess-compat.ps1 is missing.' 1 }
+    if ($probe.blockInstall) { Fail-Result 'failed' $probe.hint 1 }
+    Write-Event 'validate' 'Close the game before repairing or restoring XeSS.'
+    try {
+        if ($req.action -ne 'repairXess' -and (-not $req.compatibilityFingerprint -or
+            $req.compatibilityFingerprint -cne $script:compatibility.fingerprint)) {
+            throw 'The repair record or files changed. Reopen Compatibility repair and review the file list again.'
+        }
+        if ($req.action -eq 'repairXess') {
+            Write-Event 'backup' 'Backing up game XeSS files before replacement'
+            Repair-XessCompatibility $script:gameDir $pkg @($req.explicitDecisions.xessGroups) ([string]$req.compatibilityFingerprint)
+        } elseif ($req.action -eq 'restoreXess') {
+            Write-Event 'backup' 'Restoring original game XeSS files'
+            Restore-XessCompatibility $script:gameDir ([string]$script:compatibility.transaction)
+        } else {
+            Complete-XessCompatibility $script:gameDir ([string]$script:compatibility.transaction)
+        }
+    } catch {
+        $failure = $_.Exception.Message
+        $script:compatibility = Read-XessCompatibilityReport
+        Fail-Result 'failed' $failure 1
+    }
+    $script:compatibility = Read-XessCompatibilityReport
+    Write-Event 'done' "$($req.action) complete; restart the game to test"
+    Fail-Result 'success' $null 0
+}
 if ($pkg) {
     $pythonHelper = Join-Path $pkg 'mochizuki-python.ps1'
     if (-not (Test-Path $pythonHelper)) { $pythonHelper = Join-Path $here 'mochizuki-python.ps1' }
@@ -231,7 +278,11 @@ $capScript = Join-Path $here 'install-capabilities.ps1'
 if (-not (Test-Path -LiteralPath $capScript)) { $capScript = Find-Sibling 'install-capabilities.ps1' }
 if ($capScript -and (Test-Path -LiteralPath $capScript)) {
     . $capScript
-    $script:backends = @(Get-OptScalerBackendCapabilities $script:packageRoot $script:gameDir)
+    $sourceDll = [string]$req.explicitDecisions.modelSourceDll
+    if ($sourceDll -and (-not [IO.Path]::IsPathRooted($sourceDll) -or -not (Test-Path -LiteralPath $sourceDll -PathType Leaf))) {
+        Fail-Result 'failed' 'Select an existing nvngx_dlssnr.dll using an absolute path.' 1
+    }
+    $script:backends = @(Get-OptScalerBackendCapabilities $script:packageRoot $script:gameDir $sourceDll)
 }
 
 
@@ -352,7 +403,7 @@ if ($req.action -eq 'uninstall') {
         language = if ($req.language -eq 'zh') { 'zh' } else { 'en' }
     }
     if ($dec) {
-        foreach ($name in @('existingInstall','existingIni','mochizukiModels','lmxxfModels','shortFileContinue','optiPatcher','foreignProxy')) {
+        foreach ($name in @('existingInstall','existingIni','mochizukiModels','lmxxfModels','shortFileContinue','optiPatcher','foreignProxy','modelSourceDll')) {
             if ($dec.PSObject.Properties[$name] -and $null -ne $dec.$name) {
                 if ($name -eq 'foreignProxy') { $payload[$name] = ConvertTo-ForeignProxyMap $dec.$name }
                 else { $payload[$name] = $dec.$name }
@@ -380,6 +431,9 @@ $code = $LASTEXITCODE
 $ErrorActionPreference = $prevEap
 if (Test-Path -LiteralPath $stdoutLog) {
     Get-Content -LiteralPath $stdoutLog -ErrorAction SilentlyContinue | ForEach-Object { Write-Event 'log' $_ }
+}
+if (Test-Path -LiteralPath $stderrLog) {
+    Get-Content -LiteralPath $stderrLog -ErrorAction SilentlyContinue | ForEach-Object { Write-Event 'error' $_ }
 }
 if ($code -eq 0) {
     Write-Event 'verify' 'setup process exit 0'

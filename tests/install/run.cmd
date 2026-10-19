@@ -9,6 +9,7 @@ cd /d "%~dp0..\.."
 if not defined AMD_TEST_PYTHON set "AMD_TEST_PYTHON=python"
 set "PS51=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 if /i "%~1"=="release" goto release
+"%PS51%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests\install\xess-compat.ps1 || goto fail
 "%AMD_TEST_PYTHON%" -m pip install --disable-pip-version-check -r tests\install\requirements.txt || goto fail
 "%PS51%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests\install\package-signing.ps1 || goto fail
 "%PS51%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests\install\person-worker-package.ps1 || goto fail

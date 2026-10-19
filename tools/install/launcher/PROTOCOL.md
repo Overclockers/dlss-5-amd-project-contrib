@@ -11,7 +11,7 @@ Exit codes match `status`: 0 success, 1 failed, 2 needsInput, 3 cancelled.
 {
   "schema": 1,
   "requestId": "uuid",
-  "action": "inspect | install | update | uninstall",
+  "action": "inspect | install | update | uninstall | repairXess | restoreXess | keepXess",
   "gameExe": "C:\\\\absolute\\\\game.exe",
   "proxyChoice": "auto | dxgi.dll | winmm.dll | d3d12.dll | winhttp.dll | wininet.dll | dbghelp.dll",
   "backendChoice": "auto | daniel | lmxxf | mochizuki | all",
@@ -33,6 +33,9 @@ Exit codes match `status`: 0 success, 1 failed, 2 needsInput, 3 cancelled.
   Original and Small sources are resolved independently from the package and game.
   An explicit choice with missing/invalid weights fails before game-folder writes.
 - `shortFileContinue`: `continue` | `abort`
+- `modelSourceDll`: optional absolute path selected by the user for offline extraction.
+  Inspect checks it without writing game files. Installation resolves it alongside
+  package/game sources and validates the model's supported hashes before conversion.
 
 Inspect never writes the game folder, never extracts weights, never downloads.
 The worker passes backend arrays through the decision JSON file so Windows
@@ -40,6 +43,31 @@ PowerShell's native command line does not flatten the selected backend set.
 `language` is the launcher's saved UI preference. The worker forwards it in decision
 JSON for localized installer notices; omitted/unknown values use English. Raw system
 and third-party diagnostics retain their original text.
+The GUI also captures the worker's own stdout/stderr so startup/parse failures remain
+available when no result JSON was produced. Script stderr is included in the event log.
+
+`inspect` also returns `compatibility`: `groups` (`sr`, `dx11`, `fg`), each with
+`ready`, `different`, and `files` (`name`, `gameVersion`, `packageVersion`,
+`state=missing|same|different`); `active`, `restoreFiles`, `fingerprint`, and
+historical `evidence`. An inspection failure returns `error` without blocking
+normal NR installation. Version differences do not prove incompatibility.
+
+`repairXess` requires `explicitDecisions.xessGroups` and the inspected
+`compatibilityFingerprint`. It copies only selected known XeSS DLLs from the
+selected complete package after saving all originals; `fg` always includes XeLL.
+`restoreXess` needs the game EXE, valid stored backups and the preview's
+`compatibilityFingerprint`, independent of NR backends and the original package.
+The worker rejects changed previews and passes the checked transaction identity to
+restoration. `keepXess` uses the same preview check and explicitly archives the old
+record without changing any DLL or deleting backups, allowing a new repair after
+game updates. An inspection error still returns recovery metadata when the stored
+record is valid. Repair and restoration require the game to be closed and return
+updated `compatibility`, including after a failed operation when possible.
+The GUI uses the existing target mutex for both actions and previews the selected
+files before dispatch. Original backups persist under `OptiScaler-compat-backup/`.
+Restore refuses changed game files or damaged backups before modifying any target.
+Commits hash and rename the same exclusively held file handle. Installing the staged
+file never overwrites a concurrently created path; interrupted moves remain recoverable.
 
 ## Events (`-EventsJsonl`, append-only JSONL)
 

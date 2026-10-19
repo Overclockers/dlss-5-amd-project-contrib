@@ -78,6 +78,52 @@ try {
     Call 'ApplyInspect' @($capabilities) | Out-Null
     Check ((Call 'CheckedBackends').Count -eq 0) 'Inspection ignored the deliberate empty backend selection'
     Check ((Field '_activeBackend') -eq '') 'Empty selection retained a misleading active marker'
+
+    # Compatibility repair is independent of backend/model/proxy installation choices.
+    Call 'SelectGame' @($a) | Out-Null
+    $jsonType = $assembly.GetType('OptScalerNR.Launcher.JsonUtil', $true)
+    $read = $jsonType.GetMethod('Read').MakeGenericMethod($resultType)
+    $compat = $read.Invoke($null, @('{"schema":1,"compatibility":{"groups":[{"id":"fg","ready":true,"different":true,"files":[{"name":"libxess_fg.dll","state":"different","gameVersion":"1.0","packageVersion":"3.0"},{"name":"libxell.dll","state":"missing","packageVersion":"2.0"}]}],"active":false,"fingerprint":"token","evidence":[]}}'))
+    Call 'ApplyInspect' @($compat) | Out-Null
+    Check $window.FindName('CompatButton').IsEnabled 'Repair requires an installed backend or selected proxy'
+    Check (-not $window.FindName('RestoreCompatButton').IsEnabled) 'Restore enabled without backups'
+    Check ($window.FindName('CompatSummary').Text.Contains('libxess_fg.dll')) 'Automatic comparison summary hidden'
+    $dialog = Call 'CreateCompatibilityDialog' @($false)
+    try {
+        $panel = $dialog.Content.Content
+        $checks = @($panel.Children | Where-Object { $_ -is [Windows.Controls.CheckBox] })
+        Check ($checks.Count -eq 1) 'Paired XeFG/XeLL exposed as separate choices'
+        Check ($checks[0].IsChecked -ne $true) 'Repair was selected without a user choice'
+        $buttons = $panel.Children[$panel.Children.Count - 1]
+        Check (-not $buttons.Children[1].IsEnabled) 'Repair allowed without component selection'
+        $checks[0].IsChecked = $true
+        Check $buttons.Children[1].IsEnabled 'Selecting a group did not enable repair'
+        $size = New-Object Windows.Size 650,650
+        $dialog.Content.Measure($size)
+        $dialog.Content.Arrange((New-Object Windows.Rect $size))
+        $dialog.Content.UpdateLayout()
+        $bitmap = New-Object Windows.Media.Imaging.RenderTargetBitmap 650,650,96,96,([Windows.Media.PixelFormats]::Pbgra32)
+        $bitmap.Render($dialog.Content)
+        $encoder = New-Object Windows.Media.Imaging.PngBitmapEncoder
+        $encoder.Frames.Add([Windows.Media.Imaging.BitmapFrame]::Create($bitmap))
+        $stream = [IO.File]::Create((Join-Path $out 'xess-repair-dialog.png'))
+        try { $encoder.Save($stream) } finally { $stream.Dispose() }
+    } finally { $dialog.Close() }
+    $compat.Compatibility.Active = $true
+    $compat.Compatibility.RestoreFiles = [string[]]@('libxess_fg.dll','libxell.dll')
+    Call 'ApplyInspect' @($compat) | Out-Null
+    Check $window.FindName('RestoreCompatButton').IsEnabled 'Restoration hidden after repair'
+    $dialog = Call 'CreateCompatibilityDialog' @($true)
+    try {
+        $texts = @($dialog.Content.Content.Children | Where-Object { $_ -is [Windows.Controls.TextBlock] } | ForEach-Object { $_.Text }) -join '|'
+        Check ($texts.Contains('libxess_fg.dll') -and $texts.Contains('libxell.dll')) 'Restore preview omitted actual files'
+        Check (-not $texts.Contains('libxess_dx11.dll')) 'Restore preview claims unrelated files'
+    } finally { $dialog.Close() }
+    Call 'SetBusy' @($true, 'repairXess') | Out-Null
+    Call 'UpdatePrimaryButtonState' | Out-Null
+    Check (-not $window.FindName('CompatButton').IsEnabled) 'Repair button enabled during writes'
+    Check (-not $window.FindName('RestoreCompatButton').IsEnabled) 'Restore button enabled during writes'
+    Call 'SetBusy' @($false, '') | Out-Null
     Call 'SelectGame' @($a) | Out-Null
     (Field '_decisions').ForeignProxy['dxgi.dll'] = 'backup'
     Check (Call 'TryLockTarget' @([string]$arguments[1])) 'Cannot acquire isolated target lock'

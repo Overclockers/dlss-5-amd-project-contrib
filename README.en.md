@@ -304,6 +304,8 @@ Advanced process env (no Ins toggle): `DLSSNR_NO_REG`, `DLSSNR_CHAIN`, `DLSSNR_N
 
 ## 5. Troubleshooting, Logs & Uninstallation
 
+**Unavailable XeSS, limited frame multipliers or startup problems**: close the game, open `Setup.bat` from the complete package, select the game and choose **Compatibility repair**. It compares game/package XeSS versions and file contents. Select components and choose **Back up and try repair**; XeFG and XeLL are replaced together. No manual DLL moving is needed, and a version difference alone does not prove a fault. If it does not help, choose **Restore game files** in the same place. Restoration stops if game updates changed the files, preserving them and the backups. This repair is independent of uninstallation: restore before uninstalling, or use the installer to restore afterwards. The Ins menu's Status / Compatibility pages show actual loaded paths and versions.
+
 ### 1. Uninstallation
 1. Open the **game directory**;
 2. Run **`Uninstall_OptiScaler_NR.bat`**;

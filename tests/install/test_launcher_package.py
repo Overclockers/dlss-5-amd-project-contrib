@@ -31,3 +31,4 @@ class LauncherPackageTests(unittest.TestCase):
         self.assertIn("'proxy-probe.ps1'", text)
         self.assertIn("'library-scan.ps1'", text)
         self.assertIn("'install-capabilities.ps1'", text)
+        self.assertIn("'xess-compat.ps1'", text)

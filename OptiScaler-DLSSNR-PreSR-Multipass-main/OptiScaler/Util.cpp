@@ -772,6 +772,9 @@ void Util::LoadProxyLibrary(const std::wstring& name, const std::wstring& optiPa
     if (overridePath.size() > 0)
     {
         auto path = std::filesystem::path(overridePath);
+        // Library overrides follow OptiDllPath: relative paths are based on the game EXE.
+        if (path.is_relative())
+            path = Util::ExePath().parent_path() / path;
 
         if (std::filesystem::exists(path))
         {
@@ -785,7 +788,12 @@ void Util::LoadProxyLibrary(const std::wstring& name, const std::wstring& optiPa
                 LOG_INFO("{} loaded from override path: {}", wstring_to_string(name), path.string());
                 *loadedModule = result;
             }
+            else
+                LOG_WARN("{} failed to load from override path {} (Windows error {})", wstring_to_string(name),
+                         path.string(), GetLastError());
         }
+        else
+            LOG_WARN("{} override path does not exist: {}", wstring_to_string(name), path.string());
     }
 
     if (optiPath.size() > 0 && *loadedModule == nullptr)
@@ -804,6 +812,9 @@ void Util::LoadProxyLibrary(const std::wstring& name, const std::wstring& optiPa
                 LOG_INFO("{} loaded from Opti dll path: {}", wstring_to_string(name), path.string());
                 *loadedModule = result;
             }
+            else
+                LOG_WARN("{} failed to load from Opti dll path {} (Windows error {})", wstring_to_string(name),
+                         path.string(), GetLastError());
         }
     }
 

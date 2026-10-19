@@ -23,6 +23,7 @@
 
 #include <proxies/XeSS_Proxy.h>
 #include <proxies/XeFG_Proxy.h>
+#include <proxies/XeLL_Proxy.h>
 #include <proxies/FfxApi_Proxy.h>
 #include <proxies/Streamline_Proxy.h>
 
@@ -6296,6 +6297,65 @@ void MenuCommon::RenderAdvancedSettings(RenderMenuContext& ctx)
     }
 }
 
+void MenuCommon::RenderXeSSLibraryStatus(RenderMenuContext&)
+{
+    if (auto header = ScopedCollapsingHeader("XeSS loaded libraries"); header.IsHeaderOpen())
+    {
+        ScopedIndent indent {};
+        struct LibraryStatus
+        {
+            HMODULE module = nullptr;
+            std::string path;
+            std::string version;
+            int source = 0;
+        };
+        static std::array<LibraryStatus, 4> cached {};
+        const std::array<HMODULE, 4> modules { XeSSProxy::Module(), XeSSProxy::ModuleDx11(),
+                                              XeFGProxy::Module(), XeLLProxy::Module() };
+        const char* names[] = { "libxess.dll", "libxess_dx11.dll", "libxess_fg.dll", "libxell.dll" };
+        for (size_t i = 0; i < modules.size(); ++i)
+        {
+            auto& entry = cached[i];
+            if (entry.module != modules[i])
+            {
+                entry = {};
+                entry.module = modules[i];
+                if (entry.module != nullptr)
+                {
+                    wchar_t path[32768] {};
+                    const auto length = GetModuleFileNameW(entry.module, path, std::size(path));
+                    if (length > 0 && length < std::size(path))
+                    {
+                        entry.path = wstring_to_string(std::wstring(path, length));
+                        const auto parent = std::filesystem::path(path).parent_path();
+                        std::error_code error;
+                        if (std::filesystem::equivalent(parent, Util::ExePath().parent_path(), error))
+                            entry.source = 1;
+                        else if (std::filesystem::equivalent(parent, Config::Instance()->MainDllPath.value(), error))
+                            entry.source = 2;
+                        version_t version {};
+                        if (Util::GetFileVersion(path, &version))
+                            entry.version = std::format("{}.{}.{}.{}", version.major, version.minor,
+                                                        version.patch, version.reserved);
+                    }
+                }
+            }
+            MenuUi::Text("%s", names[i]);
+            if (entry.module == nullptr)
+                MenuUi::TextWrapped("Not loaded (normal if this component is unused)");
+            else
+            {
+                MenuUi::TextWrapped(entry.source == 1 ? "Source: game folder" : entry.source == 2
+                    ? "Source: OptiScaler library folder" : "Source: custom folder");
+                MenuUi::TextWrapped("Loaded path: %s", entry.path.c_str());
+                MenuUi::TextWrapped("File version: %s", entry.version.empty() ? "?" : entry.version.c_str());
+            }
+        }
+        MenuUi::TextWrapped("If XeSS fails or frame multipliers are limited, close the game, open Setup.bat, "
+                            "select this game and choose Compatibility repair. Restore game files if it does not help.");
+    }
+}
+
 void MenuCommon::RenderLoggingSettings(RenderMenuContext& ctx)
 {
     auto config = ctx.config;
@@ -7336,6 +7396,7 @@ void MenuCommon::RenderMainMenuTable(RenderMenuContext& ctx)
             card(RenderMagnifierSettings);
             break;
         case MenuNavigation::Page::Compatibility:
+            card(RenderXeSSLibraryStatus);
             card(RenderInitializationSettings);
             card(RenderAdvancedSettings);
             card(RenderQuirksSettings);
@@ -7352,6 +7413,7 @@ void MenuCommon::RenderMainMenuTable(RenderMenuContext& ctx)
                 MenuUi::Text("Upscaler: %s", ctx.currentFeature->Name().c_str());
             card(RenderUpscalerStateMessage);
             card(RenderUpscalerInputsSettings);
+            card(RenderXeSSLibraryStatus);
             card(RenderLoggingSettings);
             if (ctx.state.nvngxIniDetected)
                 MenuUi::TextWrapped("nvngx.ini detected: use OptiScaler.ini and remove the old config.");

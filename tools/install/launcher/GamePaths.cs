@@ -38,7 +38,7 @@ namespace OptScalerNR.Launcher
             return mapped ?? path;
         }
 
-        public static string PickExe(bool isZh = false)
+        public static string PickExe(bool isZh = false, string initialDirectory = null)
         {
             try
             {
@@ -50,7 +50,14 @@ namespace OptScalerNR.Launcher
                 dlg.DereferenceLinks = false;
                 dlg.AddExtension = false;
                 dlg.ValidateNames = false;
-                if (Directory.Exists(@"C:\XboxGames"))
+                if (!string.IsNullOrEmpty(initialDirectory) && Directory.Exists(initialDirectory))
+                {
+                    dlg.InitialDirectory = initialDirectory;
+                    // Override the shell's remembered location for this specific operation.
+                    dlg.FileName = Path.Combine(initialDirectory, "*.exe");
+                    dlg.RestoreDirectory = true;
+                }
+                else if (Directory.Exists(@"C:\XboxGames"))
                     dlg.InitialDirectory = @"C:\XboxGames";
                 if (dlg.ShowDialog() != true) return null;
                 var fn = dlg.FileName;

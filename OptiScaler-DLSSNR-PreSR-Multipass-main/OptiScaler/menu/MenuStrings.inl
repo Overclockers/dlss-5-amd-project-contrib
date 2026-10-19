@@ -1,4 +1,12 @@
 // English source text is a UI lookup key, never a config identifier.
+{"XeSS loaded libraries", "XeSS 实际加载的运行库"},
+{"Source: game folder", "来源：游戏目录版本"},
+{"Source: OptiScaler library folder", "来源：OptiScaler 依赖目录版本"},
+{"Source: custom folder", "来源：自定义目录版本"},
+{"Not loaded (normal if this component is unused)", "未加载（未使用该组件时属于正常情况）"},
+{"Loaded path: %s", "加载路径：%s"},
+{"File version: %s", "文件版本：%s"},
+{"If XeSS fails or frame multipliers are limited, close the game, open Setup.bat, select this game and choose Compatibility repair. Restore game files if it does not help.", "如果 XeSS 不可用或插帧倍率受限，请关闭游戏，打开 Setup.bat，选择该游戏后点“兼容修复”。无改善可点“恢复游戏原文件”。"},
 {" (2 real + prediction)", "（2 层真实推理 + 预测）"},
 {" pass(es)", " 层"},
 {" pass(es) configured", " 层（配置值）"},

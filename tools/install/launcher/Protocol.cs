@@ -22,6 +22,7 @@ namespace OptScalerNR.Launcher
         [DataMember(Name = "backends")] public string[] Backends;
         [DataMember(Name = "activeBackend")] public string ActiveBackend;
         [DataMember(Name = "language")] public string Language;
+        [DataMember(Name = "compatibilityFingerprint")] public string CompatibilityFingerprint;
     }
 
     [DataContract]
@@ -34,6 +35,8 @@ namespace OptScalerNR.Launcher
         [DataMember(Name = "lmxxfModels")] public string LmxxfModels;
         [DataMember(Name = "shortFileContinue")] public string ShortFileContinue;
         [DataMember(Name = "foreignProxy")] public Dictionary<string, string> ForeignProxy;
+        [DataMember(Name = "xessGroups")] public string[] XessGroups;
+        [DataMember(Name = "modelSourceDll")] public string ModelSourceDll;
     }
 
     [DataContract]
@@ -56,6 +59,36 @@ namespace OptScalerNR.Launcher
         [DataMember(Name = "games")] public GameInfo[] Games;
         [DataMember(Name = "backends")] public BackendInfo[] Backends;
         [DataMember(Name = "packageRoot")] public string PackageRoot;
+        [DataMember(Name = "compatibility")] public XessCompatibility Compatibility;
+    }
+
+    [DataContract]
+    public sealed class XessCompatibility
+    {
+        [DataMember(Name = "restoreFiles")] public string[] RestoreFiles;
+        [DataMember(Name = "groups")] public XessGroup[] Groups;
+        [DataMember(Name = "active")] public bool Active;
+        [DataMember(Name = "fingerprint")] public string Fingerprint;
+        [DataMember(Name = "evidence")] public string[] Evidence;
+        [DataMember(Name = "error")] public string Error;
+    }
+
+    [DataContract]
+    public sealed class XessGroup
+    {
+        [DataMember(Name = "id")] public string Id;
+        [DataMember(Name = "ready")] public bool Ready;
+        [DataMember(Name = "different")] public bool Different;
+        [DataMember(Name = "files")] public XessFile[] Files;
+    }
+
+    [DataContract]
+    public sealed class XessFile
+    {
+        [DataMember(Name = "name")] public string Name;
+        [DataMember(Name = "gameVersion")] public string GameVersion;
+        [DataMember(Name = "packageVersion")] public string PackageVersion;
+        [DataMember(Name = "state")] public string State;
     }
 
     [DataContract]

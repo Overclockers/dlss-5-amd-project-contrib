@@ -36,7 +36,9 @@ function Get-LmxxfOriginalLayout {
         if ($b -in @(4,8,14,22)) { $layout["block$b-ds"] = 2*$c*$c }
         if ($b -in @(48,56,62,66)) { $layout["block$b-weights"] = 2*$c*$c+$c }
     }
-    foreach ($pair in @(@('head-matrix',524288),@('post70-scales',64),@('post70-head',96),@('post70-ffn',8736),@('post70-attention',8225),@('post70-history-head',32))) { $layout[$pair[0]] = $pair[1] }
+    # Original history uses the host's embedded row (NativePostWeights.h). The
+    # separate post70-history-head asset belongs to Small, not the Original layout.
+    foreach ($pair in @(@('head-matrix',524288),@('post70-scales',64),@('post70-head',96),@('post70-ffn',8736),@('post70-attention',8225))) { $layout[$pair[0]] = $pair[1] }
     return $layout
 }
 
@@ -120,7 +122,7 @@ function Copy-LmxxfModel {
 # Small assets can be prepared independently of installing Mochizuki.
 function Initialize-LmxxfSmall {
     param([string]$Pack, [string]$Dll,
-          [Parameter(Mandatory=$true)][string]$Output,
+          [Parameter(Mandatory=$true)][Alias('Output')][string]$ModelOutput,
           [string]$Python = '', [string]$Tool = (Join-Path $PSScriptRoot 'lmxxf-model.py'))
     if (-not (Test-Path -LiteralPath $Tool -PathType Leaf)) {
         throw 'Small converter missing. Re-extract the complete package.'
@@ -130,11 +132,13 @@ function Initialize-LmxxfSmall {
         $Python = Find-MochizukiPython
     }
     if (-not $Python) { throw 'lmxxf Small conversion needs Python 3.10+. Install Python and rerun Setup.' }
-    & $Python -X utf8 $Tool --verify $Output
+    # The dot-sourced Python helper has its own $Output parameter. Keep this
+    # function's destination separate so probing Python cannot clear it.
+    & $Python -X utf8 $Tool --verify $ModelOutput
     if ($LASTEXITCODE -eq 0) { Write-Host 'lmxxf Small assets verified.'; return }
     Write-Host 'Preparing lmxxf Small from your local model pack...' -ForegroundColor Cyan
     if (-not $Pack -and -not $Dll) { throw 'Supply a verified Small pack or nvngx_dlssnr.dll 310.9.16.' }
-    if ($Pack) { & $Python -X utf8 $Tool --pack $Pack --output $Output --replace }
-    else { & $Python -X utf8 $Tool --dll $Dll --output $Output --replace }
+    if ($Pack) { & $Python -X utf8 $Tool --pack $Pack --output $ModelOutput --replace }
+    else { & $Python -X utf8 $Tool --dll $Dll --output $ModelOutput --replace }
     if ($LASTEXITCODE -ne 0) { throw 'lmxxf Small conversion failed; previous model assets were preserved.' }
 }

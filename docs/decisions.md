@@ -1,3 +1,11 @@
+## 2026-10-18 — 保留依赖子目录，XeSS 替换通过安装器显式修复
+
+默认维持 `OptiScaler/` 依赖布局，不按 DLL 年龄自动覆盖游戏原文件。
+安装器自动显示 XeSS 文件差异，提供明确选组、先备份的兼容修复与同入口恢复；
+XeFG 与 XeLL 配套替换，游戏后续更新优先，恢复不覆盖未知新内容。
+修复不改变用户 INI 或 NR 后端选择；宿主显示实际加载路径，避免要求用户自行猜测 DLL。
+实现及验证入口见[安装器说明](architecture/installer.md#xess-兼容检查修复与恢复)。
+
 ## 2026-10-18 — lmxxf 0.44 Small与W16接入
 
 采用固定目标d50cde4b的31块Small网络、独立几何/历史头及decoder/down W16优化。复用Mochizuki离线Small pack与提取流程，转换为lmxxf布局并逐项验证93个SHA；不移植Mochizuki网络算子。模型只通过菜单切换，不引入F9；默认Original，保留其1..3遍偏好。Small不兼容选项/缺损资产/Mode2或3时回退Original并显示原因。模型切换重建录制链，不热改在用权重。80个双架构模块从固定源码重编，RX9070XT各档、往返切换和History专项通过；游戏、长时、gfx1200实机和Small低频适配仍有明确暂缓。详见[lmxxf 0.44消费审阅](lmxxf-044-consumer-review.md)和[模型安装](lmxxf-small-model.md)。没有准备或发布版本包。

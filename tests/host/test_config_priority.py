@@ -18,6 +18,119 @@ MENU = (ROOT / "OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/dlssnr/DlssNr_
 
 class ConfigPriorityTests(unittest.TestCase):
     @unittest.skipUnless(os.name == "nt" and shutil.which("cl"), "requires MSVC")
+    def test_proxy_library_relative_override_uses_game_exe_not_working_directory(self):
+        product = ROOT / 'OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler'
+        util = (product / 'Util.cpp').read_text(encoding='utf-8')
+        implementation = util[util.index('void Util::LoadProxyLibrary('):util.index('\nstd::map<Util::Luid', util.index('void Util::LoadProxyLibrary('))]
+        work = ROOT / 'exports/tests/xess-load-path'
+        work.mkdir(parents=True, exist_ok=True)
+        fixture = work / 'fixture.cpp'
+        fixture.write_text('extern "C" __declspec(dllexport) int Identity() { return ID; }', encoding='utf-8')
+        for directory, identity in ((work, 1), (work / 'OptiScaler', 2), (work / 'alternate', 3)):
+            directory.mkdir(exist_ok=True)
+            build = subprocess.run(['cl', '/nologo', '/LD', '/DID=' + str(identity), str(fixture),
+                                    '/Fo' + str(directory / 'fixture.obj'), '/Fe' + str(directory / 'fixture.dll'),
+                                    '/link', '/IMPLIB:' + str(directory / 'fixture.lib')],
+                                   capture_output=True, text=True, errors='replace', timeout=60)
+            self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
+        source = '''
+#include <windows.h>
+#include <filesystem>
+#include <string>
+#include <cassert>
+#define LOG_INFO(...) ((void)0)
+#define LOG_WARN(...) ((void)0)
+HMODULE dllModule = reinterpret_cast<HMODULE>(-1);
+namespace KernelBaseProxy { auto GetModuleHandleW_() {return &::GetModuleHandleW;} }
+namespace NtdllProxy { HMODULE LoadLibraryExW_Ldr(LPCWSTR p,HANDLE h,DWORD f) {return ::LoadLibraryExW(p,h,f);} }
+namespace Util {
+std::filesystem::path gameExe;
+std::filesystem::path ExePath() {return gameExe;}
+void LoadProxyLibrary(const std::wstring&,const std::wstring&,const std::wstring&,HMODULE*,HMODULE*);
+}
+''' + implementation + '''
+int wmain(int argc, wchar_t** argv) {
+    assert(argc == 2);
+    auto root = std::filesystem::path(argv[1]);
+    Util::gameExe = root / L"Game.exe";
+    std::filesystem::create_directory(root / L"different-cwd");
+    std::filesystem::current_path(root / L"different-cwd");
+    auto load = [&](std::wstring opti, std::wstring overridePath, int expected) {
+        HMODULE memory = nullptr, loaded = nullptr;
+        Util::LoadProxyLibrary(L"fixture.dll", opti, overridePath, &memory, &loaded);
+        assert(loaded != nullptr);
+        auto identity = reinterpret_cast<int(*)()>(::GetProcAddress(loaded,"Identity"));
+        assert(identity && identity() == expected);
+        ::FreeLibrary(loaded);
+    };
+    load((root / L"OptiScaler").wstring(), L"", 2);
+    load((root / L"OptiScaler").wstring(), L"alternate", 3);
+    load((root / L"OptiScaler").wstring(), L"alternate/fixture.dll", 3);
+    load((root / L"OptiScaler").wstring(), L"missing", 2);
+    load(L"", L"", 1);
+}
+'''
+        cpp, exe = work / 'load.cpp', work / 'load.exe'
+        cpp.write_text(source, encoding='utf-8')
+        build = subprocess.run(['cl', '/nologo', '/std:c++20', '/EHsc', '/utf-8', str(cpp),
+                                '/Fo' + str(work / 'load.obj'), '/Fe' + str(exe)],
+                               capture_output=True, text=True, errors='replace', timeout=60)
+        self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
+        run = subprocess.run([str(exe), str(work)], capture_output=True, text=True, errors='replace', timeout=10)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+
+    @unittest.skipUnless(os.name == "nt" and shutil.which("cl"), "requires MSVC")
+    def test_xess_library_paths_are_independent_and_preserve_explicit_preferences(self):
+        product = ROOT / 'OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler'
+        header = (product / 'Config.h').read_text(encoding='utf-8')
+        optional = header[header.index('enum HasDefaultValue'):header.index('constexpr inline int UnboundKey')]
+        bindings = CONFIG[CONFIG.index('            XeSSLibrary.set_from_config('):CONFIG.index('\n        }', CONFIG.index('            XeSSLibrary.set_from_config('))]
+        source = '''
+#include <optional>
+#include <concepts>
+#include <utility>
+#include <string>
+#include <cassert>
+''' + optional + '''
+CustomOptional<std::wstring, NoDefault> XeSSLibrary, XeFGLibrary, XeLLLibrary, XeSSDx11Library;
+bool omitSr = false;
+std::optional<std::wstring> readWString(const char*, const char* key) {
+    if (omitSr && std::string(key) == "XeSSPath") return std::nullopt;
+    return std::wstring(key, key + std::char_traits<char>::length(key));
+}
+void Read() {
+''' + bindings + '''
+}
+int main() {
+    Read();
+    assert(XeSSLibrary.value() == L"XeSSPath");
+    assert(XeFGLibrary.value() == L"XeFGPath");
+    assert(XeLLLibrary.value() == L"XeLLPath");
+    assert(XeSSDx11Library.value() == L"XeSSDx11Path");
+    XeSSLibrary = std::wstring(L"user-sr"); XeFGLibrary = std::wstring(L"user-fg"); XeLLLibrary = std::wstring(L"user-ll");
+    Read();
+    assert(XeSSLibrary.value_for_config_or(L"") == L"user-sr");
+    assert(XeFGLibrary.value_for_config_or(L"") == L"user-fg");
+    assert(XeLLLibrary.value_for_config_or(L"") == L"user-ll");
+    XeSSLibrary.reset(); XeFGLibrary.reset(); XeLLLibrary.reset(); omitSr = true;
+    Read();
+    assert(!XeSSLibrary.has_value());
+    assert(XeFGLibrary.value() == L"XeFGPath");
+    assert(XeLLLibrary.value() == L"XeLLPath");
+}
+'''
+        work = ROOT / 'exports/tests/xess-config'
+        work.mkdir(parents=True, exist_ok=True)
+        cpp, exe = work / 'bindings.cpp', work / 'bindings.exe'
+        cpp.write_text(source, encoding='utf-8')
+        result = subprocess.run(['cl', '/nologo', '/std:c++20', '/EHsc', '/utf-8', str(cpp),
+                                 '/Fo' + str(work / 'bindings.obj'), '/Fe' + str(exe)],
+                                capture_output=True, text=True, errors='replace', timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        run = subprocess.run([str(exe)], capture_output=True, text=True, errors='replace', timeout=10)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+
+    @unittest.skipUnless(os.name == "nt" and shutil.which("cl"), "requires MSVC")
     def test_mochizuki_reset_preserves_standalone_aco(self):
         product = ROOT / 'OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler'
         header = (product / 'Config.h').read_text(encoding='utf-8')

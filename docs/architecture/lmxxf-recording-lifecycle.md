@@ -27,6 +27,27 @@ silently certify it. Cross-queue replay waits for the previous consumer fence be
 submitting its producer. UINT64_MAX is not normal completion; confirmed device removal
 has a separate teardown path.
 
+## DX11 companion command lists
+
+The DX11-to-DX12 upscaler companion can create its device through the original
+D3D12 factory, bypassing native-game list creation hooks. When startup submission
+policy requires recording proxies, `IFeature_Dx11wDx12::CreateD3D12Objects` explicitly
+creates its DIRECT lists through `CreateProxiedCommandList`. This policy does not
+depend on NR being enabled, and retains convenience-mode backend switching.
+
+`AmdBridge::EnsureRecordingSubmissionHook` installs queue notification and enables
+proxy expansion before the first companion list is exposed, including feature
+initialization uploads. Both initialization and frame submission use this route;
+normal unsplit lists are unwrapped and split lists retain recording callbacks and
+completion proofs. Allocator reuse still waits for the companion's per-buffer fence.
+Recreated companion lists use the same setup. Hook setup failure rejects companion
+creation rather than submitting a proxy to a native queue without expansion.
+
+This does not enable global creation wrapping or change early EXE/Unity preferences.
+It does not repair retained native-DX12 game lists created before wrapping starts.
+The `DX11 companion: recordingProxy=... submissionExpansion=...` log identifies the
+companion setup; successful game inference still requires runtime and game validation.
+
 ## Replayable resources
 
 Codec, RGB input and RGB output private resources start in NON_PIXEL_SHADER_RESOURCE.

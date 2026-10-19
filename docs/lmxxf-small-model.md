@@ -7,12 +7,16 @@ lmxxf 菜单的 **Network model** 可选 Original（71块）和 Small（310.9.16
 启动器安装 lmxxf 时可选 Original、Small 或两个模型。安装脚本支持
 `-LmxxfModels original|small|both`；缺少明确选择的非交互 CLI 按可用来源决定范围。
 两套权重分别从安装包和游戏目录检测、复用与补装，不删除未选中的现有模型。
-Original 检查 185 个必需张量的尺寸；Small 检查清单、尺寸与 SHA256。
+Original 检查 184 个必需张量的尺寸；Small 检查清单、尺寸与 SHA256。
+Original 的历史投影行由宿主内置，不要求根目录存在 `post70-history-head`；
+Small 的独立历史投影行仍是必需资产。
 安装包已有 Original 时仍可从游戏补回 Small，反之亦然；已有有效模型不会被覆盖。
 
 只选 Small 时不要求同时安装 Original；新建或覆盖 INI 默认选 Small。
 保留 INI 时保留显式模型偏好，若缺少该偏好需要的模型，会在写入前明确拒绝。
 现成 Small 权重位于 `native-game-tiled-assets/small`，复用不需要 Python。
+检测到受支持 DLL 或模型包时显示“Small 未安装（可提取）”，不代表已存在 Small 权重。
+仅选择 Original 会直接复用 Original，不提取 Small。
 选择 Small 且只有本地 `dlssnr-small.bin` 或受支持 DLL 时，安装器会先转换、校验，
 再写入游戏目录。转换需要 Python3.10+，只使用标准库，与是否安装 Mochizuki 无关。
 没有该包时，可从用户自己提供的受支持 `nvngx_dlssnr.dll`（310.9.16）离线准备：

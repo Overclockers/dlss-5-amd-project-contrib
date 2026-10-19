@@ -3,6 +3,8 @@
 #include "IFeature_Dx11wDx12.h"
 
 #include <dlssnr/DlssNr.h>
+#include <dlssnr/backend/Selector.h>
+#include <dlssnr/submission/SubmissionHooks.h>
 
 #include <Config.h>
 
@@ -31,6 +33,19 @@ bool IFeature_Dx11wDx12::CreateD3D12Objects()
 {
     HRESULT result;
 
+    // This device can be created through the original D3D12 factory, bypassing
+    // native-game CreateCommandList hooks. Own the recording boundary explicitly;
+    // early EXE/Unity wrapping cannot cover lists created by this bridge.
+    // Startup policy also covers NR initially off and convenience backend switches.
+    const bool recordingProxy = DlssNr::Backend::SubmissionHooksWanted();
+    if (recordingProxy &&
+        (Dx12CommandListType != D3D12_COMMAND_LIST_TYPE_DIRECT ||
+         !DlssNr::AmdBridge::EnsureRecordingSubmissionHook(Dx12CommandQueue)))
+    {
+        LOG_ERROR("DX11 companion: could not prepare recording proxy submission");
+        return false;
+    }
+
     for (size_t i = 0; i < DX11WDX12_NUM_OF_BUFFERS; i++)
     {
         if (Dx12CommandAllocator[i] == nullptr)
@@ -47,9 +62,15 @@ bool IFeature_Dx11wDx12::CreateD3D12Objects()
 
         if (Dx12CommandList[i] == nullptr && Dx12CommandAllocator[i] != nullptr)
         {
-            // CreateCommandList
-            result = _dx11on12Device->CreateCommandList(0, Dx12CommandListType, Dx12CommandAllocator[i], nullptr,
-                                                        IID_PPV_ARGS(&Dx12CommandList[i]));
+            // Install expansion before exposing a proxy, including the Init upload.
+            // The helper suppresses nested wrapping when creation is already hooked.
+            if (recordingProxy)
+                result = DlssNr::Submission::Hooks::CreateProxiedCommandList(
+                    _dx11on12Device, 0, Dx12CommandListType, Dx12CommandAllocator[i], nullptr,
+                    IID_PPV_ARGS(&Dx12CommandList[i]));
+            else
+                result = _dx11on12Device->CreateCommandList(0, Dx12CommandListType, Dx12CommandAllocator[i], nullptr,
+                                                          IID_PPV_ARGS(&Dx12CommandList[i]));
 
             if (result != S_OK)
             {
@@ -57,9 +78,17 @@ bool IFeature_Dx11wDx12::CreateD3D12Objects()
                 return false;
             }
 
-            Dx12CommandList[i]->Close();
+            result = Dx12CommandList[i]->Close();
+            if (FAILED(result))
+            {
+                LOG_ERROR("DX11 companion: initial command list Close failed: {:X}", (UINT) result);
+                return false;
+            }
         }
     }
+
+    LOG_INFO("DX11 companion: recordingProxy={} submissionExpansion={} queue={:p}", recordingProxy,
+             DlssNr::Submission::Hooks::ExpandEnabled(), reinterpret_cast<void*>(Dx12CommandQueue));
 
     if (Dx12Fence == nullptr)
     {
