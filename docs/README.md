@@ -10,6 +10,7 @@
 | [architecture/optiscaler-upstream.md](architecture/optiscaler-upstream.md) | OptiScaler定向整合来源、已接模块、生命周期边界与延期 |
 | [mochizuki.md](mochizuki.md) | 第三后端：安装、模型提取、菜单、生命周期、构建和验证范围 |
 | [architecture/mochizuki-upstream-extensions.md](architecture/mochizuki-upstream-extensions.md) | Mochizuki 核心扩展的必要性、固定来源补丁与上游提案边界 |
+| [architecture/mochizuki-split-transport.md](architecture/mochizuki-split-transport.md) | Mochizuki split 传输开销、共享颜色纹理离线结果及产品接入前的资源/回退约束 |
 | [post-sr-nr.md](post-sr-nr.md) | 三后端实验性 SR → NR：设置、分辨率、输入限制和验收 |
 | [xefg-mfg-notes.md](xefg-mfg-notes.md) | XeFG 多帧生成插件宿主兼容、`HighResMV` 自动检测与 4K 性能验证边界 |
 | [architecture/overview.md](architecture/overview.md) | 管线、两个后端怎么加载与选择、代码归属与许可证、日志位置、如何查看 wilsjo2 上游 |
