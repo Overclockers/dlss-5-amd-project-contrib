@@ -1,6 +1,6 @@
 // Private adapter resource. A recording retains this owner independently of the
 // rest of FrameBuffers, so changing transport never changes a closed recording.
-struct ColourInput
+struct ImageInput
 {
     VkDevice device {};
     SharedBuffer upload;
@@ -18,9 +18,9 @@ struct ColourInput
     uint64_t generation = ++nextGeneration;
     static inline std::atomic<uint64_t> nextGeneration { 0 };
 
-    explicit ColourInput(VkDevice d) : device(d) {}
-    ColourInput(const ColourInput&) = delete;
-    ColourInput& operator=(const ColourInput&) = delete;
+    explicit ImageInput(VkDevice d) : device(d) {}
+    ImageInput(const ImageInput&) = delete;
+    ImageInput& operator=(const ImageInput&) = delete;
     bool Shared() const { return texture != nullptr; }
     bool Matches(UINT w, UINT h, VkFormat f, VkImageUsageFlags u) const
     { return width == w && height == h && format == f && usage == u; }
@@ -36,7 +36,7 @@ struct ColourInput
 
     // The session retains every pending initialization until its fence is proven
     // complete, and quarantines these owners on uncertain/device-lost completion.
-    ~ColourInput()
+    ~ImageInput()
     {
         if (initDone) vkDestroyFence(device, initDone, nullptr);
         if (initPool) vkDestroyCommandPool(device, initPool, nullptr);
@@ -59,9 +59,11 @@ struct ColourInput
 
     // Query allocation sizes before allocating/importing the optional memory.
     // VkImage itself is only an unbound descriptor at this point.
-    D3D12_RESOURCE_DESC PlanShared(ID3D12Device* d, Vulkan& vk, UINT w, UINT h)
+    D3D12_RESOURCE_DESC PlanShared(ID3D12Device* d, Vulkan& vk, UINT w, UINT h, VkFormat selected = VK_FORMAT_R16G16B16A16_SFLOAT)
     {
-        width = w; height = h; format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        if (selected != VK_FORMAT_R16G16B16A16_SFLOAT && selected != VK_FORMAT_R16G16_SFLOAT)
+            throw NrError(NrError::Unsupported, "shared input format is unsupported");
+        width = w; height = h; format = selected;
         usage = kImageUsage; family = vk.family;
         const auto handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT;
         VkPhysicalDeviceExternalImageFormatInfo ext { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO };
@@ -72,26 +74,26 @@ struct ColourInput
         VkImageFormatProperties2 fp { VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2, &ep };
         const auto result = vkGetPhysicalDeviceImageFormatProperties2(vk.physical, &fi, &fp);
         if (result != VK_SUCCESS && result != VK_ERROR_FORMAT_NOT_SUPPORTED)
-            VkCheck(result, "shared colour capabilities");
+            VkCheck(result, "shared input capabilities");
         if (result == VK_ERROR_FORMAT_NOT_SUPPORTED ||
             !(ep.externalMemoryProperties.externalMemoryFeatures & VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT) ||
             !(ep.externalMemoryProperties.compatibleHandleTypes & handleType) ||
             w > fp.imageFormatProperties.maxExtent.width || h > fp.imageFormatProperties.maxExtent.height)
-            throw NrError(NrError::Unsupported, "shared RGBA16F colour import is unavailable");
+            throw NrError(NrError::Unsupported, "shared input import is unavailable");
 
-        D3D12_FEATURE_DATA_FORMAT_SUPPORT support { DXGI_FORMAT_R16G16B16A16_FLOAT };
-        Check(d->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &support, sizeof support), "shared colour format");
+        D3D12_FEATURE_DATA_FORMAT_SUPPORT support { selected == VK_FORMAT_R16G16_SFLOAT ? DXGI_FORMAT_R16G16_FLOAT : DXGI_FORMAT_R16G16B16A16_FLOAT };
+        Check(d->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &support, sizeof support), "shared input format");
         if (!(support.Support1 & D3D12_FORMAT_SUPPORT1_TEXTURE2D) ||
             !(support.Support1 & D3D12_FORMAT_SUPPORT1_TYPED_UNORDERED_ACCESS_VIEW))
-            throw NrError(NrError::Unsupported, "shared RGBA16F colour texture is unavailable");
+            throw NrError(NrError::Unsupported, "shared input texture is unavailable");
         D3D12_RESOURCE_DESC rd {};
         rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
         rd.Width = w; rd.Height = h; rd.DepthOrArraySize = rd.MipLevels = rd.SampleDesc.Count = 1;
-        rd.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        rd.Format = support.Format;
         rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
         const auto allocation = d->GetResourceAllocationInfo(0, 1, &rd);
         if (allocation.SizeInBytes == UINT64_MAX)
-            throw NrError(NrError::Unsupported, "shared colour allocation description is unsupported");
+            throw NrError(NrError::Unsupported, "shared input allocation description is unsupported");
         VkExternalMemoryImageCreateInfo external { VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO };
         external.handleTypes = handleType;
         VkImageCreateInfo ci { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, &external };
@@ -99,7 +101,7 @@ struct ColourInput
         ci.mipLevels = ci.arrayLayers = 1; ci.samples = VK_SAMPLE_COUNT_1_BIT;
         ci.tiling = VK_IMAGE_TILING_OPTIMAL; ci.usage = usage;
         ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE; ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        ImportCheck(vkCreateImage(device, &ci, nullptr, &image.image), "shared colour VkImage");
+        ImportCheck(vkCreateImage(device, &ci, nullptr, &image.image), "shared input VkImage");
         VkMemoryRequirements req {};
         vkGetImageMemoryRequirements(device, image.image, &req);
         bytes = std::max<UINT64>(req.size, allocation.SizeInBytes);
@@ -110,14 +112,14 @@ struct ColourInput
     {
         D3D12_HEAP_PROPERTIES heap {}; heap.Type = D3D12_HEAP_TYPE_DEFAULT;
         Check(d->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_SHARED, &rd, D3D12_RESOURCE_STATE_COMMON,
-                                        nullptr, IID_PPV_ARGS(&texture)), "shared colour texture");
+                                        nullptr, IID_PPV_ARGS(&texture)), "shared input texture");
         HANDLE handle {};
-        Check(d->CreateSharedHandle(texture, nullptr, GENERIC_ALL, nullptr, &handle), "shared colour handle");
+        Check(d->CreateSharedHandle(texture, nullptr, GENERIC_ALL, nullptr, &handle), "shared input handle");
         struct Close { HANDLE handle; ~Close() { CloseHandle(handle); } } close { handle };
         VkMemoryRequirements req {}; vkGetImageMemoryRequirements(device, image.image, &req);
         VkMemoryWin32HandlePropertiesKHR hp { VK_STRUCTURE_TYPE_MEMORY_WIN32_HANDLE_PROPERTIES_KHR };
         ImportCheck(vk.memoryHandleProperties(device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT, handle, &hp),
-                    "shared colour handle properties");
+                    "shared input handle properties");
         VkMemoryDedicatedAllocateInfo dedicated { VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO };
         dedicated.image = image.image;
         VkImportMemoryWin32HandleInfoKHR import { VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR, &dedicated };
@@ -125,8 +127,8 @@ struct ColourInput
         VkMemoryAllocateInfo ai { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &import };
         ai.allocationSize = bytes;
         ai.memoryTypeIndex = vk.MemoryType(req.memoryTypeBits & hp.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        ImportCheck(vkAllocateMemory(device, &ai, nullptr, &image.memory), "shared colour import");
-        VkCheck(vkBindImageMemory(device, image.image, image.memory, 0), "shared colour bind");
+        ImportCheck(vkAllocateMemory(device, &ai, nullptr, &image.memory), "shared input import");
+        VkCheck(vkBindImageMemory(device, image.image, image.memory, 0), "shared input bind");
     }
 
     void Ownership(VkCommandBuffer c, bool acquire, VkImageLayout before, VkImageLayout after) const
@@ -147,24 +149,24 @@ struct ColourInput
     {
         VkCommandPoolCreateInfo pi { VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
         pi.queueFamilyIndex = family; pi.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-        VkCheck(vkCreateCommandPool(device, &pi, nullptr, &initPool), "shared colour init pool");
+        VkCheck(vkCreateCommandPool(device, &pi, nullptr, &initPool), "shared input init pool");
         VkCommandBufferAllocateInfo ai { VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
         ai.commandPool = initPool; ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; ai.commandBufferCount = 1;
         VkCommandBuffer c {};
-        VkCheck(vkAllocateCommandBuffers(device, &ai, &c), "shared colour init command");
+        VkCheck(vkAllocateCommandBuffers(device, &ai, &c), "shared input init command");
         VkCommandBufferBeginInfo bi { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        VkCheck(vkBeginCommandBuffer(c, &bi), "shared colour init begin");
+        VkCheck(vkBeginCommandBuffer(c, &bi), "shared input init begin");
         ImageBarrier(c, image.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                      VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
         Ownership(c, false, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
-        VkCheck(vkEndCommandBuffer(c), "shared colour init end");
+        VkCheck(vkEndCommandBuffer(c), "shared input init end");
         VkFenceCreateInfo fi { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
-        VkCheck(vkCreateFence(device, &fi, nullptr, &initDone), "shared colour init fence");
+        VkCheck(vkCreateFence(device, &fi, nullptr, &initDone), "shared input init fence");
         VkSubmitInfo si { VK_STRUCTURE_TYPE_SUBMIT_INFO };
         si.commandBufferCount = 1; si.pCommandBuffers = &c;
-        VkCheck(vkQueueSubmit(vk.queue, 1, &si, initDone), "shared colour initialization");
+        VkCheck(vkQueueSubmit(vk.queue, 1, &si, initDone), "shared input initialization");
         initSubmitted = true;
     }
 
@@ -173,7 +175,7 @@ struct ColourInput
         if (!initSubmitted) return false;
         const auto result = vkGetFenceStatus(device, initDone);
         if (result == VK_NOT_READY) return false;
-        VkCheck(result, "shared colour initialization status");
+        VkCheck(result, "shared input initialization status");
         return true;
     }
 

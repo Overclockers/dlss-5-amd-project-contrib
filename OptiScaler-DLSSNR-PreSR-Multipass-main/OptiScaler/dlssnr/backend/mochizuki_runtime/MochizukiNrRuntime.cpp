@@ -1,7 +1,7 @@
 // MochizukiNrRuntime.dll: mochizuki0323's Vulkan network (third_party/mochizuki) behind the lmxxf C ABI.
 //
 // The network runs on a Vulkan device of its own, on the game's adapter. Before the cut, the game's colour and
-// motion vectors are copied into D3D12 buffers that Vulkan imports. Between the two halves of the game's command
+// motion vectors are captured into imported D3D12 resources (shared images for eligible split inputs, buffers otherwise). Between the two halves of the game's command
 // list, the game queue signals a shared fence (toVk), a Vulkan submit waits on it, runs the network and writes the
 // result into a third shared buffer, then signals a second shared fence (fromVk), which the game queue waits on.
 // After the cut, the result is copied into the texture handed to Super Resolution. Any game queue may run the list
@@ -211,6 +211,9 @@ struct TestHooks
     uint64_t phaseSubmitFailAt = 0; // MZ_TEST_PHASE_SUBMIT_FAIL_AT=N: fail phase N of an inline chain
     uint64_t computeRefuseAt = 0; // MZ_TEST_COMPUTE_REFUSE_AT=N: Enqueue N's whole-chain compute recording is refused
     int sharedInput = 1; // MZ_TEST_SHARED_INPUT=0 keeps the complete buffer route; 1 requests safe admission.
+    int sharedMotion = 1; // MZ_TEST_SHARED_MOTION=0 retains buffer motion independently of colour.
+    bool rejectSharedMotion = false; // MZ_TEST_REJECT_SHARED_MOTION=1: recoverable handle rejection.
+    uint64_t sharedMotionDelay = 0; // MZ_TEST_SHARED_MOTION_DELAY=N: defer ready admission.
     bool rejectSharedInput = false; // MZ_TEST_REJECT_SHARED_INPUT=1: recoverable handle rejection.
     uint64_t sharedInputDelay = 0; // MZ_TEST_SHARED_INPUT_DELAY=N: defer ready admission N prepares.
     uint64_t inlineChain = 0; // MZ_TEST_INLINE_CHAIN=1: an inline frame must run whole on compute; =2: in segments;
@@ -252,6 +255,9 @@ const TestHooks& Hooks()
         h.inlineChain = number("MZ_TEST_INLINE_CHAIN");
         h.computeRefuseAt = number("MZ_TEST_COMPUTE_REFUSE_AT");
         if (const char* value = std::getenv("MZ_TEST_SHARED_INPUT")) h.sharedInput = std::strcmp(value, "0") != 0;
+        if (const char* value = std::getenv("MZ_TEST_SHARED_MOTION")) h.sharedMotion = std::strcmp(value, "0") != 0;
+        h.rejectSharedMotion = on("MZ_TEST_REJECT_SHARED_MOTION");
+        h.sharedMotionDelay = number("MZ_TEST_SHARED_MOTION_DELAY");
         h.rejectSharedInput = on("MZ_TEST_REJECT_SHARED_INPUT");
         h.sharedInputDelay = number("MZ_TEST_SHARED_INPUT_DELAY");
         return h;
@@ -1966,7 +1972,7 @@ void CopyToBuffer(ID3D12GraphicsCommandList* c, ID3D12Resource* texture, D3D12_R
     Transition(c, texture, D3D12_RESOURCE_STATE_COPY_SOURCE, state);
 }
 
-#include "MochizukiColourInput.inl"
+#include "MochizukiImageInput.inl"
 
 struct Job
 {
@@ -2182,7 +2188,8 @@ bool SameDesc(const D3D12_RESOURCE_DESC& a, const D3D12_RESOURCE_DESC& b)
 struct FrameBuffers
 {
     std::shared_ptr<FrameBuffers> allocation;
-    std::shared_ptr<ColourInput> colourInput;
+    std::shared_ptr<ImageInput> colourInput;
+    std::shared_ptr<ImageInput> motionInput;
     Geometry geometry;
     D3D12_RESOURCE_DESC resultDesc {};
     Footprint colourFootprint, motionFootprint;
@@ -2212,6 +2219,7 @@ struct FrameBuffers
         if (this == &other) return;
         allocation = std::move(other.allocation);
         colourInput = std::move(other.colourInput);
+        motionInput = std::move(other.motionInput);
         geometry = std::exchange(other.geometry, {});
         resultDesc = std::exchange(other.resultDesc, {});
         colourFootprint = std::exchange(other.colourFootprint, {});
@@ -2237,6 +2245,7 @@ struct FrameBuffers
     {
         Quarantine(allocation);
         Quarantine(colourInput);
+        Quarantine(motionInput);
     }
 
     void Release(VkDevice device)
@@ -2253,10 +2262,14 @@ struct FrameBuffers
             output.Release(device);
             firstOutput.Release(device);
             firstColour.Release(device);
-            motionBuffer.Release(device);
+            if (motionInput) {
+                motionBuffer = {}; motionImage = {}; motionInput.reset();
+            } else {
+                motionBuffer.Release(device);
+                motionImage.Release(device);
+            }
             canonicalColour.Release(device);
             convert.Release(device);
-            motionImage.Release(device);
             motionRescale.Release(device);
             motionScaled.Release(device);
         }
@@ -2414,16 +2427,23 @@ struct Session
     }
     std::wstring assets;
     std::shared_ptr<FrameBuffers> allocation;
-    std::shared_ptr<ColourInput> colourInput;
-    std::shared_ptr<ColourInput> pendingColour;
-    std::vector<std::shared_ptr<ColourInput>> colourInitializations;
-    std::vector<std::shared_ptr<ColourInput>> retiredColours;
-    std::weak_ptr<ColourInput> bufferColourCache, sharedColourCache;
+    std::shared_ptr<ImageInput> colourInput;
+    std::shared_ptr<ImageInput> motionInput;
+    std::shared_ptr<ImageInput> pendingColour;
+    std::vector<std::shared_ptr<ImageInput>> inputInitializations;
+    std::vector<std::shared_ptr<ImageInput>> retiredInputs;
+    std::weak_ptr<ImageInput> bufferColourCache, sharedColourCache;
     Hold<Geometry> sharedColourHold;
     Hold<Geometry> bufferColourHold;
     int sharedInputRequest = Hooks().sharedInput;
     uint64_t sharedInputDelay = Hooks().sharedInputDelay;
     uint64_t loggedColourGeneration = 0;
+    std::shared_ptr<ImageInput> pendingMotion;
+    std::weak_ptr<ImageInput> bufferMotionCache, sharedMotionCache;
+    Hold<Geometry> sharedMotionHold, bufferMotionHold;
+    int sharedMotionRequest = Hooks().sharedMotion;
+    uint64_t sharedMotionDelay = Hooks().sharedMotionDelay;
+    uint64_t loggedMotionGeneration = 0;
 
     std::unordered_map<void*, std::unique_ptr<Recording>> recordings;
     static constexpr uint32_t kRecordingSlots = 4;
@@ -3290,6 +3310,7 @@ struct Session
         // before optional trace/awaited bookkeeping can allocate or throw.
         job.vkFinished = finished;
         if (colourInput) colourInput->finished = finished;
+        if (motionInput) motionInput->finished = finished;
         if (traceOn) {
             if (!tracer.joinable()) { try { tracer = std::thread([this] { TraceLoop(); }); } catch (...) { traceOn = false; } }
             NetTrace t; t.produced = produced; t.finished = finished; t.enq = traceEnq ? traceEnq : TraceQpc(); t.sub = TraceQpc();
@@ -3492,7 +3513,7 @@ struct Session
         std::lock_guard lock(jobMutex);
         if (!orphaned)
             return;
-        for (ID3D12Resource* r : { colourInput && colourInput->Shared() ? colourInput->texture : input.resource, motionBuffer.resource, output.resource, result, firstOutput.resource, firstResult })
+        for (ID3D12Resource* r : { colourInput && colourInput->Shared() ? colourInput->texture : input.resource, motionInput && motionInput->Shared() ? motionInput->texture : motionBuffer.resource, output.resource, result, firstOutput.resource, firstResult })
             if (r)
             {
                 r->AddRef();
@@ -3540,6 +3561,7 @@ struct Session
         FrameBuffers b;
         b.allocation = std::move(allocation);
         b.colourInput = std::move(colourInput);
+        b.motionInput = std::move(motionInput);
         b.geometry = std::exchange(geometry, {});
         b.resultDesc = bufferResultDesc;
         b.colourFootprint = colourFootprint;
@@ -3598,7 +3620,7 @@ struct Session
     }
 
     // The frame's buffers for g; a bucketed geometry with motion adds its bucket-sized motion image.
-    static UINT64 FrameBytes(const Geometry& g, const ColourInput* actualColour = nullptr)
+    static UINT64 FrameBytes(const Geometry& g, const ImageInput* actualColour = nullptr, const ImageInput* actualMotion = nullptr)
     {
         const UINT64 scaled = g.bucketed ? MotionFormat(g.motionFormat).bytes : 0;
         UINT64 first = 0;
@@ -3619,10 +3641,18 @@ struct Session
         const UINT64 ordinaryColour = buffer + colourBytes * g.width * g.height + 65536;
         // Preserve the calibrated allowance for the other resources. Account for
         // the buffer floor, then replace only the colour term for an admitted route.
-        const UINT64 baseline = std::max(kFramePixelBytes * g.width * g.height,
-                                        ordinaryColour + UINT64(32) * g.width * g.height);
-        return baseline - ordinaryColour + (actualColour ? actualColour->bytes : ordinaryColour) +
-               scaled * g.width * g.height + first;
+        UINT64 ordinaryMotion = 0;
+        if (g.motionFormat) {
+            const UINT64 bpp = MotionFormat(g.motionFormat).bytes;
+            const UINT64 motionPitch = (UINT64(g.motionWidth) * bpp + 255) & ~UINT64(255);
+            ordinaryMotion = std::max((motionPitch * g.motionHeight + 65535) & ~UINT64(65535), UINT64(16) << 20) +
+                             bpp * g.motionWidth * g.motionHeight + 65536;
+        }
+        const UINT64 baseline = std::max({kFramePixelBytes * g.width * g.height,
+            ordinaryColour + UINT64(32) * g.width * g.height,
+            ordinaryColour + ordinaryMotion + UINT64(16) * g.width * g.height});
+        return baseline - ordinaryColour - ordinaryMotion + (actualColour ? actualColour->bytes : ordinaryColour) +
+               (actualMotion ? actualMotion->bytes : ordinaryMotion) + scaled * g.width * g.height + first;
     }
 
     // A network measured: `bytes` is what it took, or gave back, in this process's VRAM.
@@ -3709,7 +3739,7 @@ struct Session
         b.resultDesc = desc;
         b.colourFootprint = Footprint(colourDxgi, cf.bytes, g.width, g.height);
         b.colourVk = cf.vk;
-        b.colourInput = std::make_shared<ColourInput>(vk.device);
+        b.colourInput = std::make_shared<ImageInput>(vk.device);
         b.colourInput->CreateBuffer(device, vk, b.colourFootprint, cf.vk, g.width, g.height,
                                    g.canonicalise ? kImageUsage | VK_IMAGE_USAGE_STORAGE_BIT : kImageUsage);
         b.input = b.colourInput->upload;
@@ -3734,8 +3764,10 @@ struct Session
         if (mf.vk)
         {
             b.motionFootprint = Footprint(g.motionFormat, mf.bytes, g.motionWidth, g.motionHeight);
-            b.motionBuffer.Create(device, vk, b.motionFootprint.bytes);
-            b.motionImage.Create(vk, mf.vk, g.motionWidth, g.motionHeight);
+            b.motionInput = std::make_shared<ImageInput>(vk.device);
+            b.motionInput->CreateBuffer(device, vk, b.motionFootprint, mf.vk, g.motionWidth, g.motionHeight, kImageUsage);
+            b.motionBuffer = b.motionInput->upload;
+            b.motionImage = b.motionInput->image;
             if (g.bucketed)
                 b.motionScaled.Create(vk, mf.vk, g.width, g.height,
                                       g.computeMotion ? kImageUsage | VK_IMAGE_USAGE_STORAGE_BIT : kImageUsage);
@@ -3760,18 +3792,21 @@ struct Session
         // Each snapshot retains its colour owner directly. The allocation of the
         // other resources must not pin an obsolete buffer carrier after a route switch.
         raw->input = {}; raw->colourImage = {}; raw->colourInput.reset();
+        raw->motionBuffer = {}; raw->motionImage = {}; raw->motionInput.reset();
         b.allocation = std::shared_ptr<FrameBuffers>(raw, [dev = vk.device](FrameBuffers* p) {
             p->Release(dev); delete p;
         });
     }
 
 #include "MochizukiColourRouting.inl"
+#include "MochizukiMotionRouting.inl"
 
     // The frames take b over (there is no geometry now); its passthrough is recorded when first used. Render thread.
     void UseBuffers(FrameBuffers& b)
     {
         allocation = std::move(b.allocation);
         colourInput = std::move(b.colourInput);
+        motionInput = std::move(b.motionInput);
         bufferResultDesc = b.resultDesc;
         colourFootprint = b.colourFootprint;
         motionFootprint = b.motionFootprint;
@@ -5486,7 +5521,13 @@ struct Session
         // the vectors laid over the subrect (dynamic resolution).
         VkImage motionSource = motionImage.image;
         uint32_t motionW = job.motionWidth, motionH = job.motionHeight;
-        if (motion && job.motionPath == Job::Uploaded)
+        const bool sharedMotion = motionInput && motionInput->Shared();
+        if (sharedMotion) {
+            if (!sharedColour || job.motionPath != Job::Uploaded || motionW != w || motionH != h)
+                throw std::logic_error("shared motion recording has incompatible geometry or colour route");
+            motionInput->Ownership(c, true, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
+        }
+        else if (motion && job.motionPath == Job::Uploaded)
             upload(motionBuffer, motionImage, motionFootprint, motionW, motionH, false);
         else if (motion && job.motionPath == Job::Padded)
         {
@@ -5820,6 +5861,8 @@ struct Session
         vkCmdCopyImageToBuffer(c, net->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, output.buffer, 1, &out);
         if (sharedColour)
             colourInput->Ownership(c, false, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
+        if (sharedMotion)
+            motionInput->Ownership(c, false, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
         VkCheck(vkEndCommandBuffer(c), "vkEndCommandBuffer");
 
         // Plan A: report the output pass. The first conversions are named individually (they are what tells a
@@ -5907,7 +5950,7 @@ struct Session
         // The private Vulkan device still needs its own completion proof (and the
         // builder was joined above). On loss, retain its imported resources.
         if (gpuUsed && !deviceLost && vk.device &&
-            (VulkanIdle(kDrainWaitMs) != VK_SUCCESS || !ColourInitializationsDone(kDrainWaitMs)))
+            (VulkanIdle(kDrainWaitMs) != VK_SUCCESS || !InputInitializationsDone(kDrainWaitMs)))
             Lose("the session ended with Vulkan work that did not finish");
         if (gpuUsed && deviceLost)
         {
@@ -5917,9 +5960,11 @@ struct Session
             Quarantine(built);
             Quarantine(allocation);
             Quarantine(colourInput);
+            Quarantine(motionInput);
+            Quarantine(pendingMotion);
             Quarantine(pendingColour);
-            for (auto& input : colourInitializations) Quarantine(input);
-            for (auto& input : retiredColours) Quarantine(input);
+            for (auto& input : inputInitializations) Quarantine(input);
+            for (auto& input : retiredInputs) Quarantine(input);
             for (auto& b : buried) b.buffers.KeepOnLoss();
             for (auto& b : recordingPool) b.KeepOnLoss();
             recordingPool.clear();
@@ -5939,8 +5984,9 @@ struct Session
         exposureSnapshot.reset();
         retired.clear();
         pendingColour.reset();
-        colourInitializations.clear();
-        retiredColours.clear();
+        pendingMotion.reset();
+        inputInitializations.clear();
+        retiredInputs.clear();
         ReleaseGeometry();
         for (auto& pooled : recordingPool) pooled.Release(vk.device);
         recordingPool.clear();
@@ -6471,9 +6517,13 @@ int32_t CoreRecordInputs(void* context, void* job, void* command_list)
                          s->colourInput->Capture(c, j.colour, j.colourState);
                      else
                          CopyToBuffer(c, j.colour, j.colourState, s->input.resource, s->colourFootprint, j.width, j.height);
-                     if (j.motion)
-                         CopyToBuffer(c, j.motion, j.motionState, s->motionBuffer.resource, s->motionFootprint,
-                                      j.motionWidth, j.motionHeight);
+                     if (j.motion) {
+                         if (s->motionInput && s->motionInput->Shared())
+                             s->motionInput->Capture(c, j.motion, j.motionState);
+                         else
+                             CopyToBuffer(c, j.motion, j.motionState, s->motionBuffer.resource, s->motionFootprint,
+                                          j.motionWidth, j.motionHeight);
+                     }
                      // Exposure (MochizukiAutoExposure.h). Both probes ride this list, which carries the tail
                      // EndRecordingExecution is handed at the end of the frame, so a value is picked up one frame
                      // later once that tail has passed - nothing here waits on the GPU. Everything here runs under

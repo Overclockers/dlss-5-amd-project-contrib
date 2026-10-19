@@ -1,8 +1,8 @@
-# Mochizuki split 共享颜色输入
+# Mochizuki split 共享颜色与 motion 输入
 
 ## 状态（2026-10-19）
 
-共享颜色纹理已接入产品适配器。符合下述条件的 split 录制默认申请共享 texture，
+共享颜色与受限 motion 纹理已接入产品适配器。符合下述条件的 split 录制默认申请共享 texture，
 初始化完成后采用；不支持、初始化未完成或预算不足时继续执行 buffer NR。
 不新增菜单/INI 开关，不调整模型、精度、时域历史或合成语义。仅在载体 generation
 变化及申请失败/退避时记录路线信息，不增加逐帧正常日志。
@@ -83,19 +83,22 @@ RGBA16F motion 的颜色上传区间约减少 0.142 ms，捕获约减少 0.015�
 
 第一版只覆盖 RGBA16F、全尺寸单 mip/单层/单采样纹理、单遍、完整模型比例、
 实际 motion 输入和普通 compose。canonical 转换、bucket/DRS、first-pass 导出、RenoDX、
-无 motion 及 Inline 均使用现有 buffer 路线。只改变颜色载体；motion 与输出不变，
+无 motion 及 Inline 均使用现有 buffer 路线。颜色满足上述条件后，完整尺寸、无 rescale/pad、
+RG16F 或 RGBA16F 的已上传 motion 也可独立采用共享纹理；不满足 motion 条件或申请失败时
+保留“共享颜色 + buffer motion”。输出不变，
 直接复用核心对 `colourImage` 的原地处理，不修改 vendored 核心或增加 `EngineFrame::target`。
 
-`MZ_TEST_SHARED_INPUT=0` 在进程启动前设置，可靠选择原 buffer 路线；缺省或 `1` 仅请求
+`MZ_TEST_SHARED_INPUT=0` 在进程启动前设置，可靠选择颜色和 motion 的原 buffer 路线；
+`MZ_TEST_SHARED_MOTION=0` 可单独保留 buffer motion。缺省或 `1` 仅请求
 通过全部安全/能力/预算准入的共享路线。这是内部诊断入口，不属于用户配置优先级，
 不提供产品热切换 ABI。临时同进程 A/B 夹具通过私有派生 setter 请求后续录制，已关闭
 录制始终保持自己的路线、资源及 generation。
 
 ## 所有权、排序和故障处理
 
-- `ColourInput` 单独拥有 D3D12 texture、Vulkan import/image、初始化 pool/fence，
+- `ImageInput` 分别拥有颜色或 motion 的 D3D12 texture、Vulkan import/image、初始化 pool/fence，
   `FrameBuffers` 与 recording 直接持有它。其他资源的 `FrameBuffers::allocation` 不再
-  强持旧颜色 buffer；Steal/Take/Use/Release、几何退休和设备丢失保留均携带颜色所有者。
+  强持旧颜色/motion buffer；Steal/Take/Use/Release、几何退休和设备丢失保留均携带两种所有者。
   旧录制存在时允许暂时共存；仅以 weak cache 缓存两种载体，防止永久双持。
 - 初始化在同一 Vulkan 队列族上使用 EXCLUSIVE + EXTERNAL 交接。独立 fence 非阻塞
   查询 Ready；申请提交前先登记强持有，即使用户未提交游戏录制就丢弃也不提前释放。
@@ -114,12 +117,12 @@ RGBA16F motion 的颜色上传区间约减少 0.142 ms，捕获约减少 0.015�
 - 不支持能力缓存为不可用，可恢复导入/共享句柄错误使用 `kInvalidRetryMs` 退避，
   预算拒绝保持 10 秒，避免逐帧申请或路线抖动。可选候选失败保留可执行的 buffer NR，
   不调用整体预算拒绝的 `ReleaseNetwork`。device loss 继续按丢失处理。
-- FrameBytes 按实际颜色 allocation 替换颜色项，候选另查实际进程用量、增量分配和
+- FrameBytes 按实际颜色/motion allocation 替换各自估算项，候选另查实际进程用量、增量分配和
   预算余量。现有 buffer 的 16 MiB 驱动规避保持原样，不套给 texture。2558×1449 本机
   buffer 颜色载体为 59,834,368 字节、shared 为 30,146,560；旧录制收集后可释放差额
   29,687,808 字节（约 28.31 MiB），而非永久叠加一张共享纹理。
 
-实现入口为适配器的 `MochizukiColourInput.inl`、`MochizukiColourRouting.inl`、
+实现入口为适配器的 `MochizukiImageInput.inl`、`MochizukiColourRouting.inl`、`MochizukiMotionRouting.inl`、
 `MochizukiNrRuntime.cpp` 及 `MochizukiRecording.inl`。宿主 ABI、lmxxf、Inline 算法不变。
 
 ## 产品验证范围
@@ -150,7 +153,8 @@ Vulkan 已接受但记账抛异常时 D3D12 尾部已完成仍拒绝 Collect，V
 会话为 0.1732 ms；未锁频且会话有波动，不能只选较大收益，也不能把两次差值归因于
 回收凭证。当前可确认的是本机受限 split 有正收益，精确游戏收益仍需实测。
 
-motion 后续独立评估，输出最后评估或不做。仍需真实游戏、Present/FG/FSR4、长时间运行
+以上是颜色单项接入时的历史验收；motion 的后续产品验收见末节。输出最后评估或不做。
+仍需真实游戏、Present/FG/FSR4、长时间运行
 及其他 GPU/驱动验证；不能将离线 NR+SR 耗时直接称为游戏 FPS 改善。
 
 ## 接入后三路同条件复测（2026-10-19）
@@ -282,3 +286,56 @@ motion 值得继续受限最小接入，颜色路线保持现状，输出继续�
    初始化和提交记账故障；再用同条件三路与完整宿主确认收益，不能把两轮中位数直接相加。
 
 这些是下一次产品修改的验收边界，本轮只完成调查、scratch 验证和路线决定。
+
+## motion 产品接入及同条件验收（2026-10-19）
+
+在上述独立实验后，将 motion 纳入产品的 `ImageInput` 所有权机制。颜色和 motion
+分别保留载体，初始化列表与退休完成查询共用；准入在 recording 快照前决定，已关闭
+录制不随下一帧请求改变。候选失败不释放网络、不重置历史，也不撤销共享颜色。
+预算恢复不会绕过既有 10 秒退避；到期且能力、几何与预算允许后自动重新申请，就绪才绑定。
+旧 buffer 仅由仍需它的录制持有，收集后释放；没有永久保留双套载体。
+
+复用现有 ABI、split retained、GPU、early-unity/inline-discard 边界检查，临时夹具补充：
+
+- 三条路线分别保留和跨两条 D3D12 队列重放；格式/几何变化、未提交丢弃、消费者尾部
+  未完成及旧 motion buffer 最后引用释放。
+- motion 导入拒绝、初始化延迟、初始化受 GPU gate 阻塞时丢弃及 Destroy；实际 Vulkan
+  已接受后记账故障同时保留两种输入完成凭证，D3D12 尾部先完成仍不能提前收集。
+- 候选预算拒绝时连续执行 NR；预算恢复但未到退避时间继续 buffer motion，10 秒到期
+  自动重入。默认两种共享输入、motion 单项回滚、全部 buffer 回滚均验证实际路线。
+- ACO/原生编译各自变化颜色与非零 motion 逐帧输出对应一致；完整网络 dispatch 不减少。
+  DRS rescale/pad/subrect 实际执行回退，以及低分辨率 motion 保留共享颜色，均通过。
+
+12 项集中检查及额外回退执行通过。启用 D3D12 debug 的集中检查未报错误；回退执行
+只检查输出与实际路线，未额外统计 InfoQueue。测量窗口 System/4101 事件为零；没有启用
+Vulkan validation，也没有模拟真实硬件 device loss。验证没有新增跟踪测试项目。
+
+同机 RX9070XT/32.0.31041.1004、2558×1449、ACO、单遍完整比例，每会话六轮遍历
+三路线全部顺序，每段重置历史、预热 40 帧；Small 计时 180 帧、Original 120 帧。
+以下为各自会话配对差中位数（ms），不同列独立取中位数，不能代数相加：
+
+| 产品适配器路线对照 | buffer→共享颜色 | 共享颜色→再共享 motion | buffer→两项共享 | 成功 NR |
+|---|---:|---:|---:|---:|
+| Small、RG16F motion、阶段标记开 | 0.0882 | 0.0753 | 0.1550 | 3240/3240 |
+| Original、RGBA16F motion、阶段标记开 | 0.1142 | 0.0693 | 0.1998 | 2160/2160 |
+| 完整 Release 宿主、Small RG16F、正常日志、无额外阶段标记 | 0.1394 | 0.0437 | 0.1800 | 3240/3240 |
+
+宿主运行真实 NGX + FSR2.1.2，NR 2558×1449→SR 3840×2160。motion 六轮增量均为正，
+范围 0.0238–0.0932 ms；两项合计范围 0.1622–0.2103 ms。使用同源码带私有计数入口
+runtime 和实际 Release 宿主，另对未插桩产品 DLL 执行 ABI/retained/GPU 检查。
+
+独立原版三路对照（均有相同额外阶段标记、相同权重/输入、段末 hash 一致）：
+
+| 工作负载 | 产品 buffer 比原版多 ms | 两项共享比原版多 ms | 产品内部节省 ms | 成功 NR |
+|---|---:|---:|---:|---:|
+| Small、RG16F motion | 0.2778 | 0.1071 | 0.1685 | 3240/3240 |
+| Original、RGBA16F motion | 0.3234 | 0.1282 | 0.1856 | 2160/2160 |
+
+五组计时共 14,040/14,040 次 NR。模型间 motion 格式不同，不能把收益差归为模型因素。
+这也不是把旧颜色会话约 0.084 ms 加上 scratch 数字；当前表是完整产品同条件复测。
+仍有约 0.11–0.13 ms 离线桥接残差，输出搬运尚未修改。
+
+Small RG16F 本机 motion 载体从 32,505,856 降至 15,728,640 字节，稳态少 16 MiB；
+连同颜色共少约 44.31 MiB。候选峰值仍计入旧载体及在途录制，不能直接按稳态差额放行。
+未锁 GPU 时钟、HAGS 未确认；没有真实游戏、Present/FG/FSR4 或跨厂商驱动验证，
+因此不能承诺游戏 FPS、所有画面/兼容情况或用户 5% 反馈已经解决。

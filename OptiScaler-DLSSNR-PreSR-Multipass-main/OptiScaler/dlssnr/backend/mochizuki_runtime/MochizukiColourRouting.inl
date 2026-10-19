@@ -1,15 +1,15 @@
     // Included inside Session. Route selection happens before the recording's
     // FrameBuffers snapshot; BoundRecording subsequently restores its exact owner.
-    void PollColourInitializations()
+    void PollInputInitializations()
     {
-        colourInitializations.erase(std::remove_if(colourInitializations.begin(), colourInitializations.end(),
-            [](const auto& input) { return !input->initSubmitted || input->Ready(); }), colourInitializations.end());
+        inputInitializations.erase(std::remove_if(inputInitializations.begin(), inputInitializations.end(),
+            [](const auto& input) { return !input->initSubmitted || input->Ready(); }), inputInitializations.end());
     }
 
-    bool ColourInitializationsDone(uint32_t ms)
+    bool InputInitializationsDone(uint32_t ms)
     {
         const auto until = GetTickCount64() + ms;
-        for (const auto& input : colourInitializations)
+        for (const auto& input : inputInitializations)
             if (input->initSubmitted) {
                 const auto now = GetTickCount64();
                 const uint64_t remaining = now < until ? until - now : 0;
@@ -34,13 +34,13 @@
                desc.DepthOrArraySize == 1 && desc.SampleDesc.Count == 1;
     }
 
-    void InstallColourInput(std::shared_ptr<ColourInput> next)
+    void InstallColourInput(std::shared_ptr<ImageInput> next)
     {
         if (colourInput == next) return;
         if (colourInput) {
             // Keep the outgoing carrier until Vulkan itself confirms completion.
             // Closed recordings independently keep its D3D12 future uses alive.
-            retiredColours.push_back(colourInput);
+            retiredInputs.push_back(colourInput);
             if (colourInput->Shared()) sharedColourCache = colourInput;
             else bufferColourCache = colourInput;
         }
@@ -59,20 +59,20 @@
                 colourInput->Shared() ? "shared texture" : "buffer",
                 static_cast<unsigned long long>(colourInput->generation),
                 static_cast<unsigned long long>(colourInput->bytes), colourInput->family,
-                static_cast<unsigned long long>(FrameBytes(geometry, colourInput.get())));
+                static_cast<unsigned long long>(FrameBytes(geometry, colourInput.get(), motionInput.get())));
         }
     }
 
-    void PollRetiredColours()
+    void PollRetiredInputs()
     {
-        if (retiredColours.empty() || deviceLost) return;
-        Check(device->GetDeviceRemovedReason(), "colour retirement device status");
+        if (retiredInputs.empty() || deviceLost) return;
+        Check(device->GetDeviceRemovedReason(), "input retirement device status");
         uint64_t finished = 0;
-        VkCheck(vkGetSemaphoreCounterValue(vk.device, fromVk.semaphore, &finished), "colour retirement completion");
+        VkCheck(vkGetSemaphoreCounterValue(vk.device, fromVk.semaphore, &finished), "input retirement completion");
         if (finished == UINT64_MAX)
-            throw NrError(NrError::DeviceLost, "colour retirement has no trustworthy Vulkan completion");
-        retiredColours.erase(std::remove_if(retiredColours.begin(), retiredColours.end(),
-            [finished](const auto& input) { return input->finished <= finished; }), retiredColours.end());
+            throw NrError(NrError::DeviceLost, "input retirement has no trustworthy Vulkan completion");
+        retiredInputs.erase(std::remove_if(retiredInputs.begin(), retiredInputs.end(),
+            [finished](const auto& input) { return input->finished <= finished; }), retiredInputs.end());
     }
 
     // Switching away from a ready texture may reuse a buffer carrier still held
@@ -85,7 +85,7 @@
         if (!buffer || !buffer->Matches(geometry.width, geometry.height, colourVk, usage)) {
             if (bufferColourHold.Holds(geometry, GetTickCount64()))
                 throw NrError(NrError::OutOfMemory, bufferColourHold.message);
-            auto made = std::make_shared<ColourInput>(vk.device);
+            auto made = std::make_shared<ImageInput>(vk.device);
             std::string why;
             // The regular FrameBytes estimate assumes this buffer carrier. Check
             // the incremental switch peak without invoking ReleaseNetwork.
@@ -112,10 +112,10 @@
 
     void SelectColourInput(const Job& j)
     {
-        PollColourInitializations();
-        PollRetiredColours();
+        PollInputInitializations();
+        PollRetiredInputs();
         if (!SharedColourEligible(j)) {
-            pendingColour.reset(); // pending submissions are still retained by colourInitializations
+            pendingColour.reset(); // pending submissions are still retained by inputInitializations
             SelectBufferColour();
             return;
         }
@@ -142,7 +142,7 @@
         std::unique_lock lock(submitMutex, std::try_to_lock);
         if (!lock) return;
         try {
-            auto made = std::make_shared<ColourInput>(vk.device);
+            auto made = std::make_shared<ImageInput>(vk.device);
             const auto desc = made->PlanShared(device, vk, j.width, j.height);
             std::string why;
             // Incremental allocation: current usage already includes the buffer
@@ -156,7 +156,7 @@
                 throw NrError(NrError::Invalid, "MZ_TEST_REJECT_SHARED_INPUT: shared colour handle rejected", VK_SUCCESS, E_INVALIDARG);
             made->Import(device, vk, desc);
             // Reserve the strong initialization owner before submission can happen.
-            colourInitializations.push_back(made);
+            inputInitializations.push_back(made);
             gpuUsed.store(true, std::memory_order_relaxed);
             made->Initialize(vk);
             pendingColour = std::move(made);

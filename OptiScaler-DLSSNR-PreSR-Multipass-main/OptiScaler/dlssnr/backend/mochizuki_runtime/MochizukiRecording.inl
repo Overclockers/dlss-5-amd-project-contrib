@@ -73,7 +73,9 @@ int32_t PrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfNrJob
     return Guard(s, [&] {
         if (!inlineExec) {
             s->SelectColourInput(s->job);
+            s->SelectMotionInput(s->job);
             s->LogColourInput();
+            s->LogMotionInput();
         }
         auto r = std::make_unique<Recording>();
         r->job = s->job;
