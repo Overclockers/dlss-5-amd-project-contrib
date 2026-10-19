@@ -1,6 +1,8 @@
+diff --git a/windows/src/core/nr_graph.cpp b/windows/src/core/nr_graph.cpp
+index 582596fcaa9e64e7c372ee19211083867698737d..30cfd8aecd46dc3f2ee9a1be22e1d2766b5226e7 100644
 --- a/windows/src/core/nr_graph.cpp
 +++ b/windows/src/core/nr_graph.cpp
-@@ -17,6 +17,13 @@
+@@ -18,6 +18,13 @@
  //
  // Two things this is not, yet: every family - `--report` says which - and the
  // OptiScaler entry point. The arenas are already the shapes that adapter wants.
@@ -14,7 +16,7 @@
  #if NR_INT4
  #include "nr_build_cfg.hpp"
  #endif
-@@ -38,9 +45,7 @@
+@@ -39,9 +46,7 @@
  #include <iostream>
  #include <map>
  #include <mutex>
@@ -24,7 +26,7 @@
  #include <set>
  #include <sstream>
  #include <string>
-@@ -326,10 +331,54 @@
+@@ -327,10 +332,54 @@ bool slot_reading_diagnostic(int c, char** v) {
  // is what it was with loose files.
  struct ModelPack {
      std::string root, file;
@@ -80,7 +82,7 @@
      std::ifstream f(file, std::ios::binary);
      char magic[8];
      uint32_t count = 0, reserved = 0;
-@@ -338,15 +387,54 @@
+@@ -339,15 +388,54 @@ bool open_model_pack(const std::string& file, const std::string& root, std::stri
          if (why) *why = "not a model pack: " + file;
          return false;
      }
@@ -107,7 +109,6 @@
          if (!f.read(name.data(), n) || !f.read(reinterpret_cast<char*>(&off), 8) ||
              !f.read(reinterpret_cast<char*>(&size), 8)) { if (why) *why = "model pack index is damaged"; return false; }
 -        p.index[name] = {off, size};
--    }
 +        if (off < 16 || size == 0 || off > file_len || size > file_len - off ||
 +            !p.index.emplace(name, std::make_pair(off, size)).second) {
 +            if (why) *why = "invalid or duplicate model pack entry";
@@ -134,14 +135,14 @@
 +            if (why) *why = "model tensor integrity failed: " + std::string(expected[i].name);
 +            return false;
 +        }
-+    }
+     }
 +    nr::logf("[nr] verified model identity=%s tensors=%u", count == 255 ? "small" : "original", count);
      g_pack = std::move(p);
      return true;
  }
-@@ -1380,6 +1468,11 @@
- 
+@@ -1534,6 +1622,11 @@ static std::recursive_mutex g_build_lock;
  int NrSession::build(int argc, char** argv, const std::vector<Step>* prepared_plan) {
+     if (share) return build_shared(argc, argv);   // no layout globals: not one of the builds the lock orders
      std::lock_guard<std::recursive_mutex> one_build(g_build_lock);
 +    struct ModelReadScope {
 +        ModelPack previous;
@@ -151,7 +152,7 @@
      // A build lays out its own persistent sync words; an epoch word left from a
      // previous build (another extent) would point into the old layout.
      g_chain_epoch_word = 0xFFFFFFFFu;
-@@ -1404,7 +1497,7 @@
+@@ -1558,7 +1651,7 @@ int NrSession::build(int argc, char** argv, const std::vector<Step>* prepared_pl
      const std::string unp = arg(argc, argv, "--unpacked", "artifacts");
      if (const char* pack = arg(argc, argv, "--model-pack")) {
          std::string why;
@@ -160,32 +161,9 @@
          std::printf("model pack: %s (%zu entries)\n", pack, g_pack.index.size());
      }
      const std::string accumulation=arg(argc,argv,"--accumulation","fp32");
---- a/windows/src/core/nr_runtime.cpp
-+++ b/windows/src/core/nr_runtime.cpp
-@@ -1260,11 +1260,11 @@
-         std::error_code ec;
-         const char* missing = network != NetworkModel::Small ? nullptr
-             : !installed ? "not an installed tree"
--            : !std::filesystem::is_regular_file(data / "dlssnr-small.bin", ec) ? "dlssnr-amd/dlssnr-small.bin is missing (run install.ps1 with the 310.9.16 nvngx_dlssnr.dll)"
-+            : !std::filesystem::is_regular_file(data / "dlssnr-small.bin", ec) ? "dlssnr-amd/dlssnr-small.bin is missing (run Setup with nvngx_dlssnr.dll 310.9.16)"
-             : nullptr;
-         if (missing) {
--            nr::logf("[nr] small model (%s) but %s: original model", from, missing);
--            network = NetworkModel::Original;
-+            nr::logf("[nr] small model requested (%s) but %s: unavailable", from, missing);
-+            throw std::runtime_error(std::string("small model unavailable (") + from + "): " + missing);
-         } else {
-             nr::logf("[nr] %s model (%s)", network == NetworkModel::Small ? "small" : "original", from);
-         }
-@@ -1412,6 +1412,8 @@
-         if (!std::filesystem::is_regular_file(pack))
-             throw std::runtime_error("missing " + pack.string() + " (run install.ps1 again)");
-         arguments.push_back("--model-pack"); arguments.push_back(pack.string());
-+        arguments.push_back("--model-family");
-+        arguments.push_back(network == NetworkModel::Small ? "small" : "original");
-     }
-     // One pass at the frame's own extent, not linear: every kernel only samples
-     // the input image, so it can be the frame's own format filled by a copy.
+diff --git a/windows/src/core/nr_model_profile.hpp b/windows/src/core/nr_model_profile.hpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..b94b9a765c575ea53e0e3855ec13de3ce148d034
 --- /dev/null
 +++ b/windows/src/core/nr_model_profile.hpp
 @@ -0,0 +1,863 @@
@@ -1052,3 +1030,32 @@
 +    {"unpacked-postblock/block30.layer0.layer.skip_gain.bin", "b43bd74e36d1493d21d25e83f93ef859e4a4d3e8f47ff37bb6d1b6b968c0fde9"},
 +};
 +} // namespace nr::model_profile
+diff --git a/windows/src/core/nr_runtime.cpp b/windows/src/core/nr_runtime.cpp
+index c3f0e61860be73af433e4a265d7f6ffda11d93b6..9e0bf970dbca09c1965496bffdd6c4fb12290b44 100644
+--- a/windows/src/core/nr_runtime.cpp
++++ b/windows/src/core/nr_runtime.cpp
+@@ -1320,12 +1320,11 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
+         std::error_code ec;
+         const char* missing = network != NetworkModel::Small ? nullptr
+             : !installed ? "not an installed tree"
+-            : !std::filesystem::is_regular_file(data / "dlssnr-small.bin", ec) ? "dlssnr-amd/dlssnr-small.bin is missing (run install.ps1 with the 310.9.16 nvngx_dlssnr.dll)"
++            : !std::filesystem::is_regular_file(data / "dlssnr-small.bin", ec) ? "dlssnr-amd/dlssnr-small.bin is missing (run Setup with nvngx_dlssnr.dll 310.9.16)"
+             : nullptr;
+         if (missing) {
+-            nr::logf("[nr] small model (%s) but %s: original model", from, missing);
+-            impl_->network_note = missing;
+-            network = NetworkModel::Original;
++            nr::logf("[nr] small model requested (%s) but %s: unavailable", from, missing);
++            throw std::runtime_error(std::string("small model unavailable (") + from + "): " + missing);
+         } else {
+             nr::logf("[nr] %s model (%s)", network == NetworkModel::Small ? "small" : "original", from);
+         }
+@@ -1509,6 +1508,8 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
+         if (!std::filesystem::is_regular_file(pack))
+             throw std::runtime_error("missing " + pack.string() + " (run install.ps1 again)");
+         arguments.push_back("--model-pack"); arguments.push_back(pack.string());
++        arguments.push_back("--model-family");
++        arguments.push_back(network == NetworkModel::Small ? "small" : "original");
+     }
+     // One pass at the frame's own extent, not linear: every kernel only samples
+     // the input image, so it can be the frame's own format filled by a copy.

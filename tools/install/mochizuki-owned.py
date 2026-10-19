@@ -27,11 +27,18 @@ RUNTIME = (
 MOTION = ('motion_luma', 'motion_estimate')
 
 
+def grade_paths(table, prefix):
+    grade = table['style_grade']
+    return ([f'{prefix}/g_{name}_grade.spv' for name in grade['pipelines']] +
+            [f'{prefix}/temporal/{name}_grade.spv' for name in grade['variants']])
+
+
 def shader_paths(table_path, prefix):
     table = json.loads(table_path.read_text(encoding='utf-8'))
     paths = [f'{prefix}/g_{name}.spv' for name in table['pipelines']]
     paths += [f'{prefix}/{name}' for name in table['markers']]
     paths += [f'{prefix}/temporal/{name}.spv' for name in table['variants']]
+    paths += grade_paths(table, prefix)
     paths += [f'{prefix}/temporal/{name}.spv' for name in MOTION]
     paths.append(f'{prefix}/temporal/shader-constants.txt')
     paths += [f'{prefix}/runtime/{name}.spv' for name in RUNTIME]
@@ -54,6 +61,7 @@ def owned_paths():
         paths += [f'{prefix}/{name}' for name in table['markers']]
         paths += [f'{prefix}/g_{name}.spv.iu4' for name in int4['iu4']]
         paths += [f'{prefix}/temporal/{name}.spv' for name in list(table['variants']) + list(MOTION)]
+        paths += grade_paths(table, prefix)
         paths += [f'{prefix}/temporal/shader-constants.txt', f'{prefix}/hs-pipelines.txt']
     paths += [f'aco/int4/records/{p.name}' for p in (vendor / 'windows/data/aco/int4/records').iterdir() if p.is_file()]
     paths.append('aco/int4/shell-aliases.txt')
@@ -71,8 +79,8 @@ def owned_paths():
     if any('*' in path or '?' in path or path.startswith('/') or '\\' in path for path in unique):
         raise SystemExit('Mochizuki ownership pin is not a list of exact relative paths')
     records_only = [path for path in unique if path.startswith('aco/records/')]
-    if len(records_only) != 58:
-        raise SystemExit(f'expected 58 pinned ACO records, found {len(records_only)}')
+    if len(records_only) != 62:
+        raise SystemExit(f'expected 62 pinned ACO records, found {len(records_only)}')
     return unique
 
 

@@ -42,7 +42,7 @@ acceptance of repeated extent changes and visual continuity remains separate.
 | 04 first-pass-output | Export pass 0 for host composition, including person protection | Add independent single-pass equality and retained recording tests |
 | 05 output-buffer-policy | Optional RGBA32F reuse, or force separate answer | Prove incremental memory benefit beyond official store_native first |
 | 06 ACO-builder-state | Current temporary product adaptation | Request optional configuration/result interfaces; do not transplant this implementation upstream |
-| 07 drop-unused-up-shown | Below full model scale, do not allocate the unread full-frame `up_shown` image | Official binds it and never reads or writes it; drop the binding with the image |
+| 07 drop-unused-up-shown | Remove residual unused bindings, including local first-pass paths | Official 0.0.7 already removes the independent image allocation; retain only the local layout difference |
 | 08 thirty-layer-mode | Raise one network's pass cap from 16 to 30 and size the timing readback for that | The host slider stays 1..3. 30 is a separate layer mode, default off |
 | 10 inline-compute-segments | Optional second-family resource access and a recording callback around network dispatches | Default stays one command buffer; device/queues, submissions, failure policy and D3D12 integration stay in the adapter |
 | 11 inline-compute-writeback | Allow compatible inline frames to keep the entire Vulkan chain on compute | Unsupported conversions keep the segmented path; host queue and failure policy remain in the adapter |
@@ -59,7 +59,7 @@ acceptance of repeated extent changes and visual continuity remains separate.
 | 21 compute-downscale | `RuntimeConfig::compute_downscale`: model scale below 1 on the compute family when the frame is kept in its own format (runtime_downscale, the blit's own taps) and the full-size answer is stored natively, copied (RGBA32F) or packed on compute (runtime_pack_f16 / the per-format packs) | Off unless the host sets it (NrInlineComputeDownscale); otherwise the downscale blit and its refusal remain |
 | 22 compute-first-pass-export | `RuntimeConfig::compute_export`: with first_pass_output, a compute pack of pass 0 into the frame's format (`first_pass_packed`, `record_first_pack`; runtime_pack_f16/_r11/_u8/_u8_bgra/_u10/_u10_bgra) | Off unless the host sets it (NrInlineComputeExport); other formats keep the host's blit |
 | 23 multipass-motion-in-place | `RuntimeConfig::motion_in_place_passes`: with max_passes > 1, every pass samples the engine motion vectors in place through per-recording sets for the multi-pass pre/post kernels; no motion blit | Off unless the host sets it (NrInlineComputeMotion with 2+ layers); otherwise multi-pass blits the motion as before |
-| 24 nonnegative-hdr-reference | Compose linear HDR against nonnegative reference RGB, matching OptiScaler before its resolve; retain raw keep and alpha, leave SDR unchanged | Shader regression reproduces finite negative inputs becoming extreme primary colours before this change; covers native/reduced model sizes and all transfer modes. Game acceptance remains separate |
+| 24 nonnegative-hdr-reference (removed) | Original 0.0.7 includes the same expression | Do not replay the duplicate fix |
 
 The patches replay sequentially against `manifest.json`'s commit. Patches 02-05
 share header/implementation context, so do not assume their patch files apply
@@ -73,7 +73,7 @@ apply on the 0.0.5 pin after patches 01-15; it stays dropped. Official already c
 decoder-tail case. Patch 23 also folds the former downscale-convert log tweak that was 22
 on the pre-0.0.5 series.
 
-This twenty-two-patch series records the product snapshot; it is not the upstream PR
+The manifest records the product feature-patch snapshot; it is not the upstream PR
 series. The upstream preparation branch has reverted the ACO, buffer-optimization
 and timing-calculation snapshots and retains only optional interface proposals.
 
@@ -99,3 +99,9 @@ and [source ownership](../../third_party/mochizuki/UPSTREAM.md).
 Source comments that name sample-internal addresses are normalized by the declared
 `source_comment_policy` during verification. This affects comments only; upstream
 identity, authorship, licenses and executable source remain unchanged.
+
+## Windows 0.0.7 construction policy
+
+Patch 27 preserves official standalone defaults while letting this adapter require grade assets, own the depth policy, disable cross-runtime pipeline reuse and skip unused Facts GPU readback. Its fields are internal core construction options, not new public INI/menu controls. The product keeps model/INT4/ACO configuration and whole-graph native fallback in the adapter. The new raw core source does not mean the official PE residency manager or image-heap DRS scheduler has been adopted.
+
+The current closure includes both Linux and Windows grade includes: Linux recipes generate the product's Windows ACO SPIR-V. Update the exact ownership generator/pin together with recipes and records; copying only Windows shader sources is insufficient. The original now covers HDR patch 24 and the allocation part of patch 07; the local pack_img release in patch 11 remains necessary.

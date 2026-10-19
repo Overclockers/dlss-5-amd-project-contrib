@@ -958,3 +958,11 @@ lmxxf 额外多槽吞吐回落；更少的 16/8 段没有进一步收益，因�
 - Preparation logs identify requested settings; submission logs identify the actual network, model and pass styles. Reference-drop logs are distinct from object destruction and process-wide VRAM measurements.
 - `mochizuki_nr.log` rotates to `mochizuki_nr.1.log` at 4 MiB to preserve the newest diagnostics while capping total log footprint at 8 MiB.
 - Vendor changes replay as patch 26. CPU coverage is `tests\mochizuki\run.cmd renodx-feed`; game/GPU acceptance of visual continuity and repeated-action performance remains outstanding.
+
+## 2026-10-19: Mochizuki 0.0.7 core and style integration
+
+- Adopt fixed original `cc27501dc116bdcfbb43612e497c5ca12497574a`, with complete native/default-ACO/INT4-ACO grade assets and an exact 833-path install/uninstall pin. Natural/Cinematic use the corrected grade; ordinary models retain non-ACO compilation and existing preferences.
+- Rebase local source patches by feature. Original covers HDR patch 24 and the unused up_shown allocation; retain only residual binding/layout changes. Preserve local pack_img destruction, capacity/failed-upgrade behavior, recording proofs, model verification and exposure continuity.
+- Product construction policy (patch 27) keeps independent pipeline import/fallback accounting, fixes the no-depth contract, skips unconsumed Facts readback and requires usable grade variants. Official standalone defaults and the public host/runtime ABI remain unchanged.
+- Keep current split transport and size scheduling. New cross-model arenas, image heaps and RAM-offload scheduling are deferred until their lifetime/order and net benefit are demonstrated against this host; they do not replace the local destruction fix. Motion point sampling is also deferred until the preceding LINEAR rescale contract is reconciled.
+- Evidence and limits: the source ownership record and extension decisions describe focused offline/GPU checks; this is not game-FPS, 4K stress or full Inline certification. No packaging or publishing is part of this change.

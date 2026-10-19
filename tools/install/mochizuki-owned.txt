@@ -12,6 +12,7 @@ aco/int4/records/209d440f0f2abc1b.nrp
 aco/int4/records/23e705c7810d635c.nrp
 aco/int4/records/26228a0dd1bc496a.nrp
 aco/int4/records/271b75d18c07ad4a.nrp
+aco/int4/records/2cc6bc17d5fd0b48.nrp
 aco/int4/records/2d190dc551d0d36b.nrp
 aco/int4/records/34a1f23f76d42b2f.nrp
 aco/int4/records/38a4fa7be1135f89.nrp
@@ -24,6 +25,7 @@ aco/int4/records/6291e9c7853dae3f.nrp
 aco/int4/records/640b7c2e989cd1a5.nrp
 aco/int4/records/65c655c35b29e9b8.nrp
 aco/int4/records/65c6a55c752c619e.nrp
+aco/int4/records/685c0581b22885d8.nrp
 aco/int4/records/6d71d6d4b52e2c2d.nrp
 aco/int4/records/7645181bf21ac57c.nrp
 aco/int4/records/77fc12a51fc5876a.nrp
@@ -37,6 +39,7 @@ aco/int4/records/97174de7ced214b0.nrp
 aco/int4/records/99b8b3cb85e8b743.nrp
 aco/int4/records/9a5a4f3e8e96c5e6.nrp
 aco/int4/records/9c0501011456830d.nrp
+aco/int4/records/9d7787da683bb1fb.nrp
 aco/int4/records/9e7ca05cf4553d16.nrp
 aco/int4/records/a75c1374f0e9f530.nrp
 aco/int4/records/a8b0ca43a87b1f5d.nrp
@@ -56,6 +59,7 @@ aco/int4/records/d1e9757782569394.nrp
 aco/int4/records/d37c39c6bb6283ea.nrp
 aco/int4/records/d408e5e174e5cea3.nrp
 aco/int4/records/d4deb21a15baeb8e.nrp
+aco/int4/records/d653b3f490d2640e.nrp
 aco/int4/records/d754efa73483c836.nrp
 aco/int4/records/db7a0a2d3882f91e.nrp
 aco/int4/records/e4d148943732c2a0.nrp
@@ -103,6 +107,7 @@ aco/int4/shaders/g_fswinfusedup32.spv
 aco/int4/shaders/g_fswinfusedup32nh.spv
 aco/int4/shaders/g_fswinfusedup64.spv
 aco/int4/shaders/g_fswinimagepost32.spv
+aco/int4/shaders/g_fswinimagepost32_grade.spv
 aco/int4/shaders/g_fswinimagepreds32.spv
 aco/int4/shaders/g_fswinimagepreds32nh.spv
 aco/int4/shaders/g_fswinp128.spv
@@ -160,8 +165,11 @@ aco/int4/shaders/temporal/motion_estimate.spv
 aco/int4/shaders/temporal/motion_luma.spv
 aco/int4/shaders/temporal/shader-constants.txt
 aco/int4/shaders/temporal/temporal_post_fp32.spv
+aco/int4/shaders/temporal/temporal_post_fp32_grade.spv
 aco/int4/shaders/temporal/temporal_post_fp32h16.spv
+aco/int4/shaders/temporal/temporal_post_fp32h16_grade.spv
 aco/int4/shaders/temporal/temporal_post_fp32hp.spv
+aco/int4/shaders/temporal/temporal_post_fp32hp_grade.spv
 aco/int4/shaders/temporal/temporal_pre_fp32.spv
 aco/int4/shaders/temporal/temporal_pre_fp32nh.spv
 aco/int4/shaders/temporal/temporal_pre_fp32nhhp.spv
@@ -170,6 +178,7 @@ aco/records/03aef996aaf9f54a.nrp
 aco/records/0401a3f73822ebd4.nrp
 aco/records/05a24ec73dacc552.nrp
 aco/records/0acf7df46748d5ec.nrp
+aco/records/0d231a01bbc316bd.nrp
 aco/records/1824cf2dd7287efc.nrp
 aco/records/191b6c179065a652.nrp
 aco/records/1f3fa643968995ef.nrp
@@ -198,6 +207,7 @@ aco/records/820e9417845a6e7a.nrp
 aco/records/846f1b9f35747aad.nrp
 aco/records/93ac870d9c5fa3a9.nrp
 aco/records/961ca3a350b6b064.nrp
+aco/records/96ae7cc20ac7f56e.nrp
 aco/records/9a5a4f3e8e96c5e6.nrp
 aco/records/9c0501011456830d.nrp
 aco/records/9e7ca05cf4553d16.nrp
@@ -206,6 +216,7 @@ aco/records/a394ec5059b6fdef.nrp
 aco/records/a569ebdb55ae39ab.nrp
 aco/records/a8b0ca43a87b1f5d.nrp
 aco/records/b00fdd3684a499f1.nrp
+aco/records/b1ef84de2cfc87e1.nrp
 aco/records/b389a30783b4fd8e.nrp
 aco/records/b67eaa29a9185311.nrp
 aco/records/b829cfa5b536da41.nrp
@@ -219,6 +230,7 @@ aco/records/db7a0a2d3882f91e.nrp
 aco/records/dfe6cfe562db9ccd.nrp
 aco/records/e4d148943732c2a0.nrp
 aco/records/e53ddd3ddf6bb8d5.nrp
+aco/records/e5c897313d3bab71.nrp
 aco/records/eae2df7e8feaaea4.nrp
 aco/records/ed043908eeb94f7e.nrp
 aco/records/f7aba9aacafa1dd2.nrp
@@ -250,6 +262,7 @@ aco/shaders/g_fswinfusedup32.spv
 aco/shaders/g_fswinfusedup32nh.spv
 aco/shaders/g_fswinfusedup64.spv
 aco/shaders/g_fswinimagepost32.spv
+aco/shaders/g_fswinimagepost32_grade.spv
 aco/shaders/g_fswinimagepreds32.spv
 aco/shaders/g_fswinimagepreds32nh.spv
 aco/shaders/g_fswinp128.spv
@@ -312,8 +325,11 @@ aco/shaders/temporal/motion_estimate.spv
 aco/shaders/temporal/motion_luma.spv
 aco/shaders/temporal/shader-constants.txt
 aco/shaders/temporal/temporal_post_fp32.spv
+aco/shaders/temporal/temporal_post_fp32_grade.spv
 aco/shaders/temporal/temporal_post_fp32h16.spv
+aco/shaders/temporal/temporal_post_fp32h16_grade.spv
 aco/shaders/temporal/temporal_post_fp32hp.spv
+aco/shaders/temporal/temporal_post_fp32hp_grade.spv
 aco/shaders/temporal/temporal_pre_fp32.spv
 aco/shaders/temporal/temporal_pre_fp32nh.spv
 aco/shaders/temporal/temporal_pre_fp32nhhp.spv
@@ -353,6 +369,7 @@ int4/shaders/g_fswinfusedup32.spv
 int4/shaders/g_fswinfusedup32nh.spv
 int4/shaders/g_fswinfusedup64.spv
 int4/shaders/g_fswinimagepost32.spv
+int4/shaders/g_fswinimagepost32_grade.spv
 int4/shaders/g_fswinimagepreds32.spv
 int4/shaders/g_fswinimagepreds32nh.spv
 int4/shaders/g_fswinp128.spv
@@ -410,8 +427,11 @@ int4/shaders/temporal/motion_estimate.spv
 int4/shaders/temporal/motion_luma.spv
 int4/shaders/temporal/shader-constants.txt
 int4/shaders/temporal/temporal_post_fp32.spv
+int4/shaders/temporal/temporal_post_fp32_grade.spv
 int4/shaders/temporal/temporal_post_fp32h16.spv
+int4/shaders/temporal/temporal_post_fp32h16_grade.spv
 int4/shaders/temporal/temporal_post_fp32hp.spv
+int4/shaders/temporal/temporal_post_fp32hp_grade.spv
 int4/shaders/temporal/temporal_pre_fp32.spv
 int4/shaders/temporal/temporal_pre_fp32nh.spv
 int4/shaders/temporal/temporal_pre_fp32nhhp.spv
@@ -721,6 +741,7 @@ shaders/g_fswinfusedup256.spv
 shaders/g_fswinfusedup32.spv
 shaders/g_fswinfusedup64.spv
 shaders/g_fswinimagepost32.spv
+shaders/g_fswinimagepost32_grade.spv
 shaders/g_fswinimagepreds32.spv
 shaders/g_fswinimagepreds32nh.spv
 shaders/g_fswinp128.spv
@@ -807,5 +828,6 @@ shaders/temporal/motion_estimate.spv
 shaders/temporal/motion_luma.spv
 shaders/temporal/shader-constants.txt
 shaders/temporal/temporal_post_fp32.spv
+shaders/temporal/temporal_post_fp32_grade.spv
 shaders/temporal/temporal_pre_fp32.spv
 shaders/temporal/temporal_pre_fp32nh.spv

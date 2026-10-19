@@ -59,7 +59,7 @@ int main(int argc, char** argv) try
         rejects([&] { nr::pal::Record::parse(bad); });
         ++count;
     }
-    require(count == 58, "unexpected pinned record inventory");
+    require(count == 62, "unexpected pinned record inventory");
     rejects([] { nr::pal::unpack({0x82, 0xa1, 'x', 0x01, 0xa1, 'x', 0x02}); });
     rejects([] { nr::pal::unpack({0xdb, 0xff, 0xff, 0xff, 0xff}); });
 

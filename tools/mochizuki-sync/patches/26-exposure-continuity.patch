@@ -1,7 +1,91 @@
+diff --git a/windows/shaders/renodx/feed_continuity.hlsli b/windows/shaders/renodx/feed_continuity.hlsli
+new file mode 100644
+index 0000000000000000000000000000000000000000..2cc50c0742abb7df4af6702c0dd30562bbbc7055
+--- /dev/null
++++ b/windows/shaders/renodx/feed_continuity.hlsli
+@@ -0,0 +1,4 @@
++// Shared by the GPU transition and its CPU regression test. Inputs are positive divisors.
++float FeedStep(float previous, float target, float attack, float release, float dt) {
++    return previous * exp2(clamp(log2(target / previous), -release * dt, attack * dt));
++}
+diff --git a/windows/shaders/renodx/v6_feed_transition.cs_5_1.hlsl b/windows/shaders/renodx/v6_feed_transition.cs_5_1.hlsl
+new file mode 100644
+index 0000000000000000000000000000000000000000..b227150424a78a5786fe3124105ffe50a2458e65
+--- /dev/null
++++ b/windows/shaders/renodx/v6_feed_transition.cs_5_1.hlsl
+@@ -0,0 +1,32 @@
++// Bridge feed changes from the divisor actually used by the previous frame. The v1
++// and v2 estimators keep their own state; ordinary game exposure is not rate limited.
++#include "vk_binding.hlsli"
++#include "feed_continuity.hlsli"
++VK_BINDING(4) RWTexture2D<float4> Scale : register(u0);
++VK_BINDING(5) RWTexture2D<float4> Continuity : register(u1);
++PUSH_CONSTANTS(TransitionConstants) {
++    uint Feed;
++    uint Reset;
++    float Attack;
++    float Release;
++    float Seconds;
++};
++[numthreads(1, 1, 1)]
++void main() {
++    const float4 old = Continuity[uint2(0, 0)];
++    float4 scale = Scale[uint2(0, 0)];
++    const uint source = Feed == 3u ? 1u : Feed;
++    const bool valid = old.r > 0.0 && old.r < 16777216.0;
++    float value = scale.r;
++    bool tracking = valid && (old.b > 0.5 || uint(old.g) != source);
++    if (Reset == 0u && valid) {
++        if (Feed == 3u) value = old.r;
++        else if (tracking) {
++            value = FeedStep(old.r, max(scale.r, 5.96046448e-8), Attack, Release, clamp(Seconds, 0.0, 0.1));
++            tracking = abs(log2(max(scale.r, 5.96046448e-8) / value)) > 0.0001;
++        }
++    } else tracking = false;
++    scale.r = value;
++    Scale[uint2(0, 0)] = scale;
++    Continuity[uint2(0, 0)] = float4(value, float(source), tracking ? 1.0 : 0.0, 0.0);
++}
+diff --git a/windows/src/core/nr_graph.cpp b/windows/src/core/nr_graph.cpp
+index 30cfd8aecd46dc3f2ee9a1be22e1d2766b5226e7..1bf8baec82632439a028add6dfaa18b437267b0f 100644
+--- a/windows/src/core/nr_graph.cpp
++++ b/windows/src/core/nr_graph.cpp
+@@ -425,7 +425,7 @@ bool open_model_pack(const std::string& file, const std::string& root, const std
+     for (size_t i = 1; i < ranges.size(); ++i) {
+         if (ranges[i].first < ranges[i - 1].second) { if (why) *why = "overlapping model tensors"; return false; }
+     }
+-    const auto* expected = count == 255 ? nr::model_profile::small : nr::model_profile::original;
++    const auto* expected = count == 255 ? nr::model_profile::small_tensors : nr::model_profile::original_tensors;
+     for (uint32_t i = 0; i < count; ++i) {
+         const auto it = p.index.find(expected[i].name);
+         std::string digest;
+diff --git a/windows/src/core/nr_model_profile.hpp b/windows/src/core/nr_model_profile.hpp
+index b94b9a765c575ea53e0e3855ec13de3ce148d034..a7e858ce9b1316ab493682855642fd8ef42a04c4 100644
+--- a/windows/src/core/nr_model_profile.hpp
++++ b/windows/src/core/nr_model_profile.hpp
+@@ -2,7 +2,7 @@
+ #pragma once
+ namespace nr::model_profile {
+ struct Tensor { const char* name; const char* sha256; };
+-inline constexpr Tensor original[] = {
++inline constexpr Tensor original_tensors[] = {
+     {"inventory/weights/block23.layer0.layer.bin", "63399444cd1c361a295167f7958cc707d8e88ec363da1cbf2ada632dcc741df5"},
+     {"inventory/weights/block24.layer0.layer.bin", "0b034c80329788fe6e7047cfaf63cd6a72e4b4803cddd945f053657868908059"},
+     {"inventory/weights/block25.layer0.layer.bin", "1ec87cc7deec553a343123ff6e6a2db7248e713cdf9246f1e9918132415e2427"},
+@@ -603,7 +603,7 @@ inline constexpr Tensor original[] = {
+     {"unpacked/block9.layer0.layer.residual_scale.bin", "e6d6e39a4a65583e8907b6df1c56f6fa30c524f70ae2c730cf2efeebaedff566"},
+     {"unpacked/block9.layer0.layer.scalars_b.bin", "dfd9bf5ef683b39284428c96a3f42a0f0daf1d1354e4a21ceec9ee92e7b78fcb"},
+ };
+-inline constexpr Tensor small[] = {
++inline constexpr Tensor small_tensors[] = {
+     {"unpacked-preblock/block0.layer0.layer.attn_out_proj.bin", "4a0ab1262dcff594132faf676c0705b35b7c45b7918be3a6a864abac77fd2634"},
+     {"unpacked-preblock/block0.layer0.layer.attn_pos_bias.bin", "32b272875f13b9f34b28da93dd3f26dd2fe12d0fa2d27dd22dae606665092c86"},
+     {"unpacked-preblock/block0.layer0.layer.attn_residual_scale.bin", "2f545c569372539325fcb6d575a3fcde7e08becd859d2025b9e8f22a64015c94"},
 diff --git a/windows/src/core/nr_renodx.cpp b/windows/src/core/nr_renodx.cpp
+index b631c88ddc02b841455936bb1d1dee222b714cc6..7329043e8c078040184535b1f3d744ae33dcc362 100644
 --- a/windows/src/core/nr_renodx.cpp
 +++ b/windows/src/core/nr_renodx.cpp
-@@ -169,28 +169,46 @@
+@@ -169,28 +169,46 @@ struct LegacyConstants {
  static_assert(sizeof(LegacyConstants) == 80);
  
  // FeedSource (dlssnr.hpp): where a relative-HDR frame's NR input scale comes from.
@@ -52,7 +136,7 @@ diff --git a/windows/src/core/nr_renodx.cpp b/windows/src/core/nr_renodx.cpp
  }
  
  ScalePlan plan_frame_scale(const Settings& s, NormStream& stream, bool frame_reset, uint32_t feed, bool epoch) {
-@@ -203,26 +221,25 @@
+@@ -203,26 +221,25 @@ ScalePlan plan_frame_scale(const Settings& s, NormStream& stream, bool frame_res
          reset_snap = stream.last_reset_ns == 0 || now - stream.last_reset_ns >= kNormResetQuietNs;
          stream.last_reset_ns = now;
      }
@@ -85,7 +169,7 @@ diff --git a/windows/src/core/nr_renodx.cpp b/windows/src/core/nr_renodx.cpp
      return plan;
  }
  
-@@ -428,6 +445,22 @@
+@@ -428,6 +445,22 @@ std::map<uint32_t, VkDescriptorType> reflect(const std::vector<uint32_t>& code)
  
  }  // namespace
  
@@ -108,7 +192,7 @@ diff --git a/windows/src/core/nr_renodx.cpp b/windows/src/core/nr_renodx.cpp
  struct Stage::Impl {
      VkDevice device{};
      VkPhysicalDevice physical{};
-@@ -443,12 +476,12 @@
+@@ -443,12 +476,12 @@ struct Stage::Impl {
  
      enum P { kLinearize, kAutoscale, kExposureScale, kEncode6, kResolve6, kReduce6, kReduce6Unshaped, kCommit6,
               kCommitExposure, kEncodeL, kDecodeL, kReduceL, kReduceLUnshaped, kApplyL, kCompose, kUpsample, kBand,
@@ -123,7 +207,7 @@ diff --git a/windows/src/core/nr_renodx.cpp b/windows/src/core/nr_renodx.cpp
      Image up_proxy, up_neural;     // look_upsample's P_up and N'_up at the frame's extent (network below it)
      Image band_a, band_b, band_max_a, band_max_b;   // the look's bands at half the network's extent, when wanted
      // Preprocess: what the network is shown, made from the pass's running image (HDR) or the kept proxy (SDR),
-@@ -473,9 +506,8 @@
+@@ -478,9 +511,8 @@ struct Stage::Impl {
      uint32_t logged_passes = 1;
      Image motion;                  // the game's motion vectors, copied (region at the origin)
      Image exposure;                // texel (0,0) of the game's exposure texture, copied
@@ -134,7 +218,7 @@ diff --git a/windows/src/core/nr_renodx.cpp b/windows/src/core/nr_renodx.cpp
      std::vector<std::pair<uint64_t, Image>> retired;
      std::vector<std::pair<uint64_t, VkDescriptorSet>> retired_sets;
      std::vector<VkImage> fresh;    // made, not yet in GENERAL
-@@ -987,6 +1019,7 @@
+@@ -993,6 +1025,7 @@ Stage::Stage(const HostDevice& host, const StageConfig& cfg) : impl_(std::make_u
          m.load(m.programs[Impl::kLinearize], "v6_linearize", v6);
          m.load(m.programs[Impl::kAutoscale], "v6_autoscale", v6);
          m.load(m.programs[Impl::kExposureScale], "v6_exposure_scale", 7 * 4);
@@ -142,7 +226,7 @@ diff --git a/windows/src/core/nr_renodx.cpp b/windows/src/core/nr_renodx.cpp
          m.load(m.programs[Impl::kCommitExposure], "v6_commit_exposure", v6);
          m.load(m.programs[Impl::kEncode6], "v6_encode", v6);
          m.load(m.programs[Impl::kResolve6], "v6_resolve", v6);
-@@ -1024,7 +1057,11 @@
+@@ -1030,7 +1063,11 @@ Stage::Stage(const HostDevice& host, const StageConfig& cfg) : impl_(std::make_u
          m.work0 = m.make_image(W, H, VK_FORMAT_R16G16B16A16_SFLOAT, rw);
          m.work_a = m.make_image(W, H, VK_FORMAT_R16G16B16A16_SFLOAT, rw);
          m.scale = m.make_image(1, 1, VK_FORMAT_R32G32B32A32_SFLOAT, rw);
@@ -155,7 +239,7 @@ diff --git a/windows/src/core/nr_renodx.cpp b/windows/src/core/nr_renodx.cpp
      }
      m.make_buffer(16 * 1024, &m.unread, &m.unread_memory);
      m.looks.resize(1);
-@@ -1043,7 +1080,7 @@
+@@ -1051,7 +1088,7 @@ Stage::~Stage() {
          if (b.pool) vkDestroyDescriptorPool(m.device, b.pool, nullptr);
      }
      for (Image* im : {&m.original, &m.work0, &m.work_a, &m.work_b, &m.proxy, &m.neural, &m.look_out, &m.decoded,
@@ -164,11 +248,10 @@ diff --git a/windows/src/core/nr_renodx.cpp b/windows/src/core/nr_renodx.cpp
                        &m.up_neural, &m.band_a, &m.band_b, &m.band_max_a, &m.band_max_b, &m.work_p, &m.prep_keep})
          m.destroy(*im);
      for (auto& pl : m.looks)
-@@ -1104,6 +1141,25 @@
+@@ -1121,6 +1158,25 @@ Stage::Facts Stage::facts() const {
+     return f;
  }
  
- uint8_t Stage::hdr_mode() const { return impl_->hdr; }
-+
 +Stage::ExposureSnapshot Stage::exposure_state() const {
 +    return impl_->exposure_state && impl_->exposure_state->cleared ? impl_->exposure_state : nullptr;
 +}
@@ -187,10 +270,11 @@ diff --git a/windows/src/core/nr_renodx.cpp b/windows/src/core/nr_renodx.cpp
 +    m.exposure_state = state;
 +    return true;
 +}
- 
++
  void working_resolution(const Settings& s, uint32_t rw, uint32_t rh, uint32_t gw, uint32_t gh, uint32_t* nw,
                          uint32_t* nh) {
-@@ -1301,16 +1357,18 @@
+     if (s.follow_input_res && gw != 0 && gh != 0) {
+@@ -1321,16 +1377,18 @@ uint32_t Stage::record(VkCommandBuffer cmd, const StageFrame& fr, const Network&
          m.feed = kFeedV1;
          if (!m.units.absolute && !prep_exposure) {
              // 2b. this frame's scale texel: the v1 meter and the governor (feed v1).
@@ -212,7 +296,7 @@ diff --git a/windows/src/core/nr_renodx.cpp b/windows/src/core/nr_renodx.cpp
              }
              // The float formats v6_exposure_scale reads (.r), as RenoDX's Vulkan path lists them.
              bool readable = false;
-@@ -1323,25 +1381,30 @@
+@@ -1343,7 +1401,10 @@ uint32_t Stage::record(VkCommandBuffer cmd, const StageFrame& fr, const Network&
                  default:
                      break;
              }
@@ -221,8 +305,10 @@ diff --git a/windows/src/core/nr_renodx.cpp b/windows/src/core/nr_renodx.cpp
 +            if (norm_reset) state.norm.last_texture_ns = 0;
 +            m.feed = select_feed(s, m.hdr, m.units, readable, fr.auto_exposure,
 +                                 state.norm, now_ns(), fr.create_flags_known);
+             m.facts.feed = m.feed == kFeedV1 ? 0 : m.feed == kFeedTexture ? 1 : 2;
+             m.facts.exposure_texture = !fr.exposure.image ? 0 : readable ? 1 : 2;
              if (m.feed != m.logged_feed) {   // SelectFeed's line, once per decision
-                 m.logged_feed = m.feed;
+@@ -1351,19 +1412,21 @@ uint32_t Stage::record(VkCommandBuffer cmd, const StageFrame& fr, const Network&
                  nr::logf("[nr] RenoDX stage: NR feed %s (NRFeedMode=%u; exposure texture %s, auto exposure %s, "
                           "pre-exposure %.4g, exposure scale %.4g)",
                           m.feed == kFeedV1 ? "v1 (the content meter)" : m.feed == kFeedTexture ? "v2 (the game's exposure)"
@@ -247,7 +333,7 @@ diff --git a/windows/src/core/nr_renodx.cpp b/windows/src/core/nr_renodx.cpp
                             &meter, sizeof meter, 1, 1);
              }
              if (m.feed != kFeedV1) {
-@@ -1368,16 +1431,29 @@
+@@ -1390,16 +1453,29 @@ uint32_t Stage::record(VkCommandBuffer cmd, const StageFrame& fr, const Network&
                  }
                  // v6_exposure_scale's own cbuffer view: dwords 0..6. The fixed feed reads no texture: the metered
                  // image fills the slot, as RenoDX's own sets do.
@@ -280,6 +366,7 @@ diff --git a/windows/src/core/nr_renodx.cpp b/windows/src/core/nr_renodx.cpp
      }
  
 diff --git a/windows/src/core/nr_renodx.hpp b/windows/src/core/nr_renodx.hpp
+index 70087afbd8217cf7c6e3fd4b4224a91af0b30974..e65d923fe6945e47508a1241617e4acad56dba96 100644
 --- a/windows/src/core/nr_renodx.hpp
 +++ b/windows/src/core/nr_renodx.hpp
 @@ -12,6 +12,8 @@
@@ -291,7 +378,7 @@ diff --git a/windows/src/core/nr_renodx.hpp b/windows/src/core/nr_renodx.hpp
  #include "nr_runtime.hpp"
  
  #include <cstdint>
-@@ -147,6 +149,7 @@
+@@ -147,6 +149,7 @@ struct StageFrame {
      ColourFrame colour;     // read
      ColourFrame output;     // written; may be the same image as `colour`
      bool reset = false;     // DLSSNR.Reset
@@ -299,7 +386,7 @@ diff --git a/windows/src/core/nr_renodx.hpp b/windows/src/core/nr_renodx.hpp
      bool after_upscale = true;
      // The game's motion vectors, for Detail stability: the region (x, y, motion.width/height) of the
      // texture and the scale that turns a texel into normalised screen units (EngineFrame's convention).
-@@ -183,6 +186,13 @@
+@@ -183,6 +186,13 @@ public:
      // 0 SDR (legacy codec), 1 linear HDR, 2 PQ: what this frame format and flag resolve to.
      uint8_t hdr_mode() const;
  
@@ -313,82 +400,3 @@ diff --git a/windows/src/core/nr_renodx.hpp b/windows/src/core/nr_renodx.hpp
      // The network for one pass of the stack: reads `proxy`, writes its answer into `neural` (both
      // StageConfig::nr_width x nr_height, RGBA16F); `reset` restarts that pass's history.
      using Network = std::function<void(uint32_t pass, const ColourFrame& proxy, const ColourFrame& neural, bool reset)>;
-diff --git a/windows/src/core/nr_graph.cpp b/windows/src/core/nr_graph.cpp
---- a/windows/src/core/nr_graph.cpp
-+++ b/windows/src/core/nr_graph.cpp
-@@ -424,7 +424,7 @@
-     for (size_t i = 1; i < ranges.size(); ++i) {
-         if (ranges[i].first < ranges[i - 1].second) { if (why) *why = "overlapping model tensors"; return false; }
-     }
--    const auto* expected = count == 255 ? nr::model_profile::small : nr::model_profile::original;
-+    const auto* expected = count == 255 ? nr::model_profile::small_tensors : nr::model_profile::original_tensors;
-     for (uint32_t i = 0; i < count; ++i) {
-         const auto it = p.index.find(expected[i].name);
-         std::string digest;
-diff --git a/windows/src/core/nr_model_profile.hpp b/windows/src/core/nr_model_profile.hpp
---- a/windows/src/core/nr_model_profile.hpp
-+++ b/windows/src/core/nr_model_profile.hpp
-@@ -2,7 +2,7 @@
- #pragma once
- namespace nr::model_profile {
- struct Tensor { const char* name; const char* sha256; };
--inline constexpr Tensor original[] = {
-+inline constexpr Tensor original_tensors[] = {
-     {"inventory/weights/block23.layer0.layer.bin", "63399444cd1c361a295167f7958cc707d8e88ec363da1cbf2ada632dcc741df5"},
-     {"inventory/weights/block24.layer0.layer.bin", "0b034c80329788fe6e7047cfaf63cd6a72e4b4803cddd945f053657868908059"},
-     {"inventory/weights/block25.layer0.layer.bin", "1ec87cc7deec553a343123ff6e6a2db7248e713cdf9246f1e9918132415e2427"},
-@@ -603,7 +603,7 @@
-     {"unpacked/block9.layer0.layer.residual_scale.bin", "e6d6e39a4a65583e8907b6df1c56f6fa30c524f70ae2c730cf2efeebaedff566"},
-     {"unpacked/block9.layer0.layer.scalars_b.bin", "dfd9bf5ef683b39284428c96a3f42a0f0daf1d1354e4a21ceec9ee92e7b78fcb"},
- };
--inline constexpr Tensor small[] = {
-+inline constexpr Tensor small_tensors[] = {
-     {"unpacked-preblock/block0.layer0.layer.attn_out_proj.bin", "4a0ab1262dcff594132faf676c0705b35b7c45b7918be3a6a864abac77fd2634"},
-     {"unpacked-preblock/block0.layer0.layer.attn_pos_bias.bin", "32b272875f13b9f34b28da93dd3f26dd2fe12d0fa2d27dd22dae606665092c86"},
-     {"unpacked-preblock/block0.layer0.layer.attn_residual_scale.bin", "2f545c569372539325fcb6d575a3fcde7e08becd859d2025b9e8f22a64015c94"},
-diff --git a/windows/shaders/renodx/feed_continuity.hlsli b/windows/shaders/renodx/feed_continuity.hlsli
-new file mode 100644
---- /dev/null
-+++ b/windows/shaders/renodx/feed_continuity.hlsli
-@@ -0,0 +1,4 @@
-+// Shared by the GPU transition and its CPU regression test. Inputs are positive divisors.
-+float FeedStep(float previous, float target, float attack, float release, float dt) {
-+    return previous * exp2(clamp(log2(target / previous), -release * dt, attack * dt));
-+}
-diff --git a/windows/shaders/renodx/v6_feed_transition.cs_5_1.hlsl b/windows/shaders/renodx/v6_feed_transition.cs_5_1.hlsl
-new file mode 100644
---- /dev/null
-+++ b/windows/shaders/renodx/v6_feed_transition.cs_5_1.hlsl
-@@ -0,0 +1,32 @@
-+// Bridge feed changes from the divisor actually used by the previous frame. The v1
-+// and v2 estimators keep their own state; ordinary game exposure is not rate limited.
-+#include "vk_binding.hlsli"
-+#include "feed_continuity.hlsli"
-+VK_BINDING(4) RWTexture2D<float4> Scale : register(u0);
-+VK_BINDING(5) RWTexture2D<float4> Continuity : register(u1);
-+PUSH_CONSTANTS(TransitionConstants) {
-+    uint Feed;
-+    uint Reset;
-+    float Attack;
-+    float Release;
-+    float Seconds;
-+};
-+[numthreads(1, 1, 1)]
-+void main() {
-+    const float4 old = Continuity[uint2(0, 0)];
-+    float4 scale = Scale[uint2(0, 0)];
-+    const uint source = Feed == 3u ? 1u : Feed;
-+    const bool valid = old.r > 0.0 && old.r < 16777216.0;
-+    float value = scale.r;
-+    bool tracking = valid && (old.b > 0.5 || uint(old.g) != source);
-+    if (Reset == 0u && valid) {
-+        if (Feed == 3u) value = old.r;
-+        else if (tracking) {
-+            value = FeedStep(old.r, max(scale.r, 5.96046448e-8), Attack, Release, clamp(Seconds, 0.0, 0.1));
-+            tracking = abs(log2(max(scale.r, 5.96046448e-8) / value)) > 0.0001;
-+        }
-+    } else tracking = false;
-+    scale.r = value;
-+    Scale[uint2(0, 0)] = scale;
-+    Continuity[uint2(0, 0)] = float4(value, float(source), tracking ? 1.0 : 0.0, 0.0);
-+}

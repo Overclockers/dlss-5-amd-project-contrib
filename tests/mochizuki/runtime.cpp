@@ -63,6 +63,9 @@ int wmain(int argc,wchar_t**argv) try {
     LmxxfNrCreateInfo ci {sizeof ci,device.Get(),q[0].Get(),argv[2],LMXXF_NR_CREATE_FLAG_RECORDING_LEASES};
     Rc(api.Create(&ci,&context));
     if(acoMode) {
+        // The damaged-bundle fixtures supply only Original weights. Select it
+        // explicitly so this checks compiler fallback, not missing Small assets.
+        if(acoFallback) controls.network_model=0;
         auto readInfo=[&] {
             MochizukiNrInfo info {sizeof info}; Rc(getInfo(context,&info)); return info;
         };

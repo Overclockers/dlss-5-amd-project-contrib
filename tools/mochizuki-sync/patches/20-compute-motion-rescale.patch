@@ -1,6 +1,8 @@
+diff --git a/linux/build/build_network.py b/linux/build/build_network.py
+index 1b1ced47f16f63b0c8e3b81ff803b861317085cc..e569916fd03f4d89c293ac169f486422a8e8a855 100644
 --- a/linux/build/build_network.py
 +++ b/linux/build/build_network.py
-@@ -41,7 +41,12 @@
+@@ -42,7 +42,12 @@ RUNTIME_VARIANTS = {'runtime_transfer_store': ('runtime_transfer', ['NR_STORE_NA
                      'runtime_planA_convert_r11g11b10': ('runtime_planA_convert', ['PLAN_A_DST_FORMAT=r11f_g11f_b10f', 'PLAN_A_DST_MAX=65024.0']),
                      'runtime_planA_convert_rgba16f': ('runtime_planA_convert', ['PLAN_A_DST_FORMAT=rgba16f', 'PLAN_A_DST_MAX=65504.0']),
                      'runtime_planA_unconvert_r11g11b10': ('runtime_planA_unconvert', ['PLAN_A_DST_FORMAT=r11f_g11f_b10f', 'PLAN_A_DST_MAX=65024.0']),
@@ -14,6 +16,9 @@
  MOTION = ['motion_luma', 'motion_estimate']
  
  
+diff --git a/linux/shaders/passes/runtime_mv_rescale.comp b/linux/shaders/passes/runtime_mv_rescale.comp
+new file mode 100644
+index 0000000000000000000000000000000000000000..1d993d870ed4d28a35b1c3c0a77443d8aa483d31
 --- /dev/null
 +++ b/linux/shaders/passes/runtime_mv_rescale.comp
 @@ -0,0 +1,21 @@
@@ -38,9 +43,11 @@
 +    const vec2 at = (vec2(xy) + 0.5) * vec2(pc.srcWidth, pc.srcHeight) / vec2(pc.width, pc.height);
 +    imageStore(dst, xy, textureLod(src, at / vec2(textureSize(src, 0)), 0.0));
 +}
+diff --git a/windows/build/build_network.py b/windows/build/build_network.py
+index f0023eeb4223ddaa92e02cfc0027c39bcb632696..a941cea09e77aae317df6fcbde688814d8109c2f 100644
 --- a/windows/build/build_network.py
 +++ b/windows/build/build_network.py
-@@ -46,7 +46,12 @@
+@@ -47,7 +47,12 @@ RUNTIME_VARIANTS = {'runtime_transfer_store': ('runtime_transfer', ['NR_STORE_NA
                      'runtime_planA_convert_r11g11b10': ('runtime_planA_convert', ['PLAN_A_DST_FORMAT=r11f_g11f_b10f', 'PLAN_A_DST_MAX=65024.0']),
                      'runtime_planA_convert_rgba16f': ('runtime_planA_convert', ['PLAN_A_DST_FORMAT=rgba16f', 'PLAN_A_DST_MAX=65504.0']),
                      'runtime_planA_unconvert_r11g11b10': ('runtime_planA_unconvert', ['PLAN_A_DST_FORMAT=r11f_g11f_b10f', 'PLAN_A_DST_MAX=65024.0']),
@@ -54,6 +61,9 @@
  MOTION = ['motion_luma', 'motion_estimate']
  
  
+diff --git a/windows/shaders/passes/runtime_mv_rescale.comp b/windows/shaders/passes/runtime_mv_rescale.comp
+new file mode 100644
+index 0000000000000000000000000000000000000000..1d993d870ed4d28a35b1c3c0a77443d8aa483d31
 --- /dev/null
 +++ b/windows/shaders/passes/runtime_mv_rescale.comp
 @@ -0,0 +1,21 @@

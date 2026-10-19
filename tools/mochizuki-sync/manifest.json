@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "upstream": "https://github.com/mochizuki0323/DLSSNR-AMD.git",
-  "commit": "191b97b54175d50c7ec5992b54322dd3eb0ef8ac",
+  "commit": "cc27501dc116bdcfbb43612e497c5ca12497574a",
   "vendor": "third_party/mochizuki",
   "text_extensions": [
     ".comp",
@@ -348,6 +348,7 @@
     "linux/shaders/rdna4/include/image_noise.glsl",
     "linux/shaders/rdna4/include/nr_chain.glsl",
     "linux/shaders/rdna4/include/nr_prof.glsl",
+    "linux/shaders/rdna4/include/nr_style_grade.glsl",
     "linux/shaders/rdna4/include/occ_pad.glsl",
     "linux/shaders/rdna4/include/swin_math.glsl",
     "linux/shaders/rdna4/include/temporal_history.glsl",
@@ -376,6 +377,7 @@
     "windows/data/aco/int4/records/23e705c7810d635c.nrp",
     "windows/data/aco/int4/records/26228a0dd1bc496a.nrp",
     "windows/data/aco/int4/records/271b75d18c07ad4a.nrp",
+    "windows/data/aco/int4/records/2cc6bc17d5fd0b48.nrp",
     "windows/data/aco/int4/records/2d190dc551d0d36b.nrp",
     "windows/data/aco/int4/records/34a1f23f76d42b2f.nrp",
     "windows/data/aco/int4/records/38a4fa7be1135f89.nrp",
@@ -388,6 +390,7 @@
     "windows/data/aco/int4/records/640b7c2e989cd1a5.nrp",
     "windows/data/aco/int4/records/65c655c35b29e9b8.nrp",
     "windows/data/aco/int4/records/65c6a55c752c619e.nrp",
+    "windows/data/aco/int4/records/685c0581b22885d8.nrp",
     "windows/data/aco/int4/records/6d71d6d4b52e2c2d.nrp",
     "windows/data/aco/int4/records/7645181bf21ac57c.nrp",
     "windows/data/aco/int4/records/77fc12a51fc5876a.nrp",
@@ -401,6 +404,7 @@
     "windows/data/aco/int4/records/99b8b3cb85e8b743.nrp",
     "windows/data/aco/int4/records/9a5a4f3e8e96c5e6.nrp",
     "windows/data/aco/int4/records/9c0501011456830d.nrp",
+    "windows/data/aco/int4/records/9d7787da683bb1fb.nrp",
     "windows/data/aco/int4/records/9e7ca05cf4553d16.nrp",
     "windows/data/aco/int4/records/a75c1374f0e9f530.nrp",
     "windows/data/aco/int4/records/a8b0ca43a87b1f5d.nrp",
@@ -420,6 +424,7 @@
     "windows/data/aco/int4/records/d37c39c6bb6283ea.nrp",
     "windows/data/aco/int4/records/d408e5e174e5cea3.nrp",
     "windows/data/aco/int4/records/d4deb21a15baeb8e.nrp",
+    "windows/data/aco/int4/records/d653b3f490d2640e.nrp",
     "windows/data/aco/int4/records/d754efa73483c836.nrp",
     "windows/data/aco/int4/records/db7a0a2d3882f91e.nrp",
     "windows/data/aco/int4/records/e4d148943732c2a0.nrp",
@@ -438,6 +443,7 @@
     "windows/data/aco/records/0401a3f73822ebd4.nrp",
     "windows/data/aco/records/05a24ec73dacc552.nrp",
     "windows/data/aco/records/0acf7df46748d5ec.nrp",
+    "windows/data/aco/records/0d231a01bbc316bd.nrp",
     "windows/data/aco/records/1824cf2dd7287efc.nrp",
     "windows/data/aco/records/191b6c179065a652.nrp",
     "windows/data/aco/records/1f3fa643968995ef.nrp",
@@ -466,6 +472,7 @@
     "windows/data/aco/records/846f1b9f35747aad.nrp",
     "windows/data/aco/records/93ac870d9c5fa3a9.nrp",
     "windows/data/aco/records/961ca3a350b6b064.nrp",
+    "windows/data/aco/records/96ae7cc20ac7f56e.nrp",
     "windows/data/aco/records/9a5a4f3e8e96c5e6.nrp",
     "windows/data/aco/records/9c0501011456830d.nrp",
     "windows/data/aco/records/9e7ca05cf4553d16.nrp",
@@ -474,6 +481,7 @@
     "windows/data/aco/records/a569ebdb55ae39ab.nrp",
     "windows/data/aco/records/a8b0ca43a87b1f5d.nrp",
     "windows/data/aco/records/b00fdd3684a499f1.nrp",
+    "windows/data/aco/records/b1ef84de2cfc87e1.nrp",
     "windows/data/aco/records/b389a30783b4fd8e.nrp",
     "windows/data/aco/records/b67eaa29a9185311.nrp",
     "windows/data/aco/records/b829cfa5b536da41.nrp",
@@ -487,6 +495,7 @@
     "windows/data/aco/records/dfe6cfe562db9ccd.nrp",
     "windows/data/aco/records/e4d148943732c2a0.nrp",
     "windows/data/aco/records/e53ddd3ddf6bb8d5.nrp",
+    "windows/data/aco/records/e5c897313d3bab71.nrp",
     "windows/data/aco/records/eae2df7e8feaaea4.nrp",
     "windows/data/aco/records/ed043908eeb94f7e.nrp",
     "windows/data/aco/records/f7aba9aacafa1dd2.nrp",
@@ -522,6 +531,7 @@
     "windows/shaders/rdna4/include/image_noise.glsl",
     "windows/shaders/rdna4/include/nr_chain.glsl",
     "windows/shaders/rdna4/include/nr_prof.glsl",
+    "windows/shaders/rdna4/include/nr_style_grade.glsl",
     "windows/shaders/rdna4/include/occ_pad.glsl",
     "windows/shaders/rdna4/include/swin_math.glsl",
     "windows/shaders/rdna4/include/temporal_history.glsl",
@@ -679,8 +689,8 @@
       "feature": "weights-only-extraction",
       "path": "patches/12-weights-only-extraction.patch",
       "files": [
-        "linux/package/model-tools/inspect_nr.py",
-        "linux/package/model-tools/extract_model.sh"
+        "linux/package/model-tools/extract_model.sh",
+        "linux/package/model-tools/inspect_nr.py"
       ]
     },
     {
@@ -760,8 +770,8 @@
       "path": "patches/20-compute-motion-rescale.patch",
       "files": [
         "linux/build/build_network.py",
-        "windows/build/build_network.py",
         "linux/shaders/passes/runtime_mv_rescale.comp",
+        "windows/build/build_network.py",
         "windows/shaders/passes/runtime_mv_rescale.comp"
       ]
     },
@@ -790,32 +800,35 @@
       ]
     },
     {
-      "feature": "nonnegative-hdr-reference",
-      "path": "patches/24-nonnegative-hdr-reference.patch",
-      "files": [
-        "linux/shaders/passes/runtime_transfer.comp",
-        "windows/shaders/passes/runtime_transfer.comp"
-      ]
-    },
-    {
       "feature": "model-pack-validation-and-strict-selection",
       "path": "patches/25-model-pack-validation-and-strict-selection.patch",
       "files": [
         "windows/src/core/nr_graph.cpp",
-        "windows/src/core/nr_runtime.cpp",
-        "windows/src/core/nr_model_profile.hpp"
+        "windows/src/core/nr_model_profile.hpp",
+        "windows/src/core/nr_runtime.cpp"
       ]
     },
     {
       "feature": "exposure-continuity",
       "path": "patches/26-exposure-continuity.patch",
       "files": [
-        "windows/src/core/nr_renodx.cpp",
-        "windows/src/core/nr_renodx.hpp",
+        "windows/shaders/renodx/feed_continuity.hlsli",
+        "windows/shaders/renodx/v6_feed_transition.cs_5_1.hlsl",
         "windows/src/core/nr_graph.cpp",
         "windows/src/core/nr_model_profile.hpp",
-        "windows/shaders/renodx/feed_continuity.hlsli",
-        "windows/shaders/renodx/v6_feed_transition.cs_5_1.hlsl"
+        "windows/src/core/nr_renodx.cpp",
+        "windows/src/core/nr_renodx.hpp"
+      ]
+    },
+    {
+      "feature": "owned-runtime-policy",
+      "path": "patches/27-owned-runtime-policy.patch",
+      "files": [
+        "windows/src/core/nr_renodx.cpp",
+        "windows/src/core/nr_renodx.hpp",
+        "windows/src/core/nr_runtime.cpp",
+        "windows/src/core/nr_runtime.hpp",
+        "windows/src/core/nrvk.hpp"
       ]
     }
   ],

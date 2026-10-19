@@ -1,6 +1,8 @@
+diff --git a/linux/build/build_network.py b/linux/build/build_network.py
+index 2d232c901040fbd534502f79f50ae3e6a72c9745..e466713294f07509b38203465d612bfd96b15e2e 100644
 --- a/linux/build/build_network.py
 +++ b/linux/build/build_network.py
-@@ -23,6 +23,7 @@
+@@ -24,6 +24,7 @@ import sys
  from pathlib import Path
  
  R = Path(__file__).resolve().parents[2]
@@ -8,7 +10,7 @@
  RUNTIME = ['runtime_alpha', 'runtime_encode', 'runtime_transfer', 'runtime_upscale', 'runtime_prep', 'runtime_depth', 'cascade_lograt', 'cascade_blur', 'cascade_feed',
             'runtime_downscale', 'runtime_taps']
  # runtime passes built from another pass's source with defines: name -> (source, defines)
-@@ -31,7 +32,7 @@
+@@ -32,7 +33,7 @@ MOTION = ['motion_luma', 'motion_estimate']
  
  
  def glslang(arch, src, defines, out):
@@ -17,7 +19,7 @@
             '-I' + str(R / 'linux/shaders' / arch / 'include'), '-I' + str(R / 'linux/shaders/passes/include')]
      cmd += ['-D' + d for d in defines] + [str(src), '-o', str(out)]
      r = subprocess.run(cmd, capture_output=True, text=True)
-@@ -45,7 +46,12 @@
+@@ -46,7 +47,12 @@ def main():
      ap.add_argument('--int4', action='store_true')
      ap.add_argument('--out', type=Path)
      ap.add_argument('--check', type=Path)
@@ -30,9 +32,11 @@
      table = json.loads((R / 'linux/shaders' / a.arch / 'pipelines.json').read_text())
      if a.int4:
          i4 = json.loads((R / 'linux/shaders' / a.arch / 'pipelines-int4.json').read_text())
+diff --git a/windows/build/build_network.py b/windows/build/build_network.py
+index 52f38d008b6b0b33b9d43a02d9f664a719909544..ba9f7597b498baafe3790e3a2ad97f2f10203ec4 100644
 --- a/windows/build/build_network.py
 +++ b/windows/build/build_network.py
-@@ -27,6 +27,7 @@
+@@ -28,6 +28,7 @@ import sys
  from pathlib import Path
  
  R = Path(__file__).resolve().parents[2]
@@ -40,7 +44,7 @@
  RUNTIME = ['runtime_alpha', 'runtime_encode', 'runtime_transfer', 'runtime_upscale', 'runtime_prep', 'runtime_depth', 'cascade_lograt', 'cascade_blur', 'cascade_feed',
             'runtime_downscale', 'runtime_taps']
  # runtime passes built from another pass's source with defines: name -> (source, defines)
-@@ -44,7 +45,7 @@
+@@ -45,7 +46,7 @@ UNROLLED = {'fswin_t.comp', 'ffwd3_t.comp', 'attn.comp', 'vit_attn.comp'}
  def glslang(arch, src, defines, out, unroll=False, network=False):
      if unroll or (network and QUAD):
          pre = out.with_suffix('.pre.comp')
@@ -49,7 +53,7 @@
                              '-I' + str(R / 'windows/shaders/passes/include')] + ['-D' + d for d in defines] + [str(src)],
                             capture_output=True, text=True)
          if r.returncode:
-@@ -57,7 +58,7 @@
+@@ -58,7 +59,7 @@ def glslang(arch, src, defines, out, unroll=False, network=False):
              subprocess.run([sys.executable, str(R / 'windows/build/unroll_glsl.py'), str(pre), str(pre)],
                             check=True, stdout=subprocess.DEVNULL)
          src, defines = pre, []
@@ -58,7 +62,7 @@
             '-I' + str(R / 'windows/shaders' / arch / 'include'), '-I' + str(R / 'windows/shaders/passes/include')]
      cmd += ['-D' + d for d in defines] + [str(src), '-o', str(out)]
      r = subprocess.run(cmd, capture_output=True, text=True)
-@@ -76,7 +77,12 @@
+@@ -77,7 +78,12 @@ def main():
      ap.add_argument('--check', type=Path)
      ap.add_argument('--no-quad', action='store_true',
                      help='keep the pair quantisation loops (windows/build/quad_quant_glsl.py off)')

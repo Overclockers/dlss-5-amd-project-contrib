@@ -1,6 +1,8 @@
+diff --git a/windows/src/core/nr_runtime.cpp b/windows/src/core/nr_runtime.cpp
+index 59fac6460097615761cad4fd94feea8f903138c3..fb701192b1d046c95ff054f326c71dd4f45e6720 100644
 --- a/windows/src/core/nr_runtime.cpp
 +++ b/windows/src/core/nr_runtime.cpp
-@@ -487,6 +487,9 @@
+@@ -519,6 +519,9 @@ struct Runtime::Impl {
      uint32_t timing_stride{2};             // queries per slot: 2 + 2 x max_passes
      uint32_t slot_passes[kTimingSlots]{};  // passes timed in each slot
      float net_ms{}, net_ms_avg{};
@@ -10,7 +12,7 @@
      // Read the oldest slot in the ring, if its recording has finished. Called
      // once per recording, from the thread that records.
      void read_timing() {
-@@ -498,15 +501,21 @@
+@@ -530,15 +533,21 @@ struct Runtime::Impl {
          if (vkGetQueryPoolResults(session.ctx.device, timing, oldest * timing_stride, n, n * sizeof(uint64_t), stamps,
                                    sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) != VK_SUCCESS)
              return;   // VK_NOT_READY: still running, ask again next frame
@@ -41,7 +43,7 @@
          // A plain exponential average. Ten frames is enough to stop the last
          // digit dancing and short enough that a resolution change shows up
          // immediately rather than being dragged in from before it.
-@@ -1315,6 +1324,8 @@
+@@ -1412,6 +1421,8 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
          if (vkCreateQueryPool(s.ctx.device, &qi, nullptr, &impl_->timing) == VK_SUCCESS) {
              impl_->timing_ok = true;
              impl_->timestamp_ns = s.ctx.timestamp_period;
@@ -50,7 +52,7 @@
          }
      }
      // Values share arena memory by lifetime (nr_graph.cpp, `reuse`): same
-@@ -2848,6 +2859,9 @@
+@@ -3365,6 +3376,9 @@ void set_input_check(bool on, const std::string& folder, int pictures) {
  float Runtime::last_gpu_ms() const { return impl_->gpu_ms; }
  float Runtime::average_gpu_ms() const { return impl_->gpu_ms_avg; }
  float Runtime::average_network_ms() const { return impl_->split_timing ? impl_->net_ms_avg : 0.0f; }
@@ -60,9 +62,11 @@
  std::pair<float, float> Runtime::preprocess_meter() const {
      const float* s = static_cast<const float*>(impl_->prep_state.mapped);
      if (!s || s[1] != 1.0f) return {NAN, NAN};
+diff --git a/windows/src/core/nr_runtime.hpp b/windows/src/core/nr_runtime.hpp
+index e442ce9679ca50a1b44f111922814477801d5924..be4d7d31f5a18df959f296ea5a7349d92ff85157 100644
 --- a/windows/src/core/nr_runtime.hpp
 +++ b/windows/src/core/nr_runtime.hpp
-@@ -456,6 +456,13 @@
+@@ -565,6 +565,13 @@ public:
      // The network's share of average_gpu_ms (every pass's dispatches), the same average; the rest is
      // the work around it (input, composition, copies). Zero until the first result is back.
      float average_network_ms() const;

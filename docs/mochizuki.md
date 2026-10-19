@@ -19,13 +19,13 @@ completion-based resource release. Its build-progress display and execution-hist
 handling are described below. Exact reused components, source pins, licenses and
 local changes are in [the source record](../third_party/mochizuki/UPSTREAM.md).
 
-The vendored core follows official Windows source `191b97b54175d50c7ec5992b54322dd3eb0ef8ac`
-(0.0.6-win-preview-alpha, 2026-10-17). The 310.9.16 model is the default; the
+The vendored core follows official Windows source `cc27501dc116bdcfbb43612e497c5ca12497574a`
+(0.0.7, 2026-10-19). The 310.9.16 model is the default; the
 310.8.0 original remains selectable. INT4 mixed and RenoDX processing are integrated
 through this host's existing Ins menu and `[DlssNr]` settings. ACO defaults on;
 INT4 mixed and RenoDX default off. The official DX9/DX10/DX11 hosts, ReShade,
 Present hooks, End menu and screenshot capture are outside this Windows D3D12
-integration. See [the integration review](architecture/mochizuki-006-integration.md).
+integration. See the [0.0.7 adoption boundaries](architecture/mochizuki-upstream-extensions.md#windows-007-adoption-boundary) and the [historical 0.0.6 review](architecture/mochizuki-006-integration.md).
 
 Ins → Mochizuki → **Network model** selects **310.9.16 (new)** or
 **310.8.0 (original)**. `[DlssNr] MochizukiNetworkModel=1` selects the new model;
@@ -282,7 +282,7 @@ admission kept the installed ACO state (`ACO_BUDGET_KEEP_OK effective=1`).
 `ACO_RAPID_REENABLE requested=1 effective=0` when a native candidate installed
 after ACO had been requested again, then `ACO_RAPID_OK`.
 Missing, alias-less and corrupt bundles each completed one native frame
-(`ACO_FALLBACK_OK`). Package and uninstall ownership now uses the exact 794-path pin
+(`ACO_FALLBACK_OK`). At that snapshot, package and uninstall ownership used the exact 794-path pin
 `tools/install/mochizuki-owned.txt`. No game scene was compared.
 
 `MochizukiWhitePointSource` (0 off, default; 1 game; 2 meter; 3 auto) picks the exposure sources.

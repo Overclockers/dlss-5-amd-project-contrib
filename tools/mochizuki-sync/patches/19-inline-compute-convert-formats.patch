@@ -1,6 +1,8 @@
+diff --git a/linux/build/build_network.py b/linux/build/build_network.py
+index 756503080dfbe34058e90bdbfe50b6faaeae496e..1b1ced47f16f63b0c8e3b81ff803b861317085cc 100644
 --- a/linux/build/build_network.py
 +++ b/linux/build/build_network.py
-@@ -34,6 +34,9 @@
+@@ -35,6 +35,9 @@ RUNTIME_VARIANTS = {'runtime_transfer_store': ('runtime_transfer', ['NR_STORE_NA
                      'runtime_pack_u8': ('runtime_alpha', ['NR_PACK_U8']),
                      'runtime_pack_f16': ('runtime_alpha', ['NR_PACK_F16']),
                      'runtime_pack_r11': ('runtime_alpha', ['NR_PACK_R11']),
@@ -10,9 +12,11 @@
                      'runtime_unpack_f16': ('runtime_alpha', ['NR_UNPACK_F16']),
                      'runtime_planA_convert_r11g11b10': ('runtime_planA_convert', ['PLAN_A_DST_FORMAT=r11f_g11f_b10f', 'PLAN_A_DST_MAX=65024.0']),
                      'runtime_planA_convert_rgba16f': ('runtime_planA_convert', ['PLAN_A_DST_FORMAT=rgba16f', 'PLAN_A_DST_MAX=65504.0']),
+diff --git a/linux/shaders/passes/runtime_alpha.comp b/linux/shaders/passes/runtime_alpha.comp
+index d14eb6730dfe01f6ae4c1444fd336f2a375919b1..e062add3abcf61e9c20193a8b86ff115ba781840 100644
 --- a/linux/shaders/passes/runtime_alpha.comp
 +++ b/linux/shaders/passes/runtime_alpha.comp
-@@ -32,11 +32,14 @@
+@@ -32,11 +32,14 @@ void main() {
  #endif
  #endif
  }
@@ -32,7 +36,7 @@
  layout(local_size_x=8, local_size_y=8) in;
  layout(set=0,binding=0,rgba32f) uniform readonly image2D answer;
  layout(set=0,binding=1,r32ui) uniform writeonly uimage2D packed;
-@@ -44,10 +47,22 @@
+@@ -44,10 +47,22 @@ layout(push_constant) uniform Push { uint width, height; } pc;
  void main() {
      ivec2 xy=ivec2(gl_GlobalInvocationID.xy);
      if (xy.x>=pc.width || xy.y>=pc.height) return;
@@ -56,9 +60,11 @@
  }
  #else
  // Preserve caller alpha. Float output keeps NR RGB; 8-bit output uses the same
+diff --git a/windows/build/build_network.py b/windows/build/build_network.py
+index 6d9a01e0ae8c4743cb8dd1e162503ba64af63116..f0023eeb4223ddaa92e02cfc0027c39bcb632696 100644
 --- a/windows/build/build_network.py
 +++ b/windows/build/build_network.py
-@@ -39,6 +39,9 @@
+@@ -40,6 +40,9 @@ RUNTIME_VARIANTS = {'runtime_transfer_store': ('runtime_transfer', ['NR_STORE_NA
                      'runtime_pack_u8': ('runtime_alpha', ['NR_PACK_U8']),
                      'runtime_pack_f16': ('runtime_alpha', ['NR_PACK_F16']),
                      'runtime_pack_r11': ('runtime_alpha', ['NR_PACK_R11']),
@@ -68,9 +74,11 @@
                      'runtime_unpack_f16': ('runtime_alpha', ['NR_UNPACK_F16']),
                      'runtime_planA_convert_r11g11b10': ('runtime_planA_convert', ['PLAN_A_DST_FORMAT=r11f_g11f_b10f', 'PLAN_A_DST_MAX=65024.0']),
                      'runtime_planA_convert_rgba16f': ('runtime_planA_convert', ['PLAN_A_DST_FORMAT=rgba16f', 'PLAN_A_DST_MAX=65504.0']),
+diff --git a/windows/shaders/passes/runtime_alpha.comp b/windows/shaders/passes/runtime_alpha.comp
+index d14eb6730dfe01f6ae4c1444fd336f2a375919b1..e062add3abcf61e9c20193a8b86ff115ba781840 100644
 --- a/windows/shaders/passes/runtime_alpha.comp
 +++ b/windows/shaders/passes/runtime_alpha.comp
-@@ -32,11 +32,14 @@
+@@ -32,11 +32,14 @@ void main() {
  #endif
  #endif
  }
@@ -90,7 +98,7 @@
  layout(local_size_x=8, local_size_y=8) in;
  layout(set=0,binding=0,rgba32f) uniform readonly image2D answer;
  layout(set=0,binding=1,r32ui) uniform writeonly uimage2D packed;
-@@ -44,10 +47,22 @@
+@@ -44,10 +47,22 @@ layout(push_constant) uniform Push { uint width, height; } pc;
  void main() {
      ivec2 xy=ivec2(gl_GlobalInvocationID.xy);
      if (xy.x>=pc.width || xy.y>=pc.height) return;
@@ -114,9 +122,11 @@
  }
  #else
  // Preserve caller alpha. Float output keeps NR RGB; 8-bit output uses the same
+diff --git a/windows/src/core/nr_runtime.cpp b/windows/src/core/nr_runtime.cpp
+index f599ca5520ca33c492faf6fc6f79a1ebf3f96901..3303a0d86e1d16fab56139fb3187a2c77f073f96 100644
 --- a/windows/src/core/nr_runtime.cpp
 +++ b/windows/src/core/nr_runtime.cpp
-@@ -345,6 +345,7 @@
+@@ -364,6 +364,7 @@ struct Runtime::Impl {
      nrvk::Kernel unpack_f16, pack_f16;
      nrvk::Context::Image input_f16{}, output_f16{};
      bool f16_built{};
@@ -124,7 +134,7 @@
      bool compute_recording{}, graphics_family{true};
      void graphics_only(const char* what) const {
          if (compute_recording)
-@@ -1629,47 +1630,67 @@
+@@ -1763,47 +1764,67 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
      }
      // Optional compute conversions preserve FP16/HDR values. Private images keep
      // descriptors stable across caller recordings; only copies touch caller images.
@@ -220,7 +230,7 @@
      }
      if (!impl_->graphics_family && compute_refusal(false, VK_FORMAT_UNDEFINED, 0, 1))
          throw std::invalid_argument("NR colour format conversion requires a graphics-capable queue");
-@@ -2344,7 +2365,7 @@
+@@ -2850,7 +2871,7 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
          // the conversion the blit used to.
          vkCmdCopyImage(cmd, frame.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                         colour_dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
@@ -229,7 +239,7 @@
          barrier(cmd,encoded.handle,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                  VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT,
                  VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT);
-@@ -2359,8 +2380,8 @@
+@@ -2865,8 +2886,8 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
          barrier(cmd,encoded.handle,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,
                  VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT,
                  VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT|VK_ACCESS_TRANSFER_WRITE_BIT);
@@ -240,7 +250,7 @@
          // around, so the blit's own format conversion is the whole of it.
          if (impl_->compute_recording && impl_->f16_built) {
              auto image = impl_->input_f16.handle;
-@@ -2968,7 +2989,7 @@
+@@ -3487,7 +3508,7 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
              // Already the frame's bits (an *_SRGB frame takes its UNORM twin's).
              vkCmdCopyImage(cmd, out, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                             wb, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
@@ -249,9 +259,11 @@
              barrier(cmd,encoded.handle,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                      VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT,
                      VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT);
+diff --git a/windows/src/core/nr_runtime.hpp b/windows/src/core/nr_runtime.hpp
+index 77589cb971edaaa3934a9ad6098b75cfc5c92fdf..e7dec75edc8a6ca4d89a38f463c09ef8f21f2a0c 100644
 --- a/windows/src/core/nr_runtime.hpp
 +++ b/windows/src/core/nr_runtime.hpp
-@@ -196,11 +196,10 @@
+@@ -259,11 +259,10 @@ struct RuntimeConfig {
      // separate_answer: do not use store_native; keep a distinct answer image.
      bool compact_transfer = false;
      bool separate_answer = false;

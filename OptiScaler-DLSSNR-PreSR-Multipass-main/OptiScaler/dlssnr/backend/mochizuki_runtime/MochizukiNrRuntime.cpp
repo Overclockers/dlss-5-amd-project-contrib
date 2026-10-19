@@ -2144,6 +2144,7 @@ struct ProductRuntime : nr::Runtime
                  key.renodx ? 1 : 0);
         if (!key.renodx) return;
         nr::renodx::StageConfig sc;
+        sc.collect_facts = false; // No engine-panel Facts consumer in the product.
         sc.shaders = (std::filesystem::path(config.root) / "dlssnr-amd/shaders/renodx").string();
         sc.width = key.width; sc.height = key.height;
         sc.nr_width = key.renoWidth; sc.nr_height = key.renoHeight;
@@ -4527,6 +4528,11 @@ struct Session
             config.linear_input = key.linear;
             config.model_scale = key.scale;
             config.network = int(key.networkModel); // Product INI/menu overrides DLSSNR_MODEL and upstream INI.
+            config.motion_without_depth = 1; // This bridge supplies motion, never game depth.
+            // Keep independent graph compilation/import accounting and whole-graph
+            // native fallback until cross-network pipeline reuse is separately proved.
+            config.share_pipelines = false;
+            config.require_style_grade = true; // A complete package must include every grade variant.
             config.max_passes = key.maxPasses;
             config.preprocess = key.prep;
             config.compact_transfer = key.compactTransfer;

@@ -1,16 +1,16 @@
 # Mochizuki: upstream ownership and remaining interfaces
 
-The product follows official `8a70f7f418294ff1e306b66893456e5319ff8205` core,
+The product follows official `cc27501dc116bdcfbb43612e497c5ca12497574a` (Windows 0.0.7) core,
 graph, shaders and recipes. The residual feature patches are explicit in
 [the pin manifest](../../tools/mochizuki-sync/manifest.json), with a non-mutating
 [replay check](../../tools/mochizuki-sync/README.md). They reproduce the existing
 vendor snapshot. Local scheduling extensions are recorded separately; inference
-arithmetic and shader recipes remain official. This is the same ownership approach used for lmxxf, not a
+network arithmetic follows the original, with explicit local conversion recipes and host interfaces. This is the same ownership approach used for lmxxf, not a
 claim that either backend directly loads the author's distributed binary.
 
 ## What belongs to the host
 
-Upstream proposal scope is **optional interfaces only**. The local fourteen-patch
+Upstream proposal scope is **optional interfaces only**. The local feature-patch
 inventory records the current product integration, not implementations to
 transplant upstream. The upstream preparation branch has reverted the ACO,
 buffer-optimization and timing-calculation snapshots. Keep official ACO and timing
@@ -34,7 +34,7 @@ contains no person model, ONNX worker, game hook, menu or INI schema.
 | Optional pass-0 output | `RecordLayers` requests it for shared person composition; adapter copies the Vulkan image to its held D3D12 output | Off by default; ordinary multipass, model applied, no active preprocessing/control mask/native compose. Runtime owns allocation; contents require caller synchronization and may be overwritten by later recordings | Keep; propose generic auxiliary output. Existing distinct/nonblack test is weaker than single-pass equality; strengthen that and replay/lifetime validation before PR |
 | Output-buffer policy | Adapter maps `MochizukiCompactTransfer` to optional RGBA32F reuse / separate answer | Both new core flags default false; official native store remains first choice. Reuse only covers remaining RGBA32F fallback cases, not every format or mode | Conditional optimization, not essential architecture. Keep currently tested option; prove incremental memory savings and image equality beyond official native store before proposing; remove it if not justified |
 | ACO builder configuration | Adapter configures on the device thread and builder thread, reads import count, rejects mixed/empty graphs, classifies fatal Vulkan errors | Current local thread-local default differs from official process configuration. Official `nr_pe_config.cpp::configure_network` precedes `nr_pe_session.cpp`'s background builder | Keep for this integration, but do not submit the whole patch. First prepare generic typed Vulkan errors / fatal-cache-error propagation. Design opt-in scoped builder configuration preserving official host defaults; review cache identity per device before that PR |
-| Unused `up_shown` | Below full model scale the enlargement passes bound a second full-frame RGBA32F image they never read or write | The image and its bindings are removed. `up_result` still holds the classic enlargement | Local memory fix. Official still allocates it |
+| Unused `up_shown` | Below full model scale the enlargement passes bound a second full-frame RGBA32F image they never read or write | Official 0.0.7 removes the allocation; the residual local patch removes unused bindings, including local first-pass paths. `up_result` still holds the classic enlargement | Keep only residual layout changes; do not count the allocation saving twice |
 | 30-layer cap | Host layer mode asks one network for 30 sequential passes | Default stays 1. Official core rejected above 16; the timing readback buffer was the same width. Slider stays 1–3 | Local cap for the host mode. Do not treat it as an upstream default |
 | Network recording segments | Host moves inline neural work off the game's busy 3D engine | Null callback preserves the old path; optional second-family sharing, ordered timeline dependencies and same-device buffers are required | Local Windows interface extension; do not send queue creation, D3D12 polling or recovery policy as an upstream core implementation |
 | FP16 compute conversions | Avoid graphics/compute round trips for full-scale FLOAT inline frames | Private FP16 images and optional shaders; graphics recordings retain blits. HDR/linear processing and native direct paths remain; reduced scale, motion blits and first-pass export retain segments | Patch 13, local conversion optimization. Compare actual shader bytes against blit and sustained inline against split; no inference-kernel or ACO record changes |
@@ -75,3 +75,13 @@ fatal Vulkan error handling, whole-network fallback and record/cache tests.
 Preserve that attribution in contributions derived from those changes, separately
 from the official a9b13dd authorship. No upstream PR is represented as submitted
 or accepted by this document.
+
+## Windows 0.0.7 adoption boundary
+
+- Adopt the complete original core, both shader recipe inputs, Natural/Cinematic grade pipelines and their default/INT4 ACO records. Standard remains ungraded; the existing model and INT4 controls map the three network identities without changing saved preferences. Ordinary Original and Small support native compilation or ACO; Original INT4 mixed requires ACO.
+- Patch 27 keeps the original standalone defaults but gives the product explicit construction policy. This adapter supplies no depth, so it fixes motion_without_depth instead of allowing a second INI to decide it. It disables cross-runtime SharedPipeline registry lookup/publication until reuse can preserve build-thread compiler identity, import counts and whole-graph fallback. Shared ownership of each private pipeline remains. Stage Facts readback is disabled for a host that has no consumer. Required grade variants cannot silently disappear from an incomplete package.
+- Retain the pack_img release fix, pass-capacity reuse, failure service, DRS settle/buckets, dual-API recording proofs, model hashes/read leases and exposure continuity. Remove duplicate HDR patch 24; shrink patch 07 to residual layouts already needed by local first-pass/transfer paths.
+- Defer opting into share_for/with_slot_of, deferred image heaps, cross-model activation sharing and RAM offload. A two-region alias heap cannot invalidate still-replayable host recordings; adoption requires an explicit replacement for existing size/cache ownership, ordered GPU proofs, budget and failure recovery. The product currently retires obsolete networks rather than keeping the original PE's inactive network cache, so adding offload is not itself a fix for the old pack_img leak.
+- Defer motion_point: changing the final sampler alone cannot undo the host's earlier LINEAR rescale. Define low-resolution motion, subrect/padding and multipass behavior before changing that contract. Original default behavior is available in core, but this product does not claim the NGX host's point-sampling change is enabled.
+
+Validation is bounded to the tested routes and inputs: five supported model/compiler combinations across three styles, six fixed-source native core comparisons at 256x256, and existing focused lifecycle/recovery/composition checks. No new tracked test project was added. The existing ACO CPU fixture's record count advances to 62, and damaged-bundle fixtures explicitly select their supplied Original model instead of waiting for absent Small weights. Game coverage, long 4K stress and the full Inline matrix remain separate from this source update.
