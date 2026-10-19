@@ -346,6 +346,46 @@
       </Setter>
     </Style>
 
+    <Style x:Key="GameContextMenu" TargetType="ContextMenu">
+      <Setter Property="Background" Value="#FF161820"/>
+      <Setter Property="Foreground" Value="#FFF3F4F6"/>
+      <Setter Property="BorderBrush" Value="#FF282D3A"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="4"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ContextMenu">
+            <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6" Padding="{TemplateBinding Padding}">
+              <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle"/>
+            </Border>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="GameContextMenuItem" TargetType="MenuItem">
+      <Setter Property="Foreground" Value="#FFF3F4F6"/>
+      <Setter Property="Padding" Value="12,8"/>
+      <Setter Property="MinWidth" Value="160"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="MenuItem">
+            <Border x:Name="MenuItemBorder" Background="Transparent" CornerRadius="4" Padding="{TemplateBinding Padding}">
+              <ContentPresenter ContentSource="Header" RecognizesAccessKey="True"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsHighlighted" Value="True">
+                <Setter TargetName="MenuItemBorder" Property="Background" Value="#FF252C3D"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Foreground" Value="#FF6E7585"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
     <!-- Game List Item Style with Crimson Selection Accent -->
     <Style TargetType="ListBoxItem">
       <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
@@ -545,7 +585,6 @@
                       <Button x:Name="EditGameButton" Content="编辑信息" Style="{StaticResource GhostButton}" Margin="10,0,0,0"/>
                       <Button x:Name="OpenFolderButton" Content="打开目录" Style="{StaticResource GhostButton}" Margin="10,0,0,0"/>
                       <Button x:Name="UninstallButton" Content="卸载" Style="{StaticResource GhostButton}" Margin="10,0,0,0" IsEnabled="False"/>
-                      <Button x:Name="RemoveGameButton" Content="从列表移除" Style="{StaticResource GhostButton}" Margin="10,0,0,0" IsEnabled="False"/>
                     </WrapPanel>
 
                     <!-- Progress Bar -->

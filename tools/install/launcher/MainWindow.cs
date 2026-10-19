@@ -106,7 +106,7 @@ namespace OptScalerNR.Launcher
         Border _lmxxfBadge, _danielBadge, _mochiBadge;
         Button _lmxxfActiveBtn, _danielActiveBtn, _mochiActiveBtn;
         Button _compatButton, _restoreCompatButton;
-        Button _removeGameButton;
+        MenuItem _removeGameMenuItem;
         TextBlock _compatSummary;
         TextBlock _lmxxfActiveLabel, _danielActiveLabel, _mochiActiveLabel;
         CheckBox _lmxxfCheck, _danielCheck, _mochiCheck, _replaceIni, _scanOnStartup;
@@ -203,7 +203,6 @@ namespace OptScalerNR.Launcher
             _changeExeButton = (Button)window.FindName("ChangeExeButton");
             _openFolderButton = (Button)window.FindName("OpenFolderButton");
             _uninstallButton = (Button)window.FindName("UninstallButton");
-            _removeGameButton = (Button)window.FindName("RemoveGameButton");
             _compatButton = (Button)window.FindName("CompatButton");
             _restoreCompatButton = (Button)window.FindName("RestoreCompatButton");
             _compatSummary = (TextBlock)window.FindName("CompatSummary");
@@ -353,7 +352,7 @@ namespace OptScalerNR.Launcher
             if (_openFolderButton != null) _openFolderButton.Click += (s, e) => OpenSelectedFolder();
             if (_primaryButton != null) _primaryButton.Click += (s, e) => OnPrimaryAction();
             if (_uninstallButton != null) _uninstallButton.Click += (s, e) => OnUninstall();
-            if (_removeGameButton != null) _removeGameButton.Click += (s, e) => RemoveSelectedGame();
+            InitGameContextMenu();
             if (_compatButton != null) _compatButton.Click += (s, e) => OnCompatibility(false);
             if (_restoreCompatButton != null) _restoreCompatButton.Click += (s, e) => OnCompatibility(true);
             if (_openLogButton != null) _openLogButton.Click += (s, e) => OpenLog();
@@ -692,7 +691,7 @@ namespace OptScalerNR.Launcher
                 if (_changeExeButton != null) _changeExeButton.Content = isZh ? "更换 EXE" : "Change EXE";
                 if (_openFolderButton != null) _openFolderButton.Content = isZh ? "打开目录" : "Open Folder";
                 if (_uninstallButton != null) _uninstallButton.Content = isZh ? "卸载" : "Uninstall";
-                if (_removeGameButton != null) _removeGameButton.Content = L("从列表移除", "Remove from list");
+                if (_removeGameMenuItem != null) _removeGameMenuItem.Header = L("从列表移除", "Remove from list");
                 if (_compatButton != null) _compatButton.Content = L("兼容修复", "Compatibility repair");
                 if (_restoreCompatButton != null) _restoreCompatButton.Content = L("恢复游戏原文件", "Restore game files");
                 UpdateCompatibilitySummary();
@@ -1204,17 +1203,45 @@ namespace OptScalerNR.Launcher
             return false;
         }
 
-        void RemoveSelectedGame()
+        void InitGameContextMenu()
         {
-            if (_selectedGame == null || _writeBusy || (_session != null && _session.IsRunning)) return;
-            var removed = _selectedGame;
+            if (_gameList == null) return;
+            var menu = new ContextMenu();
+            menu.Style = (Style)_window.FindResource("GameContextMenu");
+            _removeGameMenuItem = new MenuItem { Header = L("从列表移除", "Remove from list"), IsEnabled = false };
+            _removeGameMenuItem.Style = (Style)_window.FindResource("GameContextMenuItem");
+            _removeGameMenuItem.Click += (s, e) => RemoveGame(_removeGameMenuItem.Tag as GameInfo);
+            menu.Items.Add(_removeGameMenuItem);
+            _gameList.ContextMenu = menu;
+            // Right-click targets a row without starting its automatic inspection.
+            _gameList.PreviewMouseRightButtonDown += (s, e) =>
+            {
+                if (ItemsControl.ContainerFromElement(_gameList, e.OriginalSource as DependencyObject) is ListBoxItem)
+                    e.Handled = true;
+            };
+            _gameList.ContextMenuOpening += (s, e) =>
+            {
+                var row = ItemsControl.ContainerFromElement(_gameList, e.OriginalSource as DependencyObject) as ListBoxItem;
+                var item = row == null ? null : row.Content as GameItemViewModel;
+                if (item == null && e.CursorLeft < 0) item = _gameList.SelectedItem as GameItemViewModel;
+                if (item == null || item.Info == null) { e.Handled = true; return; }
+                _removeGameMenuItem.Tag = item.Info;
+                _removeGameMenuItem.Header = L("从列表移除", "Remove from list");
+                _removeGameMenuItem.IsEnabled = !_writeBusy && (_session == null || !_session.IsRunning);
+            };
+        }
+
+        void RemoveGame(GameInfo removed)
+        {
+            if (removed == null || _writeBusy || (_session != null && _session.IsRunning)) return;
+            var wasSelected = _selectedGame != null && SameLibraryGame(_selectedGame, removed);
             _hiddenGames[removed.Id ?? ("custom:" + EntryLocation(removed).ToLowerInvariant())] = EntryLocation(removed);
             _allGames.RemoveAll(g => SameLibraryGame(g, removed));
-            SelectGame(null);
+            if (wasSelected) SelectGame(null);
             SaveSettings();
             SaveLibraryCache();
             RefreshGameListView();
-            if (_gameList != null && _gameList.Items.Count > 0) _gameList.SelectedIndex = 0;
+            if (wasSelected && _gameList != null && _gameList.Items.Count > 0) _gameList.SelectedIndex = 0;
             if (_statusText != null) _statusText.Text = L("已从列表移除；游戏文件未改动。可通过“添加游戏”重新添加。", "Removed from the list; game files were kept. Use Add Game to add it again.");
         }
 
@@ -1430,7 +1457,7 @@ namespace OptScalerNR.Launcher
         {
             UpdateCompatibilitySummary();
             RefreshLibraryActions();
-            if (_removeGameButton != null) _removeGameButton.IsEnabled = _selectedGame != null && !_writeBusy && (_session == null || !_session.IsRunning);
+            if (_removeGameMenuItem != null) _removeGameMenuItem.IsEnabled = _removeGameMenuItem.Tag is GameInfo && !_writeBusy && (_session == null || !_session.IsRunning);
             if (_primaryButton == null) return;
             var isZh = _language == "zh";
             if (_selectedGame == null)
@@ -2391,7 +2418,7 @@ namespace OptScalerNR.Launcher
             if (busy) _eventStage = action;
             if (_addButton != null) _addButton.IsEnabled = !busy;
             if (_changeExeButton != null) _changeExeButton.IsEnabled = !busy;
-            if (_removeGameButton != null) _removeGameButton.IsEnabled = !busy && _selectedGame != null;
+            if (_removeGameMenuItem != null) _removeGameMenuItem.IsEnabled = !busy && _removeGameMenuItem.Tag is GameInfo;
             if (_openFolderButton != null) _openFolderButton.IsEnabled = !busy;
             if (_refreshButton != null) _refreshButton.IsEnabled = !busy;
             if (_primaryButton != null) _primaryButton.IsEnabled = !busy;
