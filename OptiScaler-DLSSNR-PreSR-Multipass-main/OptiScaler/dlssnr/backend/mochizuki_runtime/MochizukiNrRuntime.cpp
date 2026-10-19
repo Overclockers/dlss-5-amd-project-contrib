@@ -210,6 +210,9 @@ struct TestHooks
     uint64_t dropSubmitAt = 0;   // MZ_TEST_DROP_SUBMIT_AT=N: Enqueue N skips its Vulkan submit, the game still waits
     uint64_t phaseSubmitFailAt = 0; // MZ_TEST_PHASE_SUBMIT_FAIL_AT=N: fail phase N of an inline chain
     uint64_t computeRefuseAt = 0; // MZ_TEST_COMPUTE_REFUSE_AT=N: Enqueue N's whole-chain compute recording is refused
+    int sharedInput = 1; // MZ_TEST_SHARED_INPUT=0 keeps the complete buffer route; 1 requests safe admission.
+    bool rejectSharedInput = false; // MZ_TEST_REJECT_SHARED_INPUT=1: recoverable handle rejection.
+    uint64_t sharedInputDelay = 0; // MZ_TEST_SHARED_INPUT_DELAY=N: defer ready admission N prepares.
     uint64_t inlineChain = 0; // MZ_TEST_INLINE_CHAIN=1: an inline frame must run whole on compute; =2: in segments;
                               // =3: segments are forced
 };
@@ -248,6 +251,9 @@ const TestHooks& Hooks()
         h.phaseSubmitFailAt = number("MZ_TEST_PHASE_SUBMIT_FAIL_AT");
         h.inlineChain = number("MZ_TEST_INLINE_CHAIN");
         h.computeRefuseAt = number("MZ_TEST_COMPUTE_REFUSE_AT");
+        if (const char* value = std::getenv("MZ_TEST_SHARED_INPUT")) h.sharedInput = std::strcmp(value, "0") != 0;
+        h.rejectSharedInput = on("MZ_TEST_REJECT_SHARED_INPUT");
+        h.sharedInputDelay = number("MZ_TEST_SHARED_INPUT_DELAY");
         return h;
     }();
     return hooks;
@@ -1960,6 +1966,8 @@ void CopyToBuffer(ID3D12GraphicsCommandList* c, ID3D12Resource* texture, D3D12_R
     Transition(c, texture, D3D12_RESOURCE_STATE_COPY_SOURCE, state);
 }
 
+#include "MochizukiColourInput.inl"
+
 struct Job
 {
     // How the frame's motion vectors reach the network: as uploaded (their extent is the frame's, or the whole frame
@@ -1976,6 +1984,7 @@ struct Job
     bool inlineExecution = false;
     bool stageTiming = false; // MOCHIZUKI_NR_FRAME_FLAG_STAGE_TIMING (diagnostic)
     bool enqueued = false; // EnqueueHip ran for it: a second call does nothing
+    uint64_t vkFinished = 0; // actual execution's accepted submission, not its preparation order
     // Plan A: this frame's colour is converted (compute pass, not a blit) into the geometry's canonical image
     // before the network sees it. Only for a frame whose format differs from the session's first-seen one.
     bool canonicalise = false;
@@ -2173,6 +2182,7 @@ bool SameDesc(const D3D12_RESOURCE_DESC& a, const D3D12_RESOURCE_DESC& b)
 struct FrameBuffers
 {
     std::shared_ptr<FrameBuffers> allocation;
+    std::shared_ptr<ColourInput> colourInput;
     Geometry geometry;
     D3D12_RESOURCE_DESC resultDesc {};
     Footprint colourFootprint, motionFootprint;
@@ -2201,6 +2211,7 @@ struct FrameBuffers
     {
         if (this == &other) return;
         allocation = std::move(other.allocation);
+        colourInput = std::move(other.colourInput);
         geometry = std::exchange(other.geometry, {});
         resultDesc = std::exchange(other.resultDesc, {});
         colourFootprint = std::exchange(other.colourFootprint, {});
@@ -2222,17 +2233,27 @@ struct FrameBuffers
         result = std::exchange(other.result, nullptr);
     }
 
+    void KeepOnLoss() noexcept
+    {
+        Quarantine(allocation);
+        Quarantine(colourInput);
+    }
+
     void Release(VkDevice device)
     {
         if (allocation) { *this = {}; return; }
         if (device)
         {
-            input.Release(device);
+            if (colourInput) {
+                input = {}; colourImage = {}; colourInput.reset();
+            } else {
+                input.Release(device);
+                colourImage.Release(device);
+            }
             output.Release(device);
             firstOutput.Release(device);
             firstColour.Release(device);
             motionBuffer.Release(device);
-            colourImage.Release(device);
             canonicalColour.Release(device);
             convert.Release(device);
             motionImage.Release(device);
@@ -2393,6 +2414,17 @@ struct Session
     }
     std::wstring assets;
     std::shared_ptr<FrameBuffers> allocation;
+    std::shared_ptr<ColourInput> colourInput;
+    std::shared_ptr<ColourInput> pendingColour;
+    std::vector<std::shared_ptr<ColourInput>> colourInitializations;
+    std::vector<std::shared_ptr<ColourInput>> retiredColours;
+    std::weak_ptr<ColourInput> bufferColourCache, sharedColourCache;
+    Hold<Geometry> sharedColourHold;
+    Hold<Geometry> bufferColourHold;
+    int sharedInputRequest = Hooks().sharedInput;
+    uint64_t sharedInputDelay = Hooks().sharedInputDelay;
+    uint64_t loggedColourGeneration = 0;
+
     std::unordered_map<void*, std::unique_ptr<Recording>> recordings;
     static constexpr uint32_t kRecordingSlots = 4;
     std::vector<FrameBuffers> recordingPool;
@@ -2550,6 +2582,9 @@ struct Session
     VkCommandBuffer fallbackCommands[kFallbacks] {};
     VkFence fallbackDone[kFallbacks] {};
     bool fallbackInFlight[kFallbacks] {};
+    uint64_t fallbackColourGeneration[kFallbacks] {};
+    VkBuffer fallbackOutput[kFallbacks] {};
+    UINT fallbackWidth[kFallbacks] {}, fallbackHeight[kFallbacks] {};
     bool fallbackCurrent[kFallbacks] {}; // recorded for the current geometry's buffers
     uint32_t nextFallback = 0;
     uint64_t passthroughs = 0; // frames passed through
@@ -3251,6 +3286,10 @@ struct Session
     // goes through. The watchdog, Drain and Follow learn of it. Under submitMutex.
     void Submitted(UINT64 produced, UINT64 finished)
     {
+        // vkQueueSubmit has accepted the work. Preserve its release credential
+        // before optional trace/awaited bookkeeping can allocate or throw.
+        job.vkFinished = finished;
+        if (colourInput) colourInput->finished = finished;
         if (traceOn) {
             if (!tracer.joinable()) { try { tracer = std::thread([this] { TraceLoop(); }); } catch (...) { traceOn = false; } }
             NetTrace t; t.produced = produced; t.finished = finished; t.enq = traceEnq ? traceEnq : TraceQpc(); t.sub = TraceQpc();
@@ -3453,7 +3492,7 @@ struct Session
         std::lock_guard lock(jobMutex);
         if (!orphaned)
             return;
-        for (ID3D12Resource* r : { input.resource, motionBuffer.resource, output.resource, result, firstOutput.resource, firstResult })
+        for (ID3D12Resource* r : { colourInput && colourInput->Shared() ? colourInput->texture : input.resource, motionBuffer.resource, output.resource, result, firstOutput.resource, firstResult })
             if (r)
             {
                 r->AddRef();
@@ -3500,6 +3539,7 @@ struct Session
     {
         FrameBuffers b;
         b.allocation = std::move(allocation);
+        b.colourInput = std::move(colourInput);
         b.geometry = std::exchange(geometry, {});
         b.resultDesc = bufferResultDesc;
         b.colourFootprint = colourFootprint;
@@ -3558,7 +3598,7 @@ struct Session
     }
 
     // The frame's buffers for g; a bucketed geometry with motion adds its bucket-sized motion image.
-    static UINT64 FrameBytes(const Geometry& g)
+    static UINT64 FrameBytes(const Geometry& g, const ColourInput* actualColour = nullptr)
     {
         const UINT64 scaled = g.bucketed ? MotionFormat(g.motionFormat).bytes : 0;
         UINT64 first = 0;
@@ -3572,7 +3612,17 @@ struct Session
             first = pitch * g.height + pixelBytes * g.width * g.height +
                     pixelBytes * g.colourWidth * g.colourHeight + 3 * 65536;
         }
-        return (kFramePixelBytes + scaled) * g.width * g.height + first;
+        const auto colourFormat = g.gameColourFormat ? g.gameColourFormat : g.colourFormat;
+        const UINT64 colourBytes = ColourFormat(colourFormat).bytes;
+        const UINT64 pitch = (UINT64(g.width) * colourBytes + 255) & ~UINT64(255);
+        const UINT64 buffer = std::max((pitch * g.height + 65535) & ~UINT64(65535), UINT64(16) << 20);
+        const UINT64 ordinaryColour = buffer + colourBytes * g.width * g.height + 65536;
+        // Preserve the calibrated allowance for the other resources. Account for
+        // the buffer floor, then replace only the colour term for an admitted route.
+        const UINT64 baseline = std::max(kFramePixelBytes * g.width * g.height,
+                                        ordinaryColour + UINT64(32) * g.width * g.height);
+        return baseline - ordinaryColour + (actualColour ? actualColour->bytes : ordinaryColour) +
+               scaled * g.width * g.height + first;
     }
 
     // A network measured: `bytes` is what it took, or gave back, in this process's VRAM.
@@ -3629,9 +3679,20 @@ struct Session
         VkCommandBufferBeginInfo bi { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
         VkCheck(vkResetCommandBuffer(c, 0), "vkResetCommandBuffer (passthrough)");
         VkCheck(vkBeginCommandBuffer(c, &bi), "vkBeginCommandBuffer (passthrough)");
-        vkCmdCopyBuffer(c, input.buffer, output.buffer, 1, &region);
-        if (firstOutput.buffer) vkCmdCopyBuffer(c, input.buffer, firstOutput.buffer, 1, &region);
+        if (colourInput && colourInput->Shared()) {
+            colourInput->Ownership(c, true, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            VkBufferImageCopy copy = colourFootprint.vk;
+            copy.imageExtent = { job.width, job.height, 1 };
+            vkCmdCopyImageToBuffer(c, colourImage.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, output.buffer, 1, &copy);
+            colourInput->Ownership(c, false, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
+        } else {
+            vkCmdCopyBuffer(c, input.buffer, output.buffer, 1, &region);
+            if (firstOutput.buffer) vkCmdCopyBuffer(c, input.buffer, firstOutput.buffer, 1, &region);
+        }
         VkCheck(vkEndCommandBuffer(c), "vkEndCommandBuffer (passthrough)");
+        fallbackColourGeneration[k] = colourInput ? colourInput->generation : 0;
+        fallbackOutput[k] = output.buffer;
+        fallbackWidth[k] = job.width; fallbackHeight[k] = job.height;
         fallbackCurrent[k] = true;
     }
 
@@ -3648,13 +3709,16 @@ struct Session
         b.resultDesc = desc;
         b.colourFootprint = Footprint(colourDxgi, cf.bytes, g.width, g.height);
         b.colourVk = cf.vk;
-        b.input.Create(device, vk, b.colourFootprint.bytes);
+        b.colourInput = std::make_shared<ColourInput>(vk.device);
+        b.colourInput->CreateBuffer(device, vk, b.colourFootprint, cf.vk, g.width, g.height,
+                                   g.canonicalise ? kImageUsage | VK_IMAGE_USAGE_STORAGE_BIT : kImageUsage);
+        b.input = b.colourInput->upload;
+        b.colourImage = b.colourInput->image;
         b.output.Create(device, vk, b.colourFootprint.bytes);
         // Plan A: when the frame is canonicalised the answer comes back out of the canonical image *into this
         // one* (the readback's layout is the game's), so it needs to be a storage image as well as a sampled
         // and transfer one. Otherwise the plain usage, which is all a non-canonicalised frame ever needs.
-        b.colourImage.Create(vk, cf.vk, g.width, g.height,
-                             g.canonicalise ? kImageUsage | VK_IMAGE_USAGE_STORAGE_BIT : kImageUsage);
+
         // Plan A: when the geometry says to canonicalise (the frame's format differs from the session's first-seen
         // one), a canonical image is made here and the frame is converted into it by a compute pass (RunNetwork),
         // so a colour-format flip costs one dispatch instead of a whole network rebuild. Otherwise colourImage is
@@ -3693,15 +3757,21 @@ struct Session
         }
         // The caller owns this set. Session geometry keeps one; each in-flight recording checks out its own.
         auto* raw = new FrameBuffers(b);
+        // Each snapshot retains its colour owner directly. The allocation of the
+        // other resources must not pin an obsolete buffer carrier after a route switch.
+        raw->input = {}; raw->colourImage = {}; raw->colourInput.reset();
         b.allocation = std::shared_ptr<FrameBuffers>(raw, [dev = vk.device](FrameBuffers* p) {
             p->Release(dev); delete p;
         });
     }
 
+#include "MochizukiColourRouting.inl"
+
     // The frames take b over (there is no geometry now); its passthrough is recorded when first used. Render thread.
     void UseBuffers(FrameBuffers& b)
     {
         allocation = std::move(b.allocation);
+        colourInput = std::move(b.colourInput);
         bufferResultDesc = b.resultDesc;
         colourFootprint = b.colourFootprint;
         motionFootprint = b.motionFootprint;
@@ -5105,6 +5175,12 @@ struct Session
         catch (const std::exception& e)
         {
             const NrError::Kind kind = KindOf(e);
+            if (!job.inlineExecution && sub.finished && job.vkFinished == sub.finished) {
+                // Accepted work must never be retried as passthrough, including
+                // an exception inside Submitted before its caller returns.
+                sub.submitted = true;
+                failed = true;
+            }
             if (sub.segmentedRecording && !sub.submitted) {
                 // Recording changed the core's tracked layouts/history. Do not
                 // silently retry that state after a partially recorded chain.
@@ -5112,7 +5188,7 @@ struct Session
                 failed = true;
                 throw;
             }
-            if (!zeroOutputFallback || !input.buffer || kind == NrError::DeviceLost || sub.submitted)
+            if (!zeroOutputFallback || !(colourInput && colourInput->Shared() ? colourImage.image != VkImage{} : input.buffer != VkBuffer{}) || kind == NrError::DeviceLost || sub.submitted)
                 throw;
             Passthrough(producer, sub);
             char text[384];
@@ -5150,7 +5226,8 @@ struct Session
                 throw lost("the wait for an earlier passthrough", r, S_OK);
             fallbackInFlight[k] = false;
         }
-        if (!fallbackCurrent[k])
+        if (!fallbackCurrent[k] || fallbackColourGeneration[k] != (colourInput ? colourInput->generation : 0) ||
+            fallbackOutput[k] != output.buffer || fallbackWidth[k] != job.width || fallbackHeight[k] != job.height)
             RecordFallback(k);
         nextFallback = (k + 1) % kFallbacks;
         if (!sub.produced)
@@ -5364,7 +5441,14 @@ struct Session
         // The frame goes up into our image, the core reads it there (sampled, in place) and writes the answer back
         // into it.
         const Image& colour = colourImage;
-        upload(input, colour, colourFootprint, w, h, padded);
+        const bool sharedColour = colourInput && colourInput->Shared();
+        if (sharedColour) {
+            if (job.inlineExecution || padded || job.canonicalise || runtime->reno || job.firstPass ||
+                job.controls.passes != 1 || !motion || job.motionPath != Job::Uploaded)
+                throw std::logic_error("shared colour recording has incompatible geometry or controls");
+            colourInput->Ownership(c, true, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
+        } else
+            upload(input, colour, colourFootprint, w, h, padded);
         if (padded)
         {
             Pad(c, colour.image, w, h, W, H);
@@ -5494,6 +5578,9 @@ struct Session
                 phases.push_back({next, enter}); c = next; return next;
             });
         }
+        // Once the core can advance its tracked history/layout state, a shared
+        // input frame must not retry as passthrough after a recording exception.
+        if (sharedColour) sub.segmentedRecording = true;
         nr::EngineFrame frame {};
         frame.colour.image = net->image;
         frame.colour.format = netVk;
@@ -5731,6 +5818,8 @@ struct Session
         VkBufferImageCopy out = colourFootprint.vk;
         out.imageExtent = { w, h, 1 };
         vkCmdCopyImageToBuffer(c, net->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, output.buffer, 1, &out);
+        if (sharedColour)
+            colourInput->Ownership(c, false, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
         VkCheck(vkEndCommandBuffer(c), "vkEndCommandBuffer");
 
         // Plan A: report the output pass. The first conversions are named individually (they are what tells a
@@ -5817,7 +5906,8 @@ struct Session
         // later, unrelated waits may need the same thread that is turning NR off.
         // The private Vulkan device still needs its own completion proof (and the
         // builder was joined above). On loss, retain its imported resources.
-        if (gpuUsed && !deviceLost && vk.device && VulkanIdle(kDrainWaitMs) != VK_SUCCESS)
+        if (gpuUsed && !deviceLost && vk.device &&
+            (VulkanIdle(kDrainWaitMs) != VK_SUCCESS || !ColourInitializationsDone(kDrainWaitMs)))
             Lose("the session ended with Vulkan work that did not finish");
         if (gpuUsed && deviceLost)
         {
@@ -5826,11 +5916,15 @@ struct Session
             Quarantine(runtime);
             Quarantine(built);
             Quarantine(allocation);
-            for (auto& b : buried) Quarantine(b.buffers.allocation);
-            for (auto& b : recordingPool) Quarantine(b.allocation);
+            Quarantine(colourInput);
+            Quarantine(pendingColour);
+            for (auto& input : colourInitializations) Quarantine(input);
+            for (auto& input : retiredColours) Quarantine(input);
+            for (auto& b : buried) b.buffers.KeepOnLoss();
+            for (auto& b : recordingPool) b.KeepOnLoss();
             recordingPool.clear();
-            if (builtBuffers) Quarantine(builtBuffers->allocation);
-            if (prepared) Quarantine(prepared->allocation);
+            if (builtBuffers) builtBuffers->KeepOnLoss();
+            if (prepared) prepared->KeepOnLoss();
             for (Retired& r : retired)
                 Quarantine(r.network);
             ReleaseGameQueues();
@@ -5844,6 +5938,9 @@ struct Session
         built.reset();
         exposureSnapshot.reset();
         retired.clear();
+        pendingColour.reset();
+        colourInitializations.clear();
+        retiredColours.clear();
         ReleaseGeometry();
         for (auto& pooled : recordingPool) pooled.Release(vk.device);
         recordingPool.clear();
@@ -6370,7 +6467,10 @@ int32_t CoreRecordInputs(void* context, void* job, void* command_list)
                      Job& j = s->job;
                      if (!c || job != JobHandle(s->jobGen) || j.state != LMXXF_NR_JOB_PREPARED)
                          return Fail(LMXXF_NR_INVALID_ARGUMENT, "RecordInputs: job not prepared");
-                     CopyToBuffer(c, j.colour, j.colourState, s->input.resource, s->colourFootprint, j.width, j.height);
+                     if (s->colourInput && s->colourInput->Shared())
+                         s->colourInput->Capture(c, j.colour, j.colourState);
+                     else
+                         CopyToBuffer(c, j.colour, j.colourState, s->input.resource, s->colourFootprint, j.width, j.height);
                      if (j.motion)
                          CopyToBuffer(c, j.motion, j.motionState, s->motionBuffer.resource, s->motionFootprint,
                                       j.motionWidth, j.motionHeight);

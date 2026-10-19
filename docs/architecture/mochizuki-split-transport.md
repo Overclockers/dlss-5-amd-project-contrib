@@ -1,10 +1,11 @@
-# Mochizuki split 数据传输：离线验证与接入边界
+# Mochizuki split 共享颜色输入
 
 ## 状态（2026-10-19）
 
-基线为 `701fc468`。共享颜色纹理已在临时派生 runtime 中完成受限 split 的性能、
-变化输入、录制路线冻结和失败旁路验证，**尚未接入产品**。产品仍使用共享 buffer；
-不新增菜单/INI 开关，不调整正常日志、模型、精度或合成语义。
+共享颜色纹理已接入产品适配器。符合下述条件的 split 录制默认申请共享 texture，
+初始化完成后采用；不支持、初始化未完成或预算不足时继续执行 buffer NR。
+不新增菜单/INI 开关，不调整模型、精度、时域历史或合成语义。仅在载体 generation
+变化及申请失败/退避时记录路线信息，不增加逐帧正常日志。
 
 本轮只考虑 split。Inline 调研与修改搁置，lmxxf 不随本方案重构。共用层实际改动时
 才复用相应非回归检查。原版指 Mochizuki 原版，不指本项目分支。
@@ -74,41 +75,80 @@ RGBA16F motion 的颜色上传区间约减少 0.142 ms，捕获约减少 0.015�
 - 上述调试检查 D3D12 debug layer 错误数为零；没有启用 Vulkan validation，不能据此
   宣称全部 Vulkan VUID 或驱动组合已验收。
 
-收益低于最初约 0.15–0.20 ms 的预期，但实际路径存在可重复正收益，值得继续最小接入。
+上述为接入前探针，收益低于最初约 0.15–0.20 ms 的预期，但实际路径存在可重复正收益。
 该目标是工程估计，不是必须凑足的合入门槛。不能宣称回收全部 0.3 ms、提升游戏 FPS
 或解决用户 5% 反馈。
 
-## 产品接入前必须补齐
+## 产品准入与回滚
 
-探针仅覆盖单会话、固定几何、逐帧完成后复用资源。它仍保留旧载体；导入颜色 allocation
-为 30,146,560 字节，不能把该分配永久叠加到产品而不计预算。
+第一版只覆盖 RGBA16F、全尺寸单 mip/单层/单采样纹理、单遍、完整模型比例、
+实际 motion 输入和普通 compose。canonical 转换、bucket/DRS、first-pass 导出、RenoDX、
+无 motion 及 Inline 均使用现有 buffer 路线。只改变颜色载体；motion 与输出不变，
+直接复用核心对 `colourImage` 的原地处理，不修改 vendored 核心或增加 `EngineFrame::target`。
 
-1. **所有者和初始化状态。** 共享 texture/import/view、初始化 pool/command/fence 进入
-   `FrameBuffers::allocation` 所有者，贯穿 Steal/Take/Use/Release、retired/quarantine。
-   `Unallocated → Initializing → Ready`；仅 Ready 可绑定新录制。没有游戏提交也要等
-   初始化完成才能回收。device loss/不确定完成进入保留状态，不能以单侧完成释放。
-2. **录制固定路线。** route 与源/目标资源 generation、格式、extent、usage、family/sharing
-   契约固定在 recording。开关只影响下一份录制；不重建网络或额外重置历史。保留旧录制
-   和在途资源，不能用 Session 可替换裸指针代替所有者。
-3. **回退缓存。** `RecordFallback` 对 texture 录制 image→buffer acquire/copy/release；
-   route、资源身份或 footprint 变化使缓存失效，等待旧命令完成后再录。当前
-   `BoundRecording::TakeBuffers` 已清除 `fallbackCurrent`，但不将这种附带行为作为
-   新路线唯一的缓存契约。`Enqueue` 的 `input.buffer` 前置检查也要按路线修改。
-4. **错误状态。** capability 不支持与可恢复 handle/预算失败分别缓存；沿用
-   `kInvalidRetryMs` 的退避思路和预算滞回，不每帧重试。16 MiB 是现有 buffer 的驱动
-   规避，不能机械套给 texture。device loss/不确定提交不能降级成普通能力失败。
-5. **独立可选预算。** 按实际 texture allocation、保留缓冲和在途份数重算 FrameBytes。
-   当前 `MakeGeometry` 的预算拒绝可能 `ReleaseNetwork`；可选快路失败不能复用这条
-   整体拒绝策略，必须保住原可执行的 buffer 路线。新旧资源暂时共存须有峰值预算，
-   旧录制释放后不再永久双持颜色载体。
-6. **捕获前排序。** 当前 recording ABI 中 `LogicalList::Execute` 在 producer 提交前调用
-   observer，`BeginRecordingExecution` 对 previous consumer tail 排 GPU wait。保留这条
-   顺序，不因 `Follow` 在 producer 提交后再等待就宣称所有入口都缺捕获前依赖；
-   也不能把 Follow 单独当成证明。跨队列/重放仍须专项验证。
-7. **失败时点。** 本次故障注入仅覆盖核心录制前。核心 CPU 状态已推进、部分实际提交、
-   未确认消费者尾部、初始化未完成即丢弃、几何变化、Reset/Release 与设备丢失均待验收。
-   不允许捕获异常后重录网络并重复推进同一帧历史。
+`MZ_TEST_SHARED_INPUT=0` 在进程启动前设置，可靠选择原 buffer 路线；缺省或 `1` 仅请求
+通过全部安全/能力/预算准入的共享路线。这是内部诊断入口，不属于用户配置优先级，
+不提供产品热切换 ABI。临时同进程 A/B 夹具通过私有派生 setter 请求后续录制，已关闭
+录制始终保持自己的路线、资源及 generation。
 
-仅在上述条件、受影响现有检查和完整宿主验证通过后，才决定改 split 默认路径。
-内部 A/B/回滚控制不进菜单；强制请求快路也必须服从能力和安全准入。motion 按独立
-收益随后评估，输出最后评估或不做；Inline 不在扩展列表。
+## 所有权、排序和故障处理
+
+- `ColourInput` 单独拥有 D3D12 texture、Vulkan import/image、初始化 pool/fence，
+  `FrameBuffers` 与 recording 直接持有它。其他资源的 `FrameBuffers::allocation` 不再
+  强持旧颜色 buffer；Steal/Take/Use/Release、几何退休和设备丢失保留均携带颜色所有者。
+  旧录制存在时允许暂时共存；仅以 weak cache 缓存两种载体，防止永久双持。
+- 初始化在同一 Vulkan 队列族上使用 EXCLUSIVE + EXTERNAL 交接。独立 fence 非阻塞
+  查询 Ready；申请提交前先登记强持有，即使用户未提交游戏录制就丢弃也不提前释放。
+  可选初始化以 try-lock 避免等候网络构建；没有新增 render-thread queue/device idle。
+  每帧从 GENERAL acquire，在下载后 release 回 GENERAL，不用 UNDEFINED 丢弃输入。
+- `BeginRecordingExecution` 保留 previous consumer tail 的捕获前 GPU wait。
+  录制 Collect 同时核对 D3D12 尾部和该录制**实际被接受的 Vulkan 完成值**；路线退休
+  也持有旧载体直至 Vulkan 完成。不是用 later frame 或 `Follow` 推断当前帧完成。
+  不确定/设备丢失沿用 quarantine；没有为了回收而强行释放导入资源。
+- `Submitted` 在可分配/抛异常的诊断记账前记录完成凭证。split 已被接受的提交若记账
+  失败，则禁止重试和继续执行；核心开始推进 CPU 历史后的录制错误也禁止改走旁路
+  重录同一帧。只有安全的核心录制前失败才允许 image→buffer 或原 buffer→buffer 旁路。
+- 旁路缓存检查颜色 generation、输出 buffer 和 extent；换路线使缓存失效，复用命令
+  前仍检查其完成 fence。texture 旁路包括 EXTERNAL acquire/release；入口不再误要求
+  快路不存在的 `input.buffer`。
+- 不支持能力缓存为不可用，可恢复导入/共享句柄错误使用 `kInvalidRetryMs` 退避，
+  预算拒绝保持 10 秒，避免逐帧申请或路线抖动。可选候选失败保留可执行的 buffer NR，
+  不调用整体预算拒绝的 `ReleaseNetwork`。device loss 继续按丢失处理。
+- FrameBytes 按实际颜色 allocation 替换颜色项，候选另查实际进程用量、增量分配和
+  预算余量。现有 buffer 的 16 MiB 驱动规避保持原样，不套给 texture。2558×1449 本机
+  buffer 颜色载体为 59,834,368 字节、shared 为 30,146,560；旧录制收集后可释放差额
+  29,687,808 字节（约 28.31 MiB），而非永久叠加一张共享纹理。
+
+实现入口为适配器的 `MochizukiColourInput.inl`、`MochizukiColourRouting.inl`、
+`MochizukiNrRuntime.cpp` 及 `MochizukiRecording.inl`。宿主 ABI、lmxxf、Inline 算法不变。
+
+## 产品验证范围
+
+复用现有 runtime ABI、split retained recording、GPU 格式/几何/生命周期检查和宿主
+early-unity/inline-discard 所有权检查；新增故障控制和 A/B 只在临时夹具中使用，
+没有新增测试项目。检查包括变化输入逐帧 hash、保留两种路线录制、跨两条 D3D12 队列
+重放、几何改变、未提交丢弃、消费者尾部未完成、旧 buffer 释放和共享句柄拒绝。
+
+两个独立 GPU gate 还检查了初始化未完成即丢弃后 Destroy 等待独立初始化凭证，以及
+Vulkan 已接受但记账抛异常时 D3D12 尾部已完成仍拒绝 Collect，Vulkan 完成后才允许回收。
+预算注入确认连续 buffer NR、原网络保留及预算恢复后重新准入。D3D12 debug layer
+未报错误；没有启用 Vulkan validation，也没有覆盖真实硬件设备丢失与全部驱动组合。
+
+接入后的离线 A/B（同机、同设备、四轮正反序）：
+
+| 工作负载 | 配对节省中位数 ms | 计时内成功 NR |
+|---|---:|---:|
+| 新模型 ACO、RG16F motion、阶段标记开 | 0.0939 | 1920/1920 |
+| 原模型 ACO、RGBA16F motion、阶段标记开 | 0.1126 | 1440/1440 |
+| 新模型 ACO、RG16F motion、阶段标记关 | 0.0978 | 1920/1920 |
+| 最终版本完整宿主、新模型、正常日志、NR+FSR2.1.2 | 0.0836 | 1920/1920 |
+
+前三行在最终补充 Vulkan 回收凭证前测量，输出 hash 对应相同；补充后重跑变化输入、
+故障、生命周期、现有 GPU/ABI 和完整宿主检查。最后一行加载实际 Release 宿主与带私有
+计数入口的同源码 runtime，NR 2558×1449、SR 输出 3840×2160，每段预热 40、计时 240 帧。
+四轮配对差为 0.0679、0.0903、0.0770、0.1130 ms；无减少网络执行。此前一次宿主探索
+会话为 0.1732 ms；未锁频且会话有波动，不能只选较大收益，也不能把两次差值归因于
+回收凭证。当前可确认的是本机受限 split 有正收益，精确游戏收益仍需实测。
+
+motion 后续独立评估，输出最后评估或不做。仍需真实游戏、Present/FG/FSR4、长时间运行
+及其他 GPU/驱动验证；不能将离线 NR+SR 耗时直接称为游戏 FPS 改善。

@@ -71,6 +71,10 @@ int32_t PrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfNrJob
     const int32_t rc = CorePrepareFrame(context, info, out);
     if (rc != LMXXF_NR_OK) return rc;
     return Guard(s, [&] {
+        if (!inlineExec) {
+            s->SelectColourInput(s->job);
+            s->LogColourInput();
+        }
         auto r = std::make_unique<Recording>();
         r->job = s->job;
         r->frameId = info->frame_id;
@@ -311,6 +315,13 @@ int32_t CollectRecording(void* context, void* token)
     {
         const uint64_t done = r->tail->GetCompletedValue();
         if (done == UINT64_MAX || done < r->tailValue) return LMXXF_NR_UNAVAILABLE;
+    }
+    if (!r->inlineExecution && r->job.vkFinished)
+    {
+        uint64_t done = 0;
+        if (vkGetSemaphoreCounterValue(s->vk.device, s->fromVk.semaphore, &done) != VK_SUCCESS ||
+            done == UINT64_MAX || done < r->job.vkFinished)
+            return LMXXF_NR_UNAVAILABLE;
     }
     const bool recycle = r->privateBuffers;
     FrameBuffers buffers = std::move(r->buffers);
