@@ -1,24 +1,57 @@
 ﻿# Known-store library scan. No full-disk walk. Does not write library.json.
 function Test-OptScalerGameExeName([string]$name) {
     return $name -match '(?i)\.exe$' -and
-        $name -notmatch '(?i)^(setup|install|unins|crash|unitycrash|vc_redist|easyanticheat|battleye).*\.exe$' -and
-        $name -notmatch '(?i)^(gamelaunchhelper|person-worker)\.exe$'
+        $name -notmatch '(?i)^(setup|install|unins|crash|unitycrash|vc_redist|dxsetup|easyanticheat|eac_|battleye|beclient|beservice|unrealcef|webview|cefsubprocess|shadercompile|bugsplat|crs-|redprelauncher|larilauncher|2klauncher).*\.exe$' -and
+        $name -notmatch '(?i)(prelauncher|launcher|crashreport|crashhandler|crs-handler|errorreporter|updater|patcher|uninstaller|benchmark|dedicatedserver)\.exe$' -and
+        $name -notmatch '(?i)^(gamelaunchhelper|person-worker|activationui|cleanup|touchup|config)\.exe$'
+}
+
+function Test-OptScalerUpscalerAnchor([string]$exeDir) {
+    if (-not $exeDir) { return $false }
+    foreach ($marker in @(
+        'amd-presr-install.txt',
+        'nvngx_dlss.dll', 'nvngx_dlssd.dll', 'nvngx_dlssg.dll', 'sl.interposer.dll',
+        'libxess.dll', 'libxess_fg.dll',
+        'amd_fidelityfx_dx12.dll', 'amd_fidelityfx_upscaler_dx12.dll', 'amd_fidelityfx_vk.dll'
+    )) {
+        if (Test-Path -LiteralPath (Join-Path $exeDir $marker) -PathType Leaf) { return $true }
+    }
+    return $false
+}
+
+function Get-OptScalerExeRank([string]$fullPath, [string]$rootDir, [int]$depth) {
+    $leaf = [IO.Path]::GetFileName($fullPath)
+    $exeDir = [IO.Path]::GetDirectoryName($fullPath)
+    $rel = if ($rootDir -and $fullPath.Length -gt $rootDir.Length) { $fullPath.Substring($rootDir.Length).TrimStart('\','/') } else { $leaf }
+    if (Test-Path -LiteralPath (Join-Path $exeDir 'amd-presr-install.txt') -PathType Leaf) { return -10 }
+    $rank = 3
+    if ($leaf -match '(?i)WinGDK-Shipping\.exe$') { $rank = 0 }
+    elseif ($leaf -match '(?i)-Win64-Shipping\.exe$') { $rank = 1 }
+    elseif ($leaf -match '(?i)Shipping\.exe$') { $rank = 2 }
+    elseif ($rel -match '(?i)(^|[\\/])(x64_dx12|dx12)([\\/]|$)' -or $leaf -match '(?i)dx12') { $rank = 1 }
+    elseif ($rel -match '(?i)(^|[\\/])(binaries[\\/](win64|wingdk)|bin[\\/](x64|win64))([\\/]|$)') { $rank = 2 }
+    elseif (Test-Path -LiteralPath (Join-Path $exeDir 'UnityPlayer.dll') -PathType Leaf) { $rank = 2 }
+    if (Test-OptScalerUpscalerAnchor $exeDir) {
+        $rank -= $(if ($rel -match '(?i)(^|[\\/])(x64_dx12|dx12)([\\/]|$)' -or $leaf -match '(?i)dx12') { 5 } else { 4 })
+    }
+    return $rank
 }
 
 function Get-OptScalerPrimaryExes([string]$dir, [int]$depth = 4) {
     $found = New-Object System.Collections.Generic.List[object]
     if (-not $dir -or -not (Test-Path -LiteralPath $dir -PathType Container)) { return @() }
-    $stack = New-Object System.Collections.Generic.Stack[object]
-    $stack.Push(@{ Path = $dir; Depth = 0 })
+    $rootFull = try { [IO.Path]::GetFullPath($dir).TrimEnd('\','/') } catch { $dir }
+    $queue = New-Object System.Collections.Generic.Queue[object]
+    $queue.Enqueue(@{ Path = $dir; Depth = 0 })
     $seen = 0
-    while ($stack.Count -gt 0 -and $seen -lt 400) {
-        $cur = $stack.Pop()
+    while ($queue.Count -gt 0 -and $seen -lt 400) {
+        $cur = $queue.Dequeue()
         if ($cur.Depth -gt $depth) { continue }
         $entries = @()
         try { $entries = [IO.Directory]::GetFileSystemEntries($cur.Path) } catch { continue }
+        $subDirs = New-Object System.Collections.Generic.List[string]
         foreach ($entry in $entries) {
             if ($seen -ge 400) { break }
-            $seen++
             $leaf = [IO.Path]::GetFileName($entry)
             $isDir = $false
             $reparse = $false
@@ -29,17 +62,24 @@ function Get-OptScalerPrimaryExes([string]$dir, [int]$depth = 4) {
             } catch { continue }
             if ($reparse) { continue }
             if ($isDir) {
-                if ($leaf -notmatch '(?i)^(OptiScaler|person-model|dlssnr-amd|_CommonRedist|__Installer|redist)$') {
-                    $stack.Push(@{ Path = $entry; Depth = $cur.Depth + 1 })
+                if ($leaf -notmatch '(?i)^(OptiScaler|person-model|dlssnr-amd|_CommonRedist|__Installer|redist|DirectX|Launcher|REDprelauncher|CrashReporter|Bonus|Extras|Soundtrack|OST|Artbook|Wallpapers?|Manual|Docs|Support|ModTools|SDK|Paks|ShaderCache)$') {
+                    [void]$subDirs.Add($entry)
                 }
                 continue
             }
+            if ($leaf -notmatch '(?i)\.exe$') { continue }
+            $seen++
             if (-not (Test-OptScalerGameExeName $leaf)) { continue }
-            $rank = 3
-            if ($leaf -match '(?i)WinGDK-Shipping\.exe$') { $rank = 0 }
-            elseif ($leaf -match '(?i)-Win64-Shipping\.exe$') { $rank = 1 }
-            elseif ($leaf -match '(?i)Shipping\.exe$') { $rank = 2 }
+            $rank = Get-OptScalerExeRank $entry $rootFull $cur.Depth
             [void]$found.Add(@{ path = $entry; rank = $rank; name = $leaf })
+        }
+        foreach ($sd in ($subDirs | Sort-Object {
+            $n = [IO.Path]::GetFileName($_)
+            if ($n -match '(?i)^(bin|binaries|x64_dx12|x64|win64|wingdk|game|client|content)$') { 0 } else { 1 }
+        }, { [IO.Path]::GetFileName($_) })) {
+            if ($seen -ge 400) { break }
+            $seen++
+            $queue.Enqueue(@{ Path = $sd; Depth = $cur.Depth + 1 })
         }
     }
     return @($found | Sort-Object { $_.rank }, { $_.name }, { $_.path } | Select-Object -First 8)
@@ -178,14 +218,15 @@ function Get-OptScalerGameLibrary {
                 if (-not $j.InstallLocation -or -not $j.DisplayName) { return }
                 if ($j.DisplayName -match '(?i)(dedicated server|editor|prerequisite)') { return }
                 $exe = $null
+                $cands = @(Get-OptScalerPrimaryExes $j.InstallLocation 4)
                 if ($j.LaunchExecutable) {
                     $cand = Join-Path $j.InstallLocation $j.LaunchExecutable
-                    if (Test-Path -LiteralPath $cand -PathType Leaf) { $exe = $cand }
+                    if ((Test-Path -LiteralPath $cand -PathType Leaf) -and (Test-OptScalerGameExeName ([IO.Path]::GetFileName($cand)))) {
+                        $candRank = Get-OptScalerExeRank $cand $j.InstallLocation 0
+                        if ($cands.Count -eq 0 -or $candRank -le $cands[0].rank) { $exe = $cand }
+                    }
                 }
-                if (-not $exe) {
-                    $cands = @(Get-OptScalerPrimaryExes $j.InstallLocation 4)
-                    if ($cands.Count -gt 0) { $exe = $cands[0].path }
-                }
+                if (-not $exe -and $cands.Count -gt 0) { $exe = $cands[0].path }
                 if ($exe) { Add-OptScalerGame $games $seen $j.DisplayName $exe 'Epic' ("epic:" + [string]$j.CatalogItemId) }
             } catch { }
         }
@@ -197,8 +238,15 @@ function Get-OptScalerGameLibrary {
                 $p = Get-ItemProperty $_.PSPath
                 if ($p.path -and $p.exe -and $p.gameName) {
                     $cand = if ([IO.Path]::IsPathRooted([string]$p.exe)) { [string]$p.exe } else { Join-Path $p.path $p.exe }
-                    if (Test-Path -LiteralPath $cand -PathType Leaf) {
-                        Add-OptScalerGame $games $seen $p.gameName $cand 'GOG' ("gog:" + [string]$_.PSChildName)
+                    $exe = $null
+                    $cands = @(Get-OptScalerPrimaryExes ([string]$p.path) 4)
+                    if ((Test-Path -LiteralPath $cand -PathType Leaf) -and (Test-OptScalerGameExeName ([IO.Path]::GetFileName($cand)))) {
+                        $candRank = Get-OptScalerExeRank $cand ([string]$p.path) 0
+                        if ($cands.Count -eq 0 -or $candRank -le $cands[0].rank) { $exe = $cand }
+                    }
+                    if (-not $exe -and $cands.Count -gt 0) { $exe = $cands[0].path }
+                    if ($exe) {
+                        Add-OptScalerGame $games $seen $p.gameName $exe 'GOG' ("gog:" + [string]$_.PSChildName)
                     }
                 }
             } catch { }

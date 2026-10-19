@@ -113,10 +113,18 @@ namespace OptScalerNR.Launcher
             }
             return false;
         }
-        static bool Auxiliary(string path)
+        internal static bool Auxiliary(string path)
         {
             var name=System.IO.Path.GetFileNameWithoutExtension(path).ToLowerInvariant();
-            return new[] {"setup","install","unins","crash","unitycrash","easyanticheat","battleye","unrealcef","webview","cefsubprocess","person-worker","gamelaunchhelper","shadercompile"}.Any(p=>name.StartsWith(p,StringComparison.Ordinal));
+            if(new[] {"setup","install","unins","crash","unitycrash","vc_redist","dxsetup","easyanticheat","eac_","battleye","beclient","beservice","unrealcef","webview","cefsubprocess","person-worker","gamelaunchhelper","shadercompile","bugsplat","crs-","redprelauncher","larilauncher","2klauncher","activationui","cleanup","touchup"}.Any(p=>name.StartsWith(p,StringComparison.Ordinal)))return true;
+            return new[] {"prelauncher","launcher","crashreport","crashhandler","crs-handler","errorreporter","updater","patcher","uninstaller","benchmark","dedicatedserver"}.Any(s=>name.EndsWith(s,StringComparison.Ordinal));
+        }
+        static bool HasUpscalerAnchor(string exeDir)
+        {
+            if(string.IsNullOrEmpty(exeDir))return false;
+            foreach(var marker in new[] {"amd-presr-install.txt","nvngx_dlss.dll","nvngx_dlssd.dll","nvngx_dlssg.dll","sl.interposer.dll","libxess.dll","libxess_fg.dll","amd_fidelityfx_dx12.dll","amd_fidelityfx_upscaler_dx12.dll","amd_fidelityfx_vk.dll"})
+                if(File.Exists(System.IO.Path.Combine(exeDir,marker)))return true;
+            return false;
         }
         static ExeCandidate Inspect(string path,string root, CancellationToken token,Stopwatch timer)
         {
@@ -141,9 +149,12 @@ namespace OptScalerNR.Launcher
                 }
             }
             bool auxiliary=Auxiliary(path);
+            var rel=path.Substring(root.Length).TrimStart('\\','/');
             int rank=(apis.Count==0 ? 50 : apis.All(a=>a=="DXGI") ? 20 : 0)+(auxiliary ? 100 : 0)+(image.Architecture=="x64" ? 0 : 200);
             if(path.IndexOf("shipping.exe",StringComparison.OrdinalIgnoreCase)>=0)rank-=3;
-            return new ExeCandidate {Path=path,RelativePath=path.Substring(root.Length).TrimStart('\\','/'),Architecture=image.Architecture,
+            if(rel.IndexOf("x64_dx12",StringComparison.OrdinalIgnoreCase)>=0 || rel.IndexOf("dx12",StringComparison.OrdinalIgnoreCase)>=0)rank-=4;
+            if(HasUpscalerAnchor(System.IO.Path.GetDirectoryName(path)))rank-=10;
+            return new ExeCandidate {Path=path,RelativePath=rel,Architecture=image.Architecture,
                 Apis=apis.OrderBy(a=>a).ToArray(),Evidence=evidence,Auxiliary=auxiliary,Rank=rank};
         }
         sealed class State
@@ -158,7 +169,7 @@ namespace OptScalerNR.Launcher
         static int Priority(string path)
         {
             var name=System.IO.Path.GetFileName(path).ToLowerInvariant();
-            return new[] {"binaries","win64","wingdk","windowsnoeditor","client","bin"}.Contains(name) ? 0 : name=="engine" || name=="content" ? 1 : 2;
+            return new[] {"binaries","win64","wingdk","x64_dx12","x64","windowsnoeditor","client","bin"}.Contains(name) ? 0 : name=="engine" || name=="content" ? 1 : 2;
         }
         public static async Task<FolderScanResult> ScanAsync(string directory,CancellationToken cancellation,Action<int,int> progress)
         {

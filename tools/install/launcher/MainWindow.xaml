@@ -385,6 +385,16 @@
         </Setter.Value>
       </Setter>
     </Style>
+    <Style x:Key="GameContextMenuSeparator" TargetType="Separator">
+      <Setter Property="Margin" Value="6,4"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Separator">
+            <Border Height="1" Background="#FF282D3A" SnapsToDevicePixels="True"/>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
 
     <!-- Game List Item Style with Crimson Selection Accent -->
     <Style TargetType="ListBoxItem">
@@ -580,10 +590,8 @@
                     <!-- Action Buttons Row -->
                     <WrapPanel Margin="0,4,0,0">
                       <Button x:Name="PrimaryButton" Content="⚡ 选择一个游戏" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left" MinWidth="190" IsEnabled="False"/>
-                      <Button x:Name="ChangeExeButton" Content="更换 EXE" Style="{StaticResource GhostButton}" Margin="10,0,0,0"/>
-                      <Button x:Name="ScanExeButton" Content="扫描启动程序" Style="{StaticResource GhostButton}" Margin="10,0,0,0"/>
-                      <Button x:Name="EditGameButton" Content="编辑信息" Style="{StaticResource GhostButton}" Margin="10,0,0,0"/>
                       <Button x:Name="OpenFolderButton" Content="打开目录" Style="{StaticResource GhostButton}" Margin="10,0,0,0"/>
+                      <Button x:Name="ManageGameButton" Content="管理 ▾" Style="{StaticResource GhostButton}" Margin="10,0,0,0" IsEnabled="False"/>
                       <Button x:Name="UninstallButton" Content="卸载" Style="{StaticResource GhostButton}" Margin="10,0,0,0" IsEnabled="False"/>
                     </WrapPanel>
 
@@ -596,9 +604,10 @@
 
             <Border Style="{StaticResource Surface}" Padding="18" Margin="0,12,0,0">
               <StackPanel>
-                <WrapPanel>
+                <WrapPanel VerticalAlignment="Center">
                   <Button x:Name="CompatButton" Content="兼容修复" Style="{StaticResource GhostButton}" IsEnabled="False"/>
                   <Button x:Name="RestoreCompatButton" Content="恢复游戏原文件" Style="{StaticResource GhostButton}" Margin="10,0,0,0" IsEnabled="False"/>
+                  <Button x:Name="CompatHelpButton" Content="?" Style="{StaticResource GhostButton}" Width="28" Height="28" Padding="0" Margin="10,0,0,0" ToolTip="一般在什么情况下需要使用兼容修复？"/>
                 </WrapPanel>
                 <TextBlock x:Name="CompatSummary" TextWrapping="Wrap" Foreground="#FF8E95A5" FontSize="12" Margin="0,8,0,0"/>
               </StackPanel>
@@ -656,7 +665,7 @@
                 <Border Background="#FF181C26" BorderBrush="#FF282D3A" BorderThickness="1" CornerRadius="6" Padding="14,10" Margin="0,0,0,8">
                   <StackPanel>
                     <DockPanel LastChildFill="False">
-                      <CheckBox x:Name="MochiCheck" Content="mochi · 0.0.6" FontWeight="SemiBold" Foreground="#FFFFFFFF" VerticalAlignment="Center"/>
+                      <CheckBox x:Name="MochiCheck" Content="mochizuki0323 · 0.0.7" FontWeight="SemiBold" Foreground="#FFFFFFFF" VerticalAlignment="Center"/>
                       <Border x:Name="MochiBadge" DockPanel.Dock="Right" Background="#FF1E222E" BorderBrush="#FF282D3A" BorderThickness="1" CornerRadius="10" Padding="8,2" VerticalAlignment="Center">
                         <TextBlock x:Name="MochiReason" Text="需权重" FontSize="11" Foreground="#FF8E95A5"/>
                       </Border>
@@ -692,7 +701,7 @@
                 <Border Background="#FF181C26" BorderBrush="#FF282D3A" BorderThickness="1" CornerRadius="6" Padding="14,10">
                   <StackPanel>
                     <DockPanel LastChildFill="False">
-                      <CheckBox x:Name="DanielCheck" Content="Daniel · 0.3.0-0.6.0" FontWeight="SemiBold" Foreground="#FFFFFFFF" VerticalAlignment="Center"/>
+                      <CheckBox x:Name="DanielCheck" Content="danielblnc · 0.3.0-0.6.0" FontWeight="SemiBold" Foreground="#FFFFFFFF" VerticalAlignment="Center"/>
                       <Border x:Name="DanielBadge" DockPanel.Dock="Right" Background="#FF1E222E" BorderBrush="#FF282D3A" BorderThickness="1" CornerRadius="10" Padding="8,2" VerticalAlignment="Center">
                         <TextBlock x:Name="DanielReason" Text="检测中" FontSize="11" Foreground="#FF8E95A5"/>
                       </Border>

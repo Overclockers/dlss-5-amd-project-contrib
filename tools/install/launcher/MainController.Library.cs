@@ -16,7 +16,9 @@ namespace OptScalerNR.Launcher
 {
     public sealed partial class MainController
     {
-        Button _addFolderButton, _editGameButton, _scanExeButton;
+        Button _addFolderButton, _manageGameButton;
+        ContextMenu _manageGameMenu;
+        MenuItem _changeExeMenuItem, _scanExeMenuItem, _editGameMenuItem, _removeSelectedGameMenuItem;
         CancellationTokenSource _folderScan;
         static string EntryLocation(GameInfo game) { return game == null ? null : !string.IsNullOrEmpty(game.Exe) ? game.Exe : game.RootDirectory; }
         static bool SamePath(string a,string b)
@@ -27,18 +29,50 @@ namespace OptScalerNR.Launcher
         void InitLibraryActions()
         {
             _addFolderButton=(Button)_window.FindName("AddFolderButton");
-            _editGameButton=(Button)_window.FindName("EditGameButton");
-            _scanExeButton=(Button)_window.FindName("ScanExeButton");
+            _manageGameButton=(Button)_window.FindName("ManageGameButton");
             if(_addFolderButton!=null)_addFolderButton.Click+=(s,e)=>AddFolder();
-            if(_editGameButton!=null)_editGameButton.Click+=(s,e)=>EditSelectedGame();
-            if(_scanExeButton!=null)_scanExeButton.Click+=(s,e)=>ScanExecutables();
+            if(_manageGameButton!=null)
+            {
+                var itemStyle=(Style)_window.FindResource("GameContextMenuItem");
+                _manageGameMenu=new ContextMenu{Style=(Style)_window.FindResource("GameContextMenu")};
+                _changeExeMenuItem=new MenuItem{Style=itemStyle};_changeExeMenuItem.Click+=(s,e)=>ChangeExe();
+                _scanExeMenuItem=new MenuItem{Style=itemStyle};_scanExeMenuItem.Click+=(s,e)=>ScanExecutables();
+                _editGameMenuItem=new MenuItem{Style=itemStyle};_editGameMenuItem.Click+=(s,e)=>EditSelectedGame();
+                _removeSelectedGameMenuItem=new MenuItem{Style=itemStyle};_removeSelectedGameMenuItem.Click+=(s,e)=>RemoveGame(_selectedGame);
+                _manageGameMenu.Items.Add(_changeExeMenuItem);
+                _manageGameMenu.Items.Add(_scanExeMenuItem);
+                _manageGameMenu.Items.Add(_editGameMenuItem);
+                _manageGameMenu.Items.Add(new Separator{Style=(Style)_window.FindResource("GameContextMenuSeparator")});
+                _manageGameMenu.Items.Add(_removeSelectedGameMenuItem);
+                _manageGameButton.ContextMenu=_manageGameMenu;
+                _manageGameButton.ContextMenuOpening+=(s,e)=>{
+                    if(_folderScan!=null||_selectedGame==null){e.Handled=true;return;}
+                    RefreshLibraryActions();
+                };
+                _manageGameButton.Click+=(s,e)=>{
+                    if(_folderScan!=null){ScanExecutables();return;}
+                    if(_selectedGame==null||_manageGameMenu==null)return;
+                    RefreshLibraryActions();
+                    _manageGameMenu.PlacementTarget=_manageGameButton;
+                    _manageGameMenu.Placement=System.Windows.Controls.Primitives.PlacementMode.Bottom;
+                    _manageGameMenu.IsOpen=true;
+                };
+            }
         }
         void RefreshLibraryActions()
         {
             bool busy=_writeBusy||(_session!=null&&_session.IsRunning)||_folderScan!=null;
+            bool canManage=_selectedGame!=null&&!busy;
             if(_addFolderButton!=null){_addFolderButton.Content=L("+ 添加文件夹","+ Add Folder");_addFolderButton.IsEnabled=!busy;}
-            if(_editGameButton!=null){_editGameButton.Content=L("编辑信息","Edit details");_editGameButton.IsEnabled=_selectedGame!=null&&!busy;}
-            if(_scanExeButton!=null){_scanExeButton.Content=_folderScan!=null?L("取消扫描","Cancel scan"):L("扫描启动程序","Find game EXE");_scanExeButton.IsEnabled=_folderScan!=null||(_selectedGame!=null&&!busy);}
+            if(_manageGameButton!=null){
+                _manageGameButton.Content=_folderScan!=null?L("取消扫描","Cancel scan"):L("管理 ▾","Manage ▾");
+                _manageGameButton.IsEnabled=_folderScan!=null||canManage;
+                if(!canManage&&_manageGameMenu!=null)_manageGameMenu.IsOpen=false;
+            }
+            if(_changeExeMenuItem!=null){_changeExeMenuItem.Header=L("更换 EXE…","Change EXE…");_changeExeMenuItem.IsEnabled=canManage;}
+            if(_scanExeMenuItem!=null){_scanExeMenuItem.Header=L("扫描启动程序…","Find game EXE…");_scanExeMenuItem.IsEnabled=canManage;}
+            if(_editGameMenuItem!=null){_editGameMenuItem.Header=L("编辑信息…","Edit details…");_editGameMenuItem.IsEnabled=canManage;}
+            if(_removeSelectedGameMenuItem!=null){_removeSelectedGameMenuItem.Header=L("从列表移除","Remove from list");_removeSelectedGameMenuItem.IsEnabled=canManage;}
         }
         void RestoreHiddenPath(string path)
         {

@@ -4,6 +4,10 @@ $script:XessGroups = [ordered]@{
     sr = @('libxess.dll')
     dx11 = @('libxess_dx11.dll')
     fg = @('libxess_fg.dll', 'libxell.dll')
+    fsr_fg = @('amd_fidelityfx_framegeneration_dx12.dll')
+    fsr_upscaler = @('amd_fidelityfx_upscaler_dx12.dll')
+    fsr_loader = @('amd_fidelityfx_loader_dx12.dll')
+    fsr_vk = @('amd_fidelityfx_vk.dll')
 }
 
 function Assert-XessPath([string]$Path) {
@@ -51,7 +55,7 @@ function Get-XessJournal([string]$GameDir) {
     $path = Join-Path $GameDir 'OptiScaler-compat-backup/active.json'
     Assert-XessPath $path
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
-    $data = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+    $data = [IO.File]::ReadAllText($path, [Text.Encoding]::UTF8) | ConvertFrom-Json
     if ($data.schema -ne 1 -or $data.gameDir -ne [IO.Path]::GetFullPath($GameDir) -or
         $data.transaction -notmatch '^[a-f0-9]{32}$' -or $data.state -notin @('pending','applied','restored','archived')) {
         throw 'Invalid XeSS repair record. No game files were changed.'

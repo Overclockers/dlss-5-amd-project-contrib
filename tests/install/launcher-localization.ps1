@@ -32,7 +32,9 @@ function Invoke-Controller($window, [string]$method, [object[]]$arguments = @())
 function Get-UiStrings($element) {
     if ($element -is [Windows.Window]) { $element.Title }
     if ($element -is [Windows.Controls.TextBlock]) { $element.Text }
+    if ($element -is [Windows.Controls.HeaderedItemsControl] -and $element.Header -is [string]) { $element.Header }
     if ($element -is [Windows.Controls.ContentControl] -and $element.Content -is [string]) { $element.Content }
+    if ($element -is [Windows.FrameworkElement] -and $null -ne $element.ContextMenu) { Get-UiStrings $element.ContextMenu }
     if ($element -is [Windows.DependencyObject]) {
         foreach ($child in [Windows.LogicalTreeHelper]::GetChildren($element)) {
             if ($child -is [Windows.DependencyObject]) { Get-UiStrings $child }
@@ -85,6 +87,7 @@ try {
             $saved = Get-Content -LiteralPath (Join-Path $dir 'settings.json') -Raw | ConvertFrom-Json
             Assert-True ($saved.Language -eq 'zh') "Expected Chinese for $culture"
             Assert-True ($window.FindName('LocalGamesHeading').Text -eq '本地游戏') "Chinese labels missing for $culture"
+            Assert-True ($window.FindName('ManageGameButton').Content -eq "管理 $([char]0x25BE)") "Chinese Manage button missing for $culture"
         } finally { $window.Close() }
     }
     foreach ($culture in @('en-US','ja-JP','fr-FR','de-DE','ar-SA')) {
@@ -93,6 +96,7 @@ try {
         try {
             $saved = Get-Content -LiteralPath (Join-Path $dir 'settings.json') -Raw | ConvertFrom-Json
             Assert-True ($saved.Language -eq 'en') "Expected English for $culture"
+            Assert-True ($window.FindName('ManageGameButton').Content -eq "Manage $([char]0x25BE)") "English Manage button missing for $culture"
             Assert-English $window "first launch ($culture)"
             Invoke-Controller $window 'SwitchTab' @($true)
             Assert-True ($window.FindName('SettingsHeading').Text -eq 'Settings') 'Settings heading was not translated'

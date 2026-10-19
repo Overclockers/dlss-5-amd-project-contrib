@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -97,7 +97,7 @@ namespace OptScalerNR.Launcher
         readonly Window _window;
         TextBox _searchBox, _logView, _packageRootBox;
         Button _minBtn, _maxBtn, _closeBtn;
-        Button _libraryTab, _settingsTab, _addButton, _primaryButton, _changeExeButton, _openFolderButton, _uninstallButton, _openLogButton, _refreshButton, _langToggle, _packageBrowse;
+        Button _libraryTab, _settingsTab, _addButton, _primaryButton, _openFolderButton, _uninstallButton, _openLogButton, _refreshButton, _langToggle, _packageBrowse;
         FrameworkElement _libraryPage, _settingsPage;
         ComboBox _filterCombo, _proxyCombo, _activeCombo, _langCombo;
         ListBox _gameList;
@@ -105,7 +105,7 @@ namespace OptScalerNR.Launcher
         TextBlock _lmxxfReason, _danielReason, _mochiReason, _statusText, _countText;
         Border _lmxxfBadge, _danielBadge, _mochiBadge;
         Button _lmxxfActiveBtn, _danielActiveBtn, _mochiActiveBtn;
-        Button _compatButton, _restoreCompatButton;
+        Button _compatButton, _restoreCompatButton, _compatHelpButton;
         MenuItem _removeGameMenuItem;
         TextBlock _compatSummary;
         TextBlock _lmxxfActiveLabel, _danielActiveLabel, _mochiActiveLabel;
@@ -200,11 +200,11 @@ namespace OptScalerNR.Launcher
             _heroBgImage = (Image)window.FindName("HeroBgImage");
 
             _primaryButton = (Button)window.FindName("PrimaryButton");
-            _changeExeButton = (Button)window.FindName("ChangeExeButton");
             _openFolderButton = (Button)window.FindName("OpenFolderButton");
             _uninstallButton = (Button)window.FindName("UninstallButton");
             _compatButton = (Button)window.FindName("CompatButton");
             _restoreCompatButton = (Button)window.FindName("RestoreCompatButton");
+            _compatHelpButton = (Button)window.FindName("CompatHelpButton");
             _compatSummary = (TextBlock)window.FindName("CompatSummary");
             _progress = (ProgressBar)window.FindName("Progress");
 
@@ -348,13 +348,13 @@ namespace OptScalerNR.Launcher
 
             if (_addButton != null) _addButton.Click += (s, e) => AddGame();
             if (_gameList != null) _gameList.SelectionChanged += (s, e) => OnGameSelected();
-            if (_changeExeButton != null) _changeExeButton.Click += (s, e) => ChangeExe();
             if (_openFolderButton != null) _openFolderButton.Click += (s, e) => OpenSelectedFolder();
             if (_primaryButton != null) _primaryButton.Click += (s, e) => OnPrimaryAction();
             if (_uninstallButton != null) _uninstallButton.Click += (s, e) => OnUninstall();
             InitGameContextMenu();
             if (_compatButton != null) _compatButton.Click += (s, e) => OnCompatibility(false);
             if (_restoreCompatButton != null) _restoreCompatButton.Click += (s, e) => OnCompatibility(true);
+            if (_compatHelpButton != null) _compatHelpButton.Click += (s, e) => ShowCompatibilityHelp();
             if (_openLogButton != null) _openLogButton.Click += (s, e) => OpenLog();
             if (_refreshButton != null) _refreshButton.Click += (s, e) => RunScan();
 
@@ -688,12 +688,12 @@ namespace OptScalerNR.Launcher
                     _settingsTab.Content = _settingsPage != null && _settingsPage.Visibility == Visibility.Visible
                         ? L("返回游戏库", "Back to Library") : L("设置", "Settings");
                 if (_addButton != null) _addButton.Content = isZh ? "+ 添加游戏" : "+ Add Game";
-                if (_changeExeButton != null) _changeExeButton.Content = isZh ? "更换 EXE" : "Change EXE";
                 if (_openFolderButton != null) _openFolderButton.Content = isZh ? "打开目录" : "Open Folder";
                 if (_uninstallButton != null) _uninstallButton.Content = isZh ? "卸载" : "Uninstall";
                 if (_removeGameMenuItem != null) _removeGameMenuItem.Header = L("从列表移除", "Remove from list");
                 if (_compatButton != null) _compatButton.Content = L("兼容修复", "Compatibility repair");
                 if (_restoreCompatButton != null) _restoreCompatButton.Content = L("恢复游戏原文件", "Restore game files");
+                if (_compatHelpButton != null) _compatHelpButton.ToolTip = L("一般在什么情况下需要使用兼容修复？", "When should you use Compatibility Repair?");
                 UpdateCompatibilitySummary();
                 if (_openLogButton != null) _openLogButton.Content = isZh ? "打开完整日志" : "Open Full Log";
                 if (_refreshButton != null) _refreshButton.Content = isZh ? "刷新" : "Refresh";
@@ -706,8 +706,8 @@ namespace OptScalerNR.Launcher
                 SetLabel("ProxyHeading", "注入代理 (Proxy DLL)", "Injection Proxy (DLL)");
                 SetLabel("BackendsHeading", "后端加速管线", "Backend Engines");
                 SetLabel("LmxxfCheck", "lmxxf · 0.44", "lmxxf · 0.44");
-                SetLabel("DanielCheck", "Daniel · 0.3.0-0.6.0", "Daniel · 0.3.0-0.6.0");
-                SetLabel("MochiCheck", "mochi · 0.0.6", "mochi · 0.0.6");
+                SetLabel("DanielCheck", "danielblnc · 0.3.0-0.6.0", "danielblnc · 0.3.0-0.6.0");
+                SetLabel("MochiCheck", "mochizuki0323 · 0.0.7", "mochizuki0323 · 0.0.7");
                 SetLabel("LmxxfDescription", "适合 RX 9000 系列", "For RX 9000 series");
                 SetLabel("DanielDescription", "适合 RX 6000/7000/9000 系列", "For RX 6000/7000/9000 series");
                 SetLabel("MochiDescription", "适合 RX 9000 系列", "For RX 9000 series");
@@ -1562,6 +1562,7 @@ namespace OptScalerNR.Launcher
             var name = Path.GetFileName(path);
             return string.Equals(name, "gamelaunchhelper.exe", StringComparison.OrdinalIgnoreCase) ||
                    string.Equals(name, "person-worker.exe", StringComparison.OrdinalIgnoreCase) ||
+                   FolderGameScanner.Auxiliary(path) ||
                    path.IndexOf("\\person-model\\", StringComparison.OrdinalIgnoreCase) >= 0 ||
                    path.IndexOf("\\OptiScaler\\", StringComparison.OrdinalIgnoreCase) >= 0;
         }
@@ -1755,8 +1756,47 @@ namespace OptScalerNR.Launcher
 
         string XessGroupLabel(string id)
         {
-            if (id == "fg") return L("XeSS 插帧 + XeLL（配套替换）", "XeSS frame generation + XeLL (replace together)");
-            return id == "dx11" ? L("XeSS 超分（DX11）", "XeSS upscaling (DX11)") : L("XeSS 超分（DX12 / Vulkan）", "XeSS upscaling (DX12 / Vulkan)");
+            switch (id)
+            {
+                case "fg": return L("XeSS 插帧 + XeLL（配套替换）", "XeSS frame generation + XeLL (replace together)");
+                case "dx11": return L("XeSS 超分（DX11）", "XeSS upscaling (DX11)");
+                case "sr": return L("XeSS 超分（DX12 / Vulkan）", "XeSS upscaling (DX12 / Vulkan)");
+                case "fsr_fg": return L("AMD FidelityFX 帧生成（DX12）", "AMD FidelityFX frame generation (DX12)");
+                case "fsr_upscaler": return L("AMD FidelityFX 超分（DX12）", "AMD FidelityFX upscaler (DX12)");
+                case "fsr_loader": return L("AMD FidelityFX 加载器（DX12）", "AMD FidelityFX loader (DX12)");
+                case "fsr_vk": return L("AMD FidelityFX 运行库（Vulkan）", "AMD FidelityFX runtime (Vulkan)");
+                default: return id;
+            }
+        }
+
+        void ShowCompatibilityHelp()
+        {
+            var title = L("关于兼容修复与配套库", "About Compatibility Repair & Companion Libraries");
+            var content = L(
+                "【兼容修复的作用与使用场景】\n\n" +
+                "1. 什么时候需要使用兼容修复？\n" +
+                "   • 游戏设置中的 DLSS 帧生成 / XeSS / FSR 选项灰显、无法开启或提示硬件不支持（如《赛博朋克 2077》等游戏自带了陈旧的配套 DLL）。\n" +
+                "   • 开启插帧后游戏闪退、报错，或插帧倍率受限。\n" +
+                "   • 游戏更新后自带的文件与 OptiScaler 补丁发生版本冲突。\n\n" +
+                "2. 兼容修复做了什么？\n" +
+                "   • 自动备份：将游戏目录中原有的配套 DLL（libxess.dll、amd_fidelityfx_*.dll 等）完整备份到游戏目录下的 OptiScaler-compat-backup 文件夹中。\n" +
+                "   • 配套替换：将本工具箱经过实测验证的配套运行库一键部署到游戏目录，替换厂商未更新的老旧文件，使补丁与游戏运行库完美协同。\n\n" +
+                "3. 如何还原或应对游戏更新？\n" +
+                "   • 若修复后没有改善或出现异常，随时点击“恢复游戏原文件”即可一键无损还原。\n" +
+                "   • 游戏更新后若正常运行，可在还原窗口中选择“保留当前文件并结束修复”，安全清理旧记录。",
+                "[Purpose & Usage Scenarios of Compatibility Repair]\n\n" +
+                "1. When should you use Compatibility Repair?\n" +
+                "   • In-game DLSS Frame Generation / XeSS / FSR options are greyed out, cannot be toggled on, or show hardware unsupported errors (e.g. Cyberpunk 2077 bundles outdated companion DLLs).\n" +
+                "   • Game crashes or throws errors when frame generation is enabled, or frame rate multipliers are limited.\n" +
+                "   • Game updates introduced conflicting companion libraries.\n\n" +
+                "2. What does Compatibility Repair do?\n" +
+                "   • Automatic Backup: Safely backs up original companion DLLs (libxess.dll, amd_fidelityfx_*.dll, etc.) to the OptiScaler-compat-backup folder inside the game directory.\n" +
+                "   • Companion Replacement: Deploys validated runtime libraries bundled with this toolbox, replacing stale vendor files so the mod and game work seamlessly together.\n\n" +
+                "3. How to restore or handle game updates?\n" +
+                "   • If repair does not help, click 'Restore game files' anytime for one-click lossless rollback.\n" +
+                "   • After a game update, you can choose 'Keep current files and finish repair' to safely keep the latest files."
+            );
+            DialogTheme.Show(_window, content, title, MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         void UpdateCompatibilitySummary()
@@ -1769,15 +1809,15 @@ namespace OptScalerNR.Launcher
             if (_restoreCompatButton != null) _restoreCompatButton.IsEnabled = available && (report.Active || !string.IsNullOrEmpty(report.Error));
             if (_compatSummary == null) return;
             if (_selectedGame == null || report == null) {
-                _compatSummary.Text = L("选择游戏后自动检查 XeSS 文件。", "Select a game to check its XeSS files automatically.");
+                _compatSummary.Text = L("选择游戏后自动检查配套运行库文件。", "Select a game to check its companion runtime files automatically.");
                 return;
             }
             if (!string.IsNullOrEmpty(report.Error)) {
-                _compatSummary.Text = L("XeSS 文件检查未完成：", "XeSS inspection incomplete: ") + report.Error;
+                _compatSummary.Text = L("配套文件检查未完成：", "Companion files inspection incomplete: ") + report.Error;
                 return;
             }
             if (report.Active) {
-                _compatSummary.Text = L("已有 XeSS 兼容修复备份。无改善可点“恢复游戏原文件”；游戏已更新时，也可在该窗口保留当前文件并结束旧修复，再重新修复。", "A XeSS repair backup exists. Use Restore game files if it did not help. After a game update, that dialog also lets you keep current files and finish the old repair before trying again.");
+                _compatSummary.Text = L("已有兼容修复备份。无改善可点“恢复游戏原文件”；游戏已更新时，也可在该窗口保留当前文件并结束旧修复，再重新修复。", "A compatibility repair backup exists. Use Restore game files if it did not help. After a game update, that dialog also lets you keep current files and finish the old repair before trying again.");
                 return;
             }
             var names = new List<string>();
@@ -1785,9 +1825,9 @@ namespace OptScalerNR.Launcher
                 if (group.Files != null) foreach (var file in group.Files)
                     if (file.State == "different") names.Add(file.Name);
             _compatSummary.Text = names.Count > 0
-                ? L("游戏目录与包内 XeSS 文件不同：", "Game and package XeSS files differ: ") + string.Join(", ", names) +
-                    L("。版本不同不等于故障。若 XeSS 不可用、插帧倍率受限或启动异常，可点“兼容修复”查看并尝试替换。", ". Different versions do not prove a fault. For unavailable XeSS, limited frame multipliers or startup problems, open Compatibility repair to review and try replacement.")
-                : L("若 XeSS 不可用、插帧倍率受限或启动异常，可点“兼容修复”检查；无需自行寻找 DLL。", "If XeSS is unavailable, frame multipliers are limited or startup fails, open Compatibility repair; no manual DLL search is needed.");
+                ? L("游戏目录与包内配套文件不同：", "Game and package companion files differ: ") + string.Join(", ", names) +
+                    L("。版本不同不等于故障。若游戏中 DLSS-FG/XeSS/FSR 不可用、插帧不可开启或启动异常，可点“兼容修复”查看并尝试替换。", ". Different versions do not prove a fault. If in-game DLSS-FG/XeSS/FSR is unavailable, frame gen is disabled or startup fails, click Compatibility repair to review and try replacement.")
+                : L("若游戏中 DLSS-FG/XeSS/FSR 不可用、插帧不可开启或启动异常，可点“兼容修复”检查；无需自行寻找 DLL。", "If in-game DLSS-FG/XeSS/FSR is unavailable, frame gen is disabled or startup fails, click Compatibility repair to review; no manual DLL search is needed.");
         }
 
         Window CreateCompatibilityDialog(bool restore)
@@ -1795,7 +1835,7 @@ namespace OptScalerNR.Launcher
             var report = _lastInspectResult == null ? null : _lastInspectResult.Compatibility;
             var dialog = new Window {
                 Owner = _window.IsVisible ? _window : null,
-                Title = restore ? L("恢复游戏原文件", "Restore game files") : L("XeSS 兼容修复", "XeSS compatibility repair"),
+                Title = restore ? L("恢复游戏原文件", "Restore game files") : L("兼容修复与配套库替换", "Compatibility repair & companion replacement"),
                 Width = 650, SizeToContent = SizeToContent.Height, MaxHeight = 720,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner, ResizeMode = ResizeMode.NoResize,
                 ShowInTaskbar = false, Background = new SolidColorBrush(Color.FromRgb(32,35,43)), Foreground = Brushes.White
@@ -1806,15 +1846,29 @@ namespace OptScalerNR.Launcher
             text(_selectedGame == null ? "" : _selectedGame.Exe);
             text(restore
                 ? L("关闭游戏后恢复上次修复前的文件，并移除修复时新增的文件。游戏更新过的文件不会被覆盖。若游戏已更新或希望保留现状，可选“保留当前文件并结束修复”：不恢复任何 DLL，保留全部备份，并允许再次修复。", "Close the game first. Restore files from before the last repair and remove files added by it. Files changed by game updates will be preserved. Alternatively, Keep current files and finish repair changes no DLLs, retains all backups and allows a new repair.")
-                : L("仅在该游戏出现 XeSS 或插帧问题时尝试。关闭游戏，勾选要替换的组件，再点“备份并尝试修复”。内层文件保留，INI 设置保留；修复不保证解决问题，无改善可恢复原文件。", "Try this only for XeSS or frame generation problems in this game. Close the game, select components and choose Back up and try repair. Inner-folder files and INI preferences are retained. A repair may not solve the problem; originals can be restored."));
+                : L("关闭游戏后，将自动把游戏目录中的配套运行库（XeSS、AMD FidelityFX 等）安全备份到 OptiScaler-compat-backup，并替换为本工具箱经过验证的最新配套组件。\n解决如《赛博朋克 2077》等游戏中设置里无法开启 DLSS 帧生成 / FSR / XeSS，或因游戏原厂自带 DLL 老旧冲突导致的异常。\n无改善可随时点击“恢复游戏原文件”一键还原。", "Close the game first. Safely back up game companion runtime libraries (XeSS, AMD FidelityFX, etc.) into OptiScaler-compat-backup, and replace them with tested companion components bundled with this toolbox.\nSolves issues such as Cyberpunk 2077 where in-game DLSS-FG / FSR / XeSS cannot be toggled on or conflicts with outdated game DLLs.\nIf it does not help, you can restore original files at any time."));
             var selections = new Dictionary<string, CheckBox>();
             if (report != null && !string.IsNullOrEmpty(report.Error)) text(report.Error);
             var canRestore = restore && report != null && report.Active && !string.IsNullOrEmpty(report.Fingerprint);
             var proceed = new Button { Content = restore ? L("恢复原文件", "Restore originals") : L("备份并尝试修复", "Back up and try repair"), IsEnabled = canRestore, MinWidth = 150, Margin = new Thickness(4) };
             DialogTheme.Primary(dialog, proceed);
             if (restore && report != null && report.RestoreFiles != null) text(string.Join("\n", report.RestoreFiles));
-            if (!restore && report != null && report.Groups != null) foreach (var group in report.Groups) {
-                if (!restore) {
+            if (!restore && report != null && report.Groups != null) {
+                if (report.Groups.Length > 1) {
+                    var selectAllBtn = new Button {
+                        Content = L("全选所有就绪组件", "Select all ready components"),
+                        HorizontalAlignment = HorizontalAlignment.Left,
+                        Margin = new Thickness(0, 0, 0, 8),
+                        Padding = new Thickness(8, 4, 8, 4)
+                    };
+                    selectAllBtn.Click += delegate {
+                        foreach (var item in selections.Values) {
+                            if (item.IsEnabled) item.IsChecked = true;
+                        }
+                    };
+                    panel.Children.Add(selectAllBtn);
+                }
+                foreach (var group in report.Groups) {
                     var check = new CheckBox { Content = XessGroupLabel(group.Id), Foreground = Brushes.White,
                         IsEnabled = group.Ready && !report.Active, Margin = new Thickness(0,6,0,6) };
                     selections[group.Id] = check;
@@ -1826,18 +1880,18 @@ namespace OptScalerNR.Launcher
                     check.Checked += changed; check.Unchecked += changed;
                     panel.Children.Add(check);
                     if (!group.Ready) text(L("安装包缺少有效配套文件，请重新解压完整包。", "Valid companion files are missing from this package. Extract a complete package again."));
-                }
-                if (group.Files != null) foreach (var file in group.Files) {
-                    var gameVersion = file.State == "missing" ? L("无", "absent") : string.IsNullOrEmpty(file.GameVersion) ? L("版本未知", "unknown version") : file.GameVersion;
-                    var packageVersion = string.IsNullOrEmpty(file.PackageVersion) ? L("版本未知", "unknown version") : file.PackageVersion;
-                    text(file.Name + "\n" + L("游戏目录：", "Game folder: ") + gameVersion +
-                        L("    包内：", "    Package: ") + packageVersion +
-                        (file.State == "same" ? L("（文件相同）", " (identical)") : L("（文件不同或缺失）", " (different or absent)")));
+                    if (group.Files != null) foreach (var file in group.Files) {
+                        var gameVersion = file.State == "missing" ? L("无", "absent") : string.IsNullOrEmpty(file.GameVersion) ? L("版本未知", "unknown version") : file.GameVersion;
+                        var packageVersion = string.IsNullOrEmpty(file.PackageVersion) ? L("版本未知", "unknown version") : file.PackageVersion;
+                        text(file.Name + "\n" + L("游戏目录：", "Game folder: ") + gameVersion +
+                            L("    包内：", "    Package: ") + packageVersion +
+                            (file.State == "same" ? L("（文件相同）", " (identical)") : L("（文件不同或缺失）", " (different or absent)")));
+                    }
                 }
             }
             if (!restore && report != null && report.Active) text(L("请先打开“恢复游戏原文件”，恢复上次修复，或保留当前文件并结束旧修复，再尝试其他组件。", "Open Restore game files first: restore the previous repair, or keep current files and finish it before trying other components."));
             if (report != null && report.Evidence != null && report.Evidence.Length > 0) {
-                text(L("最近日志中的 XeSS 记录（可能来自之前的运行，不能单独证明本次故障）：", "XeSS entries in the latest log (may be from a previous run; not proof of the current fault):"));
+                text(L("最近日志中的配套记录（可能来自之前的运行，不能单独证明本次故障）：", "Companion entries in the latest log (may be from a previous run; not proof of the current fault):"));
                 text(string.Join("\n", report.Evidence));
             }
             var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
@@ -2177,9 +2231,9 @@ namespace OptScalerNR.Launcher
                     if (action == "repairXess" || action == "restoreXess" || action == "keepXess") {
                         if (_lastInspectResult != null) _lastInspectResult.Compatibility = result.Compatibility;
                         DialogTheme.Show(_window, action == "repairXess"
-                            ? L("已备份并替换所选 XeSS 文件。请启动游戏测试；无改善可回到这里点“恢复游戏原文件”。", "Selected XeSS files were backed up and replaced. Start the game to test. If it did not help, return here and choose Restore game files.")
+                            ? L("已备份并替换所选配套运行库文件（XeSS / AMD FidelityFX 等）。请启动游戏测试；无改善可回到这里点“恢复游戏原文件”。", "Selected companion files (XeSS / AMD FidelityFX, etc.) were backed up and replaced. Start the game to test. If it did not help, return here and choose Restore game files.")
                             : action == "keepXess"
-                            ? L("已保留当前游戏文件并结束旧修复，全部备份仍保留。现在可以重新选择组件修复。", "Current game files and all backups were kept. The old repair is finished; you can now select components for a new repair.")
+                            ? L("已保留当前游戏文件并结束旧修复，全部备份仍保留。现在可以重新进行兼容修复。", "Current game files and all backups were kept. The old repair is finished; you can now perform compatibility repair again.")
                             : L("游戏原文件已恢复。请重新启动游戏。", "Original game files restored. Restart the game."), _window.Title);
                         if (_selectedGame != null) InspectGame(_selectedGame);
                     }
@@ -2433,7 +2487,6 @@ namespace OptScalerNR.Launcher
             if (_packageRootBox != null) _packageRootBox.IsEnabled = !_writeBusy;
             if (busy) _eventStage = action;
             if (_addButton != null) _addButton.IsEnabled = !busy;
-            if (_changeExeButton != null) _changeExeButton.IsEnabled = !busy;
             if (_removeGameMenuItem != null) _removeGameMenuItem.IsEnabled = !busy && _removeGameMenuItem.Tag is GameInfo;
             if (_openFolderButton != null) _openFolderButton.IsEnabled = !busy;
             if (_refreshButton != null) _refreshButton.IsEnabled = !busy;

@@ -25,7 +25,7 @@ function Reject([scriptblock]$Action, [string]$Match) {
 function Report { Get-XessCompatibility $game $package }
 function Repair([string[]]$Groups) { Repair-XessCompatibility $game $package $Groups (Report).fingerprint }
 
-foreach ($name in @('libxess.dll','libxess_dx11.dll','libxess_fg.dll','libxell.dll')) { Pe (Join-Path $deps $name) 2 }
+foreach ($name in @('libxess.dll','libxess_dx11.dll','libxess_fg.dll','libxell.dll','amd_fidelityfx_framegeneration_dx12.dll','amd_fidelityfx_upscaler_dx12.dll','amd_fidelityfx_loader_dx12.dll','amd_fidelityfx_vk.dll')) { Pe (Join-Path $deps $name) 2 }
 Pe (Join-Path $game 'Game.exe') 0
 Pe (Join-Path $game 'libxess.dll') 1
 Pe (Join-Path $game 'libxess_fg.dll') 1
@@ -35,7 +35,7 @@ $oldSr = Get-XessHash (Join-Path $game 'libxess.dll')
 $oldFg = Get-XessHash (Join-Path $game 'libxess_fg.dll')
 $before = @(Get-ChildItem -LiteralPath $game -Recurse -File | ForEach-Object { $_.FullName + ':' + (Get-XessHash $_.FullName) }) -join '|'
 $report = Report
-Check ($report.groups.Count -eq 3) 'Wrong component grouping'
+Check ($report.groups.Count -eq 7) 'Wrong component grouping'
 Check ($report.groups[2].files.Count -eq 2) 'XeFG/XeLL not paired'
 Check $report.groups[2].ready 'Complete XeFG group not ready'
 Check ($report.groups[0].files[0].state -eq 'different') 'Did not detect different content with unknown versions'
@@ -63,7 +63,7 @@ Check ((Get-XessHash (Join-Path $game 'libxess_fg.dll')) -eq $oldFg) 'Rejected p
 
 # All-target lock preflight avoids a partial pair replacement.
 $locked = [IO.File]::Open((Join-Path $game 'libxess_fg.dll'), 'Open', 'Read', 'Read')
-try { Reject { Repair @('fg') } 'being used|used by another|另一个进程|正由另一' }
+try { Reject { Repair @('fg') } 'being used|used by another|Open|另一个进程|正由另一' }
 finally { $locked.Dispose() }
 Check (-not (Test-Path (Join-Path $game 'libxell.dll'))) 'Locked group installed XeLL anyway'
 
@@ -159,7 +159,7 @@ function Worker([string]$Action, [string[]]$Groups = @()) {
     return (Get-Content -LiteralPath $result -Raw -Encoding UTF8 | ConvertFrom-Json)
 }
 $result = Worker 'inspect'
-Check ($result.compatibility.groups.Count -eq 3) 'Worker inspection omitted XeSS inventory'
+Check ($result.compatibility.groups.Count -eq 7) 'Worker inspection omitted XeSS inventory'
 $result = Worker 'repairXess' @('fg')
 Check $result.compatibility.active 'Worker repair failed to report backup'
 $result = Worker 'restoreXess'
