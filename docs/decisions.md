@@ -1,3 +1,7 @@
+## 2026-10-19 — Mochizuki 0.0.7 剩余能力统一评估
+
+一次覆盖尺寸/格式复用、plan/slot/capacity、activation、heap、residency/offload、pipeline registry、motion point 与 resize history，不再按多轮评估拆分。建议将受限后台 core/权重复用和同 Session 的 split activation 共享纳入一个实现方案；保留当前桶尺寸、失败服务、录制回放和退休框架。不直接采用使旧 runtime stale 的两区域 heap，不为 RAM offload 先增加多闲置网络缓存。全局管线复用保持关闭，采样与历史语义保持当前行为。临时 native 探针验证了实际资源共享、变化输入输出一致、容量拒绝和卸载恢复；不代表 temporal/ACO/游戏验收，尚无产品路径修改。详见 [统一评估](architecture/mochizuki-007-remaining-assessment.md)。
+
 ## 2026-10-19 — Mochizuki split 共享颜色按完整现有格式表准入
 
 共享颜色复用 `ColourFormat` 的全部 23 个 DXGI 枚举、14 种 typed 载体，不按游戏名逐个
