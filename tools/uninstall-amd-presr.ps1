@@ -21,6 +21,8 @@ param(
     [switch]$RemoveBackups
 )
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Console]::OutputEncoding
 
 function Pause-Exit([int]$code) {
     if (-not $NonInteractive -and -not $NoPause) {

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -1875,6 +1875,13 @@ namespace OptScalerNR.Launcher
 
         Window CreateMochizukiModelDialog()
         {
+            BackendInfo capability = null;
+            if (_lastInspectResult != null && _lastInspectResult.Backends != null)
+                foreach (var backend in _lastInspectResult.Backends)
+                    if (backend != null && backend.Id == "mochizuki") { capability = backend; break; }
+            var canExtract = capability != null && capability.PreparationState == "ready";
+            var original = capability != null && capability.OriginalState == "ready";
+            var small = capability != null && capability.SmallState == "ready";
             var dialog = new Window
             {
                 Owner = _window.IsVisible ? _window : null, Title = L("选择 Mochizuki 模型", "Select Mochizuki models"), Width = 500,
@@ -1897,12 +1904,21 @@ namespace OptScalerNR.Launcher
             });
             var proceed = new Button { Content = L("继续", "Continue"), IsEnabled = false, MinWidth = 100, Margin = new Thickness(4) };
             DialogTheme.Primary(dialog, proceed);
+            if (!canExtract && !(original && small))
+                panel.Children.Add(new TextBlock {
+                    Text = capability != null && capability.PreparationState == "missing-python"
+                        ? L("未找到可用的 Python 3.10+，无法提取缺失模型。请安装 Python 后重新检查，或将预提取的 dlssnr.bin / dlssnr-small.bin 放入安装包的 dlssnr-amd 文件夹。已有模型仍可选择。",
+                            "Python 3.10+ was not found. Install Python and inspect again, or place pre-extracted dlssnr.bin / dlssnr-small.bin in the package's dlssnr-amd folder. Existing models remain available.")
+                        : L("模型提取环境未就绪，请重新检查或解压完整安装包。已有模型仍可选择。", "Model extraction is unavailable. Inspect again or extract the complete package. Existing models remain available."),
+                    TextWrapping = TextWrapping.Wrap, Foreground = Brushes.OrangeRed, Margin = new Thickness(0,0,0,12)
+                });
+            var enabled = new[] { (original && small) || canExtract, small || canExtract, original || canExtract };
             var values = new[] { "both", "small", "original" };
             var labels = new[] { L("两个模型（推荐）", "Both models (recommended)"), L("仅新模型", "New model only"), L("仅原始模型", "Original model only") };
             for (var i = 0; i < values.Length; i++)
             {
                 var value = values[i];
-                var radio = new RadioButton { Content = labels[i], Foreground = Brushes.White, GroupName = "MochizukiModels", Margin = new Thickness(0, 6, 0, 6) };
+                var radio = new RadioButton { Content = labels[i], IsEnabled = enabled[i], Foreground = enabled[i] ? Brushes.White : Brushes.Gray, GroupName = "MochizukiModels", Margin = new Thickness(0, 6, 0, 6) };
                 radio.Checked += delegate { dialog.Tag = value; proceed.IsEnabled = true; };
                 panel.Children.Add(radio);
             }

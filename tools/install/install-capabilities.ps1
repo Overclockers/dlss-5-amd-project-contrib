@@ -234,10 +234,31 @@ function Get-OptScalerBackendCapabilities([string]$pkgRoot, [string]$gameDir, [s
         if ($unsupportedMochiSource) { $mochiNv = $null }
     }
     $mochiPreparable = (-not $hasMochiModel) -and [bool]$mochiNv
+    # Model choices must distinguish reusable weights from Python extraction.
+    $mochiOriginalReady = $false
+    $mochiSmallReady = $false
+    foreach ($root in @($pkgRoot, $gameDir)) {
+        if (-not $root) { continue }
+        if (Test-MochizukiModelHeaderFile (Join-Path $root 'dlssnr-amd/dlssnr.bin') 599) { $mochiOriginalReady = $true }
+        if (Test-MochizukiModelHeaderFile (Join-Path $root 'dlssnr-amd/dlssnr-small.bin') 255) { $mochiSmallReady = $true }
+    }
+    $mochiPreparation = 'ready'
+    if (-not ($mochiOriginalReady -and $mochiSmallReady)) {
+        $helper = if ($pkgRoot) { Join-Path $pkgRoot 'mochizuki-python.ps1' } else { $null }
+        if (-not $helper -or -not (Test-Path -LiteralPath $helper -PathType Leaf)) {
+            $mochiPreparation = 'missing-helper'
+        } else {
+            . $helper
+            if (-not (Find-MochizukiPython)) { $mochiPreparation = 'missing-python' }
+        }
+    }
     $mochiEnabled = $canMochiRuntime -and $hasMochiModel
     $mochiReason = if (-not $canMochiRuntime) { 'Runtime missing' } elseif ($hasMochiModel) { 'Ready' } elseif ($mochiPreparable) { 'Model preparation required' } else { 'Model missing' }
     $backends += @{
         id = 'mochizuki'
+        originalState = if ($mochiOriginalReady) { 'ready' } else { 'missing' }
+        smallState = if ($mochiSmallReady) { 'ready' } else { 'missing' }
+        preparationState = $mochiPreparation
         runtimeState = if ($canMochiRuntime) { 'ready' } else { 'missing' }
         modelState = if ($hasMochiModel) { 'ready' } elseif ($mochiPreparable) { 'preparable' } else { 'missing' }
         enabled = $mochiEnabled

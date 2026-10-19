@@ -62,6 +62,8 @@ namespace OptScalerNR.Launcher
             psi.CreateNoWindow = true;
             psi.RedirectStandardOutput = true;
             psi.RedirectStandardError = true;
+            psi.StandardOutputEncoding = new UTF8Encoding(false);
+            psi.StandardErrorEncoding = new UTF8Encoding(false);
             var proc = new Process { StartInfo = psi };
             var stdoutPath = Path.Combine(workDir, "worker.stdout.log");
             var stderrPath = Path.Combine(workDir, "worker.stderr.log");

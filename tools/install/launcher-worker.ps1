@@ -6,6 +6,9 @@ param(
     [Parameter(Mandatory = $true)][string]$ResultJson
 )
 $ErrorActionPreference = 'Stop'
+# Match redirected child output and the launcher reader, independent of the OS code page.
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Console]::OutputEncoding
 $here = $PSScriptRoot
 . (Join-Path $here 'proxy-probe.ps1')
 

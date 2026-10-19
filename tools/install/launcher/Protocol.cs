@@ -99,6 +99,7 @@ namespace OptScalerNR.Launcher
         [DataMember(Name = "modelState")] public string ModelState;
         [DataMember(Name = "originalState")] public string OriginalState;
         [DataMember(Name = "smallState")] public string SmallState;
+        [DataMember(Name = "preparationState")] public string PreparationState;
         [DataMember(Name = "enabled")] public bool Enabled;
         [DataMember(Name = "reasonCode")] public string ReasonCode;
         [DataMember(Name = "reason")] public string Reason;
