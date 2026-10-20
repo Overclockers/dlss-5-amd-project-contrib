@@ -22,6 +22,7 @@ if /i "%~1"=="source-pin" (
 call tests\_lib\msvc-env.cmd || exit /b 1
 if not exist exports\mochizuki-tests mkdir exports\mochizuki-tests
 if /i "%~1"=="stage-timing" goto stagetiming
+if /i "%~1"=="shared-output" goto sharedoutput
 if /i "%~1"=="abi" call :stagetiming || exit /b 1
 if /i "%~1"=="renodx-feed" goto renodxfeed
 if /i "%~1"=="abi" call :renodxfeed || exit /b 1
@@ -76,6 +77,14 @@ if /i "%~1"=="gpu" (
 if errorlevel 1 exit /b 1
 python -X utf8 -c "from pathlib import Path; import hashlib; p=Path('exports/mochizuki-runtime'); (p/'abi-ci.sha256').write_text(hashlib.sha256((p/'MochizukiNrRuntime.dll').read_bytes()).hexdigest()+'\n')"
 exit /b %errorlevel%
+
+:sharedoutput
+cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /I OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler tests/mochizuki/shared_output.cpp /Foexports/mochizuki-tests/shared_output.obj /Feexports/mochizuki-tests/shared_output.exe /link d3d12.lib dxgi.lib || exit /b 1
+for %%F in (rgba16 rgba8) do for %%M in (small original) do for %%A in (native aco) do (
+  exports\mochizuki-tests\shared_output.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" %%F %%M %%A
+  if errorlevel 1 exit /b 1
+)
+exit /b 0
 
 :stagetiminggpu
 exports\mochizuki-tests\runtime.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" --stage-timing
