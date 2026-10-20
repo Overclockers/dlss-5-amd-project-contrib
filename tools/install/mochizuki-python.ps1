@@ -74,10 +74,18 @@ function Write-MochizukiPythonHelp {
 }
 
 if ($MyInvocation.InvocationName -ne '.') {
-    $python = Find-MochizukiPython
-    if (-not $python) { Write-MochizukiPythonHelp; exit 1 }
     if (-not $Source) { $Source = Join-Path $PSScriptRoot 'nvngx_dlssnr.dll' }
     if (-not $Output) { $Output = Join-Path $PSScriptRoot 'dlssnr-amd/dlssnr.bin' }
+    $nativeHelper = Join-Path $PSScriptRoot 'lmxxf-small.ps1'
+    if (Test-Path -LiteralPath $nativeHelper -PathType Leaf) { . $nativeHelper }
+    $canNative = (Test-Path -LiteralPath $Source -PathType Leaf) -and
+        ((Get-Item -LiteralPath $Source).Length -ge 65536) -and
+        [bool](Get-Command Ensure-NativeModelExtractor -ErrorAction SilentlyContinue)
+    $python = $null
+    if (-not $canNative) {
+        $python = Find-MochizukiPython
+        if (-not $python) { Write-MochizukiPythonHelp; exit 1 }
+    }
 
     if (-not $Models) {
         Write-Host ''
@@ -105,16 +113,28 @@ if ($MyInvocation.InvocationName -ne '.') {
         exit 1
     }
 
-    $extractor = Join-Path $PSScriptRoot 'mochizuki-model.py'
-    if (-not (Test-Path -LiteralPath $extractor -PathType Leaf)) {
-        Write-Host 'Model extractor missing. Re-extract the complete OptiScaler package.' -ForegroundColor Yellow
-        exit 1
-    }
+    if ($canNative) {
+        try {
+            Ensure-NativeModelExtractor
+            [OptScaler.NativeModelExtractor]::ExtractMochizukiModels($Source, $Output, $Models)
+            $result = 0
+        } catch {
+            Write-Host $_.Exception.Message -ForegroundColor Yellow
+            Write-Host 'Model extraction failed. Check nvngx_dlssnr.dll 310.9.16 / 310.8.0. See docs/mochizuki.md.' -ForegroundColor Yellow
+            $result = 1
+        }
+    } else {
+        $extractor = Join-Path $PSScriptRoot 'mochizuki-model.py'
+        if (-not (Test-Path -LiteralPath $extractor -PathType Leaf)) {
+            Write-Host 'Model extractor missing. Re-extract the complete OptiScaler package.' -ForegroundColor Yellow
+            exit 1
+        }
 
-    & $python -X utf8 $extractor $Source $Output --models $Models
-    $result = $LASTEXITCODE
-    if ($result -ne 0) {
-        Write-Host 'Model extraction failed. Python was found; see the error above and check nvngx_dlssnr.dll 310.9.16 / 310.8.0. See docs/mochizuki.md.' -ForegroundColor Yellow
+        & $python -X utf8 $extractor $Source $Output --models $Models
+        $result = $LASTEXITCODE
+        if ($result -ne 0) {
+            Write-Host 'Model extraction failed. Python was found; see the error above and check nvngx_dlssnr.dll 310.9.16 / 310.8.0. See docs/mochizuki.md.' -ForegroundColor Yellow
+        }
     }
     if ($result -eq 0 -and $Models -in @('both', 'original')) {
         try {

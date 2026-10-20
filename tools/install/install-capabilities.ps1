@@ -67,6 +67,29 @@ function Get-OptScalerBackendCapabilities([string]$pkgRoot, [string]$gameDir, [s
             if (-not $lmxxfSmall -and (Test-LmxxfModel $candidate small -Quick)) { $lmxxfSmall = $candidate }
         }
     }
+    $originalSource = $false
+    if (-not $lmxxfWeights) {
+        foreach ($root in @($pkgRoot, $gameDir)) {
+            if (-not $root) { continue }
+            $packs = @((Join-Path $root 'dlssnr-amd/dlssnr.bin'))
+            if ($root -eq $pkgRoot) { $packs += Join-Path $root 'dlssnr.bin' }
+            foreach ($pack in $packs) {
+                if (Test-MochizukiModelHeaderFile $pack 599) { $originalSource = $true; break }
+            }
+            if ($originalSource) { break }
+        }
+        if (-not $originalSource) { foreach ($dll in $sourceDlls) {
+            if (Test-Path -LiteralPath $dll -PathType Leaf) {
+                try {
+                    if ((Get-OptScalerFileSha256 $dll) -in @(
+                        '2bc19bc09a7b89dd44f73e2ac0108fcc586e2154bdd0830f242f4f040e28789f',
+                        'e16bcf15e16e13f527491cdf7845b2fe6521a738d8f7c9c721866a8496e1fc8e')) {
+                        $originalSource = $true; break
+                    }
+                } catch { }
+            }
+        } }
+    }
     $smallSource = $false
     if (-not $lmxxfSmall) {
         foreach ($root in @($pkgRoot, $gameDir)) {
@@ -95,14 +118,14 @@ function Get-OptScalerBackendCapabilities([string]$pkgRoot, [string]$gameDir, [s
     $backends += @{
         id = 'lmxxf'
         runtimeState = if ($canLmxxfRuntime) { 'ready' } else { 'missing' }
-        modelState = if ($lmxxfWeights -and $lmxxfSmall) { 'ready' } elseif ($hasLmxxfWeights) { 'partial' } elseif ($smallSource) { 'preparable' } else { 'missing' }
-        originalState = if ($lmxxfWeights) { 'ready' } else { 'missing' }
+        modelState = if ($lmxxfWeights -and $lmxxfSmall) { 'ready' } elseif ($hasLmxxfWeights) { 'partial' } elseif ($originalSource -or $smallSource) { 'preparable' } else { 'missing' }
+        originalState = if ($lmxxfWeights) { 'ready' } elseif ($originalSource) { 'preparable' } else { 'missing' }
         smallState = if ($lmxxfSmall) { 'ready' } elseif ($smallSource) { 'preparable' } else { 'missing' }
         enabled = $lmxxfEnabled
-        reasonCode = if (-not $canLmxxfRuntime) { 'missing-runtime' } elseif ($lmxxfWeights -and $lmxxfSmall) { 'ready' } elseif ($hasLmxxfWeights) { 'partial' } elseif ($smallSource) { 'preparable' } else { 'missing-weights' }
+        reasonCode = if (-not $canLmxxfRuntime) { 'missing-runtime' } elseif ($lmxxfWeights -and $lmxxfSmall) { 'ready' } elseif ($hasLmxxfWeights) { 'partial' } elseif ($originalSource -or $smallSource) { 'preparable' } else { 'missing-weights' }
         reason = $lmxxfReason
         hints = @(
-            if (-not $lmxxfWeights) { 'lmxxf-original' }
+            if (-not $lmxxfWeights) { if ($originalSource) { 'lmxxf-original-preparable' } else { 'lmxxf-original' } }
             if (-not $lmxxfSmall) { if ($smallSource) { 'lmxxf-small-preparable' } else { 'lmxxf-small' } }
         )
         missingPackageFiles = @(
@@ -143,13 +166,15 @@ function Get-OptScalerBackendCapabilities([string]$pkgRoot, [string]$gameDir, [s
     foreach ($dll in $sourceDlls) {
         if (Test-Path -LiteralPath $dll -PathType Leaf) { $danielNv = $true }
     }
-    $danielPreparable = $danielSetup -and $danielNv -and (-not $canDanielRuntime -or -not $hasDanielWeights)
+    $danielRuntimePreparable = (-not $canDanielRuntime) -and $danielSetup -and ($hasDanielWeights -or $danielNv)
+    $danielWeightsPreparable = (-not $hasDanielWeights) -and $danielNv -and ($canDanielRuntime -or $danielSetup)
+    $danielPreparable = $danielRuntimePreparable -or $danielWeightsPreparable
     $danielEnabled = $canDanielRuntime -and $hasDanielWeights
     $danielReason = if (-not $canDanielRuntime) { 'Runtime missing' } elseif (-not $hasDanielWeights) { 'Weights missing' } else { 'Ready' }
     $backends += @{
         id = 'daniel'
-        runtimeState = if ($canDanielRuntime) { 'ready' } elseif ($danielPreparable) { 'preparable' } else { 'missing' }
-        modelState = if ($hasDanielWeights) { 'ready' } elseif ($danielPreparable) { 'preparable' } else { 'missing' }
+        runtimeState = if ($canDanielRuntime) { 'ready' } elseif ($danielRuntimePreparable) { 'preparable' } else { 'missing' }
+        modelState = if ($hasDanielWeights) { 'ready' } elseif ($danielWeightsPreparable) { 'preparable' } else { 'missing' }
         enabled = $danielEnabled
         reasonCode = if ($danielPreparable) { 'preparable' } elseif (-not $canDanielRuntime) { 'missing-runtime' } elseif (-not $hasDanielWeights) { 'missing-weights' } else { 'ready' }
         reason = $danielReason
@@ -159,7 +184,7 @@ function Get-OptScalerBackendCapabilities([string]$pkgRoot, [string]$gameDir, [s
                 if (-not $canDanielRuntime) { 'daniel-runtime' }
                 if (-not $hasDanielWeights) {
                     'daniel-weights'
-                    if (-not $danielSetup) { 'daniel-setup' }
+                    if (-not $danielSetup -and -not $canDanielRuntime) { 'daniel-setup' }
                     if (-not $danielNv) { 'daniel-source' }
                 }
             }
@@ -234,7 +259,6 @@ function Get-OptScalerBackendCapabilities([string]$pkgRoot, [string]$gameDir, [s
         if ($unsupportedMochiSource) { $mochiNv = $null }
     }
     $mochiPreparable = (-not $hasMochiModel) -and [bool]$mochiNv
-    # Model choices must distinguish reusable weights from Python extraction.
     $mochiOriginalReady = $false
     $mochiSmallReady = $false
     foreach ($root in @($pkgRoot, $gameDir)) {
@@ -244,12 +268,14 @@ function Get-OptScalerBackendCapabilities([string]$pkgRoot, [string]$gameDir, [s
     }
     $mochiPreparation = if ($canMochiRuntime) { 'ready' } else { 'missing-runtime' }
     if ($canMochiRuntime -and -not ($mochiOriginalReady -and $mochiSmallReady)) {
-        $helper = if ($pkgRoot) { Join-Path $pkgRoot 'mochizuki-python.ps1' } else { $null }
-        if (-not $helper -or -not (Test-Path -LiteralPath $helper -PathType Leaf)) {
-            $mochiPreparation = 'missing-helper'
-        } else {
-            . $helper
-            if (-not (Find-MochizukiPython)) { $mochiPreparation = 'missing-python' }
+        if (-not (Get-Command Ensure-NativeModelExtractor -ErrorAction SilentlyContinue)) {
+            $helper = if ($pkgRoot) { Join-Path $pkgRoot 'mochizuki-python.ps1' } else { $null }
+            if (-not $helper -or -not (Test-Path -LiteralPath $helper -PathType Leaf)) {
+                $mochiPreparation = 'missing-helper'
+            } else {
+                . $helper
+                if (-not (Find-MochizukiPython)) { $mochiPreparation = 'missing-python' }
+            }
         }
     }
     $mochiEnabled = $canMochiRuntime -and $hasMochiModel
