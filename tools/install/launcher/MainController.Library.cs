@@ -149,7 +149,7 @@ namespace OptScalerNR.Launcher
             var reset=new Button{Content=L("恢复默认图片","Reset image"),Margin=new Thickness(0,10,0,12)};
             reset.Click+=delegate{picked=null;resetCover=true;preview.Source=null;try{if(!string.IsNullOrEmpty(game.Cover))preview.Source=ReadCover(game.Cover);}catch{}};
             var images=new WrapPanel();images.Children.Add(choose);images.Children.Add(reset);panel.Children.Add(images);
-            panel.Children.Add(new TextBlock{Text=game.RootDirectory??game.Exe,TextWrapping=TextWrapping.Wrap,Foreground=Brushes.LightSlateGray,Margin=new Thickness(0,0,0,16)});
+            panel.Children.Add(new TextBlock{Text=game.RootDirectory??game.Exe,TextWrapping=TextWrapping.Wrap,Foreground=LauncherTheme.Brush("ThemeMuted"),Margin=new Thickness(0,0,0,16)});
             var buttons=new WrapPanel{HorizontalAlignment=HorizontalAlignment.Right};
             buttons.Children.Add(new Button{Content=L("取消","Cancel"),IsCancel=true,Margin=new Thickness(4)});
             var save=new Button{Content=L("保存","Save"),Margin=new Thickness(4)};DialogTheme.Primary(dialog,save);
@@ -210,20 +210,25 @@ namespace OptScalerNR.Launcher
             var all=new CheckBox{Content=new TextBlock{Text=L("显示全部 EXE（包括未识别 API 和辅助程序）","Show all EXEs (including unknown APIs and helper programs)"),TextWrapping=TextWrapping.Wrap}};panel.Children.Add(all);
             var list=new ListBox{Height=310,Margin=new Thickness(0,10,0,12)};ScrollViewer.SetHorizontalScrollBarVisibility(list,ScrollBarVisibility.Disabled);panel.Children.Add(list);
             var use=new Button{Content=L("使用此程序","Use this program"),IsEnabled=false,Margin=new Thickness(4)};DialogTheme.Primary(dialog,use);
+            var artwork = new LocalArtwork.Scope(_window.Dispatcher);
+            dialog.Closed += delegate { artwork.Replace(null); };
             Action populate=()=>{
+                artwork.Replace(null);
+                var requests = new List<LocalArtwork.Request>();
                 list.Items.Clear();
                 foreach(var item in result.Candidates){
                     if(all.IsChecked!=true&&(item.Apis.Length==0||item.Auxiliary||item.Architecture!="x64"))continue;
                     var row=new StackPanel();
                     row.Children.Add(new TextBlock{Text=item.FileName+"  ·  "+item.Architecture+"  ·  "+(item.Apis.Length==0?L("API 未识别","API unknown"):string.Join(" / ",item.Apis)),FontWeight=FontWeights.SemiBold,TextWrapping=TextWrapping.Wrap});
-                    row.Children.Add(new TextBlock{Text=item.RelativePath,TextWrapping=TextWrapping.Wrap,Foreground=Brushes.LightSlateGray,Margin=new Thickness(0,5,0,0)});
-                    row.Children.Add(new TextBlock{Text=item.Auxiliary?L("辅助程序，通常不作为游戏入口","Helper program; usually not the game entry"):item.Evidence=="direct"?L("直接导入图形 API","Direct graphics API import"):item.Evidence=="delay"?L("延迟导入图形 API","Delayed graphics API import"):item.Evidence=="dependency"?L("本地依赖中发现图形 API","Graphics API found in a local dependency"):L("可能动态加载 API，请根据位置判断","May load APIs dynamically; review its location"),Foreground=Brushes.LightSlateGray,TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,4,0,0)});
+                    row.Children.Add(new TextBlock{Text=item.RelativePath,TextWrapping=TextWrapping.Wrap,Foreground=LauncherTheme.Brush("ThemeMuted"),Margin=new Thickness(0,5,0,0)});
+                    row.Children.Add(new TextBlock{Text=item.Auxiliary?L("辅助程序，通常不作为游戏入口","Helper program; usually not the game entry"):item.Evidence=="direct"?L("直接导入图形 API","Direct graphics API import"):item.Evidence=="delay"?L("延迟导入图形 API","Delayed graphics API import"):item.Evidence=="dependency"?L("本地依赖中发现图形 API","Graphics API found in a local dependency"):L("可能动态加载 API，请根据位置判断","May load APIs dynamically; review its location"),Foreground=LauncherTheme.Brush("ThemeMuted"),TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,4,0,0)});
                     var layout=new DockPanel();
-                    var icon=GetOrExtractIcon(new GameInfo{Exe=item.Path});
-                    if(icon!=null){var image=new Image{Source=icon,Width=28,Height=28,Margin=new Thickness(0,0,12,0),VerticalAlignment=VerticalAlignment.Top};DockPanel.SetDock(image,Dock.Left);layout.Children.Add(image);}
+                    var image=new Image{Width=28,Height=28,Margin=new Thickness(0,0,12,0),VerticalAlignment=VerticalAlignment.Top};DockPanel.SetDock(image,Dock.Left);layout.Children.Add(image);
+                    requests.Add(new LocalArtwork.Request { Path=item.Path, Pixels=ArtworkPixels(28), Icon=true, Complete=icon=>image.Source=icon });
                     layout.Children.Add(row);
                     list.Items.Add(new ListBoxItem{Content=layout,Tag=item,ToolTip=item.Path});
                 }
+                artwork.Replace(requests);
                 use.IsEnabled=false;
             };
             all.Checked+=(s,e)=>populate();all.Unchecked+=(s,e)=>populate();populate();

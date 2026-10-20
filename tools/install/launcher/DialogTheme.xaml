@@ -1,67 +1,76 @@
-<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-  <SolidColorBrush x:Key="DialogSurface" Color="#FF161820"/>
-  <SolidColorBrush x:Key="DialogText" Color="#FFF3F4F6"/>
-  <SolidColorBrush x:Key="DialogMuted" Color="#FFAFB7C8"/>
-  <SolidColorBrush x:Key="DialogBorder" Color="#FF343D50"/>
-  <Style TargetType="Button">
-    <Setter Property="Background" Value="#FF202633"/><Setter Property="Foreground" Value="{StaticResource DialogText}"/>
-    <Setter Property="BorderBrush" Value="{StaticResource DialogBorder}"/><Setter Property="BorderThickness" Value="1"/>
-    <Setter Property="Padding" Value="16,9"/><Setter Property="MinHeight" Value="36"/><Setter Property="Cursor" Value="Hand"/>
-    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
-      <Border x:Name="Body" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6" Padding="{TemplateBinding Padding}">
-        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True"/>
-      </Border>
-      <ControlTemplate.Triggers>
-        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Body" Property="BorderBrush" Value="#FF9CAAC3"/></Trigger>
-        <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Body" Property="BorderBrush" Value="#FFF3F4F6"/></Trigger>
-        <Trigger Property="IsPressed" Value="True"><Setter TargetName="Body" Property="Opacity" Value="0.75"/></Trigger>
-        <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Body" Property="Opacity" Value="0.5"/></Trigger>
-      </ControlTemplate.Triggers>
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="clr-namespace:OptScalerNR.Launcher;assembly=OptScalerNR.Launcher">
+  <!-- FocusVisualStyle is shown by keyboard navigation, never by a mouse click. -->
+  <Style x:Key="KeyboardFocus" TargetType="Control">
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Control">
+      <Border Margin="-3" CornerRadius="14" BorderThickness="1.5" BorderBrush="{DynamicResource ThemeMuted}" SnapsToDevicePixels="True"/>
     </ControlTemplate></Setter.Value></Setter>
   </Style>
+  <ControlTemplate x:Key="MaterialButtonTemplate" TargetType="Button">
+    <Grid x:Name="Body">
+      <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="12"/>
+      <Border x:Name="Light" CornerRadius="12" IsHitTestVisible="False"><Border.Background><LinearGradientBrush StartPoint="0,0" EndPoint="0,1"><GradientStop Color="#0CFFFFFF" Offset="0"/><GradientStop Color="#00000000" Offset="0.5"/><GradientStop Color="#04000000" Offset="1"/></LinearGradientBrush></Border.Background></Border>
+      <ContentPresenter x:Name="Label" Margin="{TemplateBinding Padding}" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="Center" RecognizesAccessKey="True" TextElement.FontFamily="{TemplateBinding FontFamily}" TextElement.FontSize="{TemplateBinding FontSize}"/>
+      <Border x:Name="KeyboardRing" Margin="-3" CornerRadius="15" BorderThickness="1.5" BorderBrush="{DynamicResource ThemeMuted}" Visibility="Collapsed" IsHitTestVisible="False"/>
+    </Grid>
+    <ControlTemplate.Triggers>
+      <Trigger Property="local:DialogTheme.KeyboardFocusVisible" Value="True"><Setter TargetName="KeyboardRing" Property="Visibility" Value="Visible"/></Trigger>
+      <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Light" Property="Opacity" Value="0.45"/></Trigger>
+      <Trigger Property="IsPressed" Value="True"><Setter TargetName="Light" Property="Opacity" Value="0"/><Setter TargetName="Label" Property="RenderTransform"><Setter.Value><TranslateTransform Y="1"/></Setter.Value></Setter></Trigger>
+      <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Body" Property="Opacity" Value="0.45"/></Trigger>
+    </ControlTemplate.Triggers>
+  </ControlTemplate>
+  <Style TargetType="Button">
+    <Setter Property="Background" Value="{DynamicResource ThemeSubtle}"/><Setter Property="Foreground" Value="{DynamicResource ThemeInk}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource ThemeBorder}"/><Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="Padding" Value="16,9"/><Setter Property="MinHeight" Value="36"/><Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="HorizontalContentAlignment" Value="Center"/><Setter Property="FocusVisualStyle" Value="{StaticResource KeyboardFocus}"/>
+    <Setter Property="Template" Value="{StaticResource MaterialButtonTemplate}"/>
+  </Style>
   <Style x:Key="DialogPrimary" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-    <Setter Property="Background" Value="#FFC81D2B"/><Setter Property="BorderBrush" Value="#FFEF4653"/>
+    <Setter Property="Background" Value="{DynamicResource ThemeAccent}"/><Setter Property="BorderBrush" Value="{DynamicResource ThemeAccent}"/>
+    <Setter Property="Foreground" Value="{DynamicResource ThemeOnAccent}"/>
     <Setter Property="FontWeight" Value="SemiBold"/>
   </Style>
   <Style TargetType="RadioButton">
-    <Setter Property="Foreground" Value="{StaticResource DialogText}"/><Setter Property="Background" Value="#FF1B202C"/>
-    <Setter Property="BorderBrush" Value="{StaticResource DialogBorder}"/><Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="Foreground" Value="{DynamicResource ThemeInk}"/><Setter Property="Background" Value="{DynamicResource ThemeSubtle}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource ThemeBorder}"/><Setter Property="BorderThickness" Value="1"/>
     <Setter Property="Padding" Value="12"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/>
     <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource KeyboardFocus}"/>
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="RadioButton">
       <Border x:Name="Body" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6" Padding="{TemplateBinding Padding}">
-        <DockPanel><Border x:Name="Dot" DockPanel.Dock="Left" Width="12" Height="12" CornerRadius="6" BorderBrush="#FF9BA6BB" BorderThickness="1" Margin="0,0,12,0" VerticalAlignment="Center"/><ContentPresenter VerticalAlignment="Center" RecognizesAccessKey="True"/></DockPanel>
+        <DockPanel><Border x:Name="Dot" DockPanel.Dock="Left" Width="12" Height="12" CornerRadius="6" BorderBrush="{DynamicResource ThemeMuted}" BorderThickness="1" Margin="0,0,12,0" VerticalAlignment="Center"/><ContentPresenter VerticalAlignment="Center" RecognizesAccessKey="True"/></DockPanel>
       </Border>
       <ControlTemplate.Triggers>
-        <Trigger Property="IsChecked" Value="True"><Setter TargetName="Dot" Property="Background" Value="#FFED3444"/><Setter TargetName="Body" Property="BorderBrush" Value="#FFED3444"/></Trigger>
-        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Body" Property="Background" Value="#FF293144"/></Trigger>
-        <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Body" Property="BorderBrush" Value="#FFF3F4F6"/></Trigger>
+        <Trigger Property="local:DialogTheme.KeyboardFocusVisible" Value="True"><Setter TargetName="Body" Property="BorderBrush" Value="{DynamicResource ThemeMuted}"/></Trigger>
+        <Trigger Property="IsChecked" Value="True"><Setter TargetName="Dot" Property="Background" Value="{DynamicResource ThemeAccent}"/><Setter TargetName="Body" Property="Background" Value="{DynamicResource ThemeHover}"/></Trigger>
+        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Body" Property="Background" Value="{DynamicResource ThemeHover}"/></Trigger>
         <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Body" Property="Opacity" Value="0.5"/></Trigger>
       </ControlTemplate.Triggers>
     </ControlTemplate></Setter.Value></Setter>
   </Style>
   <Style TargetType="CheckBox">
-    <Setter Property="Foreground" Value="{StaticResource DialogText}"/><Setter Property="Padding" Value="4"/>
+    <Setter Property="Foreground" Value="{DynamicResource ThemeInk}"/><Setter Property="Padding" Value="4"/>
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="CheckBox">
-      <DockPanel x:Name="Body" LastChildFill="True" Margin="0,5"><Border DockPanel.Dock="Left" Width="17" Height="17" BorderBrush="#FF9BA6BB" BorderThickness="1" CornerRadius="3" Margin="0,0,10,0" VerticalAlignment="Center"><TextBlock x:Name="Tick" Text="✓" Foreground="#FFF3F4F6" Visibility="Hidden" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><ContentPresenter VerticalAlignment="Center" RecognizesAccessKey="True"/></DockPanel>
-      <ControlTemplate.Triggers><Trigger Property="IsChecked" Value="True"><Setter TargetName="Tick" Property="Visibility" Value="Visible"/></Trigger><Trigger Property="IsEnabled" Value="False"><Setter TargetName="Body" Property="Opacity" Value="0.5"/></Trigger><Trigger Property="IsKeyboardFocused" Value="True"><Setter Property="Foreground" Value="#FFFF8893"/></Trigger></ControlTemplate.Triggers>
+      <DockPanel x:Name="Body" LastChildFill="True" Margin="0,5"><Border DockPanel.Dock="Left" Width="17" Height="17" BorderBrush="{DynamicResource ThemeMuted}" BorderThickness="1" CornerRadius="3" Margin="0,0,10,0" VerticalAlignment="Center"><TextBlock x:Name="Tick" Text="✓" Foreground="{DynamicResource ThemeInk}" Visibility="Hidden" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><ContentPresenter VerticalAlignment="Center" RecognizesAccessKey="True"/></DockPanel>
+      <ControlTemplate.Triggers><Trigger Property="IsChecked" Value="True"><Setter TargetName="Tick" Property="Visibility" Value="Visible"/></Trigger><Trigger Property="IsEnabled" Value="False"><Setter TargetName="Body" Property="Opacity" Value="0.5"/></Trigger><Trigger Property="IsKeyboardFocused" Value="True"><Setter Property="Foreground" Value="{DynamicResource ThemeAccent}"/></Trigger></ControlTemplate.Triggers>
     </ControlTemplate></Setter.Value></Setter>
   </Style>
   <Style TargetType="TextBox">
-    <Setter Property="Background" Value="#FF11151D"/><Setter Property="Foreground" Value="{StaticResource DialogText}"/>
-    <Setter Property="CaretBrush" Value="{StaticResource DialogText}"/><Setter Property="BorderBrush" Value="{StaticResource DialogBorder}"/>
+    <Setter Property="Background" Value="{DynamicResource ThemeBackground}"/><Setter Property="Foreground" Value="{DynamicResource ThemeInk}"/>
+    <Setter Property="CaretBrush" Value="{DynamicResource ThemeInk}"/><Setter Property="BorderBrush" Value="{DynamicResource ThemeBorder}"/>
     <Setter Property="BorderThickness" Value="1"/><Setter Property="Padding" Value="10,8"/>
   </Style>
   <Style TargetType="ListBox">
-    <Setter Property="Background" Value="#FF11151D"/><Setter Property="Foreground" Value="{StaticResource DialogText}"/><Setter Property="BorderBrush" Value="{StaticResource DialogBorder}"/>
+    <Setter Property="Background" Value="{DynamicResource ThemeBackground}"/><Setter Property="Foreground" Value="{DynamicResource ThemeInk}"/><Setter Property="BorderBrush" Value="{DynamicResource ThemeBorder}"/>
     <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
   </Style>
   <Style TargetType="ListBoxItem">
-    <Setter Property="Foreground" Value="{StaticResource DialogText}"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+    <Setter Property="Foreground" Value="{DynamicResource ThemeInk}"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/>
     <Setter Property="Padding" Value="10"/><Setter Property="Margin" Value="0,1"/>
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem">
       <Border x:Name="Body" Background="Transparent" CornerRadius="5" Padding="{TemplateBinding Padding}"><ContentPresenter/></Border>
-      <ControlTemplate.Triggers><Trigger Property="IsSelected" Value="True"><Setter TargetName="Body" Property="Background" Value="#FF343E57"/></Trigger><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Body" Property="Background" Value="#FF252D3F"/></Trigger></ControlTemplate.Triggers>
+      <ControlTemplate.Triggers><Trigger Property="IsSelected" Value="True"><Setter TargetName="Body" Property="Background" Value="{DynamicResource ThemeHover}"/></Trigger><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Body" Property="Background" Value="{DynamicResource ThemeHover}"/></Trigger></ControlTemplate.Triggers>
     </ControlTemplate></Setter.Value></Setter>
   </Style>
 </ResourceDictionary>

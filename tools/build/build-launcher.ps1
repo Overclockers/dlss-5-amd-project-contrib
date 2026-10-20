@@ -36,7 +36,8 @@ New-Item -ItemType Directory -Force -Path $obj | Out-Null
 $cs = @(
     'Program.cs', 'MainWindow.cs', 'Protocol.cs', 'WorkerClient.cs', 'GamePaths.cs',
     'DialogTheme.cs', 'FolderGameScanner.cs', 'ProxyRecommendations.cs',
-    'MainController.Library.cs', 'MainController.Recommendations.cs'
+    'MainController.Library.cs', 'MainController.Recommendations.cs', 'LauncherTheme.cs', 'MainController.Presentation.cs',
+    'MainController.Profiles.cs', 'IniProfiles.cs', 'LocalArtwork.cs'
 ) | ForEach-Object { Join-Path $src $_ }
 $refs = @(
     (Join-Path $fw 'mscorlib.dll'),

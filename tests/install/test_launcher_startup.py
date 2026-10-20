@@ -12,19 +12,23 @@ EXE = REPO / "exports/launcher/OptScalerNR.Launcher.exe"
 @unittest.skipUnless(os.name == "nt" and EXE.is_file(), "requires built launcher")
 class LauncherStartupTests(unittest.TestCase):
     def measure_once(self):
-        log = Path(tempfile.mkdtemp(prefix="startup-")) / "t.txt"
-        env = os.environ.copy()
-        env["OPTSCALER_STARTUP_LOG"] = str(log)
-        p = subprocess.run(
-            [str(EXE), "--startup-measure"],
-            env=env,
-            capture_output=True,
-            timeout=30,
-        )
-        self.assertEqual(p.returncode, 0, p.stderr)
-        text = log.read_text(encoding="utf-8")
-        self.assertIn("interactiveMs=", text)
-        return float(text.split("interactiveMs=")[1].split()[0])
+        output = REPO / "exports/tests/launcher-startup"
+        output.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="startup-", dir=output) as fixture:
+            log = Path(fixture) / "t.txt"
+            env = os.environ.copy()
+            env["OPTSCALER_STARTUP_LOG"] = str(log)
+            env["LOCALAPPDATA"] = str(Path(fixture) / "profile")
+            p = subprocess.run(
+                [str(EXE), "--startup-measure"],
+                env=env,
+                capture_output=True,
+                timeout=30,
+            )
+            self.assertEqual(p.returncode, 0, p.stderr)
+            text = log.read_text(encoding="utf-8")
+            self.assertIn("interactiveMs=", text)
+            return float(text.split("interactiveMs=")[1].split()[0])
 
     def test_ten_warm_starts_recorded(self):
         first = self.measure_once()

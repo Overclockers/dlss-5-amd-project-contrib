@@ -25,6 +25,7 @@ namespace OptScalerNR.Launcher
         public bool CanKill { get; private set; }
         public string Action { get; private set; }
         public string GameExe { get; private set; }
+        public string PackageRoot { get; private set; }
 
         WorkerSession(Process process, string action, string eventsPath, string resultPath, bool canKill)
         {
@@ -84,7 +85,8 @@ namespace OptScalerNR.Launcher
                 throw failure;
             }
             return new WorkerSession(proc, request != null ? request.Action : "", eventsPath, resultPath, canKill) {
-                GameExe = request != null ? request.GameExe : null
+                GameExe = request != null ? request.GameExe : null,
+                PackageRoot = request != null ? request.PackageRoot : null
             };
         }
 
