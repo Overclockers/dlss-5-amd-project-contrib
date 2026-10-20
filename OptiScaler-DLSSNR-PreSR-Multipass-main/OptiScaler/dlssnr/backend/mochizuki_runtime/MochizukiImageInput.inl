@@ -61,7 +61,7 @@ struct ImageInput
     // Query allocation sizes before allocating/importing the optional memory.
     // VkImage itself is only an unbound descriptor at this point.
     D3D12_RESOURCE_DESC PlanShared(ID3D12Device* d, Vulkan& vk, UINT w, UINT h, VkFormat selected = VK_FORMAT_R16G16B16A16_SFLOAT,
-                                  DXGI_FORMAT typed = DXGI_FORMAT_UNKNOWN)
+                                  DXGI_FORMAT typed = DXGI_FORMAT_UNKNOWN, bool storage = false)
     {
         // ColourFormat owns the existing byte interpretation, including sRGB
         // and typeless families. Motion keeps its two admitted float formats.
@@ -77,7 +77,7 @@ struct ImageInput
             throw NrError(NrError::Unsupported, "shared input format is unsupported");
         sharedFormat = typed;
         width = w; height = h; format = selected;
-        usage = kImageUsage; family = vk.family;
+        usage = kImageUsage | (storage ? VK_IMAGE_USAGE_STORAGE_BIT : 0); family = vk.family;
         const auto handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT;
         VkPhysicalDeviceExternalImageFormatInfo ext { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO };
         ext.handleType = handleType;
@@ -98,13 +98,15 @@ struct ImageInput
         Check(d->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &support, sizeof support), "shared input format");
         if (!(support.Support1 & D3D12_FORMAT_SUPPORT1_TEXTURE2D))
             throw NrError(NrError::Unsupported, "shared input texture is unavailable");
+        if (storage && !(support.Support1 & D3D12_FORMAT_SUPPORT1_TYPED_UNORDERED_ACCESS_VIEW))
+            throw NrError(NrError::Unsupported, "shared input storage texture is unavailable");
         D3D12_RESOURCE_DESC rd {};
         rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
         rd.Width = w; rd.Height = h; rd.DepthOrArraySize = rd.MipLevels = rd.SampleDesc.Count = 1;
         rd.Format = support.Format;
-        // The split input is sampled and transferred, never a shader UAV.
-        // Requiring storage excludes sRGB/packed/BGRA formats unnecessarily.
-        rd.Flags = D3D12_RESOURCE_FLAG_NONE;
+        // Storage is an optional RGBA16F colour allocation preference, not a
+        // shader requirement. Other formats and motion keep sampled/transfer only.
+        rd.Flags = storage ? D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS : D3D12_RESOURCE_FLAG_NONE;
         const auto allocation = d->GetResourceAllocationInfo(0, 1, &rd);
         if (allocation.SizeInBytes == UINT64_MAX)
             throw NrError(NrError::Unsupported, "shared input allocation description is unsupported");

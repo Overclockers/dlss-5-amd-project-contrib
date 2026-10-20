@@ -216,6 +216,7 @@ struct TestHooks
     bool rejectSharedMotion = false; // MZ_TEST_REJECT_SHARED_MOTION=1: recoverable handle rejection.
     uint64_t sharedMotionDelay = 0; // MZ_TEST_SHARED_MOTION_DELAY=N: defer ready admission.
     bool rejectSharedInput = false; // MZ_TEST_REJECT_SHARED_INPUT=1: recoverable handle rejection.
+    bool rejectSharedStorage = false; // MZ_TEST_REJECT_SHARED_STORAGE=1: optional RGBA16F allocation fails.
     uint64_t sharedInputDelay = 0; // MZ_TEST_SHARED_INPUT_DELAY=N: defer ready admission N prepares.
     uint64_t inlineChain = 0; // MZ_TEST_INLINE_CHAIN=1: an inline frame must run whole on compute; =2: in segments;
                               // =3: segments are forced
@@ -258,6 +259,7 @@ const TestHooks& Hooks()
         if (const char* value = std::getenv("MZ_TEST_SHARED_INPUT")) h.sharedInput = std::strcmp(value, "0") != 0;
         if (const char* value = std::getenv("MZ_TEST_SHARED_MOTION")) h.sharedMotion = std::strcmp(value, "0") != 0;
         h.rejectSharedMotion = on("MZ_TEST_REJECT_SHARED_MOTION");
+        h.rejectSharedStorage = on("MZ_TEST_REJECT_SHARED_STORAGE");
         h.sharedMotionDelay = number("MZ_TEST_SHARED_MOTION_DELAY");
         h.rejectSharedInput = on("MZ_TEST_REJECT_SHARED_INPUT");
         h.sharedInputDelay = number("MZ_TEST_SHARED_INPUT_DELAY");
@@ -2504,6 +2506,7 @@ struct Session
     std::vector<std::shared_ptr<ImageInput>> retiredInputs;
     std::weak_ptr<ImageInput> bufferColourCache, sharedColourCache;
     Hold<Geometry> sharedColourHold;
+    bool sharedColourStorageRefused = false; // session-local: no repeated optional allocation failures
     Hold<Geometry> bufferColourHold;
     int sharedInputRequest = Hooks().sharedInput;
     uint64_t sharedInputDelay = Hooks().sharedInputDelay;
@@ -3796,11 +3799,11 @@ struct Session
         VkCheck(vkResetCommandBuffer(c, 0), "vkResetCommandBuffer (passthrough)");
         VkCheck(vkBeginCommandBuffer(c, &bi), "vkBeginCommandBuffer (passthrough)");
         if (colourInput && colourInput->Shared()) {
-            colourInput->Ownership(c, true, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-            VkBufferImageCopy copy = colourFootprint.vk;
-            copy.imageExtent = { job.width, job.height, 1 };
-            vkCmdCopyImageToBuffer(c, colourImage.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, output.buffer, 1, &copy);
-            colourInput->Ownership(c, false, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
+            // The recording's retained carrier already holds the captured input.
+            // Publish the same ownership/fence handoff as NR; RecordOutputs copies
+            // this texture directly, so passthrough needs no buffer download.
+            colourInput->Ownership(c, true, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
+            colourInput->Ownership(c, false, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
         } else {
             vkCmdCopyBuffer(c, input.buffer, output.buffer, 1, &region);
             if (firstOutput.buffer) vkCmdCopyBuffer(c, input.buffer, firstOutput.buffer, 1, &region);
@@ -5980,12 +5983,13 @@ struct Session
                          VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
         }
 
-        // The answer is where the core wrote it: the frame's own image, or (Plan A, above) the game's own image
-        // the canonical answer was just converted into. Either way the readback takes the same valid w x h
-        // from the top-left, with colourFootprint's -- the game's -- row pitch.
-        VkBufferImageCopy out = colourFootprint.vk;
-        out.imageExtent = { w, h, 1 };
-        vkCmdCopyImageToBuffer(c, net->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, output.buffer, 1, &out);
+        // A shared colour recording delivers the answer from its retained texture.
+        // Buffer/canonical/DRS paths keep their existing valid-extent row-pitch copy.
+        if (!sharedColour) {
+            VkBufferImageCopy out = colourFootprint.vk;
+            out.imageExtent = { w, h, 1 };
+            vkCmdCopyImageToBuffer(c, net->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, output.buffer, 1, &out);
+        }
         if (sharedColour)
             colourInput->Ownership(c, false, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
         if (sharedMotion)
@@ -6748,18 +6752,24 @@ int32_t CoreRecordOutputs(void* context, void* job, void* command_list)
             if (!c || job != JobHandle(s->jobGen) ||
                 (j.state != LMXXF_NR_JOB_PRODUCER_SUBMITTED && j.state != LMXXF_NR_JOB_NR_COMPLETE))
                 return Fail(LMXXF_NR_INVALID_ARGUMENT, "RecordOutputs: inputs not recorded");
-            Transition(c, s->output.resource, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_SOURCE);
+            // BoundRecording restores the carrier captured by this closed recipe,
+            // not the session's latest route. Begin waits for the prior consumer;
+            // Enqueue publishes the Vulkan completion wait before this list runs.
+            const bool sharedOutput = s->colourInput && s->colourInput->Shared();
+            ID3D12Resource* outputSource = sharedOutput ? s->colourInput->texture : s->output.resource;
+            Transition(c, outputSource, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_SOURCE);
             Transition(c, s->result, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
             D3D12_TEXTURE_COPY_LOCATION dst { s->result, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX, {} };
-            D3D12_TEXTURE_COPY_LOCATION src { s->output.resource, D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT, {} };
-            src.PlacedFootprint = s->colourFootprint.d3d;
+            D3D12_TEXTURE_COPY_LOCATION src { outputSource, sharedOutput ? D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX :
+                D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT, {} };
+            if (!sharedOutput) src.PlacedFootprint = s->colourFootprint.d3d;
             // The frame's valid extent into result's top-left: all of the buffer, except with dynamic resolution.
             const D3D12_BOX box { 0, 0, 0, j.width, j.height, 1 };
-            const bool whole =
-                j.width == src.PlacedFootprint.Footprint.Width && j.height == src.PlacedFootprint.Footprint.Height;
+            const bool whole = j.width == s->colourFootprint.d3d.Footprint.Width &&
+                               j.height == s->colourFootprint.d3d.Footprint.Height;
             c->CopyTextureRegion(&dst, 0, 0, 0, &src, whole ? nullptr : &box);
             Transition(c, s->result, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            Transition(c, s->output.resource, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
+            Transition(c, outputSource, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
             if (j.firstPass)
             {
                 Transition(c, s->firstOutput.resource, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_SOURCE);

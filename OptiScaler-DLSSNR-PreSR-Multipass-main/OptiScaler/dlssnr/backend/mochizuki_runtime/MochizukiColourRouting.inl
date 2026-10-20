@@ -55,11 +55,11 @@
         if (!colourInput) return;
         if (loggedColourGeneration != colourInput->generation) {
             loggedColourGeneration = colourInput->generation;
-            nr::logf("[mochizuki] split colour input: %s generation=%llu allocation=%llu bytes format=%d dxgi=%u family=%u frame_estimate=%llu",
+            nr::logf("[mochizuki] split colour input: %s generation=%llu allocation=%llu bytes format=%d dxgi=%u family=%u usage=0x%x frame_estimate=%llu",
                 colourInput->Shared() ? "shared texture" : "buffer",
                 static_cast<unsigned long long>(colourInput->generation),
                 static_cast<unsigned long long>(colourInput->bytes), int(colourInput->format),
-                unsigned(colourInput->sharedFormat), colourInput->family,
+                unsigned(colourInput->sharedFormat), colourInput->family, unsigned(colourInput->usage),
                 static_cast<unsigned long long>(FrameBytes(geometry, colourInput.get(), motionInput.get())));
         }
     }
@@ -121,14 +121,18 @@
             return;
         }
         const auto typed = ColourFormat(j.colour->GetDesc().Format).shared;
+        const auto expectedUsage = [&] {
+            return kImageUsage | (colourVk == VK_FORMAT_R16G16B16A16_SFLOAT && !sharedColourStorageRefused ?
+                VK_IMAGE_USAGE_STORAGE_BIT : 0);
+        };
         if (colourInput && colourInput->Shared()) return;
         if (!pendingColour) {
             if (auto cached = sharedColourCache.lock(); cached &&
-                cached->Matches(j.width, j.height, colourVk, kImageUsage) && cached->sharedFormat == typed && cached->family == vk.family) {
+                cached->Matches(j.width, j.height, colourVk, expectedUsage()) && cached->sharedFormat == typed && cached->family == vk.family) {
                 pendingColour = std::move(cached);
             }
         }
-        if (pendingColour && (!pendingColour->Matches(j.width, j.height, colourVk, kImageUsage) ||
+        if (pendingColour && (!pendingColour->Matches(j.width, j.height, colourVk, expectedUsage()) ||
                               pendingColour->sharedFormat != typed || pendingColour->family != vk.family))
             pendingColour.reset();
         if (pendingColour) {
@@ -143,20 +147,32 @@
         // build on a device with no separate build queue. Try again next frame.
         std::unique_lock lock(submitMutex, std::try_to_lock);
         if (!lock) return;
+        bool budgetRefused = false;
         try {
-            auto made = std::make_shared<ImageInput>(vk.device);
-            const auto desc = made->PlanShared(device, vk, j.width, j.height, colourVk, typed);
-            std::string why;
-            // Incremental allocation: current usage already includes the buffer
-            // route and every retained recording. Do not release them speculatively.
-            if (!VramAdmits(made->bytes + kVramMarginBytes, j.width, j.height, "shared colour candidate", why)) {
-                sharedColourHold.Refused(geometry, why.c_str());
-                nr::logf("[mochizuki] shared colour held; buffer NR retained: %s", why.c_str());
-                return;
+            auto create = [&](bool storage) {
+                auto made = std::make_shared<ImageInput>(vk.device);
+                const auto desc = made->PlanShared(device, vk, j.width, j.height, colourVk, typed, storage);
+                std::string why;
+                // Include actual allocation size and all still-retained carriers.
+                budgetRefused = !VramAdmits(made->bytes + kVramMarginBytes, j.width, j.height, "shared colour candidate", why);
+                if (budgetRefused) throw NrError(NrError::OutOfMemory, why.c_str());
+                if (hooks.rejectSharedInput || (storage && hooks.rejectSharedStorage))
+                    throw NrError(NrError::Invalid, "shared colour handle rejected (test hook)", VK_SUCCESS, E_INVALIDARG);
+                made->Import(device, vk, desc);
+                return made;
+            };
+            std::shared_ptr<ImageInput> made;
+            if (expectedUsage() & VK_IMAGE_USAGE_STORAGE_BIT) {
+                try { made = create(true); }
+                catch (const std::exception& e) {
+                    if (KindOf(e) == NrError::DeviceLost) throw;
+                    // Failed/unsupported optional capabilities never remove the
+                    // sampled route. Latch once, avoiding allocation churn.
+                    sharedColourStorageRefused = true;
+                    nr::logf("[mochizuki] shared colour storage preference unavailable; sampled texture retained: %s", e.what());
+                }
             }
-            if (hooks.rejectSharedInput)
-                throw NrError(NrError::Invalid, "MZ_TEST_REJECT_SHARED_INPUT: shared colour handle rejected", VK_SUCCESS, E_INVALIDARG);
-            made->Import(device, vk, desc);
+            if (!made) made = create(false);
             // Reserve the strong initialization owner before submission can happen.
             inputInitializations.push_back(made);
             gpuUsed.store(true, std::memory_order_relaxed);
@@ -166,6 +182,11 @@
         } catch (const std::exception& e) {
             const auto kind = KindOf(e);
             if (kind == NrError::DeviceLost) throw;
+            if (budgetRefused) {
+                sharedColourHold.Refused(geometry, e.what());
+                nr::logf("[mochizuki] shared colour held; buffer NR retained: %s", e.what());
+                return;
+            }
             const auto delay = sharedColourHold.Failed(geometry, kind, e.what(), true);
             nr::logf("[mochizuki] shared colour refused; buffer NR retained (retry=%llu ms): %s",
                      static_cast<unsigned long long>(delay), e.what());
