@@ -36,6 +36,12 @@ Both work with native compilation, ACO and RenoDX. The new model needs
 message. INT4 requires the original model and active ACO. Switching models retains
 the INT4 preference; Ctrl+F11 changes that preference without changing the model.
 
+Natural and Cinematic retain the vendored core's enabled post-network style grade;
+Standard is not graded. There is no product menu, INI or controls-ABI switch for
+this grade. The runtime requires the complete style-grade shader set and rejects
+an incomplete package instead of silently changing the picture. Host and runtime
+must come from the same complete package; control-block size mismatches are rejected.
+
 ## INT4 mixed and RenoDX
 
 Ctrl+F11 switches the default/INT4 request without changing ACO. Save Settings
@@ -53,9 +59,12 @@ while their replacement controls are shown. RenoDX runs 1–4 passes normally, u
 30 when unlocked; passes 5 onward use pass 4's controls. Game exposure uses the
 host's validated readback (one frame late), with the upstream content meter when
 unavailable. Motion uses the existing host bridge. Depth and Present-only inputs
-are not available on this route. RenoDX timing currently reports the network's
-last pass, not total stage cost. Person protection is disabled in RenoDX mode because the native first-pass
-contract is unavailable; the original settings are preserved.
+are not available on this route. RenoDX timing covers the completed whole stage
+and sums the network callbacks across every executed pass, not only the last pass.
+Those callbacks include core preparation and composition as well as network kernels;
+they are not identical to the standard route's kernel-loop timing boundary.
+Person protection is disabled in RenoDX mode because the native first-pass contract
+is unavailable; the original settings are preserved.
 
 `MochizukiNoiseEveryFrame` advances the upstream noise seed when enabled (default
 false). Ins and `OptiScaler.ini` own all these settings; upstream INI/environment
@@ -224,12 +233,36 @@ later-pass overrides. Shared effects have their own reset.
 Ins and Page Up/Down show completed **Vulkan core total** GPU measurements.
 The compact Mochizuki label is NR GPU. Diagnostics splits the same sample window
 into network and other core processing; their means sum to the total mean.
-The network includes fused temporal pre/post shaders. Other covers core copies,
-input conversion and composition. Adapter buffer/image copies, D3D12 copies,
-shared output effects, upscaling, frame generation and whole-frame latency are
-outside this measurement. Display and timing log options default off; summaries
-are limited to one per ten seconds, and query reads never wait for the GPU.
-`mochizuki_nr.log` respects file logging and rotates to `mochizuki_nr.1.log` at 4 MiB.
+On the standard route, the network scope is the core network kernel loop, including
+fused temporal pre/post shaders. RenoDX instead sums the complete `record_engine`
+callbacks for all executed passes, including preparation, history work and composition
+inside those callbacks. The menu labels this scope **RenoDX network callbacks**, not
+pure network kernels. Other processing is total minus the route's network scope;
+the RenoDX remainder therefore excludes work already counted inside its callbacks.
+Adapter buffer/image copies, D3D12 copies, shared output effects, upscaling, frame
+generation and whole-frame latency are outside both measurements. Equivalent FPS
+is `1000 / GPU ms`, not game Present FPS.
+
+Total and route-specific network median/p95 values, and the total/network/other
+means, cover the same window of up to 120 completed samples; individual quantiles
+are not additive. RenoDX reserves one
+eight-slot query-ring entry per execution, with room for up to 30 network callback
+pairs in that entry. A stage with no network callback still produces a valid
+total/other sample and zero network time. Pending entries are not reused before
+Vulkan completion, and polling does not duplicate samples or refresh their age.
+Changing between standard and RenoDX routes clears the reported timing window.
+Display and timing log options default off; summaries are limited to one per ten
+seconds, and query reads never wait for the GPU. `mochizuki_nr.log` respects file
+logging and rotates to `mochizuki_nr.1.log` at 4 MiB.
+
+Local verification on 2026-10-20 after removal of the product style-grade toggle:
+the matching runtime and Release host compiled successfully (existing local shader
+assets reused). `tests/mochizuki/run.cmd abi` passed, including rejection of both
+undersized and oversized controls and the CPU query-ring tests. The existing
+`stage-timing-gpu` smoke passed with 0, 1 and 30 RenoDX callbacks, completed-sample
+coherence, unchanged polling age and route-switch reset; `split-retain` passed
+retained recording/replay checks. These are correctness smokes, not a game FPS or
+performance comparison. No game appearance comparison was performed.
 
 Under **Apply NR edit → After the model**, **Model enlargement**
 (`MochizukiEnlargeMode`) offers matched residual (0, default), edge-aware (1) or

@@ -211,6 +211,7 @@ struct MochizukiBackend::Impl
             gpu.last_ms = info.gpu_ms_last;
             gpu.mean_ms = info.gpu_ms_median;
             gpu.max_ms = info.gpu_ms_max;
+
             gpu.last_tick_ms = info.gpu_tick;
         }
         { std::lock_guard lock(mutex); timing = next; details = info; }

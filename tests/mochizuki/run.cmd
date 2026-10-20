@@ -21,6 +21,8 @@ if /i "%~1"=="source-pin" (
 )
 call tests\_lib\msvc-env.cmd || exit /b 1
 if not exist exports\mochizuki-tests mkdir exports\mochizuki-tests
+if /i "%~1"=="stage-timing" goto stagetiming
+if /i "%~1"=="abi" call :stagetiming || exit /b 1
 if /i "%~1"=="renodx-feed" goto renodxfeed
 if /i "%~1"=="abi" call :renodxfeed || exit /b 1
 if /i "%~1"=="exposure-recording" goto exposurerecording
@@ -52,6 +54,7 @@ if /i "%~1"=="startup" goto startup
 if /i "%~1"=="profile" goto profile
 if /i "%~1"=="composition" goto composition
 if /i "%~1"=="first-pass" goto firstpass
+if /i "%~1"=="stage-timing-gpu" goto stagetiminggpu
 if /i "%~1"=="aco" goto aco
 if /i "%~1"=="aco-rapid" goto acorapid
 if /i "%~1"=="shader-tail" goto shadertail
@@ -72,6 +75,15 @@ if /i "%~1"=="gpu" (
 )
 if errorlevel 1 exit /b 1
 python -X utf8 -c "from pathlib import Path; import hashlib; p=Path('exports/mochizuki-runtime'); (p/'abi-ci.sha256').write_text(hashlib.sha256((p/'MochizukiNrRuntime.dll').read_bytes()).hexdigest()+'\n')"
+exit /b %errorlevel%
+
+:stagetiminggpu
+exports\mochizuki-tests\runtime.exe "%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll" "%CD%\exports\mochizuki-runtime" --stage-timing
+exit /b %errorlevel%
+
+:stagetiming
+cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /I OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler /I OptiScaler-DLSSNR-PreSR-Multipass-main/external/vulkan/include tests/mochizuki/stage_timing.cpp /Foexports/mochizuki-tests/stage_timing.obj /Feexports/mochizuki-tests/stage_timing.exe || exit /b 1
+exports\mochizuki-tests\stage_timing.exe
 exit /b %errorlevel%
 
 :renodxfeed

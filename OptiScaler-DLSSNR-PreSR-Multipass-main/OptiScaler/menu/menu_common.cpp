@@ -2073,12 +2073,14 @@ void MenuCommon::RenderPerformanceOverlay(RenderMenuContext& ctx)
                 firstLine += std::string(" | NR: ") + DlssNr::Backend::Name(DlssNr::Backend::ActiveKindFromConfig());
             if (overlayType != FpsOverlay_JustFPS && config->DlssNrEnabled.value_or_default()) {
                 const auto kind = DlssNr::Backend::ActiveKindFromConfig();
-                char nrValue[48] = "N/A";
-                if (gNrGpuHistory.HasMeasurement())
-                    std::snprintf(nrValue, sizeof nrValue, "%.2f ms", gNrGpuHistory.Last());
-                firstLine += std::string(" | ") +
-                    (gNrGpuHistory.HasMeasurement() ? MenuNrGpuHistory::MetricLabel(gNrGpuHistory.Metric()) : "NR GPU") +
-                    ": " + nrValue;
+                if (kind != DlssNr::Backend::Kind::Mochizuki) {
+                    char nrValue[48] = "N/A";
+                    if (gNrGpuHistory.HasMeasurement())
+                        std::snprintf(nrValue, sizeof nrValue, "%.2f ms", gNrGpuHistory.Last());
+                    firstLine += std::string(" | ") +
+                        (gNrGpuHistory.HasMeasurement() ? MenuNrGpuHistory::MetricLabel(gNrGpuHistory.Metric()) : "NR GPU") +
+                        ": " + nrValue;
+                }
                 if (kind == DlssNr::Backend::Kind::Lmxxf && config->NrTimingEnabled.value_or_default()) {
                     const auto timing = DlssNr::AmdBridge::Timing();
                     if (timing.version == NR_TIMING_VERSION) {
@@ -2094,10 +2096,40 @@ void MenuCommon::RenderPerformanceOverlay(RenderMenuContext& ctx)
                     }
                 }
                 else if (kind == DlssNr::Backend::Kind::Mochizuki) {
-                    if (overlayType >= FpsOverlay_Detailed) {
-                        const auto status = DlssNr::AmdBridge::Status();
-                        if (!status.empty())
-                            codecTimingLine = status;
+                    const auto timing = DlssNr::AmdBridge::MochizukiTimingDetails();
+                    const auto now = GetTickCount64();
+                    if (!timing.gpu_samples)
+                        firstLine += MenuLocale::Translate(" | NR: N/A (waiting)");
+                    else if (now < timing.gpu_tick || now - timing.gpu_tick > 2000)
+                        firstLine += MenuLocale::Translate(" | NR: N/A (stale)");
+                    else if (!std::isfinite(timing.gpu_ms_network_mean) || timing.gpu_ms_network_mean < 0 ||
+                             !std::isfinite(timing.gpu_ms_other_mean) || timing.gpu_ms_other_mean < 0 ||
+                             !std::isfinite(timing.gpu_ms_mean) || timing.gpu_ms_mean < 0)
+                        firstLine += MenuLocale::Translate(" | NR: N/A");
+                    else
+                    {
+                        firstLine += StrFmt(MenuLocale::Translate(" | NR: %.2f ms (total %.2f ms)"),
+                            timing.gpu_ms_network_mean, timing.gpu_ms_mean);
+                        if (overlayType >= FpsOverlay_Detailed)
+                        {
+                            codecTimingLine = timing.gpu_ms_network_mean > 0 ?
+                                StrFmt(MenuLocale::Translate(timing.renodx_effective ?
+                                    "RenoDX network callbacks: %.2f ms (equiv. %.1f FPS)" : "NR network: %.2f ms (equiv. %.1f FPS)"),
+                                    timing.gpu_ms_network_mean, 1000.0 / timing.gpu_ms_network_mean) :
+                                StrFmt(MenuLocale::Translate(timing.renodx_effective ?
+                                    "RenoDX network callbacks: %.2f ms (equiv. FPS N/A: no network work)" : "NR network: %.2f ms (equiv. FPS N/A: no network work)"),
+                                    timing.gpu_ms_network_mean);
+                            codecTimingLine += StrFmt(MenuLocale::Translate(timing.renodx_effective ?
+                                " | RenoDX processing: %.2f ms" : " | OptiScaler route: %.2f ms"),
+                                timing.gpu_ms_other_mean);
+                            codecTimingLine += timing.gpu_ms_mean > 0 ?
+                                StrFmt(MenuLocale::Translate(" | Total: %.2f ms (equiv. %.1f FPS)"),
+                                    timing.gpu_ms_mean, 1000.0 / timing.gpu_ms_mean) :
+                                StrFmt(MenuLocale::Translate(" | Total: %.2f ms (equiv. FPS N/A)"), timing.gpu_ms_mean);
+                            effectsTimingLine = MenuLocale::Translate(timing.renodx_effective ?
+                                "RenoDX callbacks include core preparation/history/composition, not just kernels. Completed-sample means; equivalent throughput, not game Present FPS. Excludes D3D12 bridge / host post-processing." :
+                                "Standard network includes the kernel loop and fused temporal shaders. Completed-sample means; equivalent throughput, not game Present FPS. Excludes D3D12 bridge / host post-processing.");
+                        }
                     }
                 }
             }

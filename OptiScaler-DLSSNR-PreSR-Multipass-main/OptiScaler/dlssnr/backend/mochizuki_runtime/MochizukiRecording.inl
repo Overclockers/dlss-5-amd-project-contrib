@@ -351,6 +351,8 @@ int32_t GetTimings(void* context, LmxxfNrTimings* out)
     if (!s || !out || out->struct_size != sizeof(*out)) return LMXXF_NR_INVALID_ARGUMENT;
     *out = { sizeof(*out) };
     float median = 0, p95 = 0;
+    // The legacy network_ms ABI slot is Vulkan core/stage TOTAL. Pure-network
+    // quantiles are explicit MochizukiNrInfo fields; do not change this contract.
     s->NetworkMs(median, p95);
     out->valid = median > 0;
     out->network_ms = median;
