@@ -44,14 +44,19 @@ function Get-OptScalerPrimaryExes([string]$dir, [int]$depth = 4) {
     $queue = New-Object System.Collections.Generic.Queue[object]
     $queue.Enqueue(@{ Path = $dir; Depth = 0 })
     $seen = 0
-    while ($queue.Count -gt 0 -and $seen -lt 400) {
+    # Keep the candidate/directory quota, but also bound all ordinary resources.
+    $examined = 0
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    while ($queue.Count -gt 0 -and $seen -lt 400 -and $examined -lt 4096 -and $timer.ElapsedMilliseconds -lt 2000) {
         $cur = $queue.Dequeue()
         if ($cur.Depth -gt $depth) { continue }
-        $entries = @()
-        try { $entries = [IO.Directory]::GetFileSystemEntries($cur.Path) } catch { continue }
+        $entries = $null
+        try { $entries = [IO.Directory]::EnumerateFileSystemEntries($cur.Path).GetEnumerator() } catch { continue }
         $subDirs = New-Object System.Collections.Generic.List[string]
-        foreach ($entry in $entries) {
-            if ($seen -ge 400) { break }
+        try {
+        while ($seen -lt 400 -and $examined -lt 4096 -and $timer.ElapsedMilliseconds -lt 2000 -and $entries.MoveNext()) {
+            $entry = $entries.Current
+            $examined++
             $leaf = [IO.Path]::GetFileName($entry)
             $isDir = $false
             $reparse = $false
@@ -73,11 +78,12 @@ function Get-OptScalerPrimaryExes([string]$dir, [int]$depth = 4) {
             $rank = Get-OptScalerExeRank $entry $rootFull $cur.Depth
             [void]$found.Add(@{ path = $entry; rank = $rank; name = $leaf })
         }
+        } catch { } finally { if ($entries) { $entries.Dispose() } }
         foreach ($sd in ($subDirs | Sort-Object {
             $n = [IO.Path]::GetFileName($_)
             if ($n -match '(?i)^(bin|binaries|x64_dx12|x64|win64|wingdk|game|client|content)$') { 0 } else { 1 }
         }, { [IO.Path]::GetFileName($_) })) {
-            if ($seen -ge 400) { break }
+            if ($seen -ge 400 -or $timer.ElapsedMilliseconds -ge 2000) { break }
             $seen++
             $queue.Enqueue(@{ Path = $sd; Depth = $cur.Depth + 1 })
         }

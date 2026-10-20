@@ -2,18 +2,65 @@ param([string]$Source, [string]$Output, [string]$Models)
 
 # Dot-sourced by Setup, or run directly by Mochizuki-Model.bat.
 function Find-MochizukiPython {
+    $timer = [Diagnostics.Stopwatch]::StartNew()
     foreach ($name in @('python', 'python3', 'py')) {
         foreach ($command in @(Get-Command $name -CommandType Application -ErrorAction SilentlyContinue)) {
+            $remaining = 5000 - [int]$timer.ElapsedMilliseconds
+            if ($remaining -le 0) { return $null }
+            $process = $null
+            $started = $false
             try {
                 # A Windows execution alias or broken launcher may exist without Python.
-                # Require code execution, not just an executable or a zero exit status.
-                $probe = & $command.Source -c "import sys; print('MOCHI_PYTHON_OK' if sys.version_info >= (3,10) else 'MOCHI_PYTHON_TOO_OLD')" 2>$null
-                if ($LASTEXITCODE -eq 0 -and @($probe) -contains 'MOCHI_PYTHON_OK') {
+                # Use a waiting wrapper for both EXEs and batch shims so a timeout can
+                # terminate the entire probe tree. Isolate Python from user startup code.
+                $quoted = $command.Source.Replace("'", "''")
+                $code = "[Console]::OutputEncoding=[Text.UTF8Encoding]::new(`$false); & '$quoted' -I -S -c `"import sys; print('MOCHI_PYTHON_OK' if sys.version_info >= (3,10) else 'MOCHI_PYTHON_TOO_OLD')`"; exit `$LASTEXITCODE"
+                $start = New-Object Diagnostics.ProcessStartInfo
+                $start.FileName = Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/powershell.exe'
+                $start.Arguments = '-NoProfile -NonInteractive -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($code))
+                $start.UseShellExecute = $false
+                $start.CreateNoWindow = $true
+                $start.RedirectStandardOutput = $true
+                $start.RedirectStandardError = $true
+                $start.StandardOutputEncoding = [Text.Encoding]::UTF8
+                $start.StandardErrorEncoding = [Text.Encoding]::UTF8
+                $process = New-Object Diagnostics.Process
+                $process.StartInfo = $start
+                if (-not $process.Start()) { continue }
+                $started = $true
+                $stdout = $process.StandardOutput.ReadToEndAsync()
+                $stderr = $process.StandardError.ReadToEndAsync()
+                if (-not $process.WaitForExit([Math]::Min(2000, $remaining))) { continue }
+                # A shim that leaves a child holding its pipes must not stall inspection.
+                $remaining = [Math]::Max(0, 5000 - [int]$timer.ElapsedMilliseconds)
+                if (-not [Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]@($stdout, $stderr), $remaining)) { continue }
+                if ($process.ExitCode -eq 0 -and ($stdout.Result -split '\r?\n') -contains 'MOCHI_PYTHON_OK') {
                     return $command.Source
                 }
             } catch {
-                # PS5.1 can throw on redirected native stderr under ErrorAction=Stop.
-                # Continue to python3/py before reporting that no usable Python exists.
+                # Continue to the next candidate within the same total deadline.
+            } finally {
+                if ($process) {
+                    if ($started -and -not $process.HasExited) {
+                        $kill = New-Object Diagnostics.ProcessStartInfo
+                        $kill.FileName = Join-Path $env:SystemRoot 'System32/taskkill.exe'
+                        $kill.Arguments = '/PID ' + $process.Id + ' /T /F'
+                        $kill.UseShellExecute = $false
+                        $kill.CreateNoWindow = $true
+                        $kill.RedirectStandardOutput = $true
+                        $kill.RedirectStandardError = $true
+                        $killer = $null
+                        try {
+                            $killer = [Diagnostics.Process]::Start($kill)
+                            $null = $killer.StandardOutput.ReadToEndAsync()
+                            $null = $killer.StandardError.ReadToEndAsync()
+                            if (-not $killer.WaitForExit(1000)) { $killer.Kill() }
+                        } catch { }
+                        finally { if ($killer) { $killer.Dispose() } }
+                        try { if (-not $process.HasExited) { $process.Kill() } } catch { }
+                    }
+                    $process.Dispose()
+                }
             }
         }
     }

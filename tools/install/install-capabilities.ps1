@@ -242,8 +242,8 @@ function Get-OptScalerBackendCapabilities([string]$pkgRoot, [string]$gameDir, [s
         if (Test-MochizukiModelHeaderFile (Join-Path $root 'dlssnr-amd/dlssnr.bin') 599) { $mochiOriginalReady = $true }
         if (Test-MochizukiModelHeaderFile (Join-Path $root 'dlssnr-amd/dlssnr-small.bin') 255) { $mochiSmallReady = $true }
     }
-    $mochiPreparation = 'ready'
-    if (-not ($mochiOriginalReady -and $mochiSmallReady)) {
+    $mochiPreparation = if ($canMochiRuntime) { 'ready' } else { 'missing-runtime' }
+    if ($canMochiRuntime -and -not ($mochiOriginalReady -and $mochiSmallReady)) {
         $helper = if ($pkgRoot) { Join-Path $pkgRoot 'mochizuki-python.ps1' } else { $null }
         if (-not $helper -or -not (Test-Path -LiteralPath $helper -PathType Leaf)) {
             $mochiPreparation = 'missing-helper'
