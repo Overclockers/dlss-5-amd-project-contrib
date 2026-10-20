@@ -200,17 +200,17 @@ struct MochizukiBackend::Impl
         if (getInfo(owner->context, &info) != LMXXF_NR_OK) return;
         NrTimingSnapshot next {};
         next.struct_size = sizeof next; next.version = NR_TIMING_VERSION;
-        if (info.gpu_ms_median > 0)
+        if (info.gpu_samples)
         {
             next.enabled = true;
             next.reserved = 1u;
             auto& gpu = next.stages[NR_GPU_NETWORK];
-            gpu.samples = info.gpu_samples ? info.gpu_samples : (info.frames > 0 ? info.frames : 10);
-            gpu.last_ms = info.gpu_ms_last > 0 ? info.gpu_ms_last : info.gpu_ms_median;
+            gpu.samples = info.gpu_samples;
+            gpu.last_ms = info.gpu_ms_last;
             gpu.mean_ms = info.gpu_ms_median;
-            gpu.max_ms = info.gpu_ms_p95 > 0 ? info.gpu_ms_p95 : info.gpu_ms_median;
+            gpu.max_ms = info.gpu_ms_max;
             gpu.frame_id = info.frames;
-            gpu.last_tick_ms = now;
+            gpu.last_tick_ms = info.gpu_tick;
         }
         { std::lock_guard lock(mutex); timing = next; details = info; }
         if (Config::Instance()->NrTimingLog.value_or_default() && now - logAt >= 10000)

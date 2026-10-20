@@ -25,10 +25,10 @@ int wmain(int argc,wchar_t**argv) try {
     MochizukiNrBuildProgress invalidProgress {sizeof invalidProgress};
     Require(getProgress(nullptr,&invalidProgress)==LMXXF_NR_INVALID_ARGUMENT,"progress accepted null session");
     Require(defaults&&set&&prepare&&getInfo,"missing controls/frame exports");Rc(defaults(&controls));
-    Require(controls.intensity==1&&controls.preprocess==0&&controls.compact_transfer==1&&controls.enlarge_mode==0&&
-            controls.classic_scaler==1&&controls.aco_mode==1&&controls.network_model==1,"control defaults");
     MochizukiNrControls oldControls {sizeof controls-4};
     Require(defaults(&oldControls)==LMXXF_NR_INVALID_ARGUMENT,"partial controls accepted");
+    MochizukiNrControls oversizedControls {sizeof controls+4};
+    Require(defaults(&oversizedControls)==LMXXF_NR_INVALID_ARGUMENT,"oversized controls accepted");
     if(argc==2) {puts("MOCHIZUKI_ABI_OK");FreeLibrary(dll);return 0;}
     reinterpret_cast<void(*)(uint32_t)>(GetProcAddress(dll,"MochizukiNrSetLogging"))(1);
     ComPtr<IDXGIFactory6> factory;Hr(CreateDXGIFactory1(IID_PPV_ARGS(&factory)));
@@ -309,6 +309,8 @@ int wmain(int argc,wchar_t**argv) try {
     Require(getProgress(context,&wrongProgress)==LMXXF_NR_INVALID_ARGUMENT,"partial progress struct accepted");
     MochizukiNrInfo oldInfo {sizeof(MochizukiNrInfo)-16};
     Require(getInfo(context,&oldInfo)==LMXXF_NR_INVALID_ARGUMENT,"old info contract accepted");
+    MochizukiNrInfo previousInfo {static_cast<uint32_t>(offsetof(MochizukiNrInfo, gpu_ms_network_median))};
+    Require(getInfo(context,&previousInfo)==LMXXF_NR_INVALID_ARGUMENT,"previous timing ABI accepted");
     const bool profile=argc>3 && std::wstring(argv[3])==L"--profile";
     // The frame-side strengths, which the image mode may override: MochizukiDetailStrength / MochizukiColourStrength
     // reach the model here, while Controls::intensity reaches it through the control block.
@@ -331,9 +333,22 @@ int wmain(int argc,wchar_t**argv) try {
     }
     Frame frame(device.Get(),startup?startupWidth:256,startup?startupHeight:256,startup?DXGI_FORMAT_R11G11B10_FLOAT:DXGI_FORMAT_R16G16B16A16_FLOAT);
     List upload(device.Get());frame.Upload(upload.cmd.Get());Hr(upload.cmd->Close());Submit(q[0].Get(),upload);Hr(q[0]->Signal(tail.Get(),++value));Wait(tail.Get(),value);
-    auto make=[&](Frame& f,UINT validWidth=0) {
+    std::unique_ptr<Frame> timingMotion;
+    if(argc>3 && std::wstring(argv[3])==L"--stage-timing") {
+        timingMotion=std::make_unique<Frame>(device.Get(),256,256);
+        void* data=nullptr;Hr(timingMotion->upload->Map(0,nullptr,&data));
+        std::memset(data,0,size_t(timingMotion->footprint.Footprint.RowPitch)*timingMotion->height);
+        timingMotion->upload->Unmap(0,nullptr);List up(device.Get());timingMotion->Upload(up.cmd.Get());Hr(up.cmd->Close());
+        Submit(q[0].Get(),up);Hr(q[0]->Signal(tail.Get(),++value));Wait(tail.Get(),value);
+    }
+    auto make=[&](Frame& f,UINT validWidth=0,bool allowBackgroundBuild=false) {
         MochizukiNrFrameInfo info {};info.struct_size=sizeof info;info.color=f.color.Get();info.color_width=validWidth?validWidth:f.width;info.color_height=f.height;
         info.color_state=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;info.flags=LMXXF_NR_FRAME_FLAG_STRENGTH;info.transfer_strength=g_transferStrength;info.color_strength=g_colorStrength;info.model_scale=profileScale;info.passes=profilePasses;
+        if(timingMotion) {
+            info.motion=timingMotion->color.Get();info.motion_width=timingMotion->width;info.motion_height=timingMotion->height;
+            info.motion_state=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;info.motion_scale_x=info.motion_scale_y=1;
+            info.flags|=MOCHIZUKI_NR_FRAME_FLAG_TEMPORAL;
+        }
         LmxxfNrJob job {sizeof job};const auto deadline=GetTickCount64()+300000;
         std::string lastStage;uint32_t lastCompleted=UINT32_MAX;
         for(;;) {
@@ -344,11 +359,51 @@ int wmain(int argc,wchar_t**argv) try {
                 printf("BUILD_PROGRESS %.1fs %s %u/%u\n",double(GetTickCount64()-progress.start_tick)/1000,progress.stage,progress.completed,progress.total);
                 fflush(stdout);lastStage=progress.stage;lastCompleted=progress.completed;
             }
-            if(!rc) {Require(!progress.active,"progress still active after ready");break;}
+            if(!rc) {Require(allowBackgroundBuild || !progress.active,"progress still active after ready");break;}
             if(rc!=LMXXF_NR_UNAVAILABLE||GetTickCount64()>deadline)Rc(rc);Sleep(100);
         }
         return job;
     };
+    if(argc>3 && std::wstring(argv[3])==L"--stage-timing") {
+        auto retire=[&](LmxxfNrJob& j) { Rc(api.InvalidateRecording(context,j.handle));Rc(api.CollectRecording(context,j.handle)); };
+        auto installed=[&](bool reno,uint32_t passes) {
+            const auto deadline=GetTickCount64()+300000;
+            for (;;) {
+                auto j=make(frame,0,true);MochizukiNrInfo t {sizeof t};Rc(getInfo(context,&t));
+                if (!t.building && bool(t.renodx_effective)==reno && t.max_passes==passes) return j;
+                retire(j);Require(GetTickCount64()<deadline,"timing fixture runtime switch timed out");Sleep(10);
+            }
+        };
+        for (uint32_t passes : {1u, 30u, 0u}) {
+            controls.renodx_enabled=1; controls.reno_unlock_passes=1;
+            controls.reno_passes=std::max(passes,1u); controls.reno_nr_enabled=passes!=0;
+            controls.max_passes=std::max(passes,1u);
+            Rc(set(context,&controls));
+            auto j=installed(true,std::max(passes,1u)); List in(device.Get()),out(device.Get());
+            Rc(api.RecordInputs(context,j.handle,in.cmd.Get()));Rc(api.RecordOutputs(context,j.handle,out.cmd.Get()));
+            Hr(in.cmd->Close());Hr(out.cmd->Close());
+            for (uint32_t f=0;f<12;++f) {
+                auto* queue=q[f%2].Get();Rc(api.BeginRecordingExecution(context,j.handle,queue));Submit(queue,in);
+                Rc(api.EnqueueHip(context,j.handle,queue));Submit(queue,out);const auto hr=queue->Signal(tail.Get(),++value);
+                Rc(api.EndRecordingExecution(context,j.handle,queue,3,tail.Get(),value,hr));Wait(tail.Get(),value);
+            }
+            MochizukiNrInfo t {sizeof t};Rc(getInfo(context,&t));
+            Require(t.renodx_effective && t.gpu_samples && t.gpu_ms_last>0,"missing stage sample");
+            Require(t.gpu_ms_network_last>=0 && t.gpu_ms_other_last>=0 &&
+                std::abs(t.gpu_ms_last-t.gpu_ms_network_last-t.gpu_ms_other_last)<1e-4f,"incoherent stage sample");
+            Require(passes ? t.gpu_ms_network_last>0 : t.gpu_ms_network_last==0,"wrong zero/multipass network timing");
+            Require(t.gpu_ms_median>=t.gpu_ms_network_median && t.gpu_ms_p95>=t.gpu_ms_network_p95,"stage total quantiles changed");
+            MochizukiNrInfo polled {sizeof polled};Rc(getInfo(context,&polled));
+            Require(polled.gpu_tick==t.gpu_tick && polled.gpu_samples==t.gpu_samples,"poll refreshed timing sample");
+            printf("STAGE_TIMING passes=%u samples=%llu total=%.3f network=%.3f other=%.3f ms\n",passes,
+                static_cast<unsigned long long>(t.gpu_samples),t.gpu_ms_last,t.gpu_ms_network_last,t.gpu_ms_other_last);
+            retire(j);
+        }
+        controls.renodx_enabled=0;Rc(set(context,&controls));auto standard=installed(false,1);
+        MochizukiNrInfo switched {sizeof switched};Rc(getInfo(context,&switched));
+        Require(!switched.renodx_effective && switched.gpu_ms_median==0 && switched.gpu_tick==0,"route switch retained timing history");
+        retire(standard);Rc(api.Destroy(context));FreeLibrary(dll);puts("MOCHIZUKI_STAGE_TIMING_OK");return 0;
+    }
     if(argc>3 && std::wstring(argv[3])==L"--split-retain") {
         struct Held {
             LmxxfNrJob job {sizeof job};
@@ -907,6 +962,9 @@ int wmain(int argc,wchar_t**argv) try {
             "split last timing is inconsistent");
     Require(std::abs(timing.gpu_ms_mean-timing.gpu_ms_network_mean-timing.gpu_ms_other_mean)<1e-4f,
             "split mean timing is inconsistent");
+    Require(timing.gpu_ms_median >= timing.gpu_ms_network_median &&
+            timing.gpu_ms_p95 >= timing.gpu_ms_network_p95 && timing.gpu_ms_network_p95 >= timing.gpu_ms_network_median,
+            "total/network timing quantile contract changed");
     const auto samples=timing.gpu_samples;Rc(getInfo(context,&timing));
     Require(timing.gpu_samples==samples,"status polling duplicated GPU samples");
     printf("TIMING samples=%llu last=%.3f ms repeated_poll=stable\n",static_cast<unsigned long long>(samples),timing.gpu_ms_last);

@@ -198,8 +198,9 @@ extern "C"
         float white_point; /* the white point the last frame used, the game's exposure applied (linear colour) */
         float gpu_ms_last, gpu_ms_mean, gpu_ms_max;
         uint64_t gpu_samples, gpu_tick;
-        /* Same sample window as gpu_ms_*: network + other = core total. Fused temporal
-         * pre/post shaders count as network. Other includes core copies/composition only. */
+        /* Same completed-sample window: network + other = core/stage total. Standard network
+         * means the kernel loop with fused temporal shaders; RenoDX sums whole record_engine
+         * callbacks, including their preparation/composition. Other is the remaining core/stage work. */
         float gpu_ms_network_last, gpu_ms_other_last;
         float gpu_ms_network_mean, gpu_ms_other_mean;
         uint32_t aco_requested; /* the setting last given to SetControls */
@@ -214,6 +215,8 @@ extern "C"
         uint32_t inline_path;
         char inline_path_why[124];
         uint32_t network_requested, network_effective; /* 0 original, 1 small; effective valid after frame_w > 0 */
+        /* Route-specific network-scope quantiles from the same completed-frame window as total. */
+        float gpu_ms_network_median, gpu_ms_network_p95;
         /* struct_size includes the current definition's tail padding. */
     } MochizukiNrInfo;
 
