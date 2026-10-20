@@ -389,6 +389,7 @@ LRESULT CALLBACK InvokeWindowsHookProxy(std::size_t slotIndex, int code, WPARAM 
 {
     HHOOK hook = nullptr;
     HOOKPROC originalProc = nullptr;
+    int hookType = 0;
     bool shouldBlock = false;
     bool keyboardHook = false;
     bool mouseHook = false;
@@ -406,6 +407,7 @@ LRESULT CALLBACK InvokeWindowsHookProxy(std::size_t slotIndex, int code, WPARAM 
 
         hook = slot.Hook;
         originalProc = slot.OriginalProc;
+        hookType = slot.HookType;
         keyboardHook = IsKeyboardWindowsHookType(slot.HookType);
         mouseHook = IsMouseWindowsHookType(slot.HookType);
         shouldBlock = ShouldBlockWindowsHookCallbackLocked(slot, code, wParam, lParam);
@@ -433,7 +435,14 @@ LRESULT CALLBACK InvokeWindowsHookProxy(std::size_t slotIndex, int code, WPARAM 
     }
 
     if (shouldBlock)
+    {
+        // Low-level hooks run before Windows processes input. Keep the system
+        // event (and our polling fallback) alive while bypassing the game proc.
+        if (hookType == WH_MOUSE_LL || hookType == WH_KEYBOARD_LL)
+            return CallNextHookEx(hook, code, wParam, lParam);
+
         return 1;
+    }
 
     if (originalProc == nullptr)
         return CallNextHookEx(hook, code, wParam, lParam);
