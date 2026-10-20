@@ -1,10 +1,16 @@
 #include "lmxxf_gpu_test_utils.h"
+#include <dxgi1_4.h>
 #include <wrl/client.h>
 #include <memory>
 #include <vector>
 #include "OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/dlssnr/backend/LmxxfRecordingOwner.h"
 
 template<class T> using Ptr = Microsoft::WRL::ComPtr<T>;
+static void SetPolicy(const char* key,const char* value)
+{
+    Require(SetEnvironmentVariableA(key,value)!=FALSE,"process policy environment");
+    Require(_putenv_s(key,value)==0,"fixture CRT policy environment");
+}
 struct RecordedFrame
 {
     void* token = nullptr;
@@ -13,11 +19,20 @@ struct RecordedFrame
     Ptr<ID3D12GraphicsCommandList> producer, consumer;
     Ptr<ID3D12Fence> fence;
     UINT64 value = 0;
+    UINT activeWidth=0,activeHeight=0,pattern=0;
+    bool inlineFrame=false;
 };
 int main(int argc, char** argv)
 {
+    const bool drs = argc == 4 && std::strcmp(argv[3], "--drs") == 0;
     const bool hipDiagnostic = argc == 4 && std::strcmp(argv[3], "--hip-passthrough") == 0;
-    if (argc != 3 && !hipDiagnostic) return 2;
+    if (argc != 3 && !hipDiagnostic && !drs) return 2;
+    if (drs) {
+        for (auto setting : {std::pair{"DLSS5_NETWORK_MODEL","0"}, {"DLSS5_NETWORK_HEIGHT","1080"},
+             {"DLSS5_NETWORK_FREE_RES","0"}, {"DLSS5_MULTI_PASS","1"}, {"DLSS5_SKIP_BLOCKS","none"},
+             {"DLSS5_VIT_ADAPTIVE","0"}, {"DLSS5_TEMPORAL_MODE","0"}})
+            SetPolicy(setting.first, setting.second);
+    }
     Ptr<ID3D12Debug> debug;
     if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug)))) debug->EnableDebugLayer();
     HMODULE dll = LoadLibraryW(Widen(argv[1]).c_str()); Require(dll != nullptr, "runtime load");
@@ -51,12 +66,13 @@ int main(int argc, char** argv)
     auto create = [&] {
         LmxxfNrCreateInfo info {}; info.struct_size = sizeof info; info.device = device.Get(); info.queue = queue.Get();
         info.assets_directory = modules.c_str(); info.flags = LMXXF_NR_CREATE_FLAG_RECORDING_LEASES;
+        if(drs) info.flags |= LMXXF_NR_CREATE_FLAG_INLINE_QUEUE;
         void* context = nullptr; ok(api.Create(&info, &context), "create lease session");
         ok(api.PrepareSession(context), "prepare session"); return context;
     };
     void* context = create();
     Require(timing.SetEnabled(context, 1) == LMXXF_NR_OK, "enable GPU telemetry");
-    auto makeColour = [&](UINT width, UINT height) {
+    auto makeColour = [&](UINT width, UINT height, UINT pattern = 0) {
         D3D12_HEAP_PROPERTIES hp {}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
         D3D12_RESOURCE_DESC rd {}; rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
         rd.Width = width; rd.Height = height; rd.DepthOrArraySize = rd.MipLevels = 1;
@@ -66,12 +82,13 @@ int main(int argc, char** argv)
         Ptr<ID3D12Resource> colour;
         Check(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                                              nullptr, IID_PPV_ARGS(&colour)), "colour");
-        UploadColorPattern(device.Get(), queue.Get(), colour.Get());
+        UploadColorPattern(device.Get(), queue.Get(), colour.Get(), {pattern});
         return colour;
     };
     uint64_t nextFrame = 0;
     auto record = [&](void* owner, UINT width, UINT height, bool passthrough = false, bool exposure = false,
-                      bool hipPassthrough = false) {
+                      bool hipPassthrough = false, UINT allocWidth = 0, UINT allocHeight = 0,
+                      UINT pattern = 0, bool temporal = false, UINT inlineSlots = 0) {
         auto result = std::make_unique<RecordedFrame>();
         Check(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&result->producerAllocator)), "producer allocator");
         Check(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&result->consumerAllocator)), "consumer allocator");
@@ -80,12 +97,16 @@ int main(int argc, char** argv)
         Check(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, result->consumerAllocator.Get(), nullptr,
                                        IID_PPV_ARGS(&result->consumer)), "consumer list");
         Check(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&result->fence)), "tail fence");
-        auto colour = makeColour(width, height);
+        auto colour = makeColour(allocWidth ? allocWidth : width, allocHeight ? allocHeight : height, pattern);
         LmxxfNrFrameInfo frame {}; frame.struct_size = sizeof frame;
         frame.frame_id = ++nextFrame;
         frame.command_list = result->producer.Get(); frame.color = colour.Get(); frame.color_width = width; frame.color_height = height;
         frame.color_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
         frame.paper_white = frame.pre_exposure = frame.exposure_scale = frame.model_scale = 1;
+        frame.temporal_flags = temporal ? LMXXF_NR_TEMPORAL_MODEL_HISTORY : 0;
+        frame.inline_slots = inlineSlots;
+        result->activeWidth=width;result->activeHeight=height;result->pattern=pattern;
+        result->inlineFrame=inlineSlots!=0;
         if (hipDiagnostic) frame.pre_exposure = 2; // Yimo's observed frame contract.
         frame.flags = (passthrough ? LMXXF_NR_FRAME_FLAG_CODEC_PASSTHROUGH : 0) |
                       (exposure ? LMXXF_NR_FRAME_FLAG_AUTO_EXPOSURE : 0) |
@@ -109,23 +130,177 @@ int main(int argc, char** argv)
     };
     auto abandoned = record(context, 1280, 720); const auto oldToken = abandoned->token; discard(context, abandoned);
     std::vector<std::unique_ptr<RecordedFrame>> frames;
-    for (unsigned i = 0; i < 10; ++i) {
+    for (unsigned i = 0; i < (drs ? 0u : 10u); ++i) {
         frames.push_back(record(context, 1280, 720));
         Require(frames.back()->token != oldToken, "discarded token never aliases a new Job");
         Require(api.CollectRecording(context, frames.back()->token) == LMXXF_NR_UNAVAILABLE, "live delayed recording retained");
     }
-    Require(api.Destroy(context) == LMXXF_NR_UNAVAILABLE, "Destroy refuses live recordings");
+    if (!drs) Require(api.Destroy(context) == LMXXF_NR_UNAVAILABLE, "Destroy refuses live recordings");
+    Ptr<ID3D12CommandQueue> side;
+    if(drs){D3D12_COMMAND_QUEUE_DESC sd{};sd.Type=D3D12_COMMAND_LIST_TYPE_COMPUTE;
+        Check(device->CreateCommandQueue(&sd,IID_PPV_ARGS(&side)),"DRS inline side queue");}
     auto run = [&](void* owner, RecordedFrame& frame, ID3D12CommandQueue* target) {
         ok(api.BeginRecordingExecution(owner, frame.token, target), "begin execution");
         ID3D12CommandList* producer[] = {frame.producer.Get()}; target->ExecuteCommandLists(1, producer);
-        ok(api.EnqueueHip(owner, frame.token, target), "actual HIP enqueue");
+        if(frame.inlineFrame){
+            Check(target->Signal(frame.fence.Get(),++frame.value),"inline capture proof");
+            WaitQueue(device.Get(),target);
+            ok(api.EnqueueHip(owner,frame.token,side.Get()),"actual inline HIP enqueue");
+            Check(side->Signal(frame.fence.Get(),++frame.value),"inline side proof");
+            Check(target->Wait(frame.fence.Get(),frame.value),"inline consumer dependency");
+        }else ok(api.EnqueueHip(owner, frame.token, target), "actual HIP enqueue");
         ID3D12CommandList* consumer[] = {frame.consumer.Get()}; target->ExecuteCommandLists(1, consumer);
         const HRESULT signal = target->Signal(frame.fence.Get(), ++frame.value);
         ok(api.EndRecordingExecution(owner, frame.token, target, 3, frame.fence.Get(), frame.value, signal), "end execution");
         WaitQueue(device.Get(), target);
         if (owner == context) { LmxxfNrTimings net {}; net.struct_size = sizeof net; ok(api.GetTimings(owner, &net), "completed network timing"); }
-        return HashTexture(device.Get(), target, frame.output);
+        return HashTexture(device.Get(), target, frame.output, 0,
+            drs ? frame.activeWidth : 0, drs ? frame.activeHeight : 0, {frame.pattern});
     };
+    if (drs)
+    {
+        auto counter = [&](void* owner, const char* key) {
+            char text[2048] {}; ok(api.GetStatus(owner,text,sizeof text),"DRS status");
+            auto p=std::strstr(text,key); Require(p!=nullptr,"DRS counter exists");
+            return unsigned(std::strtoul(p+std::strlen(key),nullptr,10));
+        };
+        Ptr<IDXGIAdapter> adapter; Ptr<IDXGIAdapter3> memory;
+        // D3D12 devices do not expose IDXGIDevice: resolve the exact adapter by LUID.
+        Check(factory->EnumAdapterByLuid(device->GetAdapterLuid(),IID_PPV_ARGS(&adapter)),"memory adapter");
+        Check(adapter.As(&memory),"memory budget interface");
+        UINT64 peak=0;
+        auto sampleMemory = [&](const char* phase) {
+            DXGI_QUERY_VIDEO_MEMORY_INFO m{};
+            Check(memory->QueryVideoMemoryInfo(0,DXGI_MEMORY_SEGMENT_GROUP_LOCAL,&m),"local memory");
+            peak=(std::max)(peak,m.CurrentUsage);
+            std::printf("DRS memory %s usage=%llu budget=%llu peak=%llu\n",phase,m.CurrentUsage,m.Budget,peak);
+        };
+        sampleMemory("initial");
+        ok(api.Destroy(context),"destroy initial DRS session");
+        for (bool smallModel : {false,true}) for (bool native : {false,true})
+        {
+            SetPolicy("DLSS5_NETWORK_MODEL",smallModel?"1":"0");
+            SetPolicy("DLSS5_NETWORK_FREE_RES",native?"1":"0");
+            context=create();
+            auto old=record(context,1280,720,false,false,false,1280,720,0);
+            char modelStatus[2048]{}; ok(api.GetStatus(context,modelStatus,sizeof modelStatus),"effective model");
+            Require(std::strstr(modelStatus,smallModel?" model=small ":" model=original ")!=nullptr,"requested model executed, no fallback");
+            const auto oldHash=run(context,*old,other.Get());
+            const unsigned creates=counter(context,"bridgeCreates=");
+            unsigned recreates=counter(context,"recreates=");
+            for (unsigned step=0;step<6;++step)
+            {
+                const UINT width=native?1280u:((step%2)?1280u:1600u);
+                const UINT height=native?720u:((step%2)?720u:900u);
+                const UINT aw=(step%2)?width:1920u, ah=(step%2)?height:1080u;
+                const UINT pattern=step%3;
+                auto current=record(context,width,height,false,false,false,aw,ah,pattern);
+                Require(counter(context,"bridgeCreates=")==creates,"exact network retained across codec recreation");
+                Require(counter(context,"recreates=")==++recreates,"one codec recreation per changed contract");
+                Require(api.CollectRecording(context,old->token)==LMXXF_NR_UNAVAILABLE,"old closed recording retained until invalidation");
+                const auto actual=run(context,*current,(step%2)?queue.Get():other.Get());
+                void* baselineContext=create();
+                auto baselineFrame=record(baselineContext,width,height,false,false,false,aw,ah,pattern);
+                Require(run(baselineContext,*baselineFrame,queue.Get())==actual,"changed nonzero DRS output equals fresh same-policy network");
+                discard(baselineContext,baselineFrame);ok(api.Destroy(baselineContext),"destroy fresh baseline");
+                Require(run(context,*old,other.Get())==oldHash,"old immutable recording replays across queues after retention");
+                sampleMemory("old-recording-pinned");
+                std::printf("DRS %s %s step=%u active=%ux%u alloc=%ux%u bridgeCreates=%u recreates=%u hash=%016llx\n",
+                    smallModel?"Small":"Original",native?"native-allocation":"fixed-tier",step,width,height,aw,ah,
+                    creates,recreates,actual);
+                discard(context,current);
+                auto unchanged=record(context,width,height,false,false,false,aw,ah,pattern);
+                Require(counter(context,"bridgeCreates=")==creates && counter(context,"recreates=")==recreates,
+                        "unchanged active subrect does not repeatedly recreate codecs");
+                Require(run(context,*unchanged,queue.Get())==actual,"rotating equal-description input retains output");
+                discard(context,unchanged);
+            }
+            // Native active changes, even with shared processing buckets, replace the network.
+            if(native) {
+                auto changed=record(context,1280,721);
+                Require(counter(context,"bridgeCreates=")==creates+1,"native valid geometry forces replacement");
+                run(context,*changed,queue.Get());discard(context,changed);
+                Require(run(context,*old,other.Get())==oldHash,"old bridge survives genuine replacement");
+                Require(std::strcmp(std::getenv("DLSS5_NETWORK_FREE_RES"),"1")==0,"native user policy never converted to fitted tier");
+            }
+            discard(context,old);sampleMemory("collected");
+            ok(api.Destroy(context),"destroy DRS matrix session");
+        }
+        // Adaptive mapping changes retain full replacement, never mutate live anchors.
+        SetPolicy("DLSS5_NETWORK_MODEL","0");SetPolicy("DLSS5_NETWORK_FREE_RES","0");
+        SetPolicy("DLSS5_VIT_ADAPTIVE","1");context=create();
+        auto adaptiveOld=record(context,1280,720);run(context,*adaptiveOld,queue.Get());
+        const auto before=counter(context,"bridgeCreates=");
+        auto adaptiveNew=record(context,1600,900);
+        Require(counter(context,"bridgeCreates=")==before+1,"adaptive mapping full replacement");
+        run(context,*adaptiveNew,other.Get());discard(context,adaptiveNew);discard(context,adaptiveOld);
+        ok(api.Destroy(context),"destroy adaptive session");
+        SetPolicy("DLSS5_VIT_ADAPTIVE","0");SetPolicy("DLSS5_TEMPORAL_MODE","2");context=create();
+        auto temporalOld=record(context,1280,720,false,false,false,1280,720,0,true);
+        const auto temporalHash=run(context,*temporalOld,queue.Get());
+        const auto temporalCreates=counter(context,"bridgeCreates=");
+        auto temporalAllocation=record(context,1280,720,false,false,false,1920,1080,1,true);
+        Require(counter(context,"bridgeCreates=")==temporalCreates,"temporal unchanged mapping allocation retains bridge");
+        run(context,*temporalAllocation,other.Get());discard(context,temporalAllocation);
+        auto temporalChanged=record(context,1600,900,false,false,false,1600,900,1,true);
+        Require(counter(context,"bridgeCreates=")==temporalCreates+1,"unproven temporal mapping replaces bridge");
+        run(context,*temporalChanged,queue.Get());discard(context,temporalChanged);
+        ok(api.ResetHistory(context),"actual execution reset");
+        Require(run(context,*temporalOld,other.Get())==temporalHash,"old temporal recording explicit reset baseline");
+        discard(context,temporalOld);ok(api.Destroy(context),"destroy temporal retention session");
+        SetPolicy("DLSS5_TEMPORAL_MODE","0");
+        context=create();
+        auto inlineOld=record(context,1280,720,false,false,false,1280,720,0,false,2);
+        const auto inlineCreates=counter(context,"bridgeCreates=");
+        auto inlineNew=record(context,1600,900,false,false,false,1920,1080,1,false,2);
+        Require(counter(context,"bridgeCreates=")==inlineCreates,"ahead inline mapping retains bridge");
+        const auto inlineNewHash=run(context,*inlineNew,queue.Get());
+        const auto inlineOldHash=run(context,*inlineOld,other.Get());
+        Require(run(context,*inlineNew,other.Get())==inlineNewHash,"inline new recording replay across queues");
+        Require(run(context,*inlineOld,queue.Get())==inlineOldHash,"inline old captures survive ahead codec replacement");
+        discard(context,inlineNew);discard(context,inlineOld);ok(api.Destroy(context),"destroy inline DRS session");
+        context=create();
+        auto memoryOld=record(context,1280,720);
+        run(context,*memoryOld,queue.Get());sampleMemory("bounded-cycle-start");
+        for(unsigned cycle=0;cycle<24;++cycle){
+            auto frame=record(context,1280,720,false,false,false,cycle%2?1280:1920,cycle%2?720:1080,cycle%3);
+            run(context,*frame,queue.Get());discard(context,frame);
+            Require(counter(context,"bridgeCreates=")==1,"bounded codec cycle never adds a bridge generation");
+            if(cycle==11||cycle==23)sampleMemory(cycle==11?"bounded-cycle-12-collected":"bounded-cycle-24-collected");
+        }
+        discard(context,memoryOld);ok(api.Destroy(context),"destroy bounded memory session");
+        // A reported failed Signal cannot be repaired by a later unrelated fence.
+        // Use a separate session and deliberately retain it to process exit: no
+        // completion certificate exists for this fault, even though the test waits.
+        void* faultContext=create();
+        auto faultOld=record(faultContext,1280,720);
+        auto faultNew=record(faultContext,1600,900);
+        Require(counter(faultContext,"bridgeCreates=")==1,"failure fixture shares retained bridge");
+        ok(api.BeginRecordingExecution(faultContext,faultOld->token,queue.Get()),"fault begin");
+        ID3D12CommandList* fp=faultOld->producer.Get();queue->ExecuteCommandLists(1,&fp);
+        ok(api.EnqueueHip(faultContext,faultOld->token,queue.Get()),"fault actual HIP");
+        ID3D12CommandList* fc=faultOld->consumer.Get();queue->ExecuteCommandLists(1,&fc);
+        Require(api.EndRecordingExecution(faultContext,faultOld->token,queue.Get(),3,nullptr,0,E_FAIL)==LMXXF_NR_UNAVAILABLE,
+                "failed Signal rejects completion proof");
+        WaitQueue(device.Get(),queue.Get());
+        faultOld->producer.Reset();faultOld->consumer.Reset();
+        ok(api.InvalidateRecording(faultContext,faultOld->token),"invalidate failed-signal recording");
+        Require(api.CollectRecording(faultContext,faultOld->token)==LMXXF_NR_UNAVAILABLE,"uncertain old recording retained");
+        Require(api.BeginRecordingExecution(faultContext,faultNew->token,other.Get())==LMXXF_NR_UNAVAILABLE,
+                "shared retained chain fails closed after uncertain execution");
+        Require(api.Destroy(faultContext)==LMXXF_NR_UNAVAILABLE,"fault session cannot free uncertain resources");
+        std::puts("DRS failed-Signal completion retention: PASS (isolated session intentionally held to process exit)");
+        sampleMemory("final");
+        Ptr<ID3D12InfoQueue> messages;
+        if(SUCCEEDED(device.As(&messages)))for(UINT64 i=0;i<messages->GetNumStoredMessages();++i){
+            SIZE_T bytes=0;messages->GetMessage(i,nullptr,&bytes);std::vector<char> storage(bytes);
+            auto* m=reinterpret_cast<D3D12_MESSAGE*>(storage.data());
+            Check(messages->GetMessage(i,m,&bytes),"DRS debug message");
+            if(m->Severity<=D3D12_MESSAGE_SEVERITY_ERROR)std::fprintf(stderr,"%s\n",m->pDescription);
+            Require(m->Severity>D3D12_MESSAGE_SEVERITY_ERROR,"DRS D3D12 debug errors");
+        }
+        FreeLibrary(dll);std::puts("Exact-network DRS recording execution: PASS");return 0;
+    }
     if (hipDiagnostic)
     {
         auto conflictColour = makeColour(1280, 720);

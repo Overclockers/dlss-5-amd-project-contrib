@@ -15,6 +15,7 @@
 #include "LmxxfProductionOptions.h"
 #include "LmxxfModelOptions.h"
 #include "LmxxfSmallAssets.h"
+#include "LmxxfNetworkIdentity.h"
 #include "LmxxfExposureMeter.h"
 #include "native_device_identity.h"
 #include "native_game_codec.h"
@@ -1063,6 +1064,7 @@ struct Job
 struct RecordingChain
 {
     std::shared_ptr<hip_reference::D3D12Bridge> bridge;
+    NativeNetworkGeometry geometry{};
     std::vector<std::shared_ptr<LmxxfRuntime::RecordingCompletion>> completions;
     bool unconfirmed = false;
     std::unique_ptr<LmxxfNativeTemporal::History> history;
@@ -1179,6 +1181,8 @@ struct Session
     int smallAssetsValid = 0; // Session cache: install assets before starting the game.
     float networkStyle = -1.f;
     std::string networkOptions;
+    NativeNetworkGeometry networkGeometry{};
+    hip_reference::Options constructionOptions;
     // Adaptive reuse reads live env, but byte stream is baked into the network.
     // Rebuild when byte stream changes before allowing reuse on the next frame.
     bool vitByteStream = false;
@@ -1286,8 +1290,8 @@ struct Session
                 throw std::runtime_error("TeardownCodecChain: bridge work did not complete");
             }
         }
-        // Exposure bindings belong to the codecs. Keep the expensive model,
-        // weights and warmed kernels when only those bindings changed.
+        // Codec bindings are independent of an identical captured network contract.
+        // Recording jobs retain immutable old descriptors/resources, not these wrappers.
         if (!retainBridge)
         {
             ReleaseBridge();
@@ -1296,6 +1300,7 @@ struct Session
             netW = 0;
             netH = 0;
             netProcessingH = 0;
+            netProcessingW = 0;
             networkStyle = -1.f;
             vitByteStream = false;
             pdlRequested = false;
@@ -1744,7 +1749,7 @@ void PrepareHistory(Session* s,const LmxxfNrFrameInfo* info,RecordingJob& j)
                 if(same)motion=cand;
             }
         }
-        auto ng=NativeCurrentNetworkGeometry();auto& chain=*j.chain;
+        auto ng=j.chain->geometry;auto& chain=*j.chain;
         if(!chain.lowFreq||!chain.lowFreq->Matches(ng.valid_width,ng.valid_height,ng.processing_height)){
             auto lf=std::make_unique<LmxxfNativeTemporal::LowFrequency>();
             lf->Create(s->device,ng.valid_width,ng.valid_height,ng.processing_height,LmxxfCompiler());
@@ -1781,7 +1786,7 @@ void PrepareHistory(Session* s,const LmxxfNrFrameInfo* info,RecordingJob& j)
         HRESULT hr=guide->GetDevice(IID_PPV_ARGS(&device));bool same=SUCCEEDED(hr)&&device&&NativeSameDevice(device,s->device);
         if(device)device->Release();if(!same){disable("guide-device");return;}
     }
-    auto ng=NativeCurrentNetworkGeometry();auto& chain=*j.chain;
+    auto ng=j.chain->geometry;auto& chain=*j.chain;
     if(!chain.history){
         auto history=std::make_unique<LmxxfNativeTemporal::History>();
         history->Create(s->device,ng.valid_width,ng.valid_height,ng.processing_height,s->bridge->DirectHistory(),LmxxfCompiler(),ng.processing_width);
@@ -1991,7 +1996,9 @@ int32_t PrepareFrame(void *context, const LmxxfNrFrameInfo *info, LmxxfNrJob *jo
         session->modelReason = model.reason;
         for (const char* key : {CfgKey::MultiPass, CfgKey::MultiPassPredict, CfgKey::MultiPassSkinProtect,
                                CfgKey::MultiPassSkipBlocks, CfgKey::FastNumeric,
-                               CfgKey::NetworkFreeRes, CfgKey::SkipBlocks}) {
+                               CfgKey::NetworkFreeRes, CfgKey::SkipBlocks, CfgKey::VitAdaptive,
+                               CfgKey::VitReusePeriod, CfgKey::VitReuseGlobal, CfgKey::VitReuseLocal,
+                               CfgKey::VitReuseImage}) {
             const char* value = std::getenv(key);
             requestedOptions += key; requestedOptions += '=';
             if (value) requestedOptions += value;
@@ -2005,6 +2012,7 @@ int32_t PrepareFrame(void *context, const LmxxfNrFrameInfo *info, LmxxfNrJob *jo
         const bool requestModelHistory = requestedTemporalMode == NativeTemporalMode::FastHistory;
         const bool requestAnyTemporal = requestedTemporalMode != NativeTemporalMode::Off;
         requestedOptions += requestModelHistory ? "history=1;" : "history=0;";
+        requestedOptions += "temporal=" + std::to_string(static_cast<unsigned>(requestedTemporalMode)) + ";";
         // This policy belongs to the chain. A later Prepare may overlap an active
         // recording, so changing it requires a new chain rather than a bridge setter.
         requestedOptions += requestAnyTemporal ? "adaptive=0;" : "adaptive=1;";
@@ -2050,6 +2058,9 @@ int32_t PrepareFrame(void *context, const LmxxfNrFrameInfo *info, LmxxfNrJob *jo
             session->smallModel = model.useSmall;
             session->networkStyle = requestedStyle;
             session->networkOptions = requestedOptions;
+            session->networkGeometry = resolvedGeo;
+            session->constructionOptions = opt;
+            if (session->recordingChain) session->recordingChain->geometry = resolvedGeo;
             session->CaptureBridgeDiagnostics();
             char geoMsg[192] {};
             std::snprintf(geoMsg, sizeof geoMsg,
@@ -2266,12 +2277,11 @@ int32_t PrepareFrame(void *context, const LmxxfNrFrameInfo *info, LmxxfNrJob *jo
         const bool allocChanged = session->encode &&
                                   ((session->allocWidth && cw != session->allocWidth) ||
                                    (session->allocHeight && ch != session->allocHeight));
-        const bool tierChanged = session->encode &&
-                                 (session->netW != resolvedGeo.valid_width ||
-                                  session->netH != resolvedGeo.valid_height ||
-                                  session->netProcessingH != resolvedGeo.processing_height ||
-                                  session->netProcessingW != resolvedGeo.processing_width);
-        const bool styleChanged = session->hipPrepared && (session->networkStyle != requestedStyle || session->networkOptions != requestedOptions);
+        const bool tierChanged = session->hipPrepared &&
+            !LmxxfRuntime::SameGeometry(session->networkGeometry, resolvedGeo);
+        const bool styleChanged = session->hipPrepared &&
+            (session->networkStyle != requestedStyle || session->networkOptions != requestedOptions ||
+             !LmxxfRuntime::SameConstruction(session->constructionOptions, model.options));
         const char *vitByte = std::getenv(CfgKey::VitByteStream);
         const bool vitByteStreamChanged = session->hipPrepared &&
             session->vitByteStream != (vitByte && std::strcmp(vitByte, "1") == 0);
@@ -2279,13 +2289,21 @@ int32_t PrepareFrame(void *context, const LmxxfNrFrameInfo *info, LmxxfNrJob *jo
             exposureChanged || validChanged || formatChanged || allocChanged || tierChanged || styleChanged;
         const bool pointerChanged = session->encode && color != session->job.color;
 
-        // Geometry and kernel-option changes still require the full teardown.
+        // Preserve the existing exposure-only path, including legacy non-lease callers.
         const bool exposureOnly = exposureChanged && !validChanged && !formatChanged &&
                                   !allocChanged && !tierChanged && !vitByteStreamChanged && !styleChanged;
-        const bool rebuilding = (session->encode && geoChanged) || vitByteStreamChanged;
+        const char* adaptive = std::getenv(CfgKey::VitAdaptive);
+        const bool adaptiveEnabled = !requestAnyTemporal && adaptive && std::strcmp(adaptive, "0") != 0;
+        // Mapping changes cannot reset adaptive anchors during Prepare: older recordings
+        // may still be executing. Temporal mapping reuse is likewise excluded until
+        // its ordered discontinuity contract is exercised; allocation-only is unchanged.
+        const bool retainNetwork = exposureOnly || LmxxfRuntime::CanRetainNetwork(
+            session->recordingLeases, !tierChanged, !styleChanged && !vitByteStreamChanged,
+            validChanged || formatChanged, adaptiveEnabled || requestAnyTemporal);
+        const bool rebuilding = (session->encode && geoChanged) || tierChanged || styleChanged || vitByteStreamChanged;
         const auto rebuildStart = std::chrono::steady_clock::now();
 
-        if ((session->encode && geoChanged) || vitByteStreamChanged)
+        if (rebuilding)
         {
             ++session->codecRecreates;
             char reason[96] {};
@@ -2313,7 +2331,7 @@ int32_t PrepareFrame(void *context, const LmxxfNrFrameInfo *info, LmxxfNrJob *jo
             if (FAILED(drainResult))
                 return Fail(LMXXF_NR_UNAVAILABLE,
                             "PrepareFrame: geometry or ViT option change; GPU drain failed (retry or rebuild session)");
-            session->TeardownCodecChain(exposureOnly);
+            session->TeardownCodecChain(retainNetwork);
             session->job = {};
         }
         // Reached only after any drain above succeeded (a failed drain returns and leaks it,
@@ -2354,6 +2372,9 @@ int32_t PrepareFrame(void *context, const LmxxfNrFrameInfo *info, LmxxfNrJob *jo
                 session->smallModel = model.useSmall;
                 session->networkStyle = requestedStyle;
                 session->networkOptions = requestedOptions;
+                session->networkGeometry = resolvedGeo;
+                session->constructionOptions = opt;
+                if (session->recordingChain) session->recordingChain->geometry = resolvedGeo;
                 session->CaptureBridgeDiagnostics();
                 char geoMsg[192] {};
                 std::snprintf(geoMsg, sizeof geoMsg,
@@ -2368,7 +2389,7 @@ int32_t PrepareFrame(void *context, const LmxxfNrFrameInfo *info, LmxxfNrJob *jo
             // One warm-up dispatch before recording so lazy weight and module uploads cannot
             // land inside the producer-wait callback later (the author's RE9 host does the
             // same). Only reached after the colour contract passed, so a title we cannot
-            // serve never pays for it. Exposure-only changes retain this warm state.
+            // serve never pays for it. Exact-network codec changes retain this warm state.
             if (!session->bridgeWarmed)
             {
                 session->bridge->PrepareStagedKernels();
@@ -3300,9 +3321,9 @@ int32_t GetStatus(void *context, char *buf, uint32_t buf_chars)
                 std::snprintf(pdlBuf, sizeof pdlBuf, "pdl=0/0(unknown)");
             }
 
-            if (session->hipPrepared && NativeNetworkGeometryResolved())
+            if (session->hipPrepared)
             {
-                auto geo = NativeCurrentNetworkGeometry();
+                const auto geo = session->networkGeometry;
                 std::snprintf(text, sizeof text,
                               "lmxxf arch=%s match=%s %s modules_ok=%u hip=1 net=%ux%u color_job=%ux%u weights=%u recreates=%u autoexp=%u passes=%u network_passes=%u predict=%u skin=%u",
                               archStr, matchStr, pdlBuf,

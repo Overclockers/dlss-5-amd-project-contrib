@@ -103,6 +103,48 @@ pre/post pixel once. Sampling, precision, disocclusion checks and model seeds ar
 unchanged. Finish and RGB texture conversion remain separate: measured fusion
 candidates did not reduce output-stage time.
 
+## Exact-network codec retention (2026-10-21)
+
+Recording-lease sessions can rebuild allocation/format/active codec bindings without
+recreating the HIP bridge only when their **captured complete network geometry**
+(valid and processing extents, token grid, Small/model and tier identity), effective
+construction options, style, byte stream, first-pass, temporal and adaptive policies
+are identical. This extends the existing exposure-only retention; it is not a peak
+resolution cache. Native/free mode remains the user's choice and is never converted
+to a fitted tier after shrinking. Small and Original have independent geometry keys.
+
+Allocation-only changes with the same active mapping qualify, including native/free
+and temporal sessions. Active/format mapping changes are excluded while adaptive or
+temporal processing is requested. Other exact fixed-tier mappings can retain the
+bridge after reaching the runtime. Genuine valid/token/model/options changes still
+replace the network. Earlier recordings pin their exact immutable resources and
+chain; no frame-age retirement or new CPU drain is added to the lease path. Existing
+actual-execution history discontinuity/reset checks remain authoritative.
+
+The shared caller's 300 ms settle and stable-frame policy is **unchanged**. Rapid
+active-resolution DRS may still be bypassed before the runtime. This change certifies
+allocation/binding retention, not end-to-end rapid DRS, high-water inference, game
+FPS or Daniel peak retention. Daniel's sampling/compute tradeoff remains deferred.
+
+Focused entry points: `tests/lmxxf/run.cmd drs-cpu` and `drs` (AMD device, verified
+Original and Small assets required). The latter executes changing nonzero inputs
+through actual HIP, compares full texture bytes to fresh same-policy sessions,
+checks outside-active sentinels, counts codec and bridge creations independently,
+and replays retained recordings on both queues and inline captures. Original and
+Small each passed six grow/shrink codec changes with `bridgeCreates=1` and
+`recreates=1..6` on gfx1201; native active-height changes and adaptive mapping
+changes rebuilt as required. This is synthetic runtime evidence, not host/game
+DRS admission proof. Only the focused matrix was run; it does not certify every
+format, injected allocation failure, memory-pressure admission or gfx1200 hardware.
+An additional 24-cycle allocation-only run kept one old recording pinned and
+collected each newer recording. Sampled process-local DXGI usage was identical
+after cycles 12 and 24 (2,959,843,328 bytes); sampled mixed-matrix peak was
+2,969,804,800 bytes against a 16,165,400,576-byte budget. These are sampled process
+usage, including existing imported-buffer pools and the deliberately retained
+failed-Signal session, not total HIP VRAM or an instantaneous transition maximum.
+Failed completion proof retained the invalidated old recording and refused replay
+and destruction of its shared chain. No memory-pressure eviction was introduced.
+
 ## ABI and modules
 
 The shared host/runtime table negotiates ABI 3. lmxxf FrameInfo is 160 bytes,
