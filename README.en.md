@@ -1,8 +1,8 @@
 [中文](README.md) | **English** | [Español](README.es.md)
 
-# OptScaler(NR) 1.13.0-alpha
+# OptScaler(NR) 1.13.0-alpha8
 
-**Special Thanks**: Thank you to all Bilibili users for your testing and feedback.
+**Special Thanks**: Thank you to all users for your testing and feedback.
 
 Connects **AMD Neural Rendering** (DLSS5 on AMD) into **OptiScaler**, enabling **pure DLSS / XeSS games** to run neural denoising on AMD GPUs; upscaling is handled by **FFX/FSR**.
 

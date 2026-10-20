@@ -83,14 +83,86 @@ jobs:
           SOURCE_REPO: ${{ github.repository }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $lines = @(
-            'Mochizuki后端适配DLSS 10.16最新模型。',
-            'The Mochizuki backend now supports the latest DLSS 10.16 model.'
-          )
-          if ($lines.Count -ne 2) { throw "Release notes must strictly contain exactly two lines" }
-          New-Item -ItemType Directory -Force exports | Out-Null
-          [IO.File]::WriteAllText((Join-Path $PWD 'exports/release-notes.md'), ($lines -join "`n") + "`n", [Text.UTF8Encoding]::new($false))
+          $body = @'
+          ### v1.13.0-alpha8 (对比 v1.12.2)
 
+          - **全新图形化启动器与安装管理**：
+            - **本地游戏库自动发现**：启动器可视化界面，自动扫描 Steam、XBOX PC、Epic 与 GOG 本地游戏，支持手动添加单款游戏或先添加文件夹再扫描启动程序。
+            - **游戏主程序与注入智能识别**：优先定位包含超分原生 DLL 及 `x64_dx12` / `Shipping.exe` 的真正游戏主程序，自动过滤游戏启动器与崩溃辅助进程。
+            - **多后端管理与精简操作栏**：支持同时勾选安装多个后端并直接指定默认主后端（Active Backend），提供缺失模型/运行库的就地提示，支持中英文实时切换。
+            - **配套运行库兼容修复**：自动检测游戏目录与安装包内对应dll版本差异（类似OptiScaler覆盖方式），支持按组件一键替换备份与恢复原文件。
+          - **Mochizuki 后端（升级至 0.0.7）**：
+            - **0.0.7 核心与三模型支持**：适配最新 DLSS 10.16 模型，支持提取并切换 **FP8（原版）**、**INT4（量化加速）** 与 **Small（轻量）** 三种模型规格。
+            - **画面与预设校正**：同步 0.0.7 修正后的预设风格档位（Grades A–D），新增分辨率/范围切换过渡窗口与曝光连续性保护。
+            - **Split 共享纹理加速**：在符合条件的帧切分（Split）场景下直接复用共享色彩纹理与共享运动矢量纹理，降低跨 API 拷贝开销。
+          - **lmxxf 后端（升级至 0.44）**：
+            - **同步至 0.44**：集成 **Small 轻量模型** 与 W16 路径支持，支持 Standard / Small 模型独立校验与菜单切换，跟进 0.44 冷启动准备策略。
+          - **OptiScaler 兼容与稳定性修复**：
+            - **代理钩子输入保护**：修复通过低级系统钩子加载代理 DLL（如 `winmm.dll` / `version.dll`）时可能引起的系统键鼠输入卡顿（[#13](https://github.com/TheAutomatic/dlss-5-amd-project/issues/13)，感谢 [@winky1717](https://github.com/winky1717)）。
+            - **游戏兼容性与菜单提示优化**：提升多款 DX11 / DX12 游戏的画面注入稳定性并自动记住兼容配置；优化游戏内 Ins 菜单的“需重启生效”提示，并修复正常代理被误报警告的问题。
+
+          **安装与权重**
+
+          - 完整解压并运行新包 `Setup.bat` 打开图形化启动器更新整包，建议使用覆盖安装。
+          - Mochizuki 0.0.7：从自备的新版 `nvngx_dlssnr.dll`（10.16 / 310.5+）提取 FP8、INT4 或 Small 模型，首次提取需要 Python 3.10+。
+          - lmxxf 0.44：从合法持有且许可允许使用的模型准备 `native-game-tiled-assets`（Standard 或 Small），见 [原仓库](https://github.com/lmxxf/dlss5-on-amd-9070xt-porting)。
+          - Daniel 0.6.0：从 [danielblnc发布页](https://github.com/danielblnc/DLSS-NR-on-AMD/releases) 获取运行文件，自备对应的 `nvngx_dlssnr.dll`。
+
+          **已知问题**
+
+          - 新版启动器当前仅保证功能使用，将尽快优化UI页面。
+          - 新模型下与 mochizuki 原版的性能差距正在修复，追求极致帧数可[优先尝试原版](https://github.com/mochizuki0323/DLSSNR-AMD)。
+          - RenoDX 无法与人物保护功能同时生效，请尝试 RenoDX 下相关类似功能。
+          - 内联（Inline）模式仍为实验功能，可尝试在《红色沙漠》等不支持命令列表切分的游戏中开启。
+          - 新版三模型规格、共享纹理加速及自动调优的跨游戏画质、长时间运行与性能仍在持续验证中；不承诺所有游戏提速。
+          - lmxxf 时序模式与 ViT 自适应复用保持互斥；Mode 2/3 不支持多层。SR → NR 不扩展原生 RR/Vulkan 支持范围。
+          - 新 XeFG 插件偶发性能下降问题，可尝试重启游戏；帧生成类插件不提供技术支持。
+
+          ---
+
+          ### v1.13.0-alpha8 (vs. v1.12.2)
+
+          - **New graphical launcher and installation manager**:
+            - **Automatic local game library discovery**: Visual launcher UI that automatically scans local Steam, Xbox PC, Epic, and GOG games, while supporting manual single-game or folder-first entries.
+            - **Smart game executable and injection detection**: Prioritizes true main game binaries containing native upscaler DLLs or `x64_dx12` / `Shipping.exe` paths, automatically filtering out game launchers and crash-helper processes.
+            - **Multi-backend management and streamlined action bar**: Install multiple backends at once and set the default Active Backend directly, with in-place hints for missing models/runtimes and live Chinese/English switching.
+            - **Companion runtime compatibility repair**: Automatically detects version differences between the game folder and bundled DLLs (similar to OptiScaler's override approach), supporting one-click backed-up replacement and original file restoration per component.
+          - **Mochizuki backend (updated to 0.0.7)**:
+            - **0.0.7 core and 3-way model support**: Supports the latest DLSS 10.16 model with **FP8 (original)**, **INT4 (quantized)**, and **Small (lightweight)** model extraction and switching.
+            - **Visual and preset refinements**: Syncs corrected 0.0.7 style grades (Grades A–D) and adds resolution/extent transition settle windows and exposure continuity protection.
+            - **Split shared-texture acceleration**: Reuses shared colour and motion textures on eligible command-list split frames to reduce cross-API copy overhead.
+          - **lmxxf backend (updated to 0.44)**:
+            - **Sync to 0.44**: Integrates **Small model** and W16 path support with independent Standard/Small model verification, menu switching, and 0.44 cold-start preparation.
+          - **OptiScaler compatibility and stability fixes**:
+            - **Low-level hook input protection**: Prevents system mouse/keyboard input stalls when proxy DLLs (`winmm.dll` / `version.dll`) are loaded through low-level system hooks ([#13](https://github.com/TheAutomatic/dlss-5-amd-project/issues/13), thanks to [@winky1717](https://github.com/winky1717)).
+            - **In-game compatibility and menu improvements**: Improves rendering injection stability across more DX11 / DX12 titles with automatically saved compatibility settings; adds clearer "restart required" hints in the in-game `Ins` menu and fixes false-positive proxy warnings.
+
+          **Installation and models**
+
+          - Extract the complete ZIP and run `Setup.bat` to open the graphical launcher and update the full package (clean overwrite recommended).
+          - Mochizuki 0.0.7: Extract the FP8, INT4, or Small model from your own `nvngx_dlssnr.dll` (10.16 / 310.5+) using Python 3.10+.
+          - lmxxf 0.44: Prepare `native-game-tiled-assets` (Standard or Small) from lawfully held model files where permitted; see [upstream](https://github.com/lmxxf/dlss5-on-amd-9070xt-porting).
+          - Daniel 0.6.0: Obtain runtime files from [danielblnc's releases](https://github.com/danielblnc/DLSS-NR-on-AMD/releases) and supply the matching `nvngx_dlssnr.dll` separately.
+
+          **Known issues**
+
+          - The new launcher currently prioritizes functional completeness; UI layout and visual improvements will follow soon.
+          - The performance gap versus upstream Mochizuki under the new model is being investigated; if maximum framerate is your priority, consider [trying the upstream release](https://github.com/mochizuki0323/DLSSNR-AMD) first.
+          - RenoDX cannot be used simultaneously with person protection; please try corresponding similar features in RenoDX.
+          - Inline mode remains experimental; you can try enabling it in titles that do not support command list splitting (such as Crimson Desert).
+          - New model variants, shared-texture split paths, and automatic tuning are still undergoing broad cross-game image-quality, long-run, and performance validation. No universal speedup is claimed.
+          - lmxxf temporal modes remain mutually exclusive with ViT adaptive reuse; Modes 2/3 require one pass. Post-SR NR does not extend native RR/Vulkan support.
+          - Occasional performance drops with new XeFG plugins can usually be resolved by restarting the game; no technical support is provided for frame-generation plugins.
+          '@
+          if ([string]::IsNullOrWhiteSpace($body)) { throw 'Empty release notes' }
+          $headings = [regex]::Matches($body, '(?m)^### v([^\s]+)(?:[ \t]+[^\r\n]*)?\r?$')
+          if (!$headings.Count) { throw "Missing release notes version heading" }
+          foreach ($heading in $headings) {
+            if ($heading.Groups[1].Value -cne $env:RELEASE_VERSION) { throw "Release notes version mismatch" }
+          }
+          $body += "`nSource / 源码：[$env:SOURCE_SHA](https://github.com/$env:SOURCE_REPO/tree/$env:SOURCE_SHA)`n"
+          New-Item -ItemType Directory -Force exports | Out-Null
+          [IO.File]::WriteAllText((Join-Path $PWD 'exports/release-notes.md'), $body, [Text.UTF8Encoding]::new($false))
       - name: Set up Python
         uses: actions/setup-python@v6
         with:

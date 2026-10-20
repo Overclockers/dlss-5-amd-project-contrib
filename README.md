@@ -1,8 +1,8 @@
 **中文** | [English](README.en.md) | [Español](README.es.md)
 
-# OptScaler(NR) 1.13.0-alpha
+# OptScaler(NR) 1.13.0-alpha8
 
-**特别感谢**：各位 Bilibili 用户的测试与反馈意见。
+**特别感谢**：各位用户的测试与反馈意见。
 
 在 **OptiScaler** 上接入 **AMD 神经网络渲染**（DLSS5 on AMD），让 **纯 DLSS / XeSS 游戏** 在 AMD 显卡上跑神经网络降噪；超分辨率仍然由 **FFX/FSR** 完成。
 

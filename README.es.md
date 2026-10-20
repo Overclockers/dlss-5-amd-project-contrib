@@ -1,8 +1,8 @@
 [中文](README.md) | [English](README.en.md) | **Español**
 
-# OptScaler(NR) 1.13.0-alpha
+# OptScaler(NR) 1.13.0-alpha8
 
-**Agradecimientos especiales**: Gracias a todos los usuarios de Bilibili por sus pruebas y comentarios.
+**Agradecimientos especiales**: Gracias a todos los usuarios por sus pruebas y comentarios.
 
 Conecta el **renderizado neuronal de AMD** (DLSS5 on AMD) en **OptiScaler**, permitiendo que juegos **exclusivos de DLSS / XeSS** ejecuten reducción de ruido neuronal (neural denoising) en GPUs AMD; el reescalado sigue a cargo de **FFX/FSR**.
 
