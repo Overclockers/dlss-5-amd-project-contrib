@@ -9,6 +9,7 @@
 #include "nvapi/fakenvapi.h"
 #include <hooks/Streamline_Hooks.h>
 #include <misc/IdentifyGpu.h>
+#include <menu/input/shortcut_keys.h>
 
 #include <SimpleIni.h>
 #include <cctype>
@@ -336,7 +337,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             DlssNrApplyAfterRR.set_from_config(readBool("DlssNr", "ApplyAfterRR"));
             DlssNrRRPasses.set_from_config(readUInt("DlssNr", "RRPasses"));
             DlssNrRRWorkingScale.set_from_config(readFloat("DlssNr", "RRWorkingScale"));
-            DlssNrToggleKey.set_from_config(readInt("DlssNr", "ToggleKey"));
+            DlssNrToggleKey.set_from_config(readShortcut("DlssNr", "ToggleKey"));
             DlssNrTransferStrength.set_from_config(readFloat("DlssNr", "TransferStrength"));
             DlssNrColourStrength.set_from_config(readFloat("DlssNr", "ColourStrength"));
             LmxxfPaperWhite.set_from_config(readFloat("DlssNr", "LmxxfPaperWhite"));
@@ -1057,11 +1058,11 @@ bool Config::Reload(std::filesystem::path iniPath)
                 value && std::isfinite(*value) && *value > 0)
                 MenuWindowHeight.set_from_config(*value);
             if (auto value = readInt(CfgKey::kMenuSection, CfgKey::MenuWindowAnchor); value)
-                MenuWindowAnchor.set_from_config(*value >= 0 && *value <= 4 ? *value : 0);
+                MenuWindowAnchor.set_from_config(*value >= 0 && *value <= 8 ? *value : 0);
 
             // Don't enable again if set false because of Linux issue
             OverlayMenu.set_from_config(readBool("Menu", "OverlayMenu"));
-            ShortcutKey.set_from_config(readInt("Menu", "ShortcutKey"));
+            ShortcutKey.set_from_config(readShortcut("Menu", "ShortcutKey"));
             ExtendedLimits.set_from_config(readBool("Menu", "ExtendedLimits"));
             ShowFps.set_from_config(readBool("Menu", "ShowFps"));
             UseHQFont.set_from_config(readBool("Menu", "UseHQFont"));
@@ -1078,8 +1079,8 @@ bool Config::Reload(std::filesystem::path iniPath)
                 FpsOverlayType.set_from_config((FpsOverlay) std::clamp(setting.value(), 0U, FpsOverlay_COUNT - 1));
             }
 
-            FpsShortcutKey.set_from_config(readInt("Menu", "FpsShortcutKey"));
-            FpsCycleShortcutKey.set_from_config(readInt("Menu", "FpsCycleShortcutKey"));
+            FpsShortcutKey.set_from_config(readShortcut("Menu", "FpsShortcutKey"));
+            FpsCycleShortcutKey.set_from_config(readShortcut("Menu", "FpsCycleShortcutKey"));
             FpsOverlayHorizontal.set_from_config(readBool("Menu", "FpsOverlayHorizontal"));
 
             if (auto setting = readFloat("Menu", "FpsOverlayAlpha"); setting.has_value())
@@ -1100,7 +1101,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             FontSize.set_from_config(readFloat("Menu", "FontSize"));
             TTFFontPath.set_from_config(readWString("Menu", "TTFFontPath"));
 
-            FGShortcutKey.set_from_config(readInt("Menu", "FGShortcutKey"));
+            FGShortcutKey.set_from_config(readShortcut("Menu", "FGShortcutKey"));
 
             LightTheme.set_from_config(readBool("Menu", "LightTheme"));
             OverlaysUseTheme.set_from_config(readBool("Menu", "OverlaysUseTheme"));
@@ -2772,6 +2773,16 @@ std::optional<float> Config::readFloat(std::string section, std::string key)
     {
         return std::nullopt;
     }
+}
+
+std::optional<int> Config::readShortcut(std::string section, std::string key)
+{
+    const auto value = readString(section, key);
+    if (!value) return std::nullopt;
+    const auto parsed = ShortcutKeys::Parse(*value);
+    if (!parsed)
+        LOG_WARN("{}.{}: \"{}\" is not a key or key combination", section, key, *value);
+    return parsed;
 }
 
 std::optional<int> Config::readInt(std::string section, std::string key)

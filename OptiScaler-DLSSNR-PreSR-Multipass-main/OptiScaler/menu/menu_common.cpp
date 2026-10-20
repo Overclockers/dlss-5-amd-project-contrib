@@ -1,11 +1,13 @@
 #include "pch.h"
 #include "../dlssnr/amd/AmdBridge.h"
 #include "../dlssnr/NrTimingDisplay.h"
+#include "NrGpuHistoryPlot.h"
 #include "../dlssnr/backend/Selector.h"
 #include "menu_common.h"
 #include "MenuNavigation.h"
 #include "UpscalerRouteDiagnostic.h"
 #include "MenuWindowLayout.h"
+#include "MenuDocking.h"
 #include "SplashNotice.h"
 #include "MenuFont.h"
 #include "MochizukiNetworkShortcut.h"
@@ -17,6 +19,7 @@
 
 #include <dlssnr/DlssNr.h>
 
+#include "input/shortcut_keys.h"
 #include "input/input_system.h"
 
 #include "font/Hack_Compressed.h"
@@ -80,6 +83,7 @@ static Upscaler currentBackend = Upscaler::Reset;
 static std::string currentBackendName = "";
 static int refreshRate = 0;
 static bool resetMenuWindow = true;
+static MenuDocking::State docking;
 
 static ImVec2 splashPosition(-1000.0f, -1000.0f);
 static ImVec2 splashSize(0.0f, 0.0f);
@@ -172,11 +176,31 @@ static std::string updateNoticeTag;
 static std::string updateNoticeUrl;
 static float lastMenuScale = 0.0f;
 static CustomOptional<uint32_t> comboPreset { 0 };
-static int lastKey = 0;
+static ShortcutKeys::ReleaseTracker shortcutReleases;
+static ShortcutKeys::Capture shortcutCapture;
+static CustomOptional<int>* captureTarget = nullptr;
+static int captureId = -1;
 static bool inputDlssNr = false;
 static bool inputMochizukiNetwork = false;
 static MochizukiNetworkShortcut mochizukiNetworkShortcut;
 static bool capturingKey = false;
+
+static void CancelShortcutCapture()
+{
+    shortcutCapture.Begin();
+    capturingKey = false;
+    captureTarget = nullptr;
+    captureId = -1;
+}
+
+static void ResetShortcutInput()
+{
+    CancelShortcutCapture();
+    shortcutReleases.Reset();
+    mochizukiNetworkShortcut = {};
+    inputMenu = inputFps = inputFpsCycle = inputFG = inputDlssNr = inputMochizukiNetwork = false;
+    lastInputTick = 0;
+}
 
 template <typename T, size_t N> struct RingBuffer
 {
@@ -216,6 +240,7 @@ template <typename T, size_t N> struct RingBuffer
 const int plotWidth = 360;
 static RingBuffer<float, plotWidth> gFrameTimes;
 static RingBuffer<float, plotWidth> gUpscalerTimes;
+static DlssNr::GpuHistory gNrGpuHistory;
 
 struct FsExistsCache
 {
@@ -263,54 +288,79 @@ inline std::string StrFmt(const char* fmt, ...)
 void MenuCommon::UpdateManualInput(HWND targetHwnd)
 {
     OptiInput::BeginFrame(targetHwnd);
-
     const auto config = Config::Instance();
-
     const auto currentTick = GetTickCount64();
-    const bool canAcceptInputs = lastInputTick + debounceThreshold < currentTick;
+    const bool focused = OptiInput::IsFocused();
+    const bool canAcceptInputs = focused && lastInputTick + debounceThreshold < currentTick;
     const bool typing = ImGui::GetCurrentContext() && ImGui::GetIO().WantTextInput;
-    const auto networkKey = mochizukiNetworkShortcut.Update(
-        OptiInput::IsKeyDown(VK_CONTROL) || OptiInput::IsKeyDown(VK_LCONTROL) || OptiInput::IsKeyDown(VK_RCONTROL),
-        OptiInput::IsKeyDown(VK_F11),
-        OptiInput::IsFocused() && DlssNr::Backend::ActiveKindFromConfig() == DlssNr::Backend::Kind::Mochizuki,
+    const int held = ShortcutKeys::HeldModifiers(OptiInput::IsKeyDown);
+    const bool f11Down = OptiInput::IsKeyDown(VK_F11);
+    const bool f11Pressed = OptiInput::IsKeyPressed(VK_F11);
+    const int originalF11Modifiers = f11Pressed ? OptiInput::GetKeyPressModifiers(VK_F11) : -1;
+    const int f11Modifiers = originalF11Modifiers >= 0 ? originalF11Modifiers : held;
+    auto networkKey = mochizukiNetworkShortcut.Update(
+        (f11Modifiers & ShortcutKeys::Ctrl) != 0, f11Down || f11Pressed,
+        focused && DlssNr::Backend::ActiveKindFromConfig() == DlssNr::Backend::Kind::Mochizuki,
         !capturingKey && !typing && canAcceptInputs);
+    if (f11Pressed && !f11Down)
+        networkKey.suppressF11 |= mochizukiNetworkShortcut.Update(false, false, false, false).suppressF11;
     inputMochizukiNetwork |= networkKey.toggle;
 
-    auto CheckShortcut = [&](int vk, bool& inputFlag, const char* logMessage)
-    {
-        if (inputFlag)
-            return;
-
-        if (vk <= 0 || vk >= 256)
-            return;
-        if (vk == VK_F11 && networkKey.suppressF11)
-            return;
-
-        if (OptiInput::IsKeyReleased(vk))
-        {
-            lastKey = vk;
-            // receivingWmInputs = false;
-            inputFlag = true;
-            LOG_DEBUG("{}", logMessage);
-        }
+    struct Action { int binding; bool* pending; const char* message; };
+    const Action actions[] = {
+        {config->ShortcutKey.value_or_default(), &inputMenu, "Menu shortcut released"},
+        {config->FpsShortcutKey.value_or_default(), &inputFps, "FPS shortcut released"},
+        {config->FpsCycleShortcutKey.value_or_default(), &inputFpsCycle, "FPS cycle shortcut released"},
+        {config->FGShortcutKey.value_or_default(), &inputFG, "FG shortcut released"},
+        {config->DlssNrToggleKey.value_or_default(), &inputDlssNr, "NR shortcut released"},
     };
+    std::array<bool, 256> interested {};
+    if (capturingKey) interested.fill(true);
+    else for (const auto& action : actions)
+        if (ShortcutKeys::Bound(action.binding)) interested[ShortcutKeys::Key(action.binding)] = true;
 
-    if (!capturingKey && canAcceptInputs)
+    if (!focused)
     {
-        CheckShortcut(config->ShortcutKey.value_or_default(), inputMenu, "Menu key pressed, will be switching menu");
-        CheckShortcut(config->FpsShortcutKey.value_or_default(), inputFps, "Menu key pressed, will be switching FPS");
-        CheckShortcut(config->FGShortcutKey.value_or_default(), inputFG, "Menu key pressed, will be switching FG mode");
-        CheckShortcut(config->FpsCycleShortcutKey.value_or_default(), inputFpsCycle,
-                      "Menu key pressed, will be switching FPS mode");
-        CheckShortcut(config->DlssNrToggleKey.value_or_default(), inputDlssNr,
-                      "Neural Rendering key pressed, will be toggling the pass");
+        shortcutReleases.Reset();
+        CancelShortcutCapture();
     }
-    else if (capturingKey)
-    {
-        lastInputTick = currentTick;
-    }
+    // Presses precede releases in capture, even for a complete chord within one frame.
+    if (capturingKey && focused)
+        for (int vk = VK_XBUTTON2 + 1; vk < 256; ++vk)
+            if (OptiInput::IsKeyPressed(vk))
+            {
+                const int modifiers = OptiInput::GetKeyPressModifiers(vk);
+                shortcutCapture.Press(vk, modifiers >= 0 ? modifiers : held);
+            }
 
-    lastKey = OptiInput::GetLastPressedKey();
+    bool accepted = networkKey.toggle;
+    const bool wasCapturing = capturingKey;
+    for (int vk = 1; focused && vk < 256; ++vk)
+    {
+        if (!interested[vk]) continue;
+        const int original = OptiInput::GetKeyPressModifiers(vk);
+        const auto released = shortcutReleases.Update(vk, OptiInput::IsKeyDown(vk),
+            OptiInput::IsKeyPressed(vk), OptiInput::IsKeyReleased(vk), original >= 0 ? original : held);
+        if (!released) continue;
+        if (wasCapturing) shortcutCapture.Release(vk, *released);
+        else if (canAcceptInputs)
+            for (const auto& action : actions)
+                if (ShortcutKeys::Accepts(action.binding, vk, *released, networkKey.suppressF11))
+                {
+                    *action.pending = true;
+                    accepted = true;
+                    LOG_DEBUG("{}", action.message);
+                }
+    }
+    if (wasCapturing && shortcutCapture.finished)
+    {
+        if (shortcutCapture.binding && captureTarget) *captureTarget = *shortcutCapture.binding;
+        capturingKey = false;
+        captureTarget = nullptr;
+        captureId = -1;
+    }
+    // Debounce the entire accepted batch, never just the first matching action.
+    if (accepted || wasCapturing) lastInputTick = currentTick;
 }
 
 void MenuCommon::ShowTooltip(const char* tip)
@@ -369,16 +419,7 @@ void MenuCommon::SeparatorWithHelpMarker(const char* label, const char* tip)
     ShowHelpMarker(tip);
 }
 
-class Keybind
-{
-    std::string name;
-    int id;
-    bool waitingForKey = false;
-
-  public:
-    Keybind(std::string name, int id) : name(name), id(id) {}
-
-    static std::string KeyNameFromVirtualKeyCode(USHORT virtualKey)
+static std::string KeyNameFromVirtualKeyCode(USHORT virtualKey)
     {
         if (virtualKey == (USHORT) UnboundKey)
             return "Unbound";
@@ -417,53 +458,35 @@ class Keybind
         return "Unknown";
     }
 
-    void Render(CustomOptional<int>& configKey)
+
+static std::string ShortcutName(int binding)
+{
+    if (!ShortcutKeys::Bound(binding)) return "Unbound";
+    return ShortcutKeys::ModifierText(ShortcutKeys::Modifiers(binding)) +
+        KeyNameFromVirtualKeyCode(static_cast<USHORT>(ShortcutKeys::Key(binding)));
+}
+
+void MenuCommon::RenderKeybind(const char* name, int id, CustomOptional<int>& configKey)
+{
+    ImGui::PushID(id);
+    if (MenuUi::Button(name))
     {
-        ImGui::PushID(id);
-        if (MenuUi::Button(name.c_str()))
-        {
-            waitingForKey = true;
-            capturingKey = true;
-            lastKey = 0;
-        }
-        ImGui::PopID();
-
-        if (waitingForKey)
-        {
-            ImGui::SameLine();
-            MenuUi::Text("Press any key...");
-
-            if (lastKey == 0 || lastKey == VK_LBUTTON || lastKey == VK_RBUTTON || lastKey == VK_MBUTTON)
-                return;
-
-            if (lastKey == VK_ESCAPE)
-            {
-                waitingForKey = false;
-                capturingKey = false;
-                return;
-            }
-
-            if (lastKey == VK_BACK)
-                lastKey = UnboundKey;
-
-            configKey = lastKey;
-            waitingForKey = false;
-            capturingKey = false;
-            return;
-        }
-
-        ImGui::SameLine();
-        MenuUi::Text(KeyNameFromVirtualKeyCode(configKey.value_or_default()).c_str());
-
-        ImGui::SameLine();
-        ImGui::PushID(id);
-        if (MenuUi::Button("R"))
-        {
-            configKey.reset();
-        }
-        ImGui::PopID();
+        shortcutCapture.Begin();
+        shortcutReleases.Reset();
+        capturingKey = true;
+        captureTarget = &configKey;
+        captureId = id;
     }
-};
+    ImGui::SameLine();
+    if (capturingKey && captureId == id)
+        MenuUi::Text("%s%s", ShortcutKeys::ModifierText(
+            ShortcutKeys::HeldModifiers(OptiInput::IsKeyDown)).c_str(), MenuLocale::Translate("Press any key..."));
+    else
+        MenuUi::Text("%s", ShortcutName(configKey.value_or_default()).c_str());
+    ImGui::SameLine();
+    if (MenuUi::Button("R")) configKey.reset();
+    ImGui::PopID();
+}
 
 Upscaler MenuCommon::GetBackendCode(const API api)
 {
@@ -1317,14 +1340,14 @@ void MenuCommon::UpdateMenuInputMode(RenderMenuContext& ctx)
         if (hasGamepad)
             io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
 
-        io.ConfigFlags = ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
+        MenuDocking::SetInputFlags(io, ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad);
     }
     else
     {
-        capturingKey = false;
+        CancelShortcutCapture();
         hasGamepad = (io.BackendFlags & ImGuiBackendFlags_HasGamepad) != 0;
         io.BackendFlags &= ~ImGuiBackendFlags_HasGamepad;
-        io.ConfigFlags = ImGuiConfigFlags_NoMouse | ImGuiConfigFlags_NoMouseCursorChange | ImGuiConfigFlags_NoKeyboard;
+        MenuDocking::SetInputFlags(io, ImGuiConfigFlags_NoMouse | ImGuiConfigFlags_NoMouseCursorChange | ImGuiConfigFlags_NoKeyboard);
     }
 }
 
@@ -1472,7 +1495,7 @@ void MenuCommon::UpdateVersionAndStartupNotifications(RenderMenuContext& ctx)
                 updateNotification.setTitle("OptiScaler Update available");
                 updateNotification.setContent(
                     "Press %s for more info",
-                    Keybind::KeyNameFromVirtualKeyCode(config->ShortcutKey.value_or_default()).c_str());
+                    ShortcutName(config->ShortcutKey.value_or_default()).c_str());
                 ImGui::InsertNotification(updateNotification);
                 return true;
             };
@@ -1609,7 +1632,7 @@ void MenuCommon::RenderSplashWindow(RenderMenuContext& ctx)
                     ImGui::SetWindowFontScale(splashScale);
 
                 MenuUi::Text("OptiScaler - %s for menu",
-                            Keybind::KeyNameFromVirtualKeyCode(config->ShortcutKey.value_or_default()).c_str());
+                            ShortcutName(config->ShortcutKey.value_or_default()).c_str());
                 // Free-distribution notice (see SplashNotice.h): author asks it be kept; do not
                 // remove it for paid resale. 作者要求保留的免费声明，请勿为收费转售而删除。
                 ImGui::TextUnformatted(SplashNotice::Chinese);
@@ -1678,6 +1701,31 @@ void MenuCommon::UpdateFrameTimeAverages(RenderMenuContext& ctx)
     auto& fpsScale = ctx.fpsScale;
     auto& averageFrameTime = ctx.averageFrameTime;
     auto& averageUpscalerFT = ctx.averageUpscalerFT;
+
+    // Always observe lifecycle changes, including when both menu and FPS overlay are hidden.
+    // These are cached, non-consuming GPU snapshots: no runtime creation or GPU waits.
+    const bool nrEnabled = config->DlssNrEnabled.value_or_default();
+    const auto nrKind = DlssNr::AmdBridge::TimingBackendKind();
+    const uint64_t runtime = DlssNr::AmdBridge::TimingRuntimeId();
+    uint64_t route = (static_cast<uint64_t>(state.api) << 8) |
+        (config->DlssNrRunBeforeSr.value_or_default() ? 1u : 0u) |
+        (config->DlssNrApplyAfterRR.value_or_default() ? 2u : 0u) |
+        (config->NrInline.value_or_default() ? 4u : 0u) |
+        (config->NrGpuHandoff.value_or_default() ? 8u : 0u);
+    DlssNr::GpuHistoryObservation observation {};
+    if (nrKind == DlssNr::Backend::Kind::Mochizuki)
+    {
+        const auto timing = DlssNr::AmdBridge::MochizukiTimingDetails();
+        route |= static_cast<uint64_t>(timing.inline_path) << 32;
+        observation = DlssNr::MochizukiHistoryObservation(timing, nrEnabled, runtime, route);
+    }
+    else if (nrKind == DlssNr::Backend::Kind::Lmxxf)
+        observation = DlssNr::NetworkHistoryObservation(DlssNr::AmdBridge::Timing(),
+            nrEnabled && config->NrTimingEnabled.value_or_default(), runtime, route);
+    // Reject snapshots crossing a session/measurement epoch change rather than
+    // attributing an old completion to the newly selected runtime.
+    if (DlssNr::AmdBridge::TimingRuntimeId() != runtime) observation = {};
+    gNrGpuHistory.Update(observation, GetTickCount64());
 
     // FPS Overlay font
     fpsScale = config->FpsScale.value_or(menuResScale);
@@ -2025,11 +2073,16 @@ void MenuCommon::RenderPerformanceOverlay(RenderMenuContext& ctx)
                 firstLine += std::string(" | NR: ") + DlssNr::Backend::Name(DlssNr::Backend::ActiveKindFromConfig());
             if (overlayType != FpsOverlay_JustFPS && config->DlssNrEnabled.value_or_default()) {
                 const auto kind = DlssNr::Backend::ActiveKindFromConfig();
+                char nrValue[48] = "N/A";
+                if (gNrGpuHistory.HasMeasurement())
+                    std::snprintf(nrValue, sizeof nrValue, "%.2f ms", gNrGpuHistory.Last());
+                firstLine += std::string(" | ") +
+                    (gNrGpuHistory.HasMeasurement() ? MenuNrGpuHistory::MetricLabel(gNrGpuHistory.Metric()) : "NR GPU") +
+                    ": " + nrValue;
                 if (kind == DlssNr::Backend::Kind::Lmxxf && config->NrTimingEnabled.value_or_default()) {
                     const auto timing = DlssNr::AmdBridge::Timing();
                     if (timing.version == NR_TIMING_VERSION) {
                         const auto now = GetTickCount64();
-                        firstLine += " | NR GPU: " + DlssNr::TimingValueText(timing, NR_GPU_NETWORK, now);
                         if (overlayType >= FpsOverlay_Detailed &&
                             (timing.stages[NR_GPU_ENCODE].samples || timing.stages[NR_GPU_DECODE].samples))
                             codecTimingLine = "Encode: " + DlssNr::TimingValueText(timing, NR_GPU_ENCODE, now) +
@@ -2041,11 +2094,6 @@ void MenuCommon::RenderPerformanceOverlay(RenderMenuContext& ctx)
                     }
                 }
                 else if (kind == DlssNr::Backend::Kind::Mochizuki) {
-                    const auto timing = DlssNr::AmdBridge::Timing();
-                    if (timing.version == NR_TIMING_VERSION && timing.stages[NR_GPU_NETWORK].samples > 0) {
-                        const auto now = GetTickCount64();
-                        firstLine += " | NR GPU: " + DlssNr::TimingValueText(timing, NR_GPU_NETWORK, now);
-                    }
                     if (overlayType >= FpsOverlay_Detailed) {
                         const auto status = DlssNr::AmdBridge::Status();
                         if (!status.empty())
@@ -7342,21 +7390,16 @@ void MenuCommon::RenderKeybindSettings(RenderMenuContext& ctx)
         ScopedIndent indent {};
         ImGui::Spacing();
 
-        MenuUi::Text("Key combinations are currently NOT supported!");
+        MenuUi::TextWrapped("Hold Ctrl, Shift, Alt or Tab with a key. Release to bind.");
+        MenuUi::TextWrapped("Actions sharing a chord fire together; Ctrl+F11 is reserved for Mochizuki.");
         MenuUi::Text("Escape to cancel, Backspace to unbind");
         ImGui::Spacing();
 
-        static auto menu = Keybind("Menu", 10);
-        static auto fpsOverlay = Keybind("FPS Overlay", 11);
-        static auto fpsOverlayCycle = Keybind("FPS Overlay Cycle", 12);
-        static auto fgEnable = Keybind("Frame Generation", 13);
-        static auto dlssNrToggle = Keybind("Neural Rendering", 14);
-
-        menu.Render(config->ShortcutKey);
-        fpsOverlay.Render(config->FpsShortcutKey);
-        fpsOverlayCycle.Render(config->FpsCycleShortcutKey);
-        fgEnable.Render(config->FGShortcutKey);
-        dlssNrToggle.Render(config->DlssNrToggleKey);
+        RenderKeybind("Menu", 10, config->ShortcutKey);
+        RenderKeybind("FPS Overlay", 11, config->FpsShortcutKey);
+        RenderKeybind("FPS Overlay Cycle", 12, config->FpsCycleShortcutKey);
+        RenderKeybind("Frame Generation", 13, config->FGShortcutKey);
+        RenderKeybind("Neural Rendering", 14, config->DlssNrToggleKey);
     }
 }
 
@@ -7467,9 +7510,7 @@ void MenuCommon::RenderMainMenuGraphs(RenderMenuContext& ctx)
                     MenuUi::Text(formattedTime.c_str());
                 }
 
-                std::optional<double> nrTime {};
-                nrTime = DlssNr::LastGpuTime();
-                if (hasExtra || nrTime.has_value())
+                if (hasExtra)
                 {
                     ImGui::TableNextRow();
                     ImGui::TableNextRow();
@@ -7491,13 +7532,6 @@ void MenuCommon::RenderMainMenuGraphs(RenderMenuContext& ctx)
                         MenuUi::Text(formattedTime.c_str());
                     }
 
-                    if (nrTime.has_value())
-                    {
-                        ImGui::TableNextColumn();
-                        MenuUi::Text("Neural Rendering");
-                        ImGui::TableNextColumn();
-                        MenuUi::Text(StrFmt("%.2f ms", nrTime.value()).c_str());
-                    }
                 }
 
                 ImGui::EndTable();
@@ -7547,6 +7581,7 @@ void MenuCommon::RenderMainMenuGraphs(RenderMenuContext& ctx)
         }
         ImGui::EndTable();
     }
+    MenuNrGpuHistory::Draw(gNrGpuHistory);
 }
 
 void MenuCommon::RenderMainMenuBottomBar(RenderMenuContext& ctx)
@@ -7581,11 +7616,15 @@ void MenuCommon::RenderMainMenuBottomBar(RenderMenuContext& ctx)
         MenuUi::CalcTextSize("Menu Scale").x + 2 * ImGui::GetStyle().ItemInnerSpacing.x + spacing;
     nextGroup(controlsWidth, false);
     ImGui::BeginGroup();
-    int anchor = config->MenuWindowAnchor.value_or_default();
-    const char* anchors[] = {"Free", "Top left", "Top right", "Bottom left", "Bottom right"};
+    int anchor = MenuWindowLayout::ValidAnchor(config->MenuWindowAnchor.value_or_default());
+    const char* anchors[] = {"Free", "Top left", "Top right", "Bottom left", "Bottom right",
+                             "Docked left", "Docked right", "Docked top", "Docked bottom"};
     ImGui::SetNextItemWidth(110.0f * menuResScale);
-    if (MenuUi::Combo("Window", &anchor, anchors, 5))
+    if (MenuUi::Combo("Window", &anchor, anchors, IM_ARRAYSIZE(anchors)))
+    {
         config->MenuWindowAnchor = anchor;
+        resetMenuWindow = true;
+    }
     if (controlsWidth <= ImGui::GetContentRegionAvail().x)
         ImGui::SameLine();
     ImGui::PushItemWidth(90.0f * menuResScale);
@@ -7639,7 +7678,7 @@ void MenuCommon::RenderMainMenuBottomBar(RenderMenuContext& ctx)
         _isVisible = false;
         hasGamepad = (io.BackendFlags | ImGuiBackendFlags_HasGamepad) > 0;
         io.BackendFlags &= 30;
-        io.ConfigFlags = ImGuiConfigFlags_NoMouse | ImGuiConfigFlags_NoMouseCursorChange | ImGuiConfigFlags_NoKeyboard;
+        MenuDocking::SetInputFlags(io, ImGuiConfigFlags_NoMouse | ImGuiConfigFlags_NoMouseCursorChange | ImGuiConfigFlags_NoKeyboard);
 
         _showMipmapCalcWindow = false;
         _showHudlessWindow = false;
@@ -7929,6 +7968,21 @@ void MenuCommon::RenderMainMenuWindow(RenderMenuContext& ctx)
     auto& frameTimesCalculated = ctx.frameTimesCalculated;
     auto& menuResScale = ctx.menuResScale;
 
+    // Closed-menu rendering may intentionally skip NewFrame entirely. DockSpace,
+    // including KeepAliveOnly, still requires an active ImGui frame/window.
+    if (!ctx.newFrame)
+        return;
+    // Stable identity survives title/language changes; preserve the current brand and game caption.
+    if (windowTitle.empty())
+        windowTitle = StrFmt("%s - %s %s %s %s%s", VER_PRODUCT_NAME, state.gameExe.c_str(),
+            state.gameName.empty() ? "" : StrFmt("- %s", state.gameName.c_str()).c_str(),
+            state.detectedQuirks.empty() ? "" : "(Q)", state.isOptiPatcherSucceed ? "(OP)" : "",
+            MenuDocking::WindowIdentity);
+    const std::string localizedTitle = MenuLocale::Label(windowTitle.c_str());
+    docking.Submit(config->MenuWindowAnchor.value_or_default(), _isVisible, localizedTitle.c_str(),
+        {config->MenuWindowWidth.value_or(700.f) * menuResScale,
+         config->MenuWindowHeight.value_or(600.f) * menuResScale});
+
     if (!_isVisible)
         return;
 
@@ -7984,16 +8038,9 @@ void MenuCommon::RenderMainMenuWindow(RenderMenuContext& ctx)
 
     }
 
-    // Main menu window
-    if (windowTitle.empty())
-    {
-        windowTitle = StrFmt("%s - %s %s %s %s", VER_PRODUCT_NAME, state.gameExe.c_str(),
-                             state.gameName.empty() ? "" : StrFmt("- %s", state.gameName.c_str()).c_str(),
-                             (state.detectedQuirks.size() > 0) ? "(Q)" : "", state.isOptiPatcherSucceed ? "(OP)" : "");
-    }
 
     const auto* viewport = ImGui::GetMainViewport();
-    ImGuiWindow* previous = ImGui::FindWindowByName(MenuLocale::Label(windowTitle.c_str()).c_str());
+    ImGuiWindow* previous = ImGui::FindWindowByName(localizedTitle.c_str());
     const bool moving = previous && GImGui->MovingWindow == previous;
     bool resizing = false;
     if (previous)
@@ -8002,7 +8049,7 @@ void MenuCommon::RenderMainMenuWindow(RenderMenuContext& ctx)
         for (int corner = 0; corner < 4; ++corner)
             resizing |= GImGui->ActiveId == ImGui::GetWindowResizeCornerID(previous, corner);
     }
-    if (moving) config->MenuWindowAnchor = 0;
+    if (moving && (!previous || previous->DockId == 0)) config->MenuWindowAnchor = 0;
     auto layout = MenuWindowLayout::Calculate(
         {viewport->WorkPos.x, viewport->WorkPos.y}, {viewport->WorkSize.x, viewport->WorkSize.y},
         menuResScale, {config->MenuWindowWidth.value_or(0), config->MenuWindowHeight.value_or(0)},
@@ -8014,10 +8061,20 @@ void MenuCommon::RenderMainMenuWindow(RenderMenuContext& ctx)
         return;
     }
     resetMenuWindow = false;
-    ImGui::SetNextWindowSize({layout.size.x, layout.size.y});
-    ImGui::SetNextWindowSizeConstraints({layout.minimum.x, layout.minimum.y}, {layout.maximum.x, layout.maximum.y});
-    if (!moving && !resizing) ImGui::SetNextWindowPos({layout.pos.x, layout.pos.y});
+    if (!MenuWindowLayout::IsDocked(config->MenuWindowAnchor.value_or_default()) &&
+        (!previous || previous->DockId == 0))
+    {
+        ImGui::SetNextWindowSize({layout.size.x, layout.size.y});
+        ImGui::SetNextWindowSizeConstraints({layout.minimum.x, layout.minimum.y}, {layout.maximum.x, layout.maximum.y});
+        if (!moving && !resizing) ImGui::SetNextWindowPos({layout.pos.x, layout.pos.y});
+    }
     const bool visible = MenuUi::Begin(windowTitle.c_str(), nullptr, flags);
+    const bool docked = ImGui::GetWindowDockID() != 0;
+    if (docking.ObserveUndocked(docked))
+    {
+        config->MenuWindowAnchor = 0;
+        resetMenuWindow = true;
+    }
     if (visible)
     {
         // Free-distribution notice (see SplashNotice.h): the author asks it be kept;
@@ -8044,15 +8101,15 @@ void MenuCommon::RenderMainMenuWindow(RenderMenuContext& ctx)
     const auto actualSize = ImGui::GetWindowSize();
     // Only user resizing changes the requested size during Begin. Viewport clamping
     // must not overwrite the user's preferred size for a larger display.
-    if (std::abs(actualSize.x - layout.size.x) > 1.0f)
+    if (!docked && std::abs(actualSize.x - layout.size.x) > 1.0f)
         config->MenuWindowWidth = actualSize.x / menuResScale;
-    if (std::abs(actualSize.y - layout.size.y) > 1.0f)
+    if (!docked && std::abs(actualSize.y - layout.size.y) > 1.0f)
         config->MenuWindowHeight = actualSize.y / menuResScale;
     const auto pos = ImGui::GetWindowPos();
     const auto bounded = MenuWindowLayout::Calculate(
         {viewport->WorkPos.x, viewport->WorkPos.y}, {viewport->WorkSize.x, viewport->WorkSize.y},
         menuResScale, {actualSize.x / menuResScale, actualSize.y / menuResScale}, {pos.x, pos.y}, 0, false);
-    ImGui::SetWindowPos({bounded.pos.x, bounded.pos.y});
+    if (!docked) ImGui::SetWindowPos({bounded.pos.x, bounded.pos.y});
     if (visible)
     {
         RenderMainMenuHeaderMessages(ctx);
@@ -8097,14 +8154,6 @@ void MenuCommon::RenderMainMenuWindow(RenderMenuContext& ctx)
 
     if (config->UseHQFont.value_or_default())
         ImGui::PopFontSize();
-}
-
-void KeyUp(UINT vKey)
-{
-    inputMenu = vKey == Config::Instance()->ShortcutKey.value_or_default();
-    inputFps = vKey == Config::Instance()->FpsShortcutKey.value_or_default();
-    inputFG = vKey == Config::Instance()->FGShortcutKey.value_or_default();
-    inputFpsCycle = vKey == Config::Instance()->FpsCycleShortcutKey.value_or_default();
 }
 
 // The lamp, and only the lamp.
@@ -8282,6 +8331,7 @@ bool MenuCommon::RenderMenu()
 
 void MenuCommon::Init(HWND InHwnd, bool isUWP)
 {
+    ResetShortcutInput();
     // Reset shutdown flag in case of re-init
     State::Instance().isShuttingDown = false;
 
@@ -8298,6 +8348,8 @@ void MenuCommon::Init(HWND InHwnd, bool isUWP)
     _isVisible = false;
     _isUWP = isUWP;
     resetMenuWindow = true;
+    docking = {};
+    windowTitle.clear();
 
     LOG_DEBUG("Handle: {0:X}", (size_t) _handle);
 
@@ -8314,7 +8366,7 @@ void MenuCommon::Init(HWND InHwnd, bool isUWP)
 
     hasGamepad = (io.BackendFlags | ImGuiBackendFlags_HasGamepad) > 0;
     io.BackendFlags &= 30;
-    io.ConfigFlags = ImGuiConfigFlags_NoMouse | ImGuiConfigFlags_NoMouseCursorChange | ImGuiConfigFlags_NoKeyboard;
+    MenuDocking::SetInputFlags(io, ImGuiConfigFlags_NoMouse | ImGuiConfigFlags_NoMouseCursorChange | ImGuiConfigFlags_NoKeyboard);
 
     io.MouseDrawCursor = _isVisible;
     io.WantCaptureKeyboard = _isVisible;
@@ -8335,7 +8387,6 @@ void MenuCommon::Init(HWND InHwnd, bool isUWP)
         else
         {
             initResult = ImGui_ImplUwp_Init(InHwnd);
-            ImGui_BindUwpKeyUp(KeyUp);
             LOG_DEBUG("ImGui_ImplUwp_Init result: {0}", initResult);
         }
     }
@@ -8406,6 +8457,7 @@ void MenuCommon::Init(HWND InHwnd, bool isUWP)
 
 void MenuCommon::Shutdown()
 {
+    ResetShortcutInput();
     if (!MenuCommon::_isInited)
         return;
 

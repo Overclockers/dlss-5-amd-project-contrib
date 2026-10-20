@@ -7,6 +7,7 @@
 #endif
 #include "RuntimeNotification.h"
 #include "RuntimeHostLoad.h"
+#include "PassInitialization.h"
 #include "HipRuntimeLoad.h"
 #include "SubmissionState.h"
 #include "GraphicsTracker.h"
@@ -366,6 +367,8 @@ struct Backend::Impl
     UINT lastInputWidth=0,lastInputHeight=0;
     bool hadExposure = false;
     std::array<HMODULE, 3> runtime {};
+    // A retained HIP module is not proof its engine initialized successfully.
+    std::array<PassInitialization, 3> initialized {};
     std::array<UINT, 3> observedTimeouts {};
     std::filesystem::path directory;
     std::string status = "AMD NR: not initialized";
@@ -925,6 +928,7 @@ struct Backend::Impl
     {
         if (runtime[i])
         {
+            initialized[i].RequireReady();
             At<uint8_t>(runtime[i], L->enabled) = 1;
             return;
         }
@@ -1012,6 +1016,7 @@ struct Backend::Impl
                      : std::string("AMD runtime: SpinDraw=0 (original wait)"));
         }
         At<uint8_t>(h, L->initDone) = 1;
+        initialized[i].Complete();
         Log("Initialized independent AMD pass " + std::to_string(i + 1));
     }
     void InitShader()

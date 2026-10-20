@@ -6,6 +6,8 @@
 #include "OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/menu/MenuNavigation.h"
 #include "OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/menu/MenuCard.h"
 #include "OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/menu/SplashNotice.h"
+#include "OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/menu/MenuDocking.h"
+#include "OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/menu/NrGpuHistoryPlot.h"
 #include <imgui/imgui_impl_dx11.h>
 #include <d3d11.h>
 #include <wrl/client.h>
@@ -289,6 +291,100 @@ int main(int argc, char** argv)
             SaveBmp(device.Get(), context.Get(), target.Get(), std::filesystem::path(argv[1]) /
                 ("navigation-" + std::string(Code(lang)) + "-" + std::to_string(width) + ".bmp"));
         }
+    }
+    // Exercise the production docking helper with the real local docking ImGui and WARP.
+    if (fontMode == 0)
+    {
+        ImGui::GetStyle() = ImGuiStyle();
+        ImGui::StyleColorsDark();
+        MenuDocking::State docking;
+        // No NewFrame is the normal fully hidden-menu path: submission must be inert.
+        auto* savedWindow = GImGui->CurrentWindow;
+        GImGui->CurrentWindow = nullptr;
+        docking.Submit(MenuWindowLayout::DockLeft, false, "Dormant###OptiScalerMainMenu", {700, 550});
+        assert(docking.context == nullptr && docking.builtAnchor == -1);
+        GImGui->CurrentWindow = savedWindow;
+        DlssNr::GpuHistory history;
+        for (uint64_t sample = 1; sample <= 120; ++sample)
+            history.Update({DlssNr::GpuHistoryMetric::Network, 1, 0, sample, 1000 + sample,
+                2.5 + std::sin(double(sample) * .15) * .4, true, true}, 1000 + sample);
+        DlssNr::GpuHistory zero, stale, core;
+        zero.Update({DlssNr::GpuHistoryMetric::Network, 1, 0, 1, 1000, 0, true, true}, 1000);
+        stale.Update({DlssNr::GpuHistoryMetric::Network, 1, 0, 1, 1000, 3, true, true}, 1000);
+        stale.Update({DlssNr::GpuHistoryMetric::Network, 1, 0, 1, 1000, 3, true, true}, 3001);
+        for (uint64_t sample = 1; sample <= 120; ++sample)
+            core.Update({DlssNr::GpuHistoryMetric::MochizukiVulkanCore, 2, 1, sample, 1000 + sample,
+                3.5 + std::cos(double(sample) * .15) * .4, true, true}, 1000 + sample);
+        io.ConfigFlags |= ImGuiConfigFlags_IsSRGB;
+        for (int anchor : {0, 1, 2, 3, 4, 5, 6, 7, 8, 0})
+        for (int frame = 0; frame < 7; ++frame)
+        {
+            current = frame & 1 ? Language::SimplifiedChinese : Language::English;
+            const bool visible = frame != 2;
+            io.DisplaySize = frame >= 4 ? ImVec2(960, 720) : ImVec2(1280, 900);
+            MenuDocking::SetInputFlags(io, visible ? ImGuiConfigFlags_NavEnableKeyboard : ImGuiConfigFlags_NoMouse);
+            assert(io.ConfigFlags & ImGuiConfigFlags_DockingEnable);
+            assert(io.ConfigFlags & ImGuiConfigFlags_IsSRGB);
+            ImGui_ImplDX11_NewFrame(); ImGui::NewFrame();
+            const std::string title = std::string(frame & 1 ? "Changed game title" : "OptiScaler menu") + MenuDocking::WindowIdentity;
+            docking.Submit(anchor, visible, title.c_str(), {700, 550});
+            if (visible)
+            {
+                if (!MenuWindowLayout::IsDocked(anchor))
+                {
+                    const auto layout = MenuWindowLayout::Calculate({}, {io.DisplaySize.x, io.DisplaySize.y}, 1,
+                        {700, 550}, {}, anchor, true);
+                    ImGui::SetNextWindowPos({layout.pos.x, layout.pos.y});
+                    ImGui::SetNextWindowSize({layout.size.x, layout.size.y});
+                }
+                MenuUi::Begin(title.c_str(), nullptr, ImGuiWindowFlags_NoSavedSettings);
+                const bool docked = ImGui::GetWindowDockID() != 0;
+                assert(docked == MenuWindowLayout::IsDocked(anchor));
+                assert(!docking.ObserveUndocked(docked));
+                auto* window = ImGui::GetCurrentWindow();
+                assert(window->ID == ImHashStr(MenuDocking::WindowIdentity));
+                assert(window->Pos.x >= -.1f && window->Pos.y >= -.1f);
+                assert(window->Pos.x + window->Size.x <= io.DisplaySize.x + .1f);
+                assert(window->Pos.y + window->Size.y <= io.DisplaySize.y + .1f);
+                auto page = MenuNavigation::Page::NR;
+                MenuNavigation::Render(page, 1, [&](MenuNavigation::Page) {
+                    MenuCard card;
+                    MenuSectionTitle("DLSS Neural Rendering");
+                    MenuUi::TextWrapped("Production docking helper / WARP component smoke");
+                    MenuUi::TextWrapped("WindowAnchor 0..4 retains floating / corner meaning; 5..8 docks to screen edges.");
+                    MenuUi::TextWrapped("Deterministic measured-sample fixture; not a live NR runtime measurement.");
+                    MenuNrGpuHistory::Draw(anchor == 6 ? core : anchor == 7 ? zero : anchor == 8 ? stale : history);
+                    if (anchor == 0)
+                    {
+                        DlssNr::GpuHistory unavailable;
+                        MenuNrGpuHistory::Draw(unavailable);
+                    }
+                });
+                MenuUi::Button("Save Settings"); ImGui::SameLine(); MenuUi::Button("Close");
+                ImGui::End();
+            }
+            ImGui::Render();
+            const auto dockContext = docking.context;
+            const int builtAnchor = docking.builtAnchor;
+            docking.Submit(anchor, false, title.c_str(), {700, 550});
+            assert(docking.context == dockContext && docking.builtAnchor == builtAnchor);
+            if (frame == 5 || frame == 6)
+            {
+                D3D11_TEXTURE2D_DESC desc {}; desc.Width = UINT(io.DisplaySize.x); desc.Height = UINT(io.DisplaySize.y);
+                desc.MipLevels = 1; desc.ArraySize = 1; desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+                desc.SampleDesc.Count = 1; desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+                ComPtr<ID3D11Texture2D> target; ComPtr<ID3D11RenderTargetView> rtv;
+                Check(device->CreateTexture2D(&desc, nullptr, &target));
+                Check(device->CreateRenderTargetView(target.Get(), nullptr, &rtv));
+                ID3D11RenderTargetView* raw = rtv.Get(); context->OMSetRenderTargets(1, &raw, nullptr);
+                const float clear[] = {.07f, .07f, .08f, 1}; context->ClearRenderTargetView(rtv.Get(), clear);
+                ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+                SaveBmp(device.Get(), context.Get(), target.Get(), std::filesystem::path(argv[1]) /
+                    ("docking-anchor-" + std::to_string(anchor) + "-" + Code(current) + ".bmp"));
+            }
+        }
+        assert(docking.ObserveUndocked(true) == false);
+        assert(docking.ObserveUndocked(false) == true);
     }
     ImGui_ImplDX11_Shutdown(); ImGui::DestroyContext();
     }

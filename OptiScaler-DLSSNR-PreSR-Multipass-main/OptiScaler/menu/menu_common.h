@@ -206,6 +206,7 @@ class MenuCommon
     static void UpdateManualInput(HWND targetHwnd);
 
   public:
+    static void RenderKeybind(const char* name, int id, CustomOptional<int>& configKey);
     static void Dx11Inited() { _dx11Ready = true; }
     static void Dx12Inited() { _dx12Ready = true; }
     static void VulkanInited() { _vulkanReady = true; }

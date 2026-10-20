@@ -14,6 +14,7 @@ constexpr const wchar_t* XInputModuleNames[] = {
 constexpr char XInputGetStateExportName[] = "XInputGetState";
 constexpr char XInputGetKeystrokeExportName[] = "XInputGetKeystroke";
 constexpr char XInputSetStateExportName[] = "XInputSetState";
+std::array<bool, XUSER_MAX_COUNT> keystrokeDrainPending {};
 
 HMODULE FindLoadedXInputModule()
 {
@@ -80,6 +81,12 @@ bool ResolveXInputExportsLocked(HMODULE module)
 }
 } // namespace
 
+void MarkXInputKeystrokesForDrainLocked()
+{
+    if (_state.XInputGetKeystrokeHookInstalled)
+        keystrokeDrainPending.fill(true);
+}
+
 void UpdateXInputIntegrationLocked()
 {
     if (_state.XInputGetStateHookInstalled || _state.XInputGetStateExHookInstalled ||
@@ -94,6 +101,9 @@ void UpdateXInputIntegrationLocked()
 
     if (module == nullptr)
         return;
+    if (!RetainInputCallbackModule(reinterpret_cast<const void*>(module)) ||
+        !RetainInputCallbackModule(reinterpret_cast<const void*>(&hkXInputGetState)))
+        return;
 
     if (!ResolveXInputExportsLocked(module))
     {
@@ -101,22 +111,21 @@ void UpdateXInputIntegrationLocked()
         return;
     }
 
-    DetourTransactionBegin();
-    DetourUpdateThread(GetCurrentThread());
+    HookLifetime::Transaction<DetourBackend> transaction;
 
     if (o_XInputGetState != nullptr)
-        DetourAttach(reinterpret_cast<PVOID*>(&o_XInputGetState), hkXInputGetState);
+        transaction.Attach(reinterpret_cast<void**>(&o_XInputGetState), reinterpret_cast<void*>(hkXInputGetState));
 
     if (o_XInputGetStateEx != nullptr)
-        DetourAttach(reinterpret_cast<PVOID*>(&o_XInputGetStateEx), hkXInputGetStateEx);
+        transaction.Attach(reinterpret_cast<void**>(&o_XInputGetStateEx), reinterpret_cast<void*>(hkXInputGetStateEx));
 
     if (o_XInputGetKeystroke != nullptr)
-        DetourAttach(reinterpret_cast<PVOID*>(&o_XInputGetKeystroke), hkXInputGetKeystroke);
+        transaction.Attach(reinterpret_cast<void**>(&o_XInputGetKeystroke), reinterpret_cast<void*>(hkXInputGetKeystroke));
 
     if (o_XInputSetState != nullptr)
-        DetourAttach(reinterpret_cast<PVOID*>(&o_XInputSetState), hkXInputSetState);
+        transaction.Attach(reinterpret_cast<void**>(&o_XInputSetState), reinterpret_cast<void*>(hkXInputSetState));
 
-    const LONG result = DetourTransactionCommit();
+    const LONG result = transaction.Commit() ? NO_ERROR : ERROR_INVALID_FUNCTION;
 
     if (result != NO_ERROR)
     {
@@ -136,40 +145,37 @@ void UpdateXInputIntegrationLocked()
              _state.XInputSetStateHookInstalled ? 1 : 0);
 }
 
-void RemoveXInputHooksLocked()
+bool RemoveXInputHooksLocked()
 {
     if (!_state.XInputGetStateHookInstalled && !_state.XInputGetStateExHookInstalled &&
         !_state.XInputGetKeystrokeHookInstalled && !_state.XInputSetStateHookInstalled)
+        return true;
+
+    HookLifetime::Transaction<DetourBackend> transaction;
+    if (_state.XInputGetStateHookInstalled)
+        transaction.Detach(reinterpret_cast<void**>(&o_XInputGetState), reinterpret_cast<void*>(hkXInputGetState));
+    if (_state.XInputGetStateExHookInstalled)
+        transaction.Detach(reinterpret_cast<void**>(&o_XInputGetStateEx), reinterpret_cast<void*>(hkXInputGetStateEx));
+    if (_state.XInputGetKeystrokeHookInstalled)
+        transaction.Detach(reinterpret_cast<void**>(&o_XInputGetKeystroke), reinterpret_cast<void*>(hkXInputGetKeystroke));
+    if (_state.XInputSetStateHookInstalled)
+        transaction.Detach(reinterpret_cast<void**>(&o_XInputSetState), reinterpret_cast<void*>(hkXInputSetState));
+    if (!transaction.Commit())
     {
-        ClearXInputHookPointersLocked();
-        return;
+        LOG_WARN("XInput detach failed; retaining installed flags and trampolines");
+        return false;
     }
-
-    DetourTransactionBegin();
-    DetourUpdateThread(GetCurrentThread());
-
-    if (_state.XInputGetStateHookInstalled && o_XInputGetState != nullptr)
-        DetourDetach(reinterpret_cast<PVOID*>(&o_XInputGetState), hkXInputGetState);
-
-    if (_state.XInputGetStateExHookInstalled && o_XInputGetStateEx != nullptr)
-        DetourDetach(reinterpret_cast<PVOID*>(&o_XInputGetStateEx), hkXInputGetStateEx);
-
-    if (_state.XInputGetKeystrokeHookInstalled && o_XInputGetKeystroke != nullptr)
-        DetourDetach(reinterpret_cast<PVOID*>(&o_XInputGetKeystroke), hkXInputGetKeystroke);
-
-    if (_state.XInputSetStateHookInstalled && o_XInputSetState != nullptr)
-        DetourDetach(reinterpret_cast<PVOID*>(&o_XInputSetState), hkXInputSetState);
-
-    const LONG result = DetourTransactionCommit();
-
-    if (result != NO_ERROR)
-        LOG_WARN("XInput hook removal completed with result:{}", result);
-
-    ClearXInputHookPointersLocked();
+    // Restored API pointers remain callable by a callback dispatched before detach.
+    _state.XInputGetStateHookInstalled = false;
+    _state.XInputGetStateExHookInstalled = false;
+    _state.XInputGetKeystrokeHookInstalled = false;
+    _state.XInputSetStateHookInstalled = false;
+    return true;
 }
 
 DWORD WINAPI hkXInputGetState(DWORD userIndex, XINPUT_STATE* state)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     if (state == nullptr)
     {
         if (o_XInputGetState != nullptr)
@@ -228,6 +234,7 @@ DWORD WINAPI hkXInputGetState(DWORD userIndex, XINPUT_STATE* state)
 
 DWORD WINAPI hkXInputGetStateEx(DWORD userIndex, XINPUT_STATE* state)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     if (state == nullptr)
     {
         if (o_XInputGetStateEx != nullptr)
@@ -286,32 +293,62 @@ DWORD WINAPI hkXInputGetStateEx(DWORD userIndex, XINPUT_STATE* state)
 
 DWORD WINAPI hkXInputGetKeystroke(DWORD userIndex, DWORD reserved, PXINPUT_KEYSTROKE keystroke)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
+    bool blocked = false;
+    bool drain = false;
     {
         std::unique_lock lock(_state.Mutex);
         _state.XInputGetKeystrokeCallCount++;
-
-        if (ShouldBlockXInputLocked())
+        blocked = ShouldBlockXInputLocked();
+        if (userIndex < XUSER_MAX_COUNT)
         {
-            if (keystroke != nullptr)
-                *keystroke = {};
-
-            _state.XInputGetKeystrokeBlockedCount++;
-            OPTIINPUT_LOG_VERBOSE("blocking XInputGetKeystroke userIndex:{}", userIndex);
-            return ERROR_EMPTY;
+            drain = keystrokeDrainPending[userIndex];
+            keystrokeDrainPending[userIndex] = false;
         }
-
-        _state.XInputGetKeystrokePassedCount++;
+        else if (userIndex == XUSER_INDEX_ANY)
+        {
+            drain = std::any_of(keystrokeDrainPending.begin(), keystrokeDrainPending.end(), [](bool value) { return value; });
+            keystrokeDrainPending.fill(false);
+        }
+        if (blocked)
+            _state.XInputGetKeystrokeBlockedCount++;
+        else
+            _state.XInputGetKeystrokePassedCount++;
     }
-
     if (o_XInputGetKeystroke == nullptr)
         return ERROR_EMPTY;
-
     ScopedHookBypass bypass;
+    if (blocked || drain)
+    {
+        XINPUT_KEYSTROKE discarded {};
+        // Never call foreign input code with the shared state mutex held.
+        unsigned consumed = 0;
+        while (consumed < 1024 && o_XInputGetKeystroke(userIndex, reserved, &discarded) == ERROR_SUCCESS)
+            ++consumed;
+        if (consumed == 1024)
+        {
+            std::unique_lock lock(_state.Mutex);
+            if (userIndex < XUSER_MAX_COUNT)
+                keystrokeDrainPending[userIndex] = true;
+            else if (userIndex == XUSER_INDEX_ANY)
+                keystrokeDrainPending.fill(true);
+            if (keystroke != nullptr)
+                *keystroke = {};
+            return ERROR_EMPTY; // Continue draining next call; do not leak stale input.
+        }
+    }
+    if (blocked)
+    {
+        if (keystroke != nullptr)
+            *keystroke = {};
+        return ERROR_EMPTY;
+    }
     return o_XInputGetKeystroke(userIndex, reserved, keystroke);
 }
 
 DWORD WINAPI hkXInputSetState(DWORD userIndex, XINPUT_VIBRATION* vibration)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     bool shouldBlock = false;
 
     {

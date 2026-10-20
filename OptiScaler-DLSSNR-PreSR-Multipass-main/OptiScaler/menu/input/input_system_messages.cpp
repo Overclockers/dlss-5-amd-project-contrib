@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "input_system_internal.h"
+#include "shortcut_keys.h"
 
 #include <include/imgui/imgui.h>
 #include <windowsx.h>
@@ -96,24 +97,7 @@ void SetMouseUpFromRawState(int button, DWORD messageTime)
 
 void SyncAggregateModifierButtonStateLocked(int aggregateVk, int leftVk, int rightVk)
 {
-    ButtonState& aggregate = _state.Keys[aggregateVk];
-    const ButtonState& left = _state.Keys[leftVk];
-    const ButtonState& right = _state.Keys[rightVk];
-
-    const bool wasDown = aggregate.Down;
-    const bool isDown = left.Down || right.Down;
-
-    aggregate.Down = isDown;
-    aggregate.BlockedDown = left.BlockedDown || right.BlockedDown;
-
-    if (!wasDown && isDown)
-        aggregate.Pressed = true;
-
-    if (wasDown && !isDown)
-        aggregate.Released = true;
-
-    aggregate.LastMessageTime =
-        left.LastMessageTime >= right.LastMessageTime ? left.LastMessageTime : right.LastMessageTime;
+    SyncAggregateModifierButtonState(_state.Keys[aggregateVk], _state.Keys[leftVk], _state.Keys[rightVk]);
 }
 
 void SyncAggregateModifierStateLocked()
@@ -216,6 +200,7 @@ void SetKeyDown(int vk, DWORD messageTime, bool blocked)
 
     if (!key.Down)
     {
+        key.PressHistory.RecordDown(ShortcutKeys::HeldModifiers([](int modifier) { return _state.Keys[modifier].Down; }));
         key.Pressed = true;
         _state.LastPressedKey = vk;
 
@@ -245,6 +230,7 @@ bool SetKeyUp(int vk, DWORD messageTime)
         return false;
 
     ButtonState& key = _state.Keys[vk];
+    key.PressHistory.MessageUp();
 
     const bool wasBlockedDown = key.BlockedDown;
 
@@ -453,6 +439,8 @@ bool ShouldBlockMouseWindowMessageLocked(HWND hwnd, UINT msg)
 
 bool HandleWindowMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, InputMessageSource source)
 {
+    if (IsDeferredWindowRemovalMessage(msg))
+        return false; // Only WndProc dispatch may consume owner-thread work.
     if (!IsTargetWindow(hwnd))
     {
         if (ShouldLogInputMessage(msg))
@@ -491,20 +479,20 @@ bool HandleWindowMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, Inpu
     {
     case WM_SETFOCUS:
     {
-        _state.Focused = true;
+        SetInputFocusLocked(true);
         break;
     }
 
     case WM_KILLFOCUS:
     {
-        _state.Focused = false;
+        SetInputFocusLocked(false);
         break;
     }
 
     case WM_MOUSEMOVE:
     {
         UpdateMousePositionFromClient(hwnd, lParam);
-        shouldBlock = _state.BlockMouse;
+        shouldBlock = ShouldBlockMouseInputLocked();
         break;
     }
 
@@ -520,11 +508,11 @@ bool HandleWindowMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, Inpu
         UpdateMousePositionFromClient(hwnd, lParam);
 
         const int button = MouseMessageToButton(msg, wParam);
-        SetMouseDown(button, GetMessageTime(), _state.BlockMouse);
+        SetMouseDown(button, GetMessageTime(), ShouldBlockMouseInputLocked());
         OPTIINPUT_LOG_VERBOSE("mouse down button:{} blocked:{} pos=({}, {})", button, _state.BlockMouse ? 1 : 0,
                               _state.MouseClientPos.x, _state.MouseClientPos.y);
 
-        shouldBlock = _state.BlockMouse;
+        shouldBlock = ShouldBlockMouseInputLocked();
         break;
     }
 
@@ -551,13 +539,13 @@ bool HandleWindowMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, Inpu
         const SHORT delta = GET_WHEEL_DELTA_WPARAM(wParam);
         _state.MouseWheel += static_cast<float>(delta) / static_cast<float>(WHEEL_DELTA);
 
-        shouldBlock = _state.BlockMouse;
+        shouldBlock = ShouldBlockMouseInputLocked();
         break;
     }
 
     case WM_MOUSEHWHEEL:
     {
-        shouldBlock = _state.BlockMouse;
+        shouldBlock = ShouldBlockMouseInputLocked();
         break;
     }
 
@@ -565,10 +553,10 @@ bool HandleWindowMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, Inpu
     case WM_SYSKEYDOWN:
     {
         const int vk = NormalizeModifierVirtualKey(static_cast<int>(wParam), lParam);
-        SetKeyDown(vk, GetMessageTime(), _state.BlockKeyboard);
+        SetKeyDown(vk, GetMessageTime(), ShouldBlockKeyboardInputLocked());
         OPTIINPUT_LOG_VERBOSE("key down vk:{} blocked:{}", vk, _state.BlockKeyboard ? 1 : 0);
 
-        shouldBlock = _state.BlockKeyboard;
+        shouldBlock = ShouldBlockKeyboardInputLocked();
         break;
     }
 
@@ -590,7 +578,7 @@ bool HandleWindowMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, Inpu
         if (wParam >= 0x20 && wParam <= 0xFFFF)
             _state.TextInput.push_back(static_cast<wchar_t>(wParam));
 
-        shouldBlock = _state.BlockKeyboard;
+        shouldBlock = ShouldBlockKeyboardInputLocked();
         break;
     }
 
@@ -599,7 +587,7 @@ bool HandleWindowMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, Inpu
         if (wParam != UNICODE_NOCHAR && wParam >= 0x20 && wParam <= 0xFFFF)
             _state.TextInput.push_back(static_cast<wchar_t>(wParam));
 
-        shouldBlock = wParam != UNICODE_NOCHAR && _state.BlockKeyboard;
+        shouldBlock = wParam != UNICODE_NOCHAR && ShouldBlockKeyboardInputLocked();
         break;
     }
 
@@ -617,7 +605,7 @@ bool HandleWindowMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, Inpu
         */
 
         const bool shouldParseRawInput =
-            source == InputMessageSource::WndProc || _state.BlockMouse || _state.BlockKeyboard;
+            source == InputMessageSource::WndProc || ShouldBlockMouseInputLocked() || ShouldBlockKeyboardInputLocked();
 
         bool mustReachGame = false;
 
@@ -629,7 +617,7 @@ bool HandleWindowMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, Inpu
         // Content is neutralised in the GetRawInputData hook, per key, by the same decision taken
         // above -- so letting one of these through does not leak input. What it does is give the
         // game the chance to ask, which it never had while the whole message was being discarded.
-        shouldBlock = (_state.BlockMouse || _state.BlockKeyboard) && !mustReachGame;
+        shouldBlock = (ShouldBlockMouseInputLocked() || ShouldBlockKeyboardInputLocked()) && !mustReachGame;
 
         break;
     }
@@ -637,9 +625,9 @@ bool HandleWindowMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, Inpu
     default:
     {
         if (IsMouseMessage(msg))
-            shouldBlock = _state.BlockMouse;
+            shouldBlock = ShouldBlockMouseInputLocked();
         else if (IsKeyboardMessage(msg))
-            shouldBlock = _state.BlockKeyboard;
+            shouldBlock = ShouldBlockKeyboardInputLocked();
 
         break;
     }
@@ -709,13 +697,14 @@ void ClearTransientState()
 
 LRESULT CALLBACK OptiInputWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     if (msg == WM_NULL)
     {
         WNDPROC originalWndProc = nullptr;
 
         {
             std::unique_lock lock(_state.Mutex);
-            originalWndProc = _state.OriginalWndProc;
+            originalWndProc = GetOriginalInputWndProcLocked(hwnd);
         }
 
         if (originalWndProc != nullptr)
@@ -731,7 +720,13 @@ LRESULT CALLBACK OptiInputWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
     {
         std::unique_lock lock(_state.Mutex);
 
-        originalWndProc = _state.OriginalWndProc;
+        originalWndProc = GetOriginalInputWndProcLocked(hwnd);
+        // Control messages must reach this owner-thread path before input
+        // filtering. Queue observation deliberately leaves them dispatchable.
+        if (HandleDeferredWindowRemovalLocked(hwnd, msg, wParam))
+            return 0;
+        if (msg == WM_NCDESTROY)
+            OnInputWindowDestroyedLocked(hwnd);
         OPTIINPUT_LOG_VERBOSE("WndProc dispatch hwnd:{} msg:{}({:#x}) input:{} original:{} menu:{} focused:{}",
                               static_cast<void*>(hwnd), WindowMessageName(msg), static_cast<unsigned>(msg),
                               static_cast<void*>(_state.InputHwnd), reinterpret_cast<std::uintptr_t>(originalWndProc),
@@ -811,6 +806,7 @@ void ConsumeMessage(MSG* msg)
 
 BOOL WINAPI hkPeekMessageA(LPMSG msg, HWND hwnd, UINT messageFilterMin, UINT messageFilterMax, UINT removeMsg)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     const BOOL result = o_PeekMessageA(msg, hwnd, messageFilterMin, messageFilterMax, removeMsg);
 
     if (!result || msg == nullptr)
@@ -830,6 +826,7 @@ BOOL WINAPI hkPeekMessageA(LPMSG msg, HWND hwnd, UINT messageFilterMin, UINT mes
 
 BOOL WINAPI hkPeekMessageW(LPMSG msg, HWND hwnd, UINT messageFilterMin, UINT messageFilterMax, UINT removeMsg)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     const BOOL result = o_PeekMessageW(msg, hwnd, messageFilterMin, messageFilterMax, removeMsg);
 
     if (!result || msg == nullptr)
@@ -849,6 +846,7 @@ BOOL WINAPI hkPeekMessageW(LPMSG msg, HWND hwnd, UINT messageFilterMin, UINT mes
 
 BOOL WINAPI hkGetMessageA(LPMSG msg, HWND hwnd, UINT messageFilterMin, UINT messageFilterMax)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     const BOOL result = o_GetMessageA(msg, hwnd, messageFilterMin, messageFilterMax);
 
     // GetMessage returns:
@@ -868,6 +866,7 @@ BOOL WINAPI hkGetMessageA(LPMSG msg, HWND hwnd, UINT messageFilterMin, UINT mess
 
 BOOL WINAPI hkGetMessageW(LPMSG msg, HWND hwnd, UINT messageFilterMin, UINT messageFilterMax)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     const BOOL result = o_GetMessageW(msg, hwnd, messageFilterMin, messageFilterMax);
 
     if (result > 0 && msg != nullptr)
@@ -901,6 +900,7 @@ bool ShouldBlockMouseMessageDispatchLocked(HWND hwnd, UINT msg, std::uint64_t& b
 
 BOOL WINAPI hkPostMessageA(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     {
         std::unique_lock lock(_state.Mutex);
 
@@ -918,6 +918,7 @@ BOOL WINAPI hkPostMessageA(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 BOOL WINAPI hkPostMessageW(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     {
         std::unique_lock lock(_state.Mutex);
 
@@ -935,6 +936,7 @@ BOOL WINAPI hkPostMessageW(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 LRESULT WINAPI hkSendMessageA(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     {
         std::unique_lock lock(_state.Mutex);
 
@@ -952,6 +954,7 @@ LRESULT WINAPI hkSendMessageA(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 LRESULT WINAPI hkSendMessageW(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     {
         std::unique_lock lock(_state.Mutex);
 
@@ -969,6 +972,7 @@ LRESULT WINAPI hkSendMessageW(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 UINT WINAPI hkSendInput(UINT inputCount, LPINPUT inputs, int size)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     if (inputs == nullptr || inputCount == 0 || size != static_cast<int>(sizeof(INPUT)))
         return o_SendInput(inputCount, inputs, size);
 
@@ -1023,6 +1027,7 @@ UINT WINAPI hkSendInput(UINT inputCount, LPINPUT inputs, int size)
 
 void WINAPI hkmouse_event(DWORD flags, DWORD dx, DWORD dy, DWORD data, ULONG_PTR extraInfo)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     {
         std::unique_lock lock(_state.Mutex);
 
@@ -1039,6 +1044,7 @@ void WINAPI hkmouse_event(DWORD flags, DWORD dx, DWORD dy, DWORD data, ULONG_PTR
 
 SHORT WINAPI hkGetAsyncKeyState(int vk)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     if (ShouldBlockVirtualKey(vk))
     {
         {
@@ -1055,6 +1061,7 @@ SHORT WINAPI hkGetAsyncKeyState(int vk)
 
 SHORT WINAPI hkGetKeyState(int vk)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     if (ShouldBlockVirtualKey(vk))
     {
         {
@@ -1071,6 +1078,7 @@ SHORT WINAPI hkGetKeyState(int vk)
 
 BOOL WINAPI hkGetKeyboardState(PBYTE keyState)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     if (keyState == nullptr)
         return FALSE;
 

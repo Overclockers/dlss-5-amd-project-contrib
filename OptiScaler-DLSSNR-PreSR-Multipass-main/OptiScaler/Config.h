@@ -988,7 +988,7 @@ class Config
     CustomOptional<float> MenuBlurStrength { 1.0f };
     CustomOptional<float, NoDefault> MenuWindowWidth;
     CustomOptional<float, NoDefault> MenuWindowHeight;
-    CustomOptional<int> MenuWindowAnchor { 0 }; // Free, top left/right, bottom left/right
+    CustomOptional<int> MenuWindowAnchor { 0 }; // 0 free; 1..4 corners; 5..8 dock left/right/top/bottom
     CustomOptional<bool> OverlayMenu { true };
     CustomOptional<int> ShortcutKey { VK_INSERT };
     CustomOptional<bool> ExtendedLimits { false };
@@ -1365,6 +1365,7 @@ class Config
     std::optional<std::wstring> readWString(std::string section, std::string key, bool lowercase = false);
     std::optional<float> readFloat(std::string section, std::string key);
     std::optional<int> readInt(std::string section, std::string key);
+    std::optional<int> readShortcut(std::string section, std::string key);
     std::optional<uint32_t> readUInt(std::string section, std::string key);
     std::optional<bool> readBool(std::string section, std::string key);
 

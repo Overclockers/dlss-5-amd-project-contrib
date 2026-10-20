@@ -1,6 +1,11 @@
 ﻿#pragma once
 
 #include "input_system.h"
+#include "input_hook_lifetime.h"
+#include "input_key_lifetime.h"
+#include "input_window_lifetime.h"
+#include "directinput_registry.h"
+#include <detours/detours.h>
 
 #include <Windows.h>
 
@@ -9,6 +14,7 @@
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <vector>
 #include <winerror.h>
 #include <Xinput.h>
 
@@ -29,6 +35,20 @@
 
 namespace OptiInput
 {
+// Shared transactional backend: no installed state is published before Commit succeeds.
+struct DetourBackend
+{
+    static LONG Begin() { return DetourTransactionBegin(); }
+    static LONG Update() { return DetourUpdateThread(GetCurrentThread()); }
+    static LONG Attach(void** target, void* callback) { return DetourAttach(target, callback); }
+    static LONG Detach(void** target, void* callback) { return DetourDetach(target, callback); }
+    static LONG Commit() { return DetourTransactionCommit(); }
+    static LONG Abort() { return DetourTransactionAbort(); }
+};
+
+extern HookLifetime::CallbackGate NonDirectInputCallbackGate;
+bool RetainInputCallbackModule(const void* address);
+
 enum class InputMessageSource
 {
     WndProc,
@@ -63,21 +83,10 @@ struct WindowsHookSlot
     HOOKPROC OriginalProc = nullptr;
     DWORD ThreadId = 0;
     HINSTANCE Module = nullptr;
+    HMODULE OriginalProcOwner = nullptr;
 };
 
-enum class DirectInputDeviceKind
-{
-    Other,
-    Keyboard,
-    Mouse,
-};
-
-struct DirectInputDeviceSlot
-{
-    bool InUse = false;
-    void* Device = nullptr;
-    DirectInputDeviceKind Kind = DirectInputDeviceKind::Other;
-};
+using DirectInputDeviceKind = DirectInputHooks::DeviceKind;
 
 enum class HidDeviceKind
 {
@@ -106,6 +115,7 @@ struct ButtonState
     bool Down = false;
     bool Pressed = false;
     bool Released = false;
+    KeyPressHistory PressHistory;
 
     // Keep blocked down/up pairs symmetrical.
     bool BlockedDown = false;
@@ -122,6 +132,9 @@ struct InputState
     HWND InputRootHwnd = nullptr;
 
     WNDPROC OriginalWndProc = nullptr;
+    HookLifetime::DeferredWindowRemoval<HWND> DeferredWndProcRemoval;
+    HookLifetime::PendingInputWindowSwitch<HWND> PendingInputWindow;
+    bool InputUsesWndProcSubclass = true;
 
     bool Initialized = false;
     bool HooksInstalled = false;
@@ -303,7 +316,6 @@ struct InputState
     std::uint64_t XInputSetStateBlockedCount = 0;
     std::uint64_t XInputSetStatePassedCount = 0;
 
-    std::array<DirectInputDeviceSlot, MaxTrackedDirectInputDevices> DirectInputDeviceSlots {};
     std::uint64_t DirectInputCreateCallCount = 0;
     std::uint64_t DirectInputCreateSucceededCount = 0;
     std::uint64_t DirectInputCreateFailedCount = 0;
@@ -456,11 +468,6 @@ extern DirectInput8Create_t o_DirectInput8Create;
 extern DirectInputCreateA_t o_DirectInputCreateA;
 extern DirectInputCreateW_t o_DirectInputCreateW;
 extern DirectInputCreateEx_t o_DirectInputCreateEx;
-extern DirectInputCreateDevice_t o_DirectInputCreateDeviceA;
-extern DirectInputCreateDevice_t o_DirectInputCreateDeviceW;
-extern DirectInputGetDeviceState_t o_DirectInputDeviceGetDeviceState;
-extern DirectInputGetDeviceData_t o_DirectInputDeviceGetDeviceData;
-extern DirectInputDeviceRelease_t o_DirectInputDeviceRelease;
 
 extern thread_local int bypassHookDepth;
 
@@ -478,17 +485,19 @@ class ScopedHookBypass
 
 // Lifecycle
 bool InstallHooks();
-void RemoveHooks();
-void ReleaseTrackedWindowsHooksLocked();
+bool RemoveHooks();
+bool ReleaseTrackedWindowsHooksLocked();
+std::vector<HMODULE> TakeRestoredCursorIatOwnersLocked();
 
 // GameInput / Windows.Gaming.Input
 void UpdateGameInputIntegrationLocked();
-void RemoveGameInputHooksLocked();
+bool RemoveGameInputHooksLocked();
 HRESULT WINAPI hkGameInputCreate(void** gameInput);
 
 // XInput
 void UpdateXInputIntegrationLocked();
-void RemoveXInputHooksLocked();
+bool RemoveXInputHooksLocked();
+void MarkXInputKeystrokesForDrainLocked();
 DWORD WINAPI hkXInputGetState(DWORD userIndex, XINPUT_STATE* state);
 DWORD WINAPI hkXInputGetStateEx(DWORD userIndex, XINPUT_STATE* state);
 DWORD WINAPI hkXInputGetKeystroke(DWORD userIndex, DWORD reserved, PXINPUT_KEYSTROKE keystroke);
@@ -496,24 +505,24 @@ DWORD WINAPI hkXInputSetState(DWORD userIndex, XINPUT_VIBRATION* vibration);
 
 // DirectInput
 void UpdateDirectInputIntegrationLocked();
-void RemoveDirectInputHooksLocked();
+bool RemoveDirectInputHooksLocked();
+void MarkDirectInputBufferedDataForDrainLocked();
 HRESULT WINAPI hkDirectInput8Create(HINSTANCE instance, DWORD version, REFIID riid, LPVOID* out, LPUNKNOWN outer);
 HRESULT WINAPI hkDirectInputCreateA(HINSTANCE instance, DWORD version, void** out, LPUNKNOWN outer);
 HRESULT WINAPI hkDirectInputCreateW(HINSTANCE instance, DWORD version, void** out, LPUNKNOWN outer);
 HRESULT WINAPI hkDirectInputCreateEx(HINSTANCE instance, DWORD version, REFIID riid, LPVOID* out, LPUNKNOWN outer);
-HRESULT WINAPI hkDirectInputCreateDeviceA(void* directInput, REFGUID guid, void** device, LPUNKNOWN outer);
-HRESULT WINAPI hkDirectInputCreateDeviceW(void* directInput, REFGUID guid, void** device, LPUNKNOWN outer);
-HRESULT WINAPI hkDirectInputGetDeviceState(void* device, DWORD dataSize, LPVOID data);
-HRESULT WINAPI hkDirectInputGetDeviceData(void* device, DWORD objectDataSize, LPDIDEVICEOBJECTDATA data, LPDWORD inOut,
-                                          DWORD flags);
-ULONG WINAPI hkDirectInputDeviceRelease(void* device);
 
 // Target/input window
 void SetTargetWindow(HWND hwnd, bool isUwp, bool useWndProcSubclass);
 void SetInputWindow(HWND hwnd, bool useWndProcSubclass, bool explicitInputHwnd);
 bool InstallWindowSubclass(HWND hwnd);
-void RemoveWindowSubclass();
+bool RemoveWindowSubclass();
+void RetryPendingInputWindowLocked();
+bool HandleDeferredWindowRemovalLocked(HWND hwnd, UINT msg, WPARAM token);
+bool IsDeferredWindowRemovalMessage(UINT msg);
+void OnInputWindowDestroyedLocked(HWND hwnd);
 bool TryGetWindowProc(HWND hwnd, WNDPROC* wndProc);
+WNDPROC GetOriginalInputWndProcLocked(HWND hwnd);
 void ClearTargetWindowLocked();
 void ClearInputWindowLocked();
 bool ValidateTargetWindowLocked();
@@ -522,6 +531,7 @@ void ValidateWindowSubclassLocked();
 bool IsTargetWindow(HWND hwnd);
 bool IsInputWindow(HWND hwnd);
 void UpdateFocusState(HWND targetHwnd);
+void SetInputFocusLocked(bool focused);
 LRESULT CALLBACK OptiInputWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 // Frame/menu policy
@@ -597,10 +607,10 @@ int WindowsHookMouseMessageToButton(int hookType, WPARAM wParam, LPARAM lParam);
 HOOKPROC GetWindowsHookProxyProc(std::size_t slotIndex);
 LRESULT CALLBACK InvokeWindowsHookProxy(std::size_t slotIndex, int code, WPARAM wParam, LPARAM lParam);
 void UpdateExternalMouseHookLocked();
-void RemoveExternalMouseHookLocked();
+bool RemoveExternalMouseHookLocked();
 void EnsureExternalRawInputSinkLocked();
 void PumpExternalRawInputSinkLocked();
-void RemoveExternalRawInputSinkLocked();
+bool RemoveExternalRawInputSinkLocked();
 void AccumulateExternalRawMouseDeltaLocked(const RAWMOUSE& mouse);
 void SyncAggregateModifierStateLocked();
 

@@ -212,6 +212,8 @@ DebugState GetDebugState();
 
 bool IsKeyDown(int vk);
 bool IsKeyPressed(int vk);
+// Modifier flags at the original press; retained until the next press or focus loss.
+int GetKeyPressModifiers(int vk);
 bool IsKeyReleased(int vk);
 int GetLastPressedKey();
 

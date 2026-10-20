@@ -288,6 +288,7 @@ HANDLE WINAPI hkCreateFileW(LPCWSTR fileName, DWORD desiredAccess, DWORD shareMo
                             LPSECURITY_ATTRIBUTES securityAttributes, DWORD creationDisposition,
                             DWORD flagsAndAttributes, HANDLE templateFile)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     HANDLE handle = o_CreateFileW(fileName, desiredAccess, shareMode, securityAttributes, creationDisposition,
                                   flagsAndAttributes, templateFile);
 
@@ -304,6 +305,7 @@ HANDLE WINAPI hkCreateFileA(LPCSTR fileName, DWORD desiredAccess, DWORD shareMod
                             LPSECURITY_ATTRIBUTES securityAttributes, DWORD creationDisposition,
                             DWORD flagsAndAttributes, HANDLE templateFile)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     HANDLE handle = o_CreateFileA(fileName, desiredAccess, shareMode, securityAttributes, creationDisposition,
                                   flagsAndAttributes, templateFile);
 
@@ -320,6 +322,7 @@ HANDLE WINAPI hkCreateFileA(LPCSTR fileName, DWORD desiredAccess, DWORD shareMod
 
 BOOL WINAPI hkReadFile(HANDLE file, LPVOID buffer, DWORD bytesToRead, LPDWORD bytesRead, LPOVERLAPPED overlapped)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     const BOOL result = o_ReadFile(file, buffer, bytesToRead, bytesRead, overlapped);
 
     if (!result)
@@ -356,6 +359,7 @@ BOOL WINAPI hkReadFile(HANDLE file, LPVOID buffer, DWORD bytesToRead, LPDWORD by
 BOOL WINAPI hkDeviceIoControl(HANDLE device, DWORD controlCode, LPVOID inBuffer, DWORD inBufferSize, LPVOID outBuffer,
                               DWORD outBufferSize, LPDWORD bytesReturned, LPOVERLAPPED overlapped)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     const BOOL result = o_DeviceIoControl(device, controlCode, inBuffer, inBufferSize, outBuffer, outBufferSize,
                                           bytesReturned, overlapped);
 
@@ -392,6 +396,7 @@ BOOL WINAPI hkDeviceIoControl(HANDLE device, DWORD controlCode, LPVOID inBuffer,
 
 BOOL WINAPI hkCloseHandle(HANDLE handle)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     {
         std::unique_lock lock(_state.Mutex);
         ClearHidHandleLocked(handle);
