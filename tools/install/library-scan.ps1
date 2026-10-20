@@ -129,6 +129,198 @@ function Get-OptScalerXboxExes([string]$dir) {
     return @(Get-OptScalerPrimaryExes $dir 6)
 }
 
+function Get-OptScalerImageBounds([string]$path) {
+    # Read container headers only: never ask an image codec to allocate decoded pixels.
+    $stream = $null
+    $reader = $null
+    try {
+        $stream = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+        if ($stream.Length -lt 33 -or $stream.Length -gt 32MB) { return $null }
+        $reader = New-Object IO.BinaryReader($stream)
+        $head = $reader.ReadBytes(24)
+        $width = 0
+        $height = 0
+        if ([BitConverter]::ToString($head, 0, 8) -eq '89-50-4E-47-0D-0A-1A-0A') {
+            if ([BitConverter]::ToString($head, 8, 8) -ne '00-00-00-0D-49-48-44-52') { return $null }
+            $width = [long]$head[16] * 16777216 + [long]$head[17] * 65536 + [long]$head[18] * 256 + $head[19]
+            $height = [long]$head[20] * 16777216 + [long]$head[21] * 65536 + [long]$head[22] * 256 + $head[23]
+            $stream.Position = $stream.Length - 12
+            if ([BitConverter]::ToString($reader.ReadBytes(12)) -ne '00-00-00-00-49-45-4E-44-AE-42-60-82') { return $null }
+        } elseif ($head[0] -eq 255 -and $head[1] -eq 216) {
+            $stream.Position = $stream.Length - 2
+            if ($reader.ReadByte() -ne 255 -or $reader.ReadByte() -ne 217) { return $null }
+            $stream.Position = 2
+            $limit = [Math]::Min($stream.Length - 2, 64KB)
+            $markers = 0
+            while ($stream.Position -lt $limit -and $markers -lt 256) {
+                $markers++
+                if ($reader.ReadByte() -ne 255) { return $null }
+                $marker = $reader.ReadByte()
+                while ($marker -eq 255 -and $stream.Position -lt $limit) { $marker = $reader.ReadByte() }
+                if ($marker -eq 218 -or $marker -eq 217 -or $marker -eq 0) { return $null }
+                if ($marker -eq 1 -or ($marker -ge 208 -and $marker -le 215)) { continue }
+                $length = [int]$reader.ReadByte() * 256 + $reader.ReadByte()
+                if ($length -lt 2 -or $stream.Position + $length - 2 -gt $limit) { return $null }
+                if ($marker -in @(192,193,194)) {
+                    if ($length -lt 8 -or $reader.ReadByte() -ne 8) { return $null }
+                    $height = [int]$reader.ReadByte() * 256 + $reader.ReadByte()
+                    $width = [int]$reader.ReadByte() * 256 + $reader.ReadByte()
+                    $components = $reader.ReadByte()
+                    if ($components -notin @(1,3,4) -or $length -ne 8 + 3 * $components) { return $null }
+                    break
+                }
+                $stream.Position += $length - 2
+            }
+        } else { return $null }
+        if ($width -lt 1 -or $height -lt 1 -or $width -gt 8192 -or $height -gt 8192 -or [long]$width * $height -gt 32000000) { return $null }
+        return @{ width = [int]$width; height = [int]$height }
+    } catch { return $null } finally {
+        if ($reader) { $reader.Dispose() }
+        elseif ($stream) { $stream.Dispose() }
+    }
+}
+
+function Test-OptScalerArtworkPath([string]$path, [string]$root) {
+    # A proven manifest mapping must still stay inside this game and avoid links.
+    try {
+        $full = [IO.Path]::GetFullPath($path)
+        $base = [IO.Path]::GetFullPath($root).TrimEnd('\','/')
+        if (-not $full.StartsWith($base + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { return $false }
+        $current = $full
+        while ($current -and $current.Length -ge $base.Length) {
+            if (([IO.File]::GetAttributes($current) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return $false }
+            $current = [IO.Path]::GetDirectoryName($current)
+        }
+        return $true
+    } catch { return $false }
+}
+
+function Get-OptScalerLocalArtwork {
+    param(
+        [ValidateSet('Steam','Xbox')][string]$Source,
+        [string[]]$Roots,
+        [hashtable]$Budget = $null,
+        [int]$MaxEntries = 192,
+        [int]$MaxDirectories = 24,
+        [int]$MaxImages = 64,
+        [int]$MaxMilliseconds = 150
+    )
+    $result = @{ cover = ''; hero = ''; candidates = @(); examined = 0; directories = 0; images = 0 }
+    if ($Budget -and $Budget.RemainingMilliseconds -le 0) { return $result }
+    if ($Budget) { $MaxMilliseconds = [Math]::Min($MaxMilliseconds, $Budget.RemainingMilliseconds) }
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    $queue = New-Object System.Collections.Generic.Queue[object]
+    $visited = @{}
+    $mapped = @{}
+    $candidates = New-Object System.Collections.Generic.List[object]
+    $coverScore = -1L
+    $heroScore = -1L
+    foreach ($root in $Roots) {
+        if (-not $root) { continue }
+        try {
+            $root = [IO.Path]::GetFullPath($root)
+            if (([IO.File]::GetAttributes($root) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { continue }
+            $queue.Enqueue(@{ path = $root; root = $root; depth = 0 })
+        } catch { }
+    }
+    try {
+        while ($queue.Count -gt 0 -and $result.directories -lt $MaxDirectories -and $result.examined -lt $MaxEntries -and $result.images -lt $MaxImages -and $timer.ElapsedMilliseconds -lt $MaxMilliseconds) {
+            $dir = $queue.Dequeue()
+            if ($visited.ContainsKey($dir.path)) { continue }
+            $visited[$dir.path] = $true
+            $result.directories++
+            if ($Source -eq 'Xbox' -and $dir.depth -eq 0) {
+                foreach ($manifest in @('MicrosoftGame.Config','appxmanifest.xml')) {
+                    if ($timer.ElapsedMilliseconds -ge $MaxMilliseconds -or $result.examined -ge $MaxEntries) { break }
+                    $result.examined++
+                    $reader = $null
+                    try {
+                        $file = Join-Path $dir.path $manifest
+                        if (-not (Test-OptScalerArtworkPath $file $dir.root) -or (Get-Item -LiteralPath $file).Length -gt 1MB) { continue }
+                        $settings = New-Object Xml.XmlReaderSettings
+                        $settings.DtdProcessing = [Xml.DtdProcessing]::Prohibit
+                        $settings.XmlResolver = $null
+                        $settings.MaxCharactersInDocument = 1MB
+                        $reader = [Xml.XmlReader]::Create($file, $settings)
+                        $xml = New-Object Xml.XmlDocument
+                        $xml.XmlResolver = $null
+                        $xml.Load($reader)
+                        foreach ($node in $xml.SelectNodes('//*[local-name()="ShellVisuals" or local-name()="VisualElements" or local-name()="DefaultTile" or local-name()="SplashScreen" or local-name()="Properties"]')) {
+                            if ($timer.ElapsedMilliseconds -ge $MaxMilliseconds -or $result.examined -ge $MaxEntries -or $mapped.Count -ge $MaxImages) { break }
+                            foreach ($attribute in $node.Attributes) {
+                                if ($timer.ElapsedMilliseconds -ge $MaxMilliseconds -or $result.examined -ge $MaxEntries -or $mapped.Count -ge $MaxImages) { break }
+                                $result.examined++
+                                $role = if ($attribute.LocalName -match '^(Square\d+x\d+Logo|StoreLogo|Logo)$') { 'square' } elseif ($attribute.LocalName -eq 'SplashScreenImage' -or ($node.LocalName -eq 'SplashScreen' -and $attribute.LocalName -eq 'Image')) { 'hero' } else { '' }
+                                if (-not $role -or [IO.Path]::IsPathRooted($attribute.Value)) { continue }
+                                $resource = [IO.Path]::GetFullPath((Join-Path $dir.path $attribute.Value))
+                                $parent = [IO.Path]::GetDirectoryName($resource)
+                                # Qualifier variants can exist even when the unqualified manifest path does not.
+                                if (-not (Test-OptScalerArtworkPath $parent $dir.root) -and $parent -ne $dir.root) { continue }
+                                $mapped[$resource.Substring(0, $resource.Length - [IO.Path]::GetExtension($resource).Length)] = $role
+                                if ($parent -ne $dir.path -and $queue.Count -lt $MaxDirectories) { $queue.Enqueue(@{ path = $parent; root = $dir.root; depth = 1 }) }
+                            }
+                        }
+                    } catch { Write-Verbose ("Artwork metadata skipped: {0}: {1}" -f $file, $_.Exception.Message) } finally { if ($reader) { $reader.Dispose() } }
+                }
+            }
+            $entries = $null
+            try {
+                $entries = [IO.Directory]::EnumerateFileSystemEntries($dir.path).GetEnumerator()
+                while ($result.examined -lt $MaxEntries -and $result.images -lt $MaxImages -and $timer.ElapsedMilliseconds -lt $MaxMilliseconds -and $entries.MoveNext()) {
+                    $result.examined++
+                    $path = $entries.Current
+                    $name = [IO.Path]::GetFileName($path)
+                    try { $attributes = [IO.File]::GetAttributes($path) } catch { continue }
+                    if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { continue }
+                    if (($attributes -band [IO.FileAttributes]::Directory) -ne 0) {
+                        if ($dir.depth -eq 0 -and (($Source -eq 'Steam' -and $name -match '^[a-fA-F0-9]{32,64}$') -or ($Source -eq 'Xbox' -and $name -ieq 'Assets'))) {
+                            if ($queue.Count -lt $MaxDirectories) { $queue.Enqueue(@{ path = $path; root = $dir.root; depth = 1 }) }
+                        }
+                        continue
+                    }
+                    if ($name -notmatch '(?i)\.(jpg|jpeg|png)$' -or $name -match '(?i)(blur|placeholder)') { continue }
+                    $role = ''
+                    $priority = 0
+                    if ($Source -eq 'Steam') {
+                        if ($name -match '(?i)^(?:\d+_)?library_(600x900|capsule)(?:_[a-z0-9_-]+)?\.(jpg|jpeg|png)$') { $role = 'poster' }
+                        elseif ($name -match '(?i)^(?:\d+_)?library_hero(?:_[a-z0-9_-]+)?\.(jpg|jpeg|png)$') { $role = 'hero'; $priority = 1 }
+                        elseif ($name -match '(?i)^(?:\d+_)?(?:library_)?header(?:_[a-z0-9_-]+)?\.(jpg|jpeg|png)$') { $role = 'hero' }
+                    } else {
+                        if ($name -match '(?i)^(StoreLogo|Logo|Square\d+x\d+Logo|LargeLogo|SmallLogo)(?:[._-][a-z0-9_.-]+)?\.(jpg|jpeg|png)$') { $role = 'square' }
+                        elseif ($name -match '(?i)^(MC)?SplashScreen(?:[._-][a-z0-9_.-]+)?\.(jpg|jpeg|png)$') { $role = 'hero' }
+                        $stem = $path.Substring(0, $path.Length - [IO.Path]::GetExtension($path).Length)
+                        foreach ($key in $mapped.Keys) {
+                            if ($stem.Equals($key, [StringComparison]::OrdinalIgnoreCase) -or $stem.StartsWith($key + '.', [StringComparison]::OrdinalIgnoreCase)) { $role = $mapped[$key]; break }
+                        }
+                        if ($role -eq 'hero' -and $name -match '(?i)logo') { $role = '' }
+                    }
+                    if (-not $role) { continue }
+                    $result.images++
+                    $bounds = Get-OptScalerImageBounds $path
+                    if (-not $bounds) { continue }
+                    $ratio = $bounds.width / [double]$bounds.height
+                    $area = [long]$bounds.width * $bounds.height
+                    $kind = ''
+                    if ($role -eq 'poster' -and $bounds.width -ge 200 -and $bounds.height -ge 300 -and $ratio -ge 0.5 -and $ratio -le 0.85) { $kind = 'cover' }
+                    elseif ($role -eq 'square' -and $bounds.width -ge 64 -and $bounds.height -ge 64 -and $ratio -ge 0.9 -and $ratio -le 1.1) { $kind = 'cover' }
+                    elseif ($role -eq 'hero' -and $bounds.width -ge 480 -and $bounds.height -ge 200 -and $ratio -ge 1.5 -and $ratio -le 4) { $kind = 'hero' }
+                    if (-not $kind) { continue }
+                    [void]$candidates.Add(@{ path = $path; kind = $kind; width = $bounds.width; height = $bounds.height })
+                    # Steam's dedicated hero wins over a header; resolution wins within each semantic class.
+                    $score = [long]$priority * 100000000 + $area
+                    if ($kind -eq 'cover' -and ($score -gt $coverScore -or ($score -eq $coverScore -and [string]::Compare($path, $result.cover, [StringComparison]::OrdinalIgnoreCase) -lt 0))) { $result.cover = $path; $coverScore = $score }
+                    elseif ($kind -eq 'hero' -and ($score -gt $heroScore -or ($score -eq $heroScore -and [string]::Compare($path, $result.hero, [StringComparison]::OrdinalIgnoreCase) -lt 0))) { $result.hero = $path; $heroScore = $score }
+                }
+            } catch { } finally { if ($entries) { $entries.Dispose() } }
+        }
+    } finally {
+        $timer.Stop()
+        if ($Budget) { $Budget.RemainingMilliseconds = [Math]::Max(0, $Budget.RemainingMilliseconds - [Math]::Max(1, $timer.ElapsedMilliseconds)) }
+    }
+    $result.candidates = $candidates.ToArray()
+    return $result
+}
+
 function Add-OptScalerGame($list, $seen, [string]$name, [string]$exe, [string]$source, [string]$id, [string]$cover = '', [string]$hero = '') {
     if (-not $exe) { return }
     try { $exe = [IO.Path]::GetFullPath($exe) } catch { return }
@@ -153,6 +345,7 @@ function Add-OptScalerGame($list, $seen, [string]$name, [string]$exe, [string]$s
 function Get-OptScalerGameLibrary {
     $games = New-Object System.Collections.Generic.List[object]
     $seen = @{}
+    $artworkBudget = @{ RemainingMilliseconds = 1000 }
     $steamRoots = New-Object System.Collections.Generic.List[string]
     foreach ($reg in @(
         'HKCU:\Software\Valve\Steam',
@@ -193,20 +386,10 @@ function Get-OptScalerGameLibrary {
                     $dir = Join-Path $lib "steamapps\common\$d"
                     $cands = @(Get-OptScalerPrimaryExes $dir 4)
                     if ($cands.Count -gt 0) {
-                        $cover = ''
-                        $hero = ''
                         $grid = Join-Path $steamRoot "appcache\librarycache\$appid"
-                        if (Test-Path -LiteralPath $grid) {
-                            $c1 = Join-Path $grid 'library_600x900.jpg'
-                            if (Test-Path -LiteralPath $c1 -PathType Leaf) { $cover = $c1 }
-                            elseif (Test-Path -LiteralPath (Join-Path $grid 'header.jpg') -PathType Leaf) { $cover = Join-Path $grid 'header.jpg' }
-                            else {
-                                $candsJpg = @(Get-ChildItem -LiteralPath $grid -Filter '*.jpg' -File -ErrorAction SilentlyContinue | Sort-Object Length -Descending)
-                                if ($candsJpg.Count -gt 0) { $cover = $candsJpg[0].FullName }
-                            }
-                            $h1 = Join-Path $grid 'library_hero.jpg'
-                            if (Test-Path -LiteralPath $h1 -PathType Leaf) { $hero = $h1 }
-                        }
+                        $art = Get-OptScalerLocalArtwork -Source Steam -Roots @($grid) -Budget $artworkBudget
+                        $cover = $art.cover
+                        $hero = $art.hero
                         Add-OptScalerGame $games $seen $n $cands[0].path 'Steam' ("steam:" + $appid) $cover $hero
                         if (@($cands | Where-Object { $_.rank -eq $cands[0].rank }).Count -gt 1) {
                             $games[$games.Count - 1].selectionRequired = $true
@@ -267,25 +450,10 @@ function Get-OptScalerGameLibrary {
             $base = if (Test-Path -LiteralPath $content -PathType Container) { $content } else { $_.FullName }
             $cands = @(Get-OptScalerXboxExes $base)
             if ($cands.Count -gt 0) {
-                $cover = ''
-                $hero = ''
-                $candDirs = @($base, (Join-Path $base 'Assets'), $_.FullName, (Join-Path $_.FullName 'Assets'), (Join-Path $_.FullName 'Content\Assets'))
-                foreach ($cd in $candDirs) {
-                    if (-not (Test-Path -LiteralPath $cd -PathType Container)) { continue }
-                    foreach ($candImg in @('StoreLogo.png','Logo.png','Square150x150Logo.png','LargeLogo.png','SmallLogo.png','Wide310x150Logo.png','WideLogo.png','SplashScreen.png')) {
-                        $p = Join-Path $cd $candImg
-                        if (Test-Path -LiteralPath $p -PathType Leaf) { $cover = $p; break }
-                    }
-                    if ($cover) { break }
-                }
-                foreach ($cd in $candDirs) {
-                    if (-not (Test-Path -LiteralPath $cd -PathType Container)) { continue }
-                    foreach ($candHero in @('SplashScreen.png','MCSplashScreen.png','WideLogo.png','Wide310x150Logo.png','LargeLogo.png')) {
-                        $p = Join-Path $cd $candHero
-                        if (Test-Path -LiteralPath $p -PathType Leaf) { $hero = $p; break }
-                    }
-                    if ($hero) { break }
-                }
+                $artRoots = @($base, $_.FullName) | Select-Object -Unique
+                $art = Get-OptScalerLocalArtwork -Source Xbox -Roots $artRoots -Budget $artworkBudget
+                $cover = $art.cover
+                $hero = $art.hero
                 Add-OptScalerGame $games $seen $_.Name $cands[0].path 'Xbox' ("xbox:" + $_.Name.ToLowerInvariant()) $cover $hero
             }
         }

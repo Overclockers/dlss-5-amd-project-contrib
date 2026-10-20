@@ -35,7 +35,7 @@ namespace OptScalerNR.Launcher
             if(_recommendations==null)return;
             if(_refreshProfilesButton!=null)_refreshProfilesButton.Content=L("更新推荐资料","Refresh recommendations");
             if(_useRecommendationButton!=null){_useRecommendationButton.Content=L("使用推荐","Use suggestion");_useRecommendationButton.IsEnabled=_selectedGame!=null&&!_writeBusy;}
-            if(_profileStatus!=null)_profileStatus.Text=(_recommendations.UsingCache?L("本地缓存资料 · ","Cached data · "):L("随包资料 · ","Bundled data · "))+_recommendations.Reviewed;
+            if(_profileStatus!=null){_profileStatus.Text=_recommendations.UsingCache?L("缓存资料","Cached data"):L("随包资料","Bundled data");_profileStatus.ToolTip=L("推荐规则来源：","Recommendation source: ")+_profileStatus.Text+" · "+_recommendations.Reviewed;}
             if(_selectedGame==null)return;
             var profile=_recommendations.Match(_selectedGame);
             string manual;

@@ -20,6 +20,11 @@
     <Compile Include="ProxyRecommendations.cs"/>
     <Compile Include="MainController.Library.cs"/>
     <Compile Include="MainController.Recommendations.cs"/>
+    <Compile Include="LauncherTheme.cs"/>
+    <Compile Include="MainController.Presentation.cs"/>
+    <Compile Include="MainController.Profiles.cs"/>
+    <Compile Include="IniProfiles.cs"/>
+    <Compile Include="LocalArtwork.cs"/>
     <EmbeddedResource Include="MainWindow.xaml"><LogicalName>OptScalerNR.Launcher.MainWindow.xaml</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="App.xaml"><LogicalName>OptScalerNR.Launcher.App.xaml</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="DialogTheme.xaml"><LogicalName>OptScalerNR.Launcher.DialogTheme.xaml</LogicalName></EmbeddedResource>

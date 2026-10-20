@@ -8,11 +8,12 @@ namespace OptScalerNR.Launcher
 {
     public static class Program
     {
-        public static readonly DateTime StartedUtc = DateTime.UtcNow;
+        public static DateTime StartedUtc { get; private set; }
 
         [STAThread]
         public static int Main(string[] args)
         {
+            StartedUtc = DateTime.UtcNow;
             var app = new Application();
             app.ShutdownMode = ShutdownMode.OnMainWindowClose;
             var window = MainController.Create(args);

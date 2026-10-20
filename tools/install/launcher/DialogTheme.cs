@@ -10,9 +10,33 @@ namespace OptScalerNR.Launcher
 {
     public static class DialogTheme
     {
+        public static readonly DependencyProperty KeyboardFocusVisibleProperty = DependencyProperty.RegisterAttached("KeyboardFocusVisible", typeof(bool), typeof(DialogTheme), new FrameworkPropertyMetadata(false));
+        public static bool GetKeyboardFocusVisible(DependencyObject target) { return (bool)target.GetValue(KeyboardFocusVisibleProperty); }
+        public static void SetKeyboardFocusVisible(DependencyObject target, bool value) { target.SetValue(KeyboardFocusVisibleProperty, value); }
+        static bool keyboardNavigation;
+        static DialogTheme()
+        {
+            EventManager.RegisterClassHandler(typeof(Window), Keyboard.PreviewKeyDownEvent, new KeyEventHandler(delegate(object sender, KeyEventArgs e) {
+                if (e.Key == Key.Tab || e.Key == Key.Left || e.Key == Key.Right || e.Key == Key.Up || e.Key == Key.Down) keyboardNavigation = true;
+            }), true);
+            EventManager.RegisterClassHandler(typeof(Window), Mouse.PreviewMouseDownEvent, new MouseButtonEventHandler(delegate {
+                keyboardNavigation = false;
+                var focused = Keyboard.FocusedElement as DependencyObject;
+                if (focused != null) SetKeyboardFocusVisible(focused, false);
+            }), true);
+            EventManager.RegisterClassHandler(typeof(Control), Keyboard.GotKeyboardFocusEvent, new KeyboardFocusChangedEventHandler(delegate(object sender, KeyboardFocusChangedEventArgs e) {
+                if (ReferenceEquals(sender, e.NewFocus)) SetKeyboardFocusVisible((DependencyObject)sender, keyboardNavigation);
+            }), true);
+            EventManager.RegisterClassHandler(typeof(Control), Keyboard.LostKeyboardFocusEvent, new KeyboardFocusChangedEventHandler(delegate(object sender, KeyboardFocusChangedEventArgs e) {
+                if (ReferenceEquals(sender, e.OldFocus)) SetKeyboardFocusVisible((DependencyObject)sender, false);
+            }), true);
+        }
         public static ResourceDictionary Resources()
         {
-            using (var stream = Program.OpenXaml("DialogTheme.xaml")) return (ResourceDictionary)XamlReader.Load(stream);
+            ResourceDictionary resources;
+            using (var stream = Program.OpenXaml("DialogTheme.xaml")) resources = (ResourceDictionary)XamlReader.Load(stream);
+            resources.MergedDictionaries.Add(LauncherTheme.Resources);
+            return resources;
         }
         public static Window Create(Window owner, string title, double width)
         {
@@ -28,9 +52,9 @@ namespace OptScalerNR.Launcher
             window.ResizeMode = ResizeMode.NoResize;
             window.WindowStyle = WindowStyle.None;
             WindowChrome.SetWindowChrome(window, new WindowChrome { CaptionHeight = 0, GlassFrameThickness = new Thickness(0), ResizeBorderThickness = new Thickness(0) });
-            window.Background = new SolidColorBrush(Color.FromRgb(22,24,32));
-            window.Foreground = Brushes.WhiteSmoke;
-            window.BorderBrush = new SolidColorBrush(Color.FromRgb(52,61,80));
+            window.SetResourceReference(Window.BackgroundProperty, "ThemeSurface");
+            window.SetResourceReference(Window.ForegroundProperty, "ThemeInk");
+            window.SetResourceReference(Window.BorderBrushProperty, "ThemeBorder");
             window.BorderThickness = new Thickness(1);
             window.FontFamily = owner != null ? owner.FontFamily : new FontFamily("Segoe UI, Microsoft YaHei UI");
             window.FontSize = 13;
@@ -47,8 +71,10 @@ namespace OptScalerNR.Launcher
         }
         public static void SetContent(Window window, UIElement content)
         {
-            var root = new DockPanel { Background = window.Background };
-            var header = new Border { Padding = new Thickness(20,12,12,12), BorderThickness = new Thickness(0,0,0,1), BorderBrush = window.BorderBrush };
+            var root = new DockPanel();
+            root.SetResourceReference(DockPanel.BackgroundProperty, "ThemeSurface");
+            var header = new Border { Padding = new Thickness(20,12,12,12), BorderThickness = new Thickness(0,0,0,1) };
+            header.SetResourceReference(Border.BorderBrushProperty, "ThemeBorder");
             var row = new DockPanel();
             var close = new Button { Content = "✕", Padding = new Thickness(10,4,10,4), MinHeight = 30, ToolTip = window.Language.IetfLanguageTag.StartsWith("zh") ? "关闭" : "Close" };
             close.Click += delegate { window.Close(); };
@@ -72,7 +98,9 @@ namespace OptScalerNR.Launcher
             bool zh = owner != null && owner.Language.IetfLanguageTag.StartsWith("zh");
             var window = Create(owner, caption, 600);
             var panel = new StackPanel { Margin = new Thickness(22) };
-            panel.Children.Add(new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap, Foreground = image == MessageBoxImage.Error ? Brushes.LightSalmon : Brushes.WhiteSmoke, Margin = new Thickness(0,0,0,20) });
+            var message = new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0,0,0,20) };
+            message.SetResourceReference(TextBlock.ForegroundProperty, image == MessageBoxImage.Error ? "ThemeWarning" : "ThemeInk");
+            panel.Children.Add(message);
             var row = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Right };
             var result = MessageBoxResult.Cancel;
             Action<string,MessageBoxResult,bool> add = (label, value, primary) => {
