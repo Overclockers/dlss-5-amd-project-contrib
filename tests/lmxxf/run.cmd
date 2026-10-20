@@ -1,6 +1,6 @@
 @echo off
 rem lmxxf runtime and submission tests. Every test in tests\lmxxf belongs to exactly one tier below.
-rem Usage: tests\lmxxf\run.cmd abi^|warp^|device^|inline^|inline-discard^|inline-gpu^|cold-producer^|slots^|wait-profile^|split-state^|early-unity^|hip-passthrough^|gpu [out-dir]
+rem Usage: tests\lmxxf\run.cmd abi^|warp^|device^|inline^|inline-discard^|inline-gpu^|cold-producer^|slots^|wait-profile^|split-state^|early-unity^|hip-passthrough^|drs-cpu^|drs^|gpu [out-dir]
 rem   abi    : lmxxf_nr_abi, lmxxf_zero_fallback_abi.c, test_runtime_validation.py (no GPU)
 rem   warp   : lmxxf_same_frame_boundary, lmxxf_color_probe (D3D12 WARP; no GPU)
 rem   split-state: focused inherited-legacy/enhanced split admission and pixel readback (also in warp).
@@ -8,6 +8,8 @@ rem   device : lmxxf_list_split, lmxxf_list1_wrap, lmxxf_create_execute, lmxxf_e
 rem            plus early Unity caller admission, retained split/Reset (hardware D3D12 adapter)
 rem   early-unity: only the early caller/retained-list regression (also included in device).
 rem   hip-passthrough: focused HIP round-trip/codec comparison (also included in gpu).
+rem   drs-cpu: complete captured geometry/options identity and conservative retention decisions (no GPU).
+rem   drs    : actual Original/Small exact-network codec cycling, fresh baselines and recording replay.
 rem   slots  : private inline history/lifetime, split vs 1..5 hashes and timed GPU sweeps.
 rem   cold-producer: fresh Small/Original networks enqueue before a withheld producer fence; replay bytes.
 rem   wait-profile: 1440p old/new wait budgets, split baseline, hashes and paced/unpaced sweeps.
@@ -41,6 +43,8 @@ set "D3D=d3d12.lib dxgi.lib dxguid.lib uuid.lib"
 if /i "%TIER%"=="model-gpu" goto model-gpu
 if /i "%TIER%"=="model" goto model
 if /i "%TIER%"=="abi" goto abi
+if /i "%TIER%"=="drs" goto drs
+if /i "%TIER%"=="drs-cpu" goto drs-cpu
 if /i "%TIER%"=="native-temporal" (
   call :RunNativeTemporal || goto fail
   goto pass
@@ -59,7 +63,7 @@ if /i "%TIER%"=="cold-producer" goto cold-producer
 if /i "%TIER%"=="slots" goto slots
 if /i "%TIER%"=="wait-profile" goto slots
 if /i "%TIER%"=="split-state" goto split-state
-echo usage: tests\lmxxf\run.cmd abi^|warp^|device^|inline^|inline-discard^|inline-gpu^|cold-producer^|slots^|wait-profile^|split-state^|early-unity^|hip-passthrough^|gpu [out-dir]
+echo usage: tests\lmxxf\run.cmd abi^|warp^|device^|inline^|inline-discard^|inline-gpu^|cold-producer^|slots^|wait-profile^|split-state^|early-unity^|hip-passthrough^|drs-cpu^|drs^|gpu [out-dir]
 exit /b 2
 
 :model-gpu
@@ -85,6 +89,19 @@ goto pass
 "%AMD_TEST_PYTHON%" -B tests\lmxxf\test_small_assets.py || goto fail
 %CXX% /I"%REPO%\third_party\lmxxf\Development\HIP" /I"%REPO%\third_party\lmxxf\src" tests\lmxxf\lmxxf_model_options.cpp /Fe"%OUT%\lmxxf_model_options.exe" /Fo"%OUT%\lmxxf_model_options.obj" /link user32.lib || goto fail
 "%OUT%\lmxxf_model_options.exe" || goto fail
+goto pass
+
+:drs-cpu
+%CXX% /I"%REPO%\third_party\lmxxf\Development\HIP" /I"%REPO%\third_party\lmxxf\src" tests\lmxxf\lmxxf_drs_retention.cpp /Fe"%OUT%\lmxxf_drs_retention.exe" /Fo"%OUT%\lmxxf_drs_retention.obj" /link user32.lib || goto fail
+"%OUT%\lmxxf_drs_retention.exe" || goto fail
+goto pass
+
+:drs
+if not defined LMXXF_ASSETS goto fail
+set "LMXXF_WEIGHTS_DIR=%LMXXF_ASSETS%"
+call :Runtime || goto fail
+%CXX% /I"%RT_INC%" /I"%INC%" tests\lmxxf\lmxxf_recording_runtime_gpu.cpp /Fe"%OUT%\lmxxf_recording_runtime_gpu.exe" /Fo"%OUT%\lmxxf_recording_runtime_gpu.obj" /link %D3D% "%DETOURS%" || goto fail
+"%OUT%\lmxxf_recording_runtime_gpu.exe" "%LMXXF_TEST_RUNTIME%" "%MODS%" --drs || goto fail
 goto pass
 
 :abi
