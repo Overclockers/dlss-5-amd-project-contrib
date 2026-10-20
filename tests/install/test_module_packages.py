@@ -65,7 +65,7 @@ Add-Type -TypeDefinition 'public static class PackageFixture { public static int
                      'release/check-release-freshness.ps1', 'release/package-signing.ps1', 'lmxxf-sync/manifest.json',
                      'build/build-launcher.ps1', 'install/launcher-worker.ps1', 'install/proxy-probe.ps1',
                      'install/library-scan.ps1', 'install/install-capabilities.ps1',
-                     'install/lmxxf-small.ps1', 'install/lmxxf-small-manifest.json'):
+                     'install/lmxxf-model.py', 'install/lmxxf-small.ps1', 'install/lmxxf-small-manifest.json'):
             shutil.copy2(REPO / 'tools' / name, self.root / 'tools' / name)
         shutil.copytree(REPO / 'tools/install/launcher', self.root / 'tools/install/launcher')
         shutil.copytree(REPO / 'assets/compatibility', self.root / 'assets/compatibility')
@@ -123,6 +123,7 @@ Add-Type -TypeDefinition 'public static class PackageFixture { public static int
                      'tools/build/mochizuki-aco.py', 'tools/build/mochizuki-renodx.py',
                      'tools/install/mochizuki-int4.ps1',
                      'tools/install/mochizuki-model.py', 'tools/install/mochizuki-python.ps1', 'docs/mochizuki.md',
+                     'docs/lmxxf-small-model.md', 'docs/lmxxf-044-consumer-review.md',
                      'OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/dlssnr/backend/lmxxf_runtime/LmxxfNrApi.h',
                      'OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/dlssnr/NrPerformance.h'):
             target = self.root / name
