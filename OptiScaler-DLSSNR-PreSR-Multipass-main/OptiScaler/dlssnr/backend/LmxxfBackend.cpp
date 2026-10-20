@@ -360,6 +360,7 @@ void LmxxfBackend::UpdateTiming()
     if (changed)
     {
         if (api->timing.SetEnabled(session, enabled ? 1u : 0u) != LMXXF_NR_OK) return;
+        { std::lock_guard lock(timingMutex); timingSnapshot = {}; AdvanceTimingRuntimeId(); }
         timingConfigured = true;
         timingEnabled = enabled;
         timingLogAt = 0;
@@ -485,6 +486,7 @@ bool LmxxfBackend::EnsureSession()
         return false;
     }
     session = ctx;
+    { std::lock_guard lock(timingMutex); timingSnapshot = {}; AdvanceTimingRuntimeId(); }
     sessionOwner->onFailure = RecordingFailure;
     timingConfigured = false;
     coverageStats->counters->prepared.store(false, std::memory_order_relaxed);
@@ -516,6 +518,7 @@ bool LmxxfBackend::NoteEnqueueRecoveries()
                   failure.phase ? failure.phase : "unknown stage", failure.result,
                   failure.error[0] ? failure.error.data() : "see log");
     sessionOwner.reset(); session = nullptr; sessionReady = false;
+    { std::lock_guard lock(timingMutex); timingSnapshot = {}; AdvanceTimingRuntimeId(); }
     SetStatus(message);
     return false;
 }
@@ -853,6 +856,7 @@ ID3D12Resource* LmxxfBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, const
             sessionOwner.reset();
             session = nullptr;
             sessionReady = false;
+            { std::lock_guard lock(timingMutex); timingSnapshot = {}; AdvanceTimingRuntimeId(); }
             SetStatus("lmxxf: session rebuild after PrepareFrame fail");
         }
         else
@@ -1219,6 +1223,7 @@ void LmxxfBackend::Submitted(ID3D12CommandQueue *, UINT, ID3D12CommandList *cons
 bool LmxxfBackend::Shutdown()
 {
     std::lock_guard lifetime(LmxxfCut::LifecycleMutex());
+    { std::lock_guard lock(timingMutex); timingSnapshot = {}; AdvanceTimingRuntimeId(); }
     LmxxfCut::DisarmBetweenSlot();
     activityOwner.store({}, std::memory_order_release);
     sessionOwner.reset(); session = nullptr; sessionReady = false;
@@ -1236,6 +1241,7 @@ void LmxxfBackend::ReleaseSession()
     {
         std::lock_guard lock(timingMutex);
         timingSnapshot = {};
+        AdvanceTimingRuntimeId();
     }
     timingConfigured = false;
     coverageStats->counters->prepared.store(false, std::memory_order_relaxed);

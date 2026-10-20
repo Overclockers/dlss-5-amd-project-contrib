@@ -2,6 +2,7 @@
 #include "../amd/AmdPreSr.h"
 #include "../NrPerformance.h"
 #include <string>
+#include <atomic>
 
 namespace DlssNr::Backend
 {
@@ -9,6 +10,12 @@ namespace DlssNr::Backend
 // are not added here; this increment only isolates the call sites.
 class Host
 {
+    inline static std::atomic<uint64_t> nextTimingRuntimeId {1};
+    std::atomic<uint64_t> timingRuntimeId {0};
+  protected:
+    // Advance while clearing cached timing on session/measurement epoch changes.
+    void AdvanceTimingRuntimeId()
+    { timingRuntimeId.store(nextTimingRuntimeId.fetch_add(1, std::memory_order_relaxed), std::memory_order_release); }
   public:
     virtual ~Host() = default;
     virtual ID3D12Resource* Record(ID3D12GraphicsCommandList*, const AmdPreSr::Frame&,
@@ -33,6 +40,7 @@ class Host
     virtual void InvalidateHistory() = 0;
     virtual std::string Status() const = 0;
     virtual NrTimingSnapshot Timing() const { return {}; }
+    uint64_t TimingRuntimeId() const { return timingRuntimeId.load(std::memory_order_acquire); }
     virtual bool IsRunning() const = 0;
     virtual bool GraphicsRestartNeeded(UINT activePasses) const = 0;
 };

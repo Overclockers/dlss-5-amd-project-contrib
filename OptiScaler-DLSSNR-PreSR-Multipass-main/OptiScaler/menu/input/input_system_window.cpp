@@ -1,10 +1,19 @@
 #include "pch.h"
 #include "input_system_internal.h"
+#include "input_window_lifetime.h"
+#include <vector>
 
 namespace OptiInput
 {
 namespace
 {
+// Keep forwarding targets beyond detach for a callback already dispatched by USER32.
+std::vector<std::pair<HWND, WNDPROC>> wndProcTargets;
+UINT DeferredWindowRemovalMessage()
+{
+    static const UINT message = RegisterWindowMessageW(L"OptiScaler.OptiInput.RemoveWndProc");
+    return message;
+}
 bool QueryWindowIdentity(HWND hwnd, HWND* rootHwnd, DWORD* processId, DWORD* threadId)
 {
     if (rootHwnd != nullptr)
@@ -71,7 +80,7 @@ void SetFocusStateLocked(bool focused, const char* reason, HWND foreground, DWOR
                          DWORD foregroundThreadId)
 {
     const bool oldFocused = _state.Focused;
-    _state.Focused = focused;
+    SetInputFocusLocked(focused);
 
     if (oldFocused != focused)
     {
@@ -105,6 +114,7 @@ void SetTargetWindow(HWND hwnd, bool isUwp, bool useWndProcSubclass)
         _state.TargetRootHwnd == rootHwnd && _state.TargetThreadId == threadId && _state.TargetProcessId == processId &&
         _state.ExternalTargetProcess == externalTargetProcess)
     {
+        RetryPendingInputWindowLocked();
         return;
     }
 
@@ -124,14 +134,13 @@ void SetTargetWindow(HWND hwnd, bool isUwp, bool useWndProcSubclass)
     // mode uses the target HWND as the input HWND. In external mode the target
     // HWND belongs to another process, so it cannot be subclassed or used as the
     // message source for OptiInput.
-    if (!_state.HasExplicitInputHwnd)
+    if (!(_state.PendingInputWindow.Requested ? _state.PendingInputWindow.Explicit : _state.HasExplicitInputHwnd))
     {
         if (externalTargetProcess)
         {
             LOG_WARN(
                 "target HWND belongs to another process and no explicit InputHwnd was provided; clearing input window");
-            RemoveWindowSubclass();
-            ClearInputWindowLocked();
+            SetInputWindow(nullptr, useWndProcSubclass, false);
         }
         else
         {
@@ -142,66 +151,65 @@ void SetTargetWindow(HWND hwnd, bool isUwp, bool useWndProcSubclass)
 
 void SetInputWindow(HWND hwnd, bool useWndProcSubclass, bool explicitInputHwnd)
 {
+    if (!_state.PendingInputWindow.Requested && hwnd == _state.InputHwnd &&
+        useWndProcSubclass == _state.InputUsesWndProcSubclass && explicitInputHwnd == _state.HasExplicitInputHwnd &&
+        (hwnd == nullptr || IsWindow(hwnd)))
+        return;
+    _state.PendingInputWindow.Request(hwnd, useWndProcSubclass, explicitInputHwnd);
+    RetryPendingInputWindowLocked();
+}
+
+void RetryPendingInputWindowLocked()
+{
+    if (!_state.PendingInputWindow.Requested)
+        return;
+
     HWND rootHwnd = nullptr;
     DWORD processId = 0;
     DWORD threadId = 0;
-
-    if (!QueryWindowIdentity(hwnd, &rootHwnd, &processId, &threadId))
+    HWND hwnd = _state.PendingInputWindow.Target;
+    if (!QueryWindowIdentity(hwnd, &rootHwnd, &processId, &threadId) || !IsCurrentProcessWindow(processId))
     {
-        LogQueryWindowFailure("SetInputWindow", hwnd);
-        RemoveWindowSubclass();
-        ClearInputWindowLocked();
-        _state.HasExplicitInputHwnd = explicitInputHwnd;
-        return;
+        // A pending HWND may disappear before the old window acknowledges.
+        hwnd = nullptr;
+        rootHwnd = nullptr;
+        processId = threadId = 0;
+        _state.PendingInputWindow.Target = nullptr;
     }
 
-    if (!IsCurrentProcessWindow(processId))
-    {
-        LOG_WARN("SetInputWindow rejected foreign HWND input:{} inputPid:{} currentPid:{} explicitInput:{}",
-                 static_cast<void*>(hwnd), processId, _state.CurrentProcessId, explicitInputHwnd ? 1 : 0);
-        RemoveWindowSubclass();
-        ClearInputWindowLocked();
-        _state.HasExplicitInputHwnd = explicitInputHwnd;
-        return;
-    }
-
-    if (_state.InputHwnd == hwnd && _state.InputRootHwnd == rootHwnd && _state.InputThreadId == threadId &&
-        _state.InputProcessId == processId && _state.HasExplicitInputHwnd == explicitInputHwnd &&
-        _state.UseWndProcSubclass == useWndProcSubclass)
-    {
-        return;
-    }
-
-    RemoveWindowSubclass();
-
-    LOG_INFO("input window set hwnd:{} root:{} pid:{} tid:{} explicitInput:{} useSubclass:{}", static_cast<void*>(hwnd),
-             static_cast<void*>(rootHwnd), processId, threadId, explicitInputHwnd ? 1 : 0, useWndProcSubclass ? 1 : 0);
-
-    _state.InputHwnd = hwnd;
-    if (_state.InputRootHwnd != rootHwnd || _state.InputProcessId != processId || _state.InputThreadId != threadId)
-    {
-        LOG_DEBUG("input identity changed hwnd:{} root {} -> {} pid {} -> {} tid {} -> {}",
-                  static_cast<void*>(_state.InputHwnd), static_cast<void*>(_state.InputRootHwnd),
-                  static_cast<void*>(rootHwnd), _state.InputProcessId, processId, _state.InputThreadId, threadId);
-    }
-
-    _state.InputRootHwnd = rootHwnd;
-    _state.InputProcessId = processId;
-    _state.InputThreadId = threadId;
-    _state.HasExplicitInputHwnd = explicitInputHwnd;
-    _state.UseWndProcSubclass = useWndProcSubclass;
-
-    if (useWndProcSubclass)
-    {
-        const bool subclassed = InstallWindowSubclass(hwnd);
-
-        // For normal Win32, this matters more. For UWP, do not treat subclass
-        // failure as fatal because UWP wrapper HWND ownership varies.
-        if (!subclassed && !_state.IsUwp)
+    _state.PendingInputWindow.Retry(
+        [](HWND target, bool useSubclass)
         {
-            LOG_WARN("failed to subclass input window hwnd:{} lastError:{}", static_cast<void*>(hwnd), GetLastError());
-        }
-    }
+            if (target == _state.InputHwnd && useSubclass == _state.InputUsesWndProcSubclass)
+            {
+                _state.DeferredWndProcRemoval.Cancel();
+                return true;
+            }
+            return RemoveWindowSubclass();
+        },
+        [=](HWND, bool useSubclass, bool explicitInputHwnd)
+        {
+            const bool sameInput = hwnd == _state.InputHwnd && useSubclass == _state.InputUsesWndProcSubclass;
+            LOG_INFO("input window set hwnd:{} root:{} pid:{} tid:{} explicitInput:{} useSubclass:{}",
+                     static_cast<void*>(hwnd), static_cast<void*>(rootHwnd), processId, threadId,
+                     explicitInputHwnd ? 1 : 0, useSubclass ? 1 : 0);
+
+            _state.InputHwnd = hwnd;
+            _state.InputRootHwnd = rootHwnd;
+            _state.InputProcessId = processId;
+            _state.InputThreadId = threadId;
+            _state.HasExplicitInputHwnd = explicitInputHwnd;
+            _state.InputUsesWndProcSubclass = useSubclass;
+
+            if (useSubclass && hwnd != nullptr && (!sameInput || _state.OriginalWndProc == nullptr))
+            {
+                const bool subclassed = InstallWindowSubclass(hwnd);
+                // UWP wrapper HWND ownership varies; preserve nonfatal failure.
+                if (!subclassed && !_state.IsUwp)
+                    LOG_WARN("failed to subclass input window hwnd:{} lastError:{}", static_cast<void*>(hwnd),
+                             GetLastError());
+            }
+        });
 }
 
 bool TryGetWindowProc(HWND hwnd, WNDPROC* wndProc)
@@ -246,17 +254,22 @@ void ClearTargetWindowLocked()
     _state.TargetProcessId = 0;
     _state.TargetThreadId = 0;
     _state.ExternalTargetProcess = false;
-    _state.Focused = false;
+    SetInputFocusLocked(false);
 
-    if (!_state.HasExplicitInputHwnd)
-    {
-        RemoveWindowSubclass();
-        ClearInputWindowLocked();
-    }
+    if (!(_state.PendingInputWindow.Requested ? _state.PendingInputWindow.Explicit : _state.HasExplicitInputHwnd))
+        SetInputWindow(nullptr, _state.UseWndProcSubclass, false);
 }
 
 void ClearInputWindowLocked()
 {
+    SetInputWindow(nullptr, _state.UseWndProcSubclass, false);
+}
+
+void OnInputWindowDestroyedLocked(HWND hwnd)
+{
+    if (hwnd != _state.InputHwnd)
+        return;
+    _state.DeferredWndProcRemoval.Cancel();
     if (_state.InputHwnd != nullptr)
     {
         LOG_WARN("clearing input window hwnd:{} pid:{} tid:{} subclassed:{}", static_cast<void*>(_state.InputHwnd),
@@ -269,8 +282,9 @@ void ClearInputWindowLocked()
     _state.InputThreadId = 0;
     _state.HasExplicitInputHwnd = false;
 
-    _state.WndProcSubclassed = false;
-    _state.OriginalWndProc = nullptr;
+    HookLifetime::DetachWindowSubclass(false, static_cast<WNDPROC>(OptiInputWndProc),
+                                       _state.OriginalWndProc, _state.WndProcSubclassed,
+                                       [](WNDPROC&) { return false; }, [](WNDPROC) { return false; });
 }
 
 bool ValidateTargetWindowLocked()
@@ -305,10 +319,7 @@ bool ValidateTargetWindowLocked()
     _state.ExternalTargetProcess = newExternalTargetProcess;
 
     if (_state.ExternalTargetProcess && !_state.HasExplicitInputHwnd && _state.InputHwnd != nullptr)
-    {
-        RemoveWindowSubclass();
-        ClearInputWindowLocked();
-    }
+        SetInputWindow(nullptr, _state.UseWndProcSubclass, false);
 
     return true;
 }
@@ -325,8 +336,8 @@ bool ValidateInputWindowLocked()
     if (!QueryWindowIdentity(_state.InputHwnd, &rootHwnd, &processId, &threadId))
     {
         LogQueryWindowFailure("ValidateInputWindow", _state.InputHwnd);
-        RemoveWindowSubclass();
-        ClearInputWindowLocked();
+        if (!IsWindow(_state.InputHwnd))
+            OnInputWindowDestroyedLocked(_state.InputHwnd);
         return false;
     }
 
@@ -334,7 +345,6 @@ bool ValidateInputWindowLocked()
     {
         LOG_WARN("ValidateInputWindow found foreign input HWND input:{} inputPid:{} currentPid:{}",
                  static_cast<void*>(_state.InputHwnd), processId, _state.CurrentProcessId);
-        RemoveWindowSubclass();
         ClearInputWindowLocked();
         return false;
     }
@@ -355,24 +365,31 @@ bool ValidateInputWindowLocked()
 
 bool InstallWindowSubclass(HWND hwnd)
 {
+    if (_state.OriginalWndProc != nullptr && _state.InputHwnd != hwnd)
+        return false;
+    if (!RetainInputCallbackModule(reinterpret_cast<const void*>(&OptiInputWndProc)))
+        return false;
     WNDPROC currentWndProc = nullptr;
 
     if (!TryGetWindowProc(hwnd, &currentWndProc))
     {
         LOG_WARN("InstallWindowSubclass failed to query current WndProc hwnd:{}", static_cast<void*>(hwnd));
-        _state.WndProcSubclassed = false;
-        _state.OriginalWndProc = nullptr;
+        // A failed query does not prove that USER32 stopped referencing us.
         return false;
     }
 
     if (currentWndProc == OptiInputWndProc)
     {
         _state.WndProcSubclassed = _state.OriginalWndProc != nullptr;
+        if (_state.WndProcSubclassed)
+            _state.DeferredWndProcRemoval.Cancel();
         LOG_DEBUG("InstallWindowSubclass found existing OptiInput WndProc hwnd:{} original:{} subclassed:{}",
                   static_cast<void*>(hwnd), reinterpret_cast<std::uintptr_t>(_state.OriginalWndProc),
                   _state.WndProcSubclassed ? 1 : 0);
         return _state.WndProcSubclassed;
     }
+    if (_state.OriginalWndProc != nullptr && currentWndProc != _state.OriginalWndProc)
+        return false; // Reinstalling above another subclass would create a cycle.
 
     SetLastError(0);
 
@@ -382,12 +399,17 @@ bool InstallWindowSubclass(HWND hwnd)
     {
         LOG_WARN("SetWindowLongPtrW(GWLP_WNDPROC) failed hwnd:{} currentWndProc:{} lastError:{}",
                  static_cast<void*>(hwnd), reinterpret_cast<std::uintptr_t>(currentWndProc), GetLastError());
-        _state.WndProcSubclassed = false;
-        _state.OriginalWndProc = nullptr;
         return false;
     }
 
     _state.OriginalWndProc = reinterpret_cast<WNDPROC>(previous);
+    _state.DeferredWndProcRemoval.Cancel(); // A queued token must not detach a later installation.
+    auto target = std::find_if(wndProcTargets.begin(), wndProcTargets.end(),
+                               [hwnd](const auto& entry) { return entry.first == hwnd; });
+    if (target == wndProcTargets.end())
+        wndProcTargets.emplace_back(hwnd, _state.OriginalWndProc);
+    else
+        target->second = _state.OriginalWndProc;
     _state.WndProcSubclassed = true;
 
     LOG_INFO("subclass installed hwnd:{} previousWndProc:{} optiWndProc:{}", static_cast<void*>(hwnd),
@@ -399,7 +421,7 @@ bool InstallWindowSubclass(HWND hwnd)
 
 void ValidateWindowSubclassLocked()
 {
-    if (!_state.UseWndProcSubclass || !_state.WndProcSubclassed)
+    if (_state.PendingInputWindow.Requested || !_state.InputUsesWndProcSubclass || !_state.WndProcSubclassed)
         return;
 
     if (!ValidateInputWindowLocked())
@@ -410,8 +432,7 @@ void ValidateWindowSubclassLocked()
     if (!TryGetWindowProc(_state.InputHwnd, &currentWndProc))
     {
         LOG_WARN("subclass validation failed to query WndProc input:{}", static_cast<void*>(_state.InputHwnd));
-        _state.WndProcSubclassed = false;
-        _state.OriginalWndProc = nullptr;
+        // Preserve the forwarding target until detachment can be proven.
         return;
     }
 
@@ -460,38 +481,52 @@ void ValidateWindowSubclassLocked()
     }
 }
 
-void RemoveWindowSubclass()
+bool IsDeferredWindowRemovalMessage(UINT msg)
 {
-    if (!_state.WndProcSubclassed || _state.InputHwnd == nullptr || _state.OriginalWndProc == nullptr)
-    {
-        if (_state.WndProcSubclassed || _state.OriginalWndProc != nullptr)
+    const UINT message = DeferredWindowRemovalMessage();
+    return message != 0 && msg == message;
+}
+
+bool RemoveWindowSubclass()
+{
+    if (_state.InputHwnd == nullptr && _state.OriginalWndProc != nullptr)
+        return false;
+    const HWND hwnd = _state.InputHwnd;
+    return HookLifetime::RemoveWindowSubclassOnOwner(
+        hwnd, IsWindow(hwnd) != FALSE, GetWindowThreadProcessId(hwnd, nullptr) == GetCurrentThreadId(),
+        static_cast<WNDPROC>(OptiInputWndProc), _state.OriginalWndProc, _state.WndProcSubclassed,
+        _state.DeferredWndProcRemoval,
+        [](WNDPROC& current) { return TryGetWindowProc(_state.InputHwnd, &current); },
+        [](WNDPROC original)
         {
-            LOG_DEBUG("RemoveWindowSubclass clearing stale state input:{} original:{} subclassed:{}",
-                      static_cast<void*>(_state.InputHwnd), reinterpret_cast<std::uintptr_t>(_state.OriginalWndProc),
-                      _state.WndProcSubclassed ? 1 : 0);
-        }
-        _state.WndProcSubclassed = false;
-        _state.OriginalWndProc = nullptr;
-        return;
-    }
+            // This operation is reached only on the owning window thread.
+            SetLastError(0);
+            const LONG_PTR previous = SetWindowLongPtrW(_state.InputHwnd, GWLP_WNDPROC,
+                                                       reinterpret_cast<LONG_PTR>(original));
+            return previous != 0 || GetLastError() == 0;
+        },
+        [hwnd](std::uintptr_t token)
+        {
+            const UINT message = DeferredWindowRemovalMessage();
+            return message != 0 && PostMessageW(hwnd, message, static_cast<WPARAM>(token), 0) != FALSE;
+        });
+}
 
-    WNDPROC currentWndProc = nullptr;
+bool HandleDeferredWindowRemovalLocked(HWND hwnd, UINT msg, WPARAM token)
+{
+    const UINT message = DeferredWindowRemovalMessage();
+    if (message == 0 || msg != message)
+        return false;
+    if (hwnd == _state.InputHwnd && _state.DeferredWndProcRemoval.Consume(hwnd, token))
+        RemoveWindowSubclass();
+    return true;
+}
 
-    if (TryGetWindowProc(_state.InputHwnd, &currentWndProc) && currentWndProc == OptiInputWndProc)
-    {
-        LOG_INFO("removing subclass input:{} restoringWndProc:{}", static_cast<void*>(_state.InputHwnd),
-                 reinterpret_cast<std::uintptr_t>(_state.OriginalWndProc));
-        SetWindowLongPtrW(_state.InputHwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(_state.OriginalWndProc));
-    }
-    else
-    {
-        LOG_WARN("RemoveWindowSubclass did not restore because current WndProc changed input:{} current:{} opti:{}",
-                 static_cast<void*>(_state.InputHwnd), reinterpret_cast<std::uintptr_t>(currentWndProc),
-                 reinterpret_cast<std::uintptr_t>(OptiInputWndProc));
-    }
-
-    _state.WndProcSubclassed = false;
-    _state.OriginalWndProc = nullptr;
+WNDPROC GetOriginalInputWndProcLocked(HWND hwnd)
+{
+    const auto target = std::find_if(wndProcTargets.begin(), wndProcTargets.end(),
+                                    [hwnd](const auto& entry) { return entry.first == hwnd; });
+    return target != wndProcTargets.end() ? target->second : nullptr;
 }
 
 bool IsInputWindow(HWND hwnd)

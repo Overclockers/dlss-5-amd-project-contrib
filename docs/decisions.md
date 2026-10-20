@@ -1,3 +1,41 @@
+## 2026-10-20 — Narrow Storm input, shortcuts and menu closure
+
+Preserve the existing input implementation and the low-level hook
+`CallNextHookEx` repair. Keyboard/mouse menu policy never zeroes other DirectInput
+axes or buttons. Actual method targets have bounded stable proxy registrations
+for CreateDevice, Release and state/data reads; shared targets attach once and
+each proxy calls its own original. Release generations protect address reuse.
+Failed detach transactions retain live flags/trampolines. WndProc restore/query
+failures and unknown subclass chains retain the forwarding root and refuse unsafe
+retargeting. Foreign-thread removal posts tokenized owner-thread work without a
+cross-thread send or wait. Pending input-window switches retry independently of
+the published game target; cancellation, reinstall and destruction invalidate old
+tokens without discarding late-callback forwarding roots. Focus changes preserve
+owed releases and defer keyboard/mouse queue draining outside the input state
+mutex. No Raw/exclusive mouse compensation added.
+Canonical Ctrl/Shift/Alt presses retain the first held side's
+original-down modifiers through left/right rollover and fast release sequences.
+Dockspace submission requires an active menu frame; a fully hidden no-NewFrame
+render path does not call ImGui DockSpace, including its keep-alive mode.
+
+Callback closure refuses active teardown rather than waiting on a callback holding
+the input mutex. USER32 restoration/destruction is owner-thread-only. Exact IAT
+owner references release after known restoration and after callback gates reopen;
+uncertain chains and bounded late-entry proxy identities retain ordinary module
+references. No permanent loader PIN is introduced. This safety retention is not
+a claim that arbitrary DLL unload is supported. Real CPU Detours and message-only
+USER32 nested-callback fixtures exercise dispatch and reentry separately from game
+compatibility. The input hook fast path has callback accounting; it is not described
+as zero-overhead or a game FPS improvement.
+
+Daniel retains loaded HIP modules as before, but host pass state becomes initialized
+only after InitPass completes. A retained half-initialized pass rejects later reuse
+instead of enabling it; no retry, extra checker or scheduler is added.
+
+Shortcut/docking/history behavior and the focused CPU/WARP verification entries are
+documented in [menu navigation](architecture/menu-navigation.md). Defaults, existing
+INI preferences, native extraction, NR algorithms and precision policies remain.
+
 ## 2026-10-19 — Mochizuki 0.0.7 剩余能力统一评估
 
 一次覆盖尺寸/格式复用、plan/slot/capacity、activation、heap、residency/offload、pipeline registry、motion point 与 resize history，不再按多轮评估拆分。建议将受限后台 core/权重复用和同 Session 的 split activation 共享纳入一个实现方案；保留当前桶尺寸、失败服务、录制回放和退休框架。不直接采用使旧 runtime stale 的两区域 heap，不为 RAM offload 先增加多闲置网络缓存。全局管线复用保持关闭，采样与历史语义保持当前行为。临时 native 探针验证了实际资源共享、变化输入输出一致、容量拒绝和卸载恢复；不代表 temporal/ACO/游戏验收，尚无产品路径修改。详见 [统一评估](architecture/mochizuki-007-remaining-assessment.md)。
@@ -261,10 +299,17 @@ Page resets touch the current backend's page only; shared effects retain a separ
 reset, while Reset NR settings keeps its current backend plus shared-controls scope.
 
 Read existing nonblocking timing snapshots without enabling sampling on menu open.
-HIP/Vulkan network time is not whole NR latency; Daniel has no network snapshot in
-the host interface. Missing/stale measurements stay unavailable. Do not subtract
-network GPU time from frame interval to invent a remainder or combine overlapping
-stabilizer/blend measurements. No new runtime ABI, rendering route or default logging.
+HIP network time is not whole NR latency; Mochizuki's explicitly labelled Vulkan
+core total includes core input/composition, not bridge copies/shared effects.
+Daniel has no network snapshot in the host interface. The fixed 360-point sampled
+history uses completed-measurement counters (`gpu_samples` / stage `samples`), not
+execution frame counts or UI poll timestamps. Runtime/measurement epochs, backend,
+route, NR off and stale/missing observations clear/partition it even while hidden.
+Zero is a valid measured duration; unavailable data stays backend-neutral N/A.
+Cached snapshots may skip executions, so the curve does not claim every frame.
+Do not subtract network GPU time from frame interval to invent a remainder or
+combine overlapping stabilizer/blend measurements. No new runtime ABI, rendering
+route or default logging.
 
 ## 2026-10-03 — Retain mochizuki capacity when reducing active passes
 

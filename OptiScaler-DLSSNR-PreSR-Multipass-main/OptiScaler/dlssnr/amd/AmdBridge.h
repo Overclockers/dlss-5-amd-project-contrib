@@ -3,6 +3,7 @@
 #include <nvsdk_ngx.h>
 #include <string>
 #include "../NrPerformance.h"
+#include "../backend/Kind.h"
 #include "../SrOutputExtent.h"
 #include "../backend/NrInlineAutoSpin.h"
 #include "../backend/mochizuki_runtime/MochizukiNrControls.h"
@@ -31,6 +32,9 @@ void PollReleases();
 void TraceContextRelease(unsigned int handle, bool after);
 std::string Status();
 NrTimingSnapshot Timing();
+// Cached session/measurement epoch; zero for absent/unsupported hosts. Never loads a runtime.
+uint64_t TimingRuntimeId();
+DlssNr::Backend::Kind TimingBackendKind();
 MochizukiNrBuildProgress BuildProgress();
 MochizukiNrInfo MochizukiTimingDetails();
 DlssNr::Backend::InlineAutoSpin::StatusSnapshot MochizukiInlineAutoSpinStatus();

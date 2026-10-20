@@ -89,12 +89,13 @@ struct MochizukiBackend::Impl
     void Error(const char* phase)
     {
         if (owner) owner->activity.Reset();
+        { std::lock_guard lock(mutex); timing = {}; details = {}; }
         char error[256] {};
         if (api.GetLastError) api.GetLastError(error, sizeof error);
         Status(std::string("mochizuki: ") + phase + (error[0] ? ": " : "") + error);
         if (++errors <= 3 || errors % 300 == 0) LOG_WARN("mochizuki {}: {}", phase, error);
     }
-    bool Ensure()
+    bool Ensure(MochizukiBackend& backend)
     {
         if (owner) return !failed && !owner->failed;
         if (failed || GetTickCount64() < retryAt) return false;
@@ -151,6 +152,7 @@ struct MochizukiBackend::Impl
         gDiagGetInfo = getInfo;
         if (owner) owner->diagCoreGpuMs = &DiagCoreGpuMs;
         if (!owner) { api.Destroy(session); Status("mochizuki: session ownership allocation failed"); return false; }
+        { std::lock_guard lock(mutex); timing = {}; details = {}; backend.AdvanceTimingRuntimeId(); }
         coverage.counters->prepared.store(false, std::memory_order_relaxed);
         owner->coverage = coverage.counters;
         owner->onFailure = SubmissionFailure;
@@ -180,7 +182,7 @@ struct MochizukiBackend::Impl
         {
             const auto& failure = owner->failure;
             std::lock_guard lock(mutex);
-            progress.active = 0; timing = {};
+            progress.active = 0; timing = {}; details = {};
             status = std::string("mochizuki: submission failed at ") +
                 (failure.phase ? failure.phase : "unknown stage") + ": " + failure.error.data();
             return;
@@ -200,17 +202,16 @@ struct MochizukiBackend::Impl
         if (getInfo(owner->context, &info) != LMXXF_NR_OK) return;
         NrTimingSnapshot next {};
         next.struct_size = sizeof next; next.version = NR_TIMING_VERSION;
-        if (info.gpu_ms_median > 0)
+        next.enabled = !info.failed;
+        if (info.gpu_samples)
         {
-            next.enabled = true;
             next.reserved = 1u;
             auto& gpu = next.stages[NR_GPU_NETWORK];
-            gpu.samples = info.gpu_samples ? info.gpu_samples : (info.frames > 0 ? info.frames : 10);
-            gpu.last_ms = info.gpu_ms_last > 0 ? info.gpu_ms_last : info.gpu_ms_median;
+            gpu.samples = info.gpu_samples;
+            gpu.last_ms = info.gpu_ms_last;
             gpu.mean_ms = info.gpu_ms_median;
-            gpu.max_ms = info.gpu_ms_p95 > 0 ? info.gpu_ms_p95 : info.gpu_ms_median;
-            gpu.frame_id = info.frames;
-            gpu.last_tick_ms = now;
+            gpu.max_ms = info.gpu_ms_max;
+            gpu.last_tick_ms = info.gpu_tick;
         }
         { std::lock_guard lock(mutex); timing = next; details = info; }
         if (Config::Instance()->NrTimingLog.value_or_default() && now - logAt >= 10000)
@@ -315,7 +316,7 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
             inlineState.TraceFailure("mochizuki", frameId, cmd, input, motion, false, false);
         return nullptr;
     }
-    if (!p->Ensure()) { coverage.Set(Coverage::Outcome::SessionUnavailable, "ensure_session"); return nullptr; }
+    if (!p->Ensure(*this)) { coverage.Set(Coverage::Outcome::SessionUnavailable, "ensure_session"); return nullptr; }
     if (p->owner->InlineBusy()) {
         coverage.Set(Coverage::Outcome::Busy, "inline_ahead_cap");
         p->owner->InlineBypassed();
@@ -565,7 +566,7 @@ void MochizukiBackend::ReleaseSession()
     p->tracedRecordings = 0;
     LmxxfRecording::Collect();
     p->coverage.Flush(true);
-    { std::lock_guard lock(p->mutex); p->timing = {}; p->progress = {}; p->details = {}; p->status = "mochizuki: NR off"; }
+    { std::lock_guard lock(p->mutex); p->timing = {}; p->progress = {}; p->details = {}; AdvanceTimingRuntimeId(); p->status = "mochizuki: NR off"; }
     if (!Config::Instance()->NrConvenience.value_or_default() && p->module)
     { FreeLibrary(p->module); p->module = nullptr; p->api = {}; }
 }

@@ -48,16 +48,18 @@ bool InstallGameInputCreateHookLocked()
         _state.GameInputCreateExportFound = false;
         return false;
     }
+    if (!RetainInputCallbackModule(reinterpret_cast<const void*>(proc)) ||
+        !RetainInputCallbackModule(reinterpret_cast<const void*>(&hkGameInputCreate)))
+        return false;
 
     _state.GameInputCreateExportFound = true;
     _state.GameInputCreateHookAttempted = true;
     o_GameInputCreate = reinterpret_cast<GameInputCreate_t>(proc);
 
-    DetourTransactionBegin();
-    DetourUpdateThread(GetCurrentThread());
-    DetourAttach(reinterpret_cast<PVOID*>(&o_GameInputCreate), hkGameInputCreate);
+    HookLifetime::Transaction<DetourBackend> transaction;
+    transaction.Attach(reinterpret_cast<void**>(&o_GameInputCreate), reinterpret_cast<void*>(hkGameInputCreate));
 
-    const LONG result = DetourTransactionCommit();
+    const LONG result = transaction.Commit() ? NO_ERROR : ERROR_INVALID_FUNCTION;
 
     _state.GameInputCreateHookInstalled = result == NO_ERROR;
 
@@ -79,30 +81,26 @@ void UpdateGameInputIntegrationLocked()
         InstallGameInputCreateHookLocked();
 }
 
-void RemoveGameInputHooksLocked()
+bool RemoveGameInputHooksLocked()
 {
-    if (!_state.GameInputCreateHookInstalled || o_GameInputCreate == nullptr)
+    if (!_state.GameInputCreateHookInstalled)
+        return true;
+    if (o_GameInputCreate == nullptr)
+        return false;
+    HookLifetime::Transaction<DetourBackend> transaction;
+    transaction.Detach(reinterpret_cast<void**>(&o_GameInputCreate), reinterpret_cast<void*>(hkGameInputCreate));
+    if (!transaction.Commit())
     {
-        _state.GameInputCreateHookInstalled = false;
-        o_GameInputCreate = nullptr;
-        return;
+        LOG_WARN("GameInputCreate detach failed; retaining live trampoline");
+        return false;
     }
-
-    DetourTransactionBegin();
-    DetourUpdateThread(GetCurrentThread());
-    DetourDetach(reinterpret_cast<PVOID*>(&o_GameInputCreate), hkGameInputCreate);
-
-    const LONG result = DetourTransactionCommit();
-
-    if (result != NO_ERROR)
-        LOG_WARN("GameInputCreate hook removal completed with result:{}", result);
-
     _state.GameInputCreateHookInstalled = false;
-    o_GameInputCreate = nullptr;
+    return true;
 }
 
 HRESULT WINAPI hkGameInputCreate(void** gameInput)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     {
         std::unique_lock lock(_state.Mutex);
         _state.GameInputCreateCallCount++;

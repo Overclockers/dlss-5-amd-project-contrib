@@ -1084,6 +1084,22 @@ bool GraphicsRestartNeeded(UINT activePasses)
         return b->GraphicsRestartNeeded(activePasses);
     return false;
 }
+DlssNr::Backend::Kind TimingBackendKind()
+{
+    const int kind = g_activeKind.load(std::memory_order_acquire);
+    if (kind == static_cast<int>(DlssNr::Backend::Kind::Lmxxf)) return DlssNr::Backend::Kind::Lmxxf;
+    if (kind == static_cast<int>(DlssNr::Backend::Kind::Mochizuki)) return DlssNr::Backend::Kind::Mochizuki;
+    return DlssNr::Backend::Kind::Daniel;
+}
+uint64_t TimingRuntimeId()
+{
+    if (!Config::Instance()->DlssNrEnabled.value_or_default()) return 0;
+    const int kind = g_activeKind.load(std::memory_order_acquire);
+    if (kind != static_cast<int>(DlssNr::Backend::Kind::Lmxxf) &&
+        kind != static_cast<int>(DlssNr::Backend::Kind::Mochizuki)) return 0;
+    if (auto* host = HostForKind(static_cast<DlssNr::Backend::Kind>(kind))) return host->TimingRuntimeId();
+    return 0;
+}
 NrTimingSnapshot Timing()
 {
     // This read must not discover files or instantiate a backend from the UI.

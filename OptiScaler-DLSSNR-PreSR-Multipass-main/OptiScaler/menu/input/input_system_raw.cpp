@@ -23,6 +23,7 @@ HINSTANCE GetCurrentModuleHandle()
 
 LRESULT CALLBACK ExternalRawInputSinkWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     if (msg == WM_INPUT)
     {
         {
@@ -48,6 +49,8 @@ bool RegisterExternalRawInputSinkClass()
 
     if (atom != 0)
         return true;
+    if (!RetainInputCallbackModule(reinterpret_cast<const void*>(&ExternalRawInputSinkWndProc)))
+        return false;
 
     WNDCLASSEXW wc {};
     wc.cbSize = sizeof(wc);
@@ -79,27 +82,22 @@ bool IsExternalRawInputSinkOnCurrentThreadLocked()
 }
 } // namespace
 
-void RemoveExternalRawInputSinkLocked()
+bool RemoveExternalRawInputSinkLocked()
 {
-    if (_state.ExternalRawInputSinkHwnd != nullptr)
+    if (_state.ExternalRawInputSinkHwnd != nullptr && IsWindow(_state.ExternalRawInputSinkHwnd))
     {
-        if (_state.ExternalRawInputSinkThreadId == GetCurrentThreadId())
+        if (_state.ExternalRawInputSinkThreadId != GetCurrentThreadId() ||
+            !DestroyWindow(_state.ExternalRawInputSinkHwnd))
         {
-            LOG_INFO("destroying external raw input sink hwnd:{}", static_cast<void*>(_state.ExternalRawInputSinkHwnd));
-            DestroyWindow(_state.ExternalRawInputSinkHwnd);
-        }
-        else
-        {
-            LOG_WARN("external raw input sink hwnd:{} was created on thread {} and cannot be destroyed from thread {}",
-                     static_cast<void*>(_state.ExternalRawInputSinkHwnd), _state.ExternalRawInputSinkThreadId,
-                     GetCurrentThreadId());
+            LOG_WARN("external raw sink destruction failed; retaining callback window and owner thread");
+            return false;
         }
     }
-
     _state.ExternalRawInputSinkHwnd = nullptr;
     _state.ExternalRawInputSinkThreadId = 0;
     _state.ExternalRawInputSinkRegistered = false;
     _state.ExternalRawInputSinkPumpUsedThisFrame = false;
+    return true;
 }
 
 void EnsureExternalRawInputSinkLocked()
@@ -256,7 +254,7 @@ void ResetRawInputSanitizeCacheLocked()
 
 RawSanitizeAction GetRawKeyboardSanitizeActionLocked(const RAWKEYBOARD& keyboard)
 {
-    if (!_state.MenuVisible || !_state.BlockKeyboard)
+    if (!ShouldBlockKeyboardInputLocked())
         return RawSanitizeAction::Pass;
 
     const int vk = NormalizeRawKeyboardVirtualKey(keyboard);
@@ -317,7 +315,7 @@ RawMouseSanitizeResult GetRawMouseSanitizeActionLocked(const RAWMOUSE& mouse)
 {
     RawMouseSanitizeResult result {};
 
-    if (!_state.MenuVisible || !_state.BlockMouse)
+    if (!ShouldBlockMouseInputLocked())
         return result;
 
     const USHORT flags = mouse.usButtonFlags;
@@ -550,31 +548,31 @@ void UpdateStateFromRawMouseLocked(const RAWMOUSE& mouse)
     const DWORD time = GetTickCount();
 
     if (mouse.usButtonFlags & RI_MOUSE_LEFT_BUTTON_DOWN)
-        SetMouseDown(0, time, _state.BlockMouse);
+        SetMouseDown(0, time, ShouldBlockMouseInputLocked());
 
     if (mouse.usButtonFlags & RI_MOUSE_LEFT_BUTTON_UP)
         SetMouseUpStateOnly(0, time);
 
     if (mouse.usButtonFlags & RI_MOUSE_RIGHT_BUTTON_DOWN)
-        SetMouseDown(1, time, _state.BlockMouse);
+        SetMouseDown(1, time, ShouldBlockMouseInputLocked());
 
     if (mouse.usButtonFlags & RI_MOUSE_RIGHT_BUTTON_UP)
         SetMouseUpStateOnly(1, time);
 
     if (mouse.usButtonFlags & RI_MOUSE_MIDDLE_BUTTON_DOWN)
-        SetMouseDown(2, time, _state.BlockMouse);
+        SetMouseDown(2, time, ShouldBlockMouseInputLocked());
 
     if (mouse.usButtonFlags & RI_MOUSE_MIDDLE_BUTTON_UP)
         SetMouseUpStateOnly(2, time);
 
     if (mouse.usButtonFlags & RI_MOUSE_BUTTON_4_DOWN)
-        SetMouseDown(3, time, _state.BlockMouse);
+        SetMouseDown(3, time, ShouldBlockMouseInputLocked());
 
     if (mouse.usButtonFlags & RI_MOUSE_BUTTON_4_UP)
         SetMouseUpStateOnly(3, time);
 
     if (mouse.usButtonFlags & RI_MOUSE_BUTTON_5_DOWN)
-        SetMouseDown(4, time, _state.BlockMouse);
+        SetMouseDown(4, time, ShouldBlockMouseInputLocked());
 
     if (mouse.usButtonFlags & RI_MOUSE_BUTTON_5_UP)
         SetMouseUpStateOnly(4, time);
@@ -632,7 +630,7 @@ void UpdateStateFromRawKeyboardLocked(const RAWKEYBOARD& keyboard)
     if (released)
         SetKeyUpStateOnly(vk, GetTickCount());
     else
-        SetKeyDown(vk, GetTickCount(), _state.BlockKeyboard);
+        SetKeyDown(vk, GetTickCount(), ShouldBlockKeyboardInputLocked());
 }
 
 void UpdateStateFromRawInputLocked(const RAWINPUT& input)
@@ -807,6 +805,7 @@ void SanitizeRawKeyboardLocked(RAWINPUT& input)
 
 UINT WINAPI hkGetRawInputData(HRAWINPUT rawInput, UINT command, LPVOID data, PUINT size, UINT headerSize)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     const UINT result = o_GetRawInputData(rawInput, command, data, size, headerSize);
 
     if (result == static_cast<UINT>(-1))
@@ -848,6 +847,7 @@ UINT WINAPI hkGetRawInputData(HRAWINPUT rawInput, UINT command, LPVOID data, PUI
 
 UINT WINAPI hkGetRawInputBuffer(PRAWINPUT data, PUINT size, UINT headerSize)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     const UINT bufferSize = size != nullptr ? *size : 0;
     const UINT result = o_GetRawInputBuffer(data, size, headerSize);
 
@@ -904,6 +904,7 @@ UINT WINAPI hkGetRawInputBuffer(PRAWINPUT data, PUINT size, UINT headerSize)
 
 BOOL WINAPI hkRegisterRawInputDevices(PCRAWINPUTDEVICE devices, UINT deviceCount, UINT size)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     const BOOL result = o_RegisterRawInputDevices(devices, deviceCount, size);
 
     if (!result)

@@ -149,6 +149,12 @@ int AllocateWindowsHookSlotLocked(int hookType, HOOKPROC proc, HINSTANCE module,
 
         if (slot.InUse)
             continue;
+        if (!RetainInputCallbackModule(reinterpret_cast<const void*>(&InvokeWindowsHookProxy)))
+            return -1;
+        HMODULE owner = nullptr;
+        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                               reinterpret_cast<LPCWSTR>(proc), &owner))
+            return -1;
 
         slot = {};
         slot.InUse = true;
@@ -156,6 +162,7 @@ int AllocateWindowsHookSlotLocked(int hookType, HOOKPROC proc, HINSTANCE module,
         slot.OriginalProc = proc;
         slot.ThreadId = threadId;
         slot.Module = module;
+        slot.OriginalProcOwner = owner;
         LOG_DEBUG("allocated windows hook slot:{} type:{} proc:{} module:{} threadId:{}", static_cast<unsigned>(i),
                   hookType, reinterpret_cast<std::uintptr_t>(proc), static_cast<void*>(module), threadId);
         return static_cast<int>(i);
@@ -169,6 +176,9 @@ void ClearWindowsHookSlotLocked(std::size_t slotIndex)
     if (slotIndex >= _state.WindowsHookSlots.size())
         return;
 
+    // Only failed installations clear a slot; USER32 never published its proxy.
+    if (_state.WindowsHookSlots[slotIndex].OriginalProcOwner != nullptr)
+        FreeLibrary(_state.WindowsHookSlots[slotIndex].OriginalProcOwner);
     _state.WindowsHookSlots[slotIndex] = {};
 }
 
@@ -183,7 +193,9 @@ void ClearWindowsHookSlotByHandleLocked(HHOOK hook)
         {
             LOG_DEBUG("clearing windows hook slot by handle slot:{} hook:{}", static_cast<unsigned>(i),
                       static_cast<void*>(hook));
-            ClearWindowsHookSlotLocked(i);
+            // USER32 permits callbacks already dispatched on another thread.
+            // Keep this proxy identity retired rather than reuse it for a new proc.
+            _state.WindowsHookSlots[i].Hook = nullptr;
             return;
         }
     }
@@ -387,6 +399,7 @@ bool ShouldBlockWindowsHookCallbackLocked(WindowsHookSlot& slot, int code, WPARA
 
 LRESULT CALLBACK InvokeWindowsHookProxy(std::size_t slotIndex, int code, WPARAM wParam, LPARAM lParam)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     HHOOK hook = nullptr;
     HOOKPROC originalProc = nullptr;
     int hookType = 0;
@@ -410,7 +423,7 @@ LRESULT CALLBACK InvokeWindowsHookProxy(std::size_t slotIndex, int code, WPARAM 
         hookType = slot.HookType;
         keyboardHook = IsKeyboardWindowsHookType(slot.HookType);
         mouseHook = IsMouseWindowsHookType(slot.HookType);
-        shouldBlock = ShouldBlockWindowsHookCallbackLocked(slot, code, wParam, lParam);
+        shouldBlock = slot.Hook != nullptr && ShouldBlockWindowsHookCallbackLocked(slot, code, wParam, lParam);
 
         if (code >= 0)
         {
@@ -536,6 +549,7 @@ void RecordExternalMouseMoveLocked(const POINT& point, DWORD flags)
 
 LRESULT CALLBACK ExternalLowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     if (code == HC_ACTION && lParam != 0)
     {
         const MSLLHOOKSTRUCT* mouse = reinterpret_cast<const MSLLHOOKSTRUCT*>(lParam);
@@ -591,55 +605,50 @@ void UpdateExternalMouseHookLocked()
              static_cast<void*>(_state.TargetHwnd), _state.TargetProcessId);
 }
 
-void RemoveExternalMouseHookLocked()
+bool RemoveExternalMouseHookLocked()
 {
-    HHOOK hook = _state.ExternalLowLevelMouseHook;
+    const HHOOK hook = _state.ExternalLowLevelMouseHook;
+    if (hook != nullptr)
+    {
+        if (o_UnhookWindowsHookEx == nullptr)
+            return false;
+        ScopedHookBypass bypass;
+        if (!o_UnhookWindowsHookEx(hook))
+        {
+            LOG_WARN("external low-level mouse hook removal failed hook:{} error:{}", static_cast<void*>(hook), GetLastError());
+            return false;
+        }
+    }
     _state.ExternalLowLevelMouseHook = nullptr;
     _state.ExternalLowLevelMouseHookInstalled = false;
     _state.ExternalLastMouseHookScreenValid = false;
     _state.ExternalPendingMouseDeltaX = 0;
     _state.ExternalPendingMouseDeltaY = 0;
-
-    if (hook == nullptr || o_UnhookWindowsHookEx == nullptr)
-        return;
-
-    ScopedHookBypass bypass;
-    if (!o_UnhookWindowsHookEx(hook))
-    {
-        LOG_WARN("external low-level mouse hook removal failed hook:{} error:{}", static_cast<void*>(hook),
-                 GetLastError());
-        return;
-    }
-
-    LOG_INFO("external low-level mouse hook removed hook:{}", static_cast<void*>(hook));
+    return true;
 }
 
-void ReleaseTrackedWindowsHooksLocked()
+bool ReleaseTrackedWindowsHooksLocked()
 {
+    bool removed = true;
     for (WindowsHookSlot& slot : _state.WindowsHookSlots)
     {
         if (!slot.InUse || slot.Hook == nullptr)
+            continue;
+        ScopedHookBypass bypass;
+        if (o_UnhookWindowsHookEx == nullptr || !o_UnhookWindowsHookEx(slot.Hook))
         {
-            slot = {};
+            removed = false;
             continue;
         }
-
-        HHOOK hook = slot.Hook;
-        slot = {};
-
-        if (o_UnhookWindowsHookEx != nullptr)
-        {
-            ScopedHookBypass bypass;
-            o_UnhookWindowsHookEx(hook);
-        }
+        // Preserve original callback identity for a dispatched, not-yet-entered proxy.
+        slot.Hook = nullptr;
     }
-
-    _state.WindowsHookKeyboardBlockedDown = {};
-    _state.WindowsHookMouseBlockedDown = {};
+    return removed;
 }
 
 HHOOK WINAPI hkSetWindowsHookExA(int hookType, HOOKPROC proc, HINSTANCE module, DWORD threadId)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     if (bypassHookDepth > 0 || !ShouldInterceptWindowsHookInstall(hookType, proc, threadId))
         return o_SetWindowsHookExA(hookType, proc, module, threadId);
 
@@ -689,6 +698,7 @@ HHOOK WINAPI hkSetWindowsHookExA(int hookType, HOOKPROC proc, HINSTANCE module, 
 
 HHOOK WINAPI hkSetWindowsHookExW(int hookType, HOOKPROC proc, HINSTANCE module, DWORD threadId)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     if (bypassHookDepth > 0 || !ShouldInterceptWindowsHookInstall(hookType, proc, threadId))
         return o_SetWindowsHookExW(hookType, proc, module, threadId);
 
@@ -738,6 +748,7 @@ HHOOK WINAPI hkSetWindowsHookExW(int hookType, HOOKPROC proc, HINSTANCE module, 
 
 BOOL WINAPI hkUnhookWindowsHookEx(HHOOK hook)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     const BOOL result = o_UnhookWindowsHookEx(hook);
 
     if (!result)

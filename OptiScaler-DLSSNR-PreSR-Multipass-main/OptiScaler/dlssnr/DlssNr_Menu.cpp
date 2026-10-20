@@ -762,6 +762,8 @@ void RenderMenu(Config* config, float menuResScale)
         bool enabled = config->DlssNrEnabled.value_or_default();
         if (MenuUi::Checkbox("Enable NR", &enabled))
             config->DlssNrEnabled = enabled;
+        ImGui::SameLine(0.0f, 16.0f * menuResScale);
+        MenuCommon::RenderKeybind("Toggle key##DlssNrMenu", 16, config->DlssNrToggleKey);
 
         {
             auto selectedKind = Backend::ActiveKindFromConfig();
@@ -2244,10 +2246,6 @@ void RenderMenu(Config* config, float menuResScale)
         HelpMarker("Relative to RR's OUTPUT resolution: 0.50x at 4K runs NR at 1920x1080."
                    "\nRR itself remains full quality. The NR edit is resized for final composition."
                    "\nPasses 2 and 3 use the same per-pass model profiles as the SR path.");
-
-        // The toggle can be bound to a key, and nobody would think to look for it under Keybinds
-        // unless told. Dimmed, because it is a note rather than a setting.
-        MenuUi::TextDisabled("Can be toggled with a key -- bind it under Keybinds, \"Neural Rendering\".");
 
         bool applyModel = config->DlssNrApplyModel.value_or_default();
         if (MenuUi::Checkbox("Apply the model", &applyModel))

@@ -1,6 +1,6 @@
 @echo off
 rem Host-contract tests. Every *.cpp in tests\host belongs to exactly one tier below.
-rem Usage: tests\host\run.cmd [release^|ci^|device^|xefg^|nr-coverage^|all] [out-dir]
+rem Usage: tests\host\run.cmd [release^|ci^|device^|xefg^|nr-coverage^|input-menu^|all] [out-dir]
 rem   ci     : CPU only, no GPU. nr_backend_selector, amd_submission_state, amd_graphics_{snapshot,
 rem            tracker,restore,restore_dx12,invocation,native_hooks}, amd_runtime_host_load (+ its
 rem            generated fixture PE), amd_retirement_diagnostics, and hip_load.ps1 (amd_hip_load +
@@ -31,8 +31,19 @@ if /i "%TIER%"=="device" goto device
 if /i "%TIER%"=="release" goto release
 if /i "%TIER%"=="xefg" goto Xefg
 if /i "%TIER%"=="nr-coverage" goto NrCoverage
-echo usage: tests\host\run.cmd [release^|ci^|device^|xefg^|nr-coverage^|all] [out-dir]
+if /i "%TIER%"=="input-menu" goto InputMenu
+echo usage: tests\host\run.cmd [release^|ci^|device^|xefg^|nr-coverage^|input-menu^|all] [out-dir]
 exit /b 2
+
+:InputMenu
+for %%T in (directinput_registry input_hook_lifetime input_key_lifetime input_window_lifetime shortcut_keys nr_gpu_history amd_pass_initialization menu_window_layout mochizuki_network_shortcut) do (
+  %CXX% /utf-8 tests\host\%%T.cpp /Fe"%OUT%\%%T.exe" /Fo"%OUT%\%%T.obj" /link user32.lib || goto fail
+  "%OUT%\%%T.exe" || goto fail
+)
+%CXX% /utf-8 /I"%INC%" tests\host\directinput_detours.cpp /Fe"%OUT%\directinput_detours.exe" /Fo"%OUT%\directinput_detours.obj" /link "%DETOURS%" || goto fail
+"%OUT%\directinput_detours.exe" || goto fail
+echo host input-menu: PASS
+exit /b 0
 
 :ci
 call :NrCoverage || goto fail
@@ -74,6 +85,12 @@ call "%REPO%\tests\host\menu-localization.cmd" "%OUT%\menu" || goto fail
 "%OUT%\upscaler_route_diagnostic.exe" || goto fail
 %CXX% /utf-8 tests\host\menu_window_layout.cpp /Fe"%OUT%\menu_window_layout.exe" /Fo"%OUT%\menu_window_layout.obj" || goto fail
 "%OUT%\menu_window_layout.exe" || goto fail
+for %%T in (directinput_registry input_hook_lifetime input_key_lifetime input_window_lifetime shortcut_keys nr_gpu_history amd_pass_initialization) do (
+  %CXX% /utf-8 tests\host\%%T.cpp /Fe"%OUT%\%%T.exe" /Fo"%OUT%\%%T.obj" /link user32.lib || goto fail
+  "%OUT%\%%T.exe" || goto fail
+)
+%CXX% /utf-8 /I"%INC%" tests\host\directinput_detours.cpp /Fe"%OUT%\directinput_detours.exe" /Fo"%OUT%\directinput_detours.obj" /link "%DETOURS%" || goto fail
+"%OUT%\directinput_detours.exe" || goto fail
 %CXX% /utf-8 tests\host\nr_diagnostic_log.cpp /Fe"%OUT%\nr_diagnostic_log.exe" /Fo"%OUT%\nr_diagnostic_log.obj" || goto fail
 "%OUT%\nr_diagnostic_log.exe" "%OUT%\diagnostic-log" || goto fail
 call :Xefg || goto fail

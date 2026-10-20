@@ -7,6 +7,39 @@ namespace OptiInput
 {
 
 InputState _state;
+HookLifetime::CallbackGate NonDirectInputCallbackGate;
+
+bool RetainInputCallbackModule(const void* address)
+{
+    // Ordinary deduplicated references for the host callback code and the two
+    // optional API dispatch targets. Their restored pointers remain reachable
+    // by late entries; IAT importers and Windows originals own separate leases.
+    static std::array<HMODULE, 3> modules {};
+    static std::mutex mutex;
+    HMODULE module = nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                           reinterpret_cast<LPCWSTR>(address), &module))
+        return false;
+    std::lock_guard lock(mutex);
+    for (const HMODULE retained : modules)
+    {
+        if (retained == module)
+        {
+            FreeLibrary(module);
+            return true;
+        }
+    }
+    for (HMODULE& retained : modules)
+    {
+        if (retained == nullptr)
+        {
+            retained = module;
+            return true;
+        }
+    }
+    FreeLibrary(module);
+    return false;
+}
 
 GetAsyncKeyState_t o_GetAsyncKeyState = ::GetAsyncKeyState;
 GetKeyState_t o_GetKeyState = ::GetKeyState;
@@ -49,20 +82,45 @@ DirectInput8Create_t o_DirectInput8Create = nullptr;
 DirectInputCreateA_t o_DirectInputCreateA = nullptr;
 DirectInputCreateW_t o_DirectInputCreateW = nullptr;
 DirectInputCreateEx_t o_DirectInputCreateEx = nullptr;
-DirectInputCreateDevice_t o_DirectInputCreateDeviceA = nullptr;
-DirectInputCreateDevice_t o_DirectInputCreateDeviceW = nullptr;
-DirectInputGetDeviceState_t o_DirectInputDeviceGetDeviceState = nullptr;
-DirectInputGetDeviceData_t o_DirectInputDeviceGetDeviceData = nullptr;
-DirectInputDeviceRelease_t o_DirectInputDeviceRelease = nullptr;
 
 thread_local int bypassHookDepth = 0;
 
-bool ShouldApplyBlockingPolicyLocked() { return bypassHookDepth == 0 && _state.MenuVisible; }
+bool ShouldApplyBlockingPolicyLocked() { return bypassHookDepth == 0 && _state.MenuVisible && _state.Focused; }
 
 bool ShouldBlockKeyboardInputLocked() { return ShouldApplyBlockingPolicyLocked() && _state.BlockKeyboard; }
 
 bool ShouldBlockMouseInputLocked() { return ShouldApplyBlockingPolicyLocked() && _state.BlockMouse; }
 
+
+void SetInputFocusLocked(bool focused)
+{
+    if (_state.Focused == focused)
+        return;
+    _state.Focused = focused;
+    if (!focused)
+    {
+        // Discard UI transitions, not game-facing owed releases/blocked-down pairs.
+        ResetMenuInputTransientState();
+        for (auto& key : _state.Keys)
+            key.PressHistory.Reset();
+        _state.LastPressedKey = 0;
+        MarkDirectInputBufferedDataForDrainLocked();
+        MarkXInputKeystrokesForDrainLocked();
+        if (_state.CursorClipReleasedForMenu)
+            EndCursorClipBlockLocked();
+        _state.HasBlockedCursorScreenPos = false;
+    }
+    else if (_state.MenuVisible)
+    {
+        POINT cursor {};
+        if (RealGetCursorPosSafe(&cursor))
+            _state.BlockedCursorScreenPos = cursor;
+        else
+            _state.BlockedCursorScreenPos = _state.MouseScreenPos;
+        _state.HasBlockedCursorScreenPos = true;
+        BeginCursorClipBlockLocked();
+    }
+}
 bool ShouldBlockCursorInputLocked() { return ShouldApplyBlockingPolicyLocked() && _state.BlockCursor; }
 
 namespace
@@ -345,6 +403,8 @@ void PollVirtualKeyLocked(int vk, DWORD time)
         return;
 
     const bool down = (RealGetAsyncKeyStateSafe(vk) & 0x8000) != 0;
+    if (!_state.Keys[vk].PressHistory.AllowPoll(down))
+        return;
 
     if (down)
     {
@@ -667,6 +727,9 @@ void PollInputFallbackLocked()
     if (_state.PolledMouseUsedThisFrame)
         _state.PolledMouseFrameCount++;
 
+    // Poll modifiers before ordinary keys so snapshots do not depend on VK order.
+    for (const int vk : { VK_LCONTROL, VK_RCONTROL, VK_LSHIFT, VK_RSHIFT, VK_LMENU, VK_RMENU, VK_TAB })
+        PollVirtualKeyLocked(vk, time);
     for (int vk = 0; vk < 256; ++vk)
     {
         const bool wasDown = _state.Keys[vk].Down;
@@ -708,7 +771,7 @@ void ApplyMenuVisibilityChangeLocked(bool visible)
     if (!visible && _state.ImGuiMouseDrawCursorForced && ImGui::GetCurrentContext() != nullptr)
         UpdateImGuiMouseDrawCursorLocked(ImGui::GetIO());
 
-    if (!wasMenuVisible && visible)
+    if (!wasMenuVisible && visible && _state.Focused)
     {
         POINT blockedCursorPos {};
         if (o_GetCursorPos != nullptr && o_GetCursorPos(&blockedCursorPos))
@@ -725,6 +788,8 @@ void ApplyMenuVisibilityChangeLocked(bool visible)
     }
     else if (wasMenuVisible && !visible)
     {
+        MarkDirectInputBufferedDataForDrainLocked();
+        MarkXInputKeystrokesForDrainLocked();
         EndCursorClipBlockLocked();
 
         _state.HasBlockedCursorScreenPos = false;
@@ -760,8 +825,10 @@ bool Initialize(const InitializeOptions& options)
             SetTargetWindow(options.TargetHwnd, options.IsUwp, options.UseWndProcSubclass);
         }
 
-        if (options.InputHwnd != nullptr && options.InputHwnd != _state.InputHwnd)
+        if (options.InputHwnd != nullptr)
             SetInputWindow(options.InputHwnd, options.UseWndProcSubclass, true);
+
+        RetryPendingInputWindowLocked();
 
         LOG_DEBUG(
             "Initialize re-entry state target:{} targetPid:{} input:{} inputPid:{} externalTarget:{} subclassed:{}",
@@ -843,6 +910,9 @@ void ResetStateAfterShutdown()
     _state.WndProcSubclassed = false;
     _state.ExternalTargetProcess = false;
     _state.HasExplicitInputHwnd = false;
+    _state.InputUsesWndProcSubclass = true;
+    _state.PendingInputWindow.Cancel();
+    _state.DeferredWndProcRemoval.Cancel();
     _state.PolledInputActive = false;
     _state.PolledInputUsedThisFrame = false;
     _state.PolledMouseUsedThisFrame = false;
@@ -904,7 +974,6 @@ void ResetStateAfterShutdown()
     ResetRawInputBlockStateLocked();
     ResetRawInputSanitizeCacheLocked();
 
-    _state.WindowsHookSlots = {};
 
     _state.WindowMessageBlockedCount = 0;
     _state.WindowMessagePassedCount = 0;
@@ -1003,7 +1072,6 @@ void ResetStateAfterShutdown()
     _state.DirectInputKeyboardDeviceSeen = false;
     _state.DirectInputMouseDeviceSeen = false;
     _state.DirectInputOtherDeviceSeen = false;
-    _state.DirectInputDeviceSlots = {};
     _state.HidHandleSlots = {};
     _state.HidMouseHandleSeen = false;
     _state.HidKeyboardHandleSeen = false;
@@ -1048,17 +1116,41 @@ void ResetStateAfterShutdown()
 
 void Shutdown()
 {
-    std::unique_lock lock(_state.Mutex);
+    // FreeLibrary can run arbitrary DllMain code. Declare this before the gate
+    // so destruction releases restored IAT owners only after gate+mutex reopen.
+    struct RestoredOwners
+    {
+        std::vector<HMODULE> Modules;
+        ~RestoredOwners() { for (HMODULE module : Modules) FreeLibrary(module); }
+    } restoredOwners;
+    HookLifetime::CloseLease callbacks(NonDirectInputCallbackGate);
+    if (!callbacks)
+        return;
+    // Do not wait on a public caller that could synchronously enter a closed hook.
+    std::unique_lock lock(_state.Mutex, std::try_to_lock);
+    if (!lock.owns_lock())
+        return;
 
-    RemoveWindowSubclass();
-    ReleaseTrackedWindowsHooksLocked();
-    RemoveExternalRawInputSinkLocked();
-    RemoveExternalMouseHookLocked();
-    RemoveDirectInputHooksLocked();
-    RemoveXInputHooksLocked();
-    RemoveGameInputHooksLocked();
-    RemoveHooks();
+    if (_state.MenuVisible)
+        ApplyMenuVisibilityChangeLocked(false);
+    else if (_state.CursorClipReleasedForMenu)
+        EndCursorClipBlockLocked();
 
+    const bool windowRemoved = RemoveWindowSubclass();
+    const bool trackedRemoved = ReleaseTrackedWindowsHooksLocked();
+    const bool sinkRemoved = RemoveExternalRawInputSinkLocked();
+    const bool mouseRemoved = RemoveExternalMouseHookLocked();
+    const bool directInputRemoved = RemoveDirectInputHooksLocked();
+    const bool xInputRemoved = RemoveXInputHooksLocked();
+    const bool gameInputRemoved = RemoveGameInputHooksLocked();
+    const bool win32Removed = RemoveHooks();
+    restoredOwners.Modules = TakeRestoredCursorIatOwnersLocked();
+    if (!windowRemoved || !trackedRemoved || !sinkRemoved || !mouseRemoved ||
+        !directInputRemoved || !xInputRemoved || !gameInputRemoved || !win32Removed)
+    {
+        LOG_WARN("OptiInput shutdown incomplete; retaining callback state for safe retry");
+        return;
+    }
     ResetStateAfterShutdown();
 }
 
@@ -1073,8 +1165,10 @@ static void BeginFrameLocked(HWND targetHwnd, HWND inputHwnd, bool hasInputHwnd,
     if (targetHwnd != nullptr && (targetHwnd != _state.TargetHwnd || isUwp != _state.IsUwp))
         SetTargetWindow(targetHwnd, isUwp, _state.UseWndProcSubclass);
 
-    if (hasInputHwnd && inputHwnd != _state.InputHwnd)
+    if (hasInputHwnd)
         SetInputWindow(inputHwnd, _state.UseWndProcSubclass, true);
+
+    RetryPendingInputWindowLocked();
 
     ValidateTargetWindowLocked();
     ValidateInputWindowLocked();
@@ -1292,6 +1386,12 @@ bool IsKeyPressed(int vk)
         return false;
 
     return _state.Keys[vk].Pressed;
+}
+
+int GetKeyPressModifiers(int vk)
+{
+    std::unique_lock lock(_state.Mutex);
+    return vk >= 0 && vk < 256 ? _state.Keys[vk].PressHistory.Modifiers : -1;
 }
 
 bool IsKeyReleased(int vk)

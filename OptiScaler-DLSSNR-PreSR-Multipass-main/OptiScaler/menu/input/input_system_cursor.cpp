@@ -189,6 +189,7 @@ DWORD PackCursorMessagePos(const POINT& point)
 
 BOOL WINAPI hkGetCursorPos(LPPOINT point)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     if (point == nullptr)
         return FALSE;
 
@@ -208,6 +209,7 @@ BOOL WINAPI hkGetCursorPos(LPPOINT point)
 
 BOOL WINAPI hkSetCursorPos(int x, int y)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     {
         std::unique_lock lock(_state.Mutex);
 
@@ -223,6 +225,7 @@ BOOL WINAPI hkSetCursorPos(int x, int y)
 
 BOOL WINAPI hkGetPhysicalCursorPos(LPPOINT point)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     if (point == nullptr)
         return FALSE;
 
@@ -242,6 +245,7 @@ BOOL WINAPI hkGetPhysicalCursorPos(LPPOINT point)
 
 BOOL WINAPI hkSetPhysicalCursorPos(int x, int y)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     {
         std::unique_lock lock(_state.Mutex);
 
@@ -257,6 +261,7 @@ BOOL WINAPI hkSetPhysicalCursorPos(int x, int y)
 
 DWORD WINAPI hkGetMessagePos()
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     {
         std::unique_lock lock(_state.Mutex);
 
@@ -275,6 +280,7 @@ DWORD WINAPI hkGetMessagePos()
 int WINAPI hkGetMouseMovePointsEx(UINT pointSize, LPMOUSEMOVEPOINT point, LPMOUSEMOVEPOINT buffer, int bufferPoints,
                                   DWORD resolution)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     {
         std::unique_lock lock(_state.Mutex);
 
@@ -291,6 +297,7 @@ int WINAPI hkGetMouseMovePointsEx(UINT pointSize, LPMOUSEMOVEPOINT point, LPMOUS
 
 BOOL WINAPI hkClipCursor(const RECT* rect)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     {
         std::unique_lock lock(_state.Mutex);
 
@@ -308,6 +315,7 @@ BOOL WINAPI hkClipCursor(const RECT* rect)
 
 BOOL WINAPI hkGetClipCursor(LPRECT rect)
 {
+    HookLifetime::CallbackLease callbackLease(NonDirectInputCallbackGate);
     if (rect == nullptr)
         return FALSE;
 

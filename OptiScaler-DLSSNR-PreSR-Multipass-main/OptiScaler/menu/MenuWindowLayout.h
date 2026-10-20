@@ -6,6 +6,10 @@ namespace MenuWindowLayout
 {
 struct Point { float x, y; };
 struct Layout { Point pos, size, minimum, maximum; bool valid; };
+// Existing 0..4 values retain their floating/corner meaning in saved INIs.
+enum Anchor { Free = 0, TopLeft, TopRight, BottomLeft, BottomRight, DockLeft, DockRight, DockTop, DockBottom };
+inline bool IsDocked(int anchor) { return anchor >= DockLeft && anchor <= DockBottom; }
+inline int ValidAnchor(int anchor) { return anchor >= Free && anchor <= DockBottom ? anchor : Free; }
 inline Layout Calculate(Point origin, Point viewport, float scale, Point preferred,
                         Point position, int anchor, bool center)
 {

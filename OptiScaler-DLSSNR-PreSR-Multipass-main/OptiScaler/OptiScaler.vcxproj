@@ -344,6 +344,15 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="dlssnr\amd\RuntimeHostLoad.h" />
     <ClInclude Include="dlssnr\amd\HipRuntimeLoad.h" />
     <ClInclude Include="dlssnr\amd\AmdBridge.h" />
+    <ClInclude Include="dlssnr\amd\PassInitialization.h" />
+    <ClInclude Include="dlssnr\NrGpuHistory.h" />
+    <ClInclude Include="menu\MenuDocking.h" />
+    <ClInclude Include="menu\NrGpuHistoryPlot.h" />
+    <ClInclude Include="menu\input\shortcut_keys.h" />
+    <ClInclude Include="menu\input\directinput_registry.h" />
+    <ClInclude Include="menu\input\input_hook_lifetime.h" />
+    <ClInclude Include="menu\input\input_key_lifetime.h" />
+    <ClInclude Include="menu\input\input_window_lifetime.h" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="framegen\nvngx\Nvngx_Combo.h" />
