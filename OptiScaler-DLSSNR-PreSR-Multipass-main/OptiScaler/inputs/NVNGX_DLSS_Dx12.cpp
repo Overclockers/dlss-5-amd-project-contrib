@@ -1216,11 +1216,18 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_D3D12_EvaluateFeature(ID3D12GraphicsCom
     // Keep NR and the replacement upscaler on the same logical list. Resolving
     // only inside AmdBridge can leave SR recording on an outer wrapper's original
     // native producer after NR has closed it and switched to a continuation.
-    const auto logicalCmd = DlssNr::Submission::QueryLogicalCommandList(InCmdList);
-    if (logicalCmd) InCmdList = logicalCmd.Get();
+    // Only an opaque wrapper (recovered via the Streamline native IID that does
+    // not forward ILogicalCommandList) must be unwrapped. Transparent forwarders
+    // like ReShade must stay on the path so their Dispatch / root-bind addon
+    // callbacks (e.g. RenoDX HDR) keep seeing upscaler work.
+    bool unwrapOuter = false;
+    const auto logicalCmd = DlssNr::Submission::QueryLogicalCommandList(InCmdList, &unwrapOuter);
 
     if (feature == NVSDK_NGX_Feature_SuperSampling)
-        DlssNr::EvaluateBeforeUpscale(InCmdList, InParameters);
+        DlssNr::EvaluateBeforeUpscale(unwrapOuter && logicalCmd ? logicalCmd.Get() : InCmdList, InParameters);
+
+    if (logicalCmd && unwrapOuter)
+        InCmdList = logicalCmd.Get();
 
     // OptiScaler internal handling
     DlssNr::SrOutputExtent nrOutputExtent;

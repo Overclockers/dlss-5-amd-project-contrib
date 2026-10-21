@@ -128,7 +128,7 @@ goto warpSmoke
 call :RunSplitState || goto fail
 call :RunInlineFixture warp || goto fail
 call :RunDiagLifetime || goto fail
-%CXX% /I"%INC%" tests\lmxxf\lmxxf_wrapped_command_list.cpp /Fe"%OUT%\lmxxf_wrapped_command_list.exe" /Fo"%OUT%\lmxxf_wrapped_command_list.obj" /link %D3D% "%DETOURS%" || goto fail
+%CXX% /I"%INC%" /I"%REPO%\OptiScaler-DLSSNR-PreSR-Multipass-main\OptiScaler" /I"%REPO%\OptiScaler-DLSSNR-PreSR-Multipass-main\external\nvngx_dlss_sdk" /I"%REPO%\OptiScaler-DLSSNR-PreSR-Multipass-main\external\spdlog\include" tests\lmxxf\lmxxf_wrapped_command_list.cpp /Fe"%OUT%\lmxxf_wrapped_command_list.exe" /Fo"%OUT%\lmxxf_wrapped_command_list.obj" /link %D3D% "%DETOURS%" || goto fail
 "%OUT%\lmxxf_wrapped_command_list.exe" || goto fail
 %CXX% tests\lmxxf\lmxxf_temporal_control.cpp /Fe"%OUT%\lmxxf_temporal_control.exe" /Fo"%OUT%\lmxxf_temporal_control.obj" /link %D3D% d3dcompiler.lib || goto fail
 "%OUT%\lmxxf_temporal_control.exe" || goto fail
