@@ -1056,7 +1056,7 @@ class Config
     };
 
     // Hotfixes
-    CustomOptional<bool> CheckForUpdate { true };
+    CustomOptional<bool> CheckForUpdate { false };
     CustomOptional<bool, SoftDefault> DisableOverlays { false };
 
     CustomOptional<bool> SimulateWaitableObject { false };
