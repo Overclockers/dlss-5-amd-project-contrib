@@ -359,6 +359,12 @@ bool FSR4DriverProviderVk::Init(VkPhysicalDevice physicalDevice)
     LUID actualLuid {};
     if (!VulkanHooks::GetPhysicalDeviceLuid(physicalDevice, actualLuid))
         return false;
+    const auto gpus = IdentifyGpu::getAllGpus();
+    const auto gpu = std::ranges::find_if(gpus, [actualLuid](const GpuInformation& value)
+                                          { return IsEqualLUID(value.luid, actualLuid); });
+    if (gpu == gpus.end() || gpu->driverStore.empty())
+        return false;
+
 
     initTried = true;
 
@@ -395,10 +401,12 @@ bool FSR4DriverProviderVk::InitFg(VkPhysicalDevice physicalDevice)
     auto gpus = IdentifyGpu::getAllGpus();
     auto gpu = std::ranges::find_if(gpus, [actualLuid](const GpuInformation& value)
                                     { return IsEqualLUID(value.luid, actualLuid); });
+    if (gpu == gpus.end() || gpu->driverStore.empty())
+        return false;
 
     initTried = true;
 
-    if (gpu == gpus.end() || gpu->realFsr4Support != FSR4Support::FP8)
+    if (gpu->realFsr4Support != FSR4Support::FP8)
     {
         LOG_INFO("GPU doesn't support FP8, not using the driver FG");
         return false;

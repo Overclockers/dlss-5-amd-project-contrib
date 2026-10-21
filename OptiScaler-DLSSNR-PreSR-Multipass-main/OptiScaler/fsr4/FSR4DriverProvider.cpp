@@ -27,7 +27,7 @@ std::vector<FSR4DriverDll*>& DriverDlls()
     return dlls;
 }
 
-HMODULE LoadDriverDll(const wchar_t* name, std::optional<LUID> actualLuid)
+HMODULE LoadDriverDll(const wchar_t* name, const GpuInformation& gpu)
 {
     HMODULE module = nullptr;
     HMODULE memModule = nullptr;
@@ -43,14 +43,6 @@ HMODULE LoadDriverDll(const wchar_t* name, std::optional<LUID> actualLuid)
         return module;
     }
 
-    auto gpu = actualLuid.has_value() ? GpuInformation {} : IdentifyGpu::getActiveGpu();
-    if (actualLuid.has_value())
-        for (const auto& candidate : IdentifyGpu::getAllGpus())
-            if (IsEqualLUID(candidate.luid, *actualLuid))
-            {
-                gpu = candidate;
-                break;
-            }
     if (!gpu.driverStore.empty())
     {
         auto dllPath = gpu.driverStore / name;
@@ -116,10 +108,27 @@ FSR4DriverDll::FSR4DriverDll(const wchar_t* name, std::vector<std::wstring> sdkM
 
 HMODULE FSR4DriverDll::Load(std::optional<LUID> actualLuid)
 {
+    if (_module != nullptr)
+        return _module;
+
+    auto gpu = actualLuid.has_value() ? GpuInformation {} : IdentifyGpu::getActiveGpu();
+    if (actualLuid.has_value())
+    {
+        for (const auto& candidate : IdentifyGpu::getAllGpus())
+            if (IsEqualLUID(candidate.luid, *actualLuid))
+            {
+                gpu = candidate;
+                break;
+            }
+        // Recursive or failed DXGI discovery is retryable, unlike an actual DLL load attempt.
+        if (gpu.driverStore.empty())
+            return nullptr;
+    }
+
     std::call_once(_loadOnce,
-                   [this, actualLuid]
+                   [this, &gpu]
                    {
-                       auto module = LoadDriverDll(_name.c_str(), actualLuid);
+                       auto module = LoadDriverDll(_name.c_str(), gpu);
                        if (module == nullptr)
                            return;
 
