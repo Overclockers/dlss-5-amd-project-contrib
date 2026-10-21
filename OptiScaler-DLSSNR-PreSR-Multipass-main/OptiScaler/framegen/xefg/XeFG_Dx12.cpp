@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "XeFG_Dx12.h"
 #include <dlssnr/DlssNr.h>
+#include <hudfix/Hudfix_Dx11.h>
 #include <hudfix/Hudfix_Dx12.h>
 #include <low_latency/input/input_common.h>
 #include <menu/menu_overlay_dx.h>
@@ -269,18 +270,6 @@ bool XeFG_Dx12::CreateSwapchain(IDXGIFactory* factory, ID3D12CommandQueue* cmdQu
         {
             LOG_INFO("Releasing old swapchain");
             ReleaseSwapchain(_hwnd);
-
-            // Not sure why but XeFG sometimes doesn't release the swapchain properly
-            // so we force release it here to be able to recreate swapchain for same hwnd
-            if (State::Instance().currentRealSwapchain != nullptr)
-            {
-                UINT release = 0;
-                do
-                {
-                    release = State::Instance().currentRealSwapchain->Release();
-                    LOG_DEBUG("Releasing swapchain, ref count: {}", release);
-                } while (release > 0);
-            }
         }
         else
         {
@@ -473,18 +462,6 @@ bool XeFG_Dx12::CreateSwapchain1(IDXGIFactory* factory, ID3D12CommandQueue* cmdQ
         {
             LOG_INFO("Releasing old swapchain");
             ReleaseSwapchain(_hwnd);
-
-            // Not sure why but XeFG sometimes doesn't release the swapchain properly
-            // so we force release it here to be able to recreate swapchain for same hwnd
-            if (State::Instance().currentRealSwapchain != nullptr)
-            {
-                UINT release = 0;
-                do
-                {
-                    release = State::Instance().currentRealSwapchain->Release();
-                    LOG_DEBUG("Releasing swapchain, ref count: {}", release);
-                } while (release > 0);
-            }
         }
         else
         {
@@ -1267,9 +1244,12 @@ void XeFG_Dx12::EvaluateState(ID3D12Device* device, FG_Constants& fgConstants)
     {
         LOG_DEBUG("!FGEnabled");
         Deactivate();
+        ReleaseResourceCopies();
+        _depthInvert.reset();
 
         state.clearCapturedHudlesses = true;
         Hudfix_Dx12::ResetCounters();
+        Hudfix_Dx11::ResetCounters();
     }
 
     if (state.fgChanged)
@@ -1279,6 +1259,7 @@ void XeFG_Dx12::EvaluateState(ID3D12Device* device, FG_Constants& fgConstants)
         state.fgChanged = false;
 
         Hudfix_Dx12::ResetCounters();
+        Hudfix_Dx11::ResetCounters();
 
         // Pause for 10 frames
         UpdateTarget();
@@ -1313,6 +1294,8 @@ void XeFG_Dx12::ReleaseObjects()
     _mvFlip.reset();
     _depthFlip.reset();
     _depthInvert.reset();
+
+    ReleaseResourceCopies();
 }
 
 void XeFG_Dx12::CreateObjects(ID3D12Device* InDevice)
@@ -1847,11 +1830,12 @@ bool XeFG_Dx12::ReleaseSwapchain(HWND hwnd)
 
     if (!State::Instance().isShuttingDown)
     {
+        State::Instance().currentFGSwapchain = nullptr;
+
         if (_swapChainContext != nullptr)
             DestroySwapchainContext();
 
         _swapChainContext = nullptr;
-        State::Instance().currentFGSwapchain = nullptr;
     }
 
     ReleaseObjects();

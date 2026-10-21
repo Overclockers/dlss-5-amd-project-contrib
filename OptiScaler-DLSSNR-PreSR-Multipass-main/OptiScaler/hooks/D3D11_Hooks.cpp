@@ -8,6 +8,8 @@
 
 #include <wrapped/wrapped_swapchain.h>
 
+#include <resource_tracking/ResTrack_dx11.h>
+
 #include <detours/detours.h>
 
 #include <d3d11_4.h>
@@ -566,6 +568,8 @@ void D3D11Hooks::Hook(HMODULE dx11Module)
 
 void D3D11Hooks::Unhook()
 {
+    ResTrack_Dx11::ReleaseHooks();
+
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
 

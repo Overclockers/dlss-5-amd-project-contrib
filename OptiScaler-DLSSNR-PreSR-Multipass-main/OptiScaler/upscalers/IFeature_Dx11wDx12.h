@@ -38,14 +38,8 @@ class IFeature_Dx11wDx12 : public virtual IFeature_Dx11
     UINT64 Dx12FenceValue = 0;
     UINT64 Dx12CommandAllocatorFenceValue[DX11WDX12_NUM_OF_BUFFERS] = {};
 
-    Dx11WithDx12::D3D11_TEXTURE2D_RESOURCE_C dx11Color = {};
-    Dx11WithDx12::D3D11_TEXTURE2D_RESOURCE_C dx11Mv = {};
-    Dx11WithDx12::D3D11_TEXTURE2D_RESOURCE_C dx11Depth = {};
-    Dx11WithDx12::D3D11_TEXTURE2D_RESOURCE_C dx11Reactive = {};
-    Dx11WithDx12::D3D11_TEXTURE2D_RESOURCE_C dx11Exp = {};
-    Dx11WithDx12::D3D11_TEXTURE2D_RESOURCE_C dx11Out = {};
-
-    ID3D11Resource* paramOutput[DX11WDX12_NUM_OF_BUFFERS] = {};
+    // Per feature, sharing it between features makes them recreate each other's in-flight resources
+    Dx11WithDx12::D3D11_UPSCALER_RESOURCE_CACHE_C ResourceCache = {};
 
     bool CreateD3D12Objects();
     bool ProcessDx11Textures(const NVSDK_NGX_Parameter* InParameters);
@@ -70,6 +64,11 @@ class IFeature_Dx11wDx12 : public virtual IFeature_Dx11
     bool Evaluate(ID3D11DeviceContext* DeviceContext, NVSDK_NGX_Parameter* InParameters) final;
     bool IsWithDx12() final { return true; }
     API Api() const override { return API::DX12; }
+
+    // Used by DX11 FG to reuse resources this feature already shared with D3D12
+    const Dx11WithDx12::D3D11_UPSCALER_RESOURCE_CACHE_C& GetResourceCache() const { return ResourceCache; }
+
+    void* WithDx12ResourceCache() final { return &ResourceCache; }
 
     std::optional<double> ReadUpscalerTime(void* deviceContextVoid) override
     {

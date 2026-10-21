@@ -140,7 +140,6 @@ bool IFeature_Dx11wDx12::ProcessDx11Textures(const NVSDK_NGX_Parameter* InParame
 
     auto frame = _frameCount % DX11WDX12_NUM_OF_BUFFERS;
     const auto cacheFrameKey = Dx11WithDx12::NextUpscalerFrameId();
-    Dx11WithDx12::SetUpscalerFrameIndex((UINT) frame);
 
     auto mask = Dx11WithDx12::ResourceMask::Color | Dx11WithDx12::ResourceMask::Mv | Dx11WithDx12::ResourceMask::Depth |
                 Dx11WithDx12::ResourceMask::Output;
@@ -160,8 +159,8 @@ bool IFeature_Dx11wDx12::ProcessDx11Textures(const NVSDK_NGX_Parameter* InParame
         LOG_DEBUG("ReactiveMask disabled!");
 
     const auto prepareResult = Dx11WithDx12::PrepareUpscalerResources(
-        InParameters, mask, (UINT) frame, cacheFrameKey, Config::Instance()->DontUseNTShared.value_or_default(),
-        reactiveRequired, true);
+        ResourceCache, InParameters, mask, (UINT) _frameCount, cacheFrameKey,
+        Config::Instance()->DontUseNTShared.value_or_default(), reactiveRequired, true);
 
     if (!prepareResult.Success)
     {
@@ -228,7 +227,7 @@ bool IFeature_Dx11wDx12::ProcessDx11Textures(const NVSDK_NGX_Parameter* InParame
 bool IFeature_Dx11wDx12::CopyBackOutput()
 {
     const auto frame = (UINT) (_frameCount % DX11WDX12_NUM_OF_BUFFERS);
-    return Dx11WithDx12::CopyUpscalerOutputToDx11(frame);
+    return Dx11WithDx12::CopyUpscalerOutputToDx11(ResourceCache, frame);
 }
 
 bool IFeature_Dx11wDx12::Init(ID3D11Device* InDevice, ID3D11DeviceContext* InContext, NVSDK_NGX_Parameter* InParameters)
@@ -359,10 +358,10 @@ bool IFeature_Dx11wDx12::Evaluate(ID3D11DeviceContext* InDeviceContext, NVSDK_NG
     auto frame = _frameCount % DX11WDX12_NUM_OF_BUFFERS;
     auto cmdList = Dx12CommandList[frame];
 
-    auto& cache = Dx11WithDx12::GetUpscalerResourceCache();
+    auto& cache = ResourceCache;
     auto& dx11Color = cache.Color;
-    auto& dx11Mv = cache.Mv;
-    auto& dx11Depth = cache.Depth;
+    auto& dx11Mv = cache.Mv[_frameCount % DX11_WITH_DX12_INPUT_FRAMES];
+    auto& dx11Depth = cache.Depth[_frameCount % DX11_WITH_DX12_INPUT_FRAMES];
     auto& dx11Reactive = cache.Reactive;
     auto& dx11Exp = cache.Exposure;
     auto& dx11Out = cache.Output[frame];
@@ -591,7 +590,7 @@ bool IFeature_Dx11wDx12::Evaluate(ID3D11DeviceContext* InDeviceContext, NVSDK_NG
     if (evalResult)
         _frameCount++;
     else
-        Dx11WithDx12::ClearLastPreparedUpscalerFrameState();
+        Dx11WithDx12::ClearLastPreparedUpscalerFrameState(ResourceCache);
 
     // restore compute shader resources
     for (UINT i = 0; i < D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT; i++)
@@ -703,4 +702,5 @@ IFeature_Dx11wDx12::~IFeature_Dx11wDx12()
         return;
 
     ReleaseSharedResources();
+    Dx11WithDx12::ResetUpscalerResourceCache(ResourceCache);
 }

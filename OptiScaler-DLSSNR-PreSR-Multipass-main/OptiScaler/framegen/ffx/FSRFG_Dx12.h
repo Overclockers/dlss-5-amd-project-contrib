@@ -22,8 +22,12 @@ class FSRFG_Dx12 : public virtual IFGFeature_Dx12
     uint32_t _maxRenderWidth = 0;
     uint32_t _maxRenderHeight = 0;
 
-    std::unique_ptr<HudCopy_Dx12> _hudCopy[BUFFER_COUNT];
-    std::unique_ptr<HCC_Dx12> _hudlessCompareCompute[BUFFER_COUNT];
+    // Callbacks run on FFX's thread, guards what they use against ReleaseResourceCopies
+    std::mutex _callbackResourceMutex;
+
+    // Dispatched in order on the same queue, one buffer is enough
+    std::unique_ptr<HudCopy_Dx12> _hudCopy;
+    std::unique_ptr<HCC_Dx12> _hudlessCompareCompute;
 
     std::unique_ptr<FT_Dx12> _hudlessTransfer[BUFFER_COUNT];
     ID3D12Resource* _hudlessCopyResource[BUFFER_COUNT] {};
@@ -71,6 +75,7 @@ class FSRFG_Dx12 : public virtual IFGFeature_Dx12
 
   protected:
     void ReleaseObjects() override final;
+    void ReleaseResourceCopies() override final;
     void CreateObjects(ID3D12Device* InDevice) override final;
 
   public:

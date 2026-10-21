@@ -4,10 +4,15 @@
 #include "MathUtils.h"
 
 #include <with_dx12/with_dx12.h>
+#include <hudfix/Hudfix_Dx11.h>
+#include <resource_tracking/ResTrack_dx11.h>
 #include "shaders/depth_scale/DS_Dx12.h"
 
 using namespace OptiMath;
 static DS_Dx12* DepthScaleDx11wDx12 = nullptr;
+
+// Used when the upscaler is native DX11 and doesn't have its own D3D12 shared resources
+static Dx11WithDx12::D3D11_UPSCALER_RESOURCE_CACHE_C FgResourceCache = {};
 
 static bool PrepareFgResourceCache(NVSDK_NGX_Parameter* parameters, UINT64 frameKey)
 {
@@ -16,10 +21,10 @@ static bool PrepareFgResourceCache(NVSDK_NGX_Parameter* parameters, UINT64 frame
 
     const auto mask = Dx11WithDx12::ResourceMask::Mv | Dx11WithDx12::ResourceMask::Depth;
     const auto dontUseNtShared = Config::Instance()->DontUseNTShared.value_or_default();
-    const auto frameIndex = Dx11WithDx12::GetUpscalerFrameIndex();
 
-    const auto result =
-        Dx11WithDx12::PrepareUpscalerResources(parameters, mask, frameIndex, frameKey, dontUseNtShared, false, true);
+    // Next slot, the previous ones can still be in use by FG
+    const auto result = Dx11WithDx12::PrepareUpscalerResources(
+        FgResourceCache, parameters, mask, FgResourceCache.FrameIndex + 1, frameKey, dontUseNtShared, false, true);
 
     if (!result.Success)
     {
@@ -30,12 +35,11 @@ static bool PrepareFgResourceCache(NVSDK_NGX_Parameter* parameters, UINT64 frame
     return true;
 }
 
-static bool ReusePreparedUpscalerCacheForFg(UINT64 frameKey)
+static bool ReusePreparedUpscalerCacheForFg(const Dx11WithDx12::D3D11_UPSCALER_RESOURCE_CACHE_C& cache)
 {
     const auto mask = Dx11WithDx12::ResourceMask::Mv | Dx11WithDx12::ResourceMask::Depth;
-    const auto resolvedFrameKey = frameKey != 0 ? frameKey : Dx11WithDx12::GetLastPreparedUpscalerFrameId();
 
-    if (!Dx11WithDx12::HasPreparedUpscalerResources(mask, resolvedFrameKey))
+    if (!Dx11WithDx12::HasPreparedUpscalerResources(cache, mask))
     {
         LOG_WARN("Dx11wDx12 FG input cache miss");
         return false;
@@ -65,12 +69,27 @@ void UpscalerInputsDx11wDx12::Init(ID3D11Device* dx11Device, ID3D11DeviceContext
     Dx11WithDx12::Init(dx11Device, dx11Context);
 }
 
-void UpscalerInputsDx11wDx12::Reset() {}
+void UpscalerInputsDx11wDx12::Reset()
+{
+    ResTrack_Dx11::ResetBindings();
+    Hudfix_Dx11::ResetCounters();
+}
+
+void UpscalerInputsDx11wDx12::Shutdown()
+{
+    Reset();
+    Dx11WithDx12::ResetUpscalerResourceCache(FgResourceCache, true);
+}
 
 void UpscalerInputsDx11wDx12::UpscaleStart(NVSDK_NGX_Parameter* InParameters, IFeature_Dx11* feature)
 {
+    Hudfix_Dx11::SetSkipStatus(true);
+
     if (InParameters == nullptr || feature == nullptr)
+    {
+        Hudfix_Dx11::SetSkipStatus(false);
         return;
+    }
 
     // FSR Camera values
     float cameraNear = 0.0f;
@@ -134,11 +153,15 @@ void UpscalerInputsDx11wDx12::UpscaleStart(NVSDK_NGX_Parameter* InParameters, IF
     if (State::Instance().activeFgInput != FGInput::Upscaler || _dx12Device == nullptr)
         return;
 
-    if (feature->IsWithDx12())
-    {
-        const auto cacheFrameKey = Dx11WithDx12::GetLastPreparedUpscalerFrameId();
+    const Dx11WithDx12::D3D11_UPSCALER_RESOURCE_CACHE_C* cache = &FgResourceCache;
 
-        if (!ReusePreparedUpscalerCacheForFg(cacheFrameKey))
+    if (auto withDx12Cache =
+            static_cast<Dx11WithDx12::D3D11_UPSCALER_RESOURCE_CACHE_C*>(feature->WithDx12ResourceCache());
+        withDx12Cache != nullptr)
+    {
+        cache = withDx12Cache;
+
+        if (!ReusePreparedUpscalerCacheForFg(*cache))
             return;
     }
     else if (!PrepareFgResourceCache(InParameters, Dx11WithDx12::NextUpscalerFrameId()))
@@ -191,6 +214,8 @@ void UpscalerInputsDx11wDx12::UpscaleStart(NVSDK_NGX_Parameter* InParameters, IF
     fg->SetReset(reset);
     fg->SetInterpolationRect(feature->DisplayWidth(), feature->DisplayHeight());
 
+    Hudfix_Dx11::UpscaleStart();
+
     if (State::Instance().isShuttingDown || !fg->IsActive() || !Config::Instance()->FGEnabled.value_or_default() ||
         State::Instance().currentSwapchain == nullptr)
     {
@@ -204,13 +229,12 @@ void UpscalerInputsDx11wDx12::UpscaleStart(NVSDK_NGX_Parameter* InParameters, IF
         fg->Mutex.unlockThis(4);
     }
 
-    auto& cache = Dx11WithDx12::GetUpscalerResourceCache();
     const auto frameIndex = fg->GetIndex();
 
     LOG_DEBUG("(FG Dx11wDx12) using cached inputs for fgUpscaledImage[{}], frame: {}", frameIndex, fg->FrameCount());
 
-    ID3D12Resource* paramVelocity = cache.Mv.Dx12Resource;
-    ID3D12Resource* paramDepth = cache.Depth.Dx12Resource;
+    ID3D12Resource* paramVelocity = cache->CurrentMv().Dx12Resource;
+    ID3D12Resource* paramDepth = cache->CurrentDepth().Dx12Resource;
 
     auto cmdList = fg->GetUICommandList();
 
@@ -292,6 +316,8 @@ void UpscalerInputsDx11wDx12::UpscaleStart(NVSDK_NGX_Parameter* InParameters, IF
 
 void UpscalerInputsDx11wDx12::UpscaleEnd(NVSDK_NGX_Parameter* InParameters, IFeature_Dx11* feature)
 {
+    Hudfix_Dx11::SetSkipStatus(false);
+
     if (InParameters == nullptr || feature == nullptr)
         return;
 
@@ -302,5 +328,34 @@ void UpscalerInputsDx11wDx12::UpscaleEnd(NVSDK_NGX_Parameter* InParameters, IFea
 
     if (fg->IsActive() && Config::Instance()->FGEnabled.value_or_default() &&
         State::Instance().currentSwapchain != nullptr)
-        LOG_DEBUG("(FG Dx11wDx12) running, frame: {}", feature->FrameCount());
+    {
+        if (Config::Instance()->FGHUDFix.value_or_default())
+        {
+            Hudfix_Dx11::UpscaleEnd(feature->FrameCount(), State::Instance().lastFGFrameTime);
+
+            ID3D11Resource* output = nullptr;
+            if (InParameters->Get(NVSDK_NGX_Parameter_Output, &output) != NVSDK_NGX_Result_Success)
+                InParameters->Get(NVSDK_NGX_Parameter_Output, (void**) &output);
+
+            if (output != nullptr)
+            {
+                ID3D11Texture2D* outputTexture = nullptr;
+                if (SUCCEEDED(output->QueryInterface(IID_PPV_ARGS(&outputTexture))) && outputTexture != nullptr)
+                {
+                    Dx11ResourceInfo info = {};
+                    if (Hudfix_Dx11::FillResourceInfo(outputTexture, Dx11ResourceType::UAV, Dx11CaptureInfo::Upscaler,
+                                                      &info))
+                    {
+                        Hudfix_Dx11::CheckForHudless(Dx11WithDx12::GetD3D11DeviceContext(), &info, true);
+                    }
+
+                    outputTexture->Release();
+                }
+            }
+        }
+        else
+        {
+            LOG_DEBUG("(FG Dx11wDx12) running, frame: {}", feature->FrameCount());
+        }
+    }
 }

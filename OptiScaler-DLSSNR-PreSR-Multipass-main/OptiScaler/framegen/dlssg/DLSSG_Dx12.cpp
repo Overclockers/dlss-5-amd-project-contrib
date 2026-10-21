@@ -2,6 +2,7 @@
 
 #include "DLSSG_Dx12.h"
 
+#include <hudfix/Hudfix_Dx11.h>
 #include <hudfix/Hudfix_Dx12.h>
 #include <menu/menu_overlay_dx.h>
 #include <resource_tracking/ResTrack_dx12.h>
@@ -49,18 +50,6 @@ bool DLSSG_Dx12::CreateSwapchain(IDXGIFactory* factory, ID3D12CommandQueue* cmdQ
         {
             LOG_INFO("Releasing old swapchain");
             ReleaseSwapchain(_hwnd);
-
-            // Not sure why but XeFG sometimes doesn't release the swapchain properly
-            // so we force release it here to be able to recreate swapchain for same hwnd
-            if (State::Instance().currentRealSwapchain != nullptr)
-            {
-                UINT release = 0;
-                do
-                {
-                    release = State::Instance().currentRealSwapchain->Release();
-                    LOG_DEBUG("Releasing swapchain, ref count: {}", release);
-                } while (release > 0);
-            }
         }
         else
         {
@@ -153,18 +142,6 @@ bool DLSSG_Dx12::CreateSwapchain1(IDXGIFactory* factory, ID3D12CommandQueue* cmd
         {
             LOG_INFO("Releasing old swapchain");
             ReleaseSwapchain(_hwnd);
-
-            // Not sure why but XeFG sometimes doesn't release the swapchain properly
-            // so we force release it here to be able to recreate swapchain for same hwnd
-            if (State::Instance().currentRealSwapchain != nullptr)
-            {
-                UINT release = 0;
-                do
-                {
-                    release = State::Instance().currentRealSwapchain->Release();
-                    LOG_DEBUG("Releasing swapchain, ref count: {}", release);
-                } while (release > 0);
-            }
         }
         else
         {
@@ -281,12 +258,16 @@ void DLSSG_Dx12::Deactivate()
         sl::DLSSGOptions options {};
         options.mode = sl::DLSSGMode::eOff;
         options.queueParallelismMode = sl::DLSSGQueueParallelismMode::eBlockPresentingClientQueue;
-        StreamlineProxy::DLSSGSetOptions()(viewport, options); // Potential crash point on exit
+
+        if (StreamlineProxy::DLSSGSetOptions() != nullptr)
+            StreamlineProxy::DLSSGSetOptions()(viewport, options); // Potential crash point on exit
 
         sl::ReflexOptions reflexConst = {};
         reflexConst.mode = sl::ReflexMode::eOff;
         reflexConst.useMarkersToOptimize = false;
-        StreamlineProxy::ReflexSetOptions()(reflexConst);
+
+        if (StreamlineProxy::ReflexSetOptions() != nullptr)
+            StreamlineProxy::ReflexSetOptions()(reflexConst);
 
         _isActive = false;
     }
@@ -571,7 +552,8 @@ void DLSSG_Dx12::EvaluateState(ID3D12Device* device, FG_Constants& fgConstants)
     auto& state = State::Instance();
 
     // If needed hooks are missing or XeFG proxy is not inited or FG swapchain is not created
-    if (!StreamlineProxy::LoadStreamline() || state.currentFGSwapchain == nullptr)
+    // currentFGSwapchain can also be a plain fallback swapchain, so check that DLSSG created its own
+    if (!StreamlineProxy::LoadStreamline() || state.currentFGSwapchain == nullptr || _swapChain == nullptr)
         return;
 
     if (state.isShuttingDown)
@@ -605,9 +587,11 @@ void DLSSG_Dx12::EvaluateState(ID3D12Device* device, FG_Constants& fgConstants)
     {
         LOG_DEBUG("!FGEnabled");
         Deactivate();
+        ReleaseResourceCopies();
 
         state.clearCapturedHudlesses = true;
         Hudfix_Dx12::ResetCounters();
+        Hudfix_Dx11::ResetCounters();
     }
 
     if (state.fgChanged)
@@ -617,6 +601,7 @@ void DLSSG_Dx12::EvaluateState(ID3D12Device* device, FG_Constants& fgConstants)
         state.fgChanged = false;
 
         Hudfix_Dx12::ResetCounters();
+        Hudfix_Dx11::ResetCounters();
 
         // Pause for 10 frames
         UpdateTarget();
@@ -651,6 +636,8 @@ void DLSSG_Dx12::ReleaseObjects()
     _hudlessCompare.reset();
     _mvFlip.reset();
     _depthFlip.reset();
+
+    ReleaseResourceCopies();
 }
 
 void DLSSG_Dx12::CreateObjects(ID3D12Device* InDevice)
