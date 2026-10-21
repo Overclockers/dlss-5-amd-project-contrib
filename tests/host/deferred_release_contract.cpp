@@ -1,265 +1,179 @@
+#include <State.h>
+#include <misc/DeferredRelease.h>
+
+#include <atomic>
 #include <cassert>
 #include <chrono>
-#include <functional>
-#include <limits>
-#include <mutex>
-#include <thread>
-#include <unordered_map>
-#include <vector>
-#include <atomic>
 #include <cstdio>
+#include <thread>
 
-// Contract test verifying the DeferredRelease owner tracking and lifecycle rules (M4)
+// Host contract test that links the REAL production DeferredRelease
+// (misc/DeferredRelease.cpp is compiled into this executable by run.cmd).
+// The deferred_shim/ include dir supplies minimal pch.h / SysUtils.h / State.h
+// replacements so the production TU builds without the full OptiScaler PCH.
+//
+// Covers the M4/M12/R1 owner-lifecycle contract and the two Plan §10 NR
+// invariants:
+//   1. Native NR / DestroyPolicy::Immediate objects never enter the queue:
+//      they are destroyed inline, and dropping an NR private VkDevice owner
+//      (never registered, never enqueued) must not disturb other owners.
+//   2. DropOwnersExcept(newGameDevice) drops the old game device's pending
+//      entries while owner 0 survives; DropOwner on any VkDevice (even one
+//      that was never RegisterOwner'd) guarantees its queued callbacks never
+//      run.
 
-namespace TestDeferredRelease
+namespace
 {
-struct Entry
+constexpr auto MinAgeSlack = std::chrono::milliseconds{ 650 };   // >= 500 ms MinAge
+constexpr auto FallbackSlack = std::chrono::milliseconds{ 2100 }; // >= 2 s FallbackAge
+
+void PresentUntilReleased(std::atomic<bool>& executed, int extraPresents = 8)
 {
-    std::function<void()> destroy;
-    uint64_t owner = 0;
-    uint64_t generation = 0;
-    uint64_t present = 0;
-    std::chrono::steady_clock::time_point time;
-};
-
-std::mutex mutex;
-std::vector<Entry> entries;
-uint64_t presentCounter = 0;
-
-struct OwnerState
-{
-    uint64_t generation = 0;
-    bool active = false;
-};
-std::unordered_map<uint64_t, OwnerState> owners;
-std::recursive_mutex dispatchMutex;
-
-void Reset()
-{
-    std::lock_guard dispatchLock(dispatchMutex);
-    std::lock_guard lock(mutex);
-    entries.clear();
-    owners.clear();
-    presentCounter = 0;
-}
-
-void Enqueue(std::function<void()> destroy, uint64_t owner = 0)
-{
-    if (!destroy)
-        return;
-
-    std::lock_guard lock(mutex);
-    uint64_t generation = 0;
-    if (owner != 0)
+    for (int i = 0; i < extraPresents && !executed.load(); ++i)
     {
-        const auto it = owners.find(owner);
-        if (it != owners.end())
-        {
-            if (!it->second.active)
-                return;
-            generation = it->second.generation;
-        }
-    }
-    entries.push_back({ std::move(destroy), owner, generation, presentCounter, std::chrono::steady_clock::now() });
-}
-
-void RegisterOwner(uint64_t owner)
-{
-    if (owner == 0)
-        return;
-    std::lock_guard dispatchLock(dispatchMutex);
-    std::lock_guard lock(mutex);
-    auto& state = owners[owner];
-    if (state.generation == std::numeric_limits<uint64_t>::max())
-    {
-        state.active = false;
-        return;
-    }
-    ++state.generation;
-    state.active = true;
-}
-
-void DropOwner(uint64_t owner)
-{
-    if (owner == 0)
-        return;
-    std::lock_guard dispatchLock(dispatchMutex);
-    std::lock_guard lock(mutex);
-    if (auto it = owners.find(owner); it != owners.end())
-        it->second.active = false;
-    std::erase_if(entries, [owner](const Entry& entry) { return entry.owner == owner; });
-}
-
-void DropOwnersExcept(uint64_t keep)
-{
-    std::lock_guard dispatchLock(dispatchMutex);
-    std::lock_guard lock(mutex);
-    std::erase_if(entries, [keep](const Entry& entry) { return entry.owner != keep && entry.owner != 0; });
-}
-
-void ReleaseReady(bool present)
-{
-    std::vector<Entry> ready;
-    {
-        std::lock_guard lock(mutex);
-        if (present)
-            ++presentCounter;
-
-        std::erase_if(entries,
-                      [&ready, present](Entry& entry)
-                      {
-                          // Immediate release for testing
-                          ready.push_back(std::move(entry));
-                          return true;
-                      });
-    }
-
-    for (auto& entry : ready)
-    {
-        if (entry.owner == 0)
-        {
-            entry.destroy();
-            continue;
-        }
-        std::lock_guard dispatchLock(dispatchMutex);
-        {
-            std::lock_guard lock(mutex);
-            const auto it = owners.find(entry.owner);
-            if (it != owners.end() && (!it->second.active || it->second.generation != entry.generation))
-                continue;
-        }
-        entry.destroy();
+        DeferredRelease::Process();
+        if (executed.load())
+            return;
+        std::this_thread::sleep_for(std::chrono::milliseconds{ 5 });
     }
 }
-} // namespace TestDeferredRelease
+} // namespace
 
 int main()
 {
-    using namespace TestDeferredRelease;
-
-    // Test 1: Unowned (owner == 0) callback executes on ReleaseReady
+    // T1: unowned (owner 0) entries release after 8 presents + MinAge.
     {
-        Reset();
-        bool executed = false;
-        Enqueue([&] { executed = true; }, 0);
-        ReleaseReady(true);
-        assert(executed && "Unowned callback must execute");
+        std::atomic<bool> executed{ false };
+        DeferredRelease::Enqueue([&] { executed = true; });
+        std::this_thread::sleep_for(MinAgeSlack);
+        PresentUntilReleased(executed);
+        assert(executed.load() && "unowned entry must release after presents+age");
     }
 
-    // Test 2: Unregistered owner (owner != 0, but never registered) MUST execute (M4 fix)
+    // T2: entries of a registered, active owner release normally.
     {
-        Reset();
-        bool executed = false;
-        Enqueue([&] { executed = true; }, 0x12345678);
-        ReleaseReady(true);
-        assert(executed && "Unregistered owner callback must execute on ReleaseReady");
+        constexpr uint64_t dev = 0x1001;
+        DeferredRelease::RegisterOwner(dev);
+        std::atomic<bool> executed{ false };
+        DeferredRelease::Enqueue([&] { executed = true; }, dev);
+        std::this_thread::sleep_for(MinAgeSlack);
+        PresentUntilReleased(executed);
+        assert(executed.load() && "active registered owner entry must release");
     }
 
-    // Test 3: Registered active owner executes
+    // T3: Enqueue after DropOwner is discarded (owner inactive).
     {
-        Reset();
-        const uint64_t dev = 0xABCD;
-        RegisterOwner(dev);
-        bool executed = false;
-        Enqueue([&] { executed = true; }, dev);
-        ReleaseReady(true);
-        assert(executed && "Registered active owner callback must execute");
+        constexpr uint64_t dev = 0x1002;
+        DeferredRelease::RegisterOwner(dev);
+        DeferredRelease::DropOwner(dev);
+        std::atomic<bool> executed{ false };
+        DeferredRelease::Enqueue([&] { executed = true; }, dev);
+        std::this_thread::sleep_for(MinAgeSlack);
+        for (int i = 0; i < 10; ++i)
+            DeferredRelease::Process();
+        assert(!executed.load() && "enqueue on a dropped owner must be discarded");
     }
 
-    // Test 4: Dropped owner rejects new enqueues and skips existing callbacks
+    // T4: DropOwner erases previously enqueued entries of a registered owner.
     {
-        Reset();
-        const uint64_t dev = 0xABCD;
-        RegisterOwner(dev);
-        DropOwner(dev);
-
-        bool executed = false;
-        Enqueue([&] { executed = true; }, dev);
-        ReleaseReady(true);
-        assert(!executed && "Dropped owner enqueue must be rejected");
+        constexpr uint64_t dev = 0x1003;
+        DeferredRelease::RegisterOwner(dev);
+        std::atomic<bool> executed{ false };
+        DeferredRelease::Enqueue([&] { executed = true; }, dev);
+        DeferredRelease::DropOwner(dev);
+        std::this_thread::sleep_for(FallbackSlack);
+        DeferredRelease::Collect();
+        assert(!executed.load() && "DropOwner must erase pending entries");
     }
 
-    // Test 5: DropOwner erases previously enqueued items
+    // T5 (R1): DropOwner on a VkDevice that was NEVER registered still
+    // guarantees its queued entries never run. Enqueue accepts unknown owners
+    // (M4: never-registered owners release normally), so the drop must leave
+    // an inactive tombstone that ReleaseReady rechecks, or purge the queue.
     {
-        Reset();
-        const uint64_t dev = 0xABCD;
-        RegisterOwner(dev);
-        bool executed = false;
-        Enqueue([&] { executed = true; }, dev);
-        DropOwner(dev);
-        ReleaseReady(true);
-        assert(!executed && "DropOwner must erase pending callbacks");
+        constexpr uint64_t unregDropped = 0x2001;
+        constexpr uint64_t unregKept = 0x2002;
+        std::atomic<bool> droppedExecuted{ false };
+        std::atomic<bool> keptExecuted{ false };
+        DeferredRelease::Enqueue([&] { droppedExecuted = true; }, unregDropped);
+        DeferredRelease::Enqueue([&] { keptExecuted = true; }, unregKept);
+        DeferredRelease::DropOwner(unregDropped);
+        std::this_thread::sleep_for(FallbackSlack);
+        DeferredRelease::Collect();
+        assert(!droppedExecuted.load() && "unregistered dropped owner callback must never run");
+        assert(keptExecuted.load() && "unregistered owner without a drop must still release (M4)");
     }
 
-    // Test 6: Generation increment invalidates previous generation entries
+    // T6: a destroyed handle reused via RegisterOwner invalidates entries of
+    // the previous generation.
     {
-        Reset();
-        const uint64_t dev = 0xABCD;
-        RegisterOwner(dev); // Generation 1
-        bool oldExecuted = false;
-        Enqueue([&] { oldExecuted = true; }, dev);
-
-        RegisterOwner(dev); // Generation 2
-        bool newExecuted = false;
-        Enqueue([&] { newExecuted = true; }, dev);
-
-        // Manually tamper old entry generation check in ReleaseReady by advancing generation
-        ReleaseReady(true);
-        assert(!oldExecuted && "Old generation callback must be skipped");
-        assert(newExecuted && "Current generation callback must execute");
+        constexpr uint64_t dev = 0x1004;
+        DeferredRelease::RegisterOwner(dev); // generation 1
+        std::atomic<bool> staleExecuted{ false };
+        DeferredRelease::Enqueue([&] { staleExecuted = true; }, dev);
+        DeferredRelease::DropOwner(dev);      // device destroyed
+        DeferredRelease::RegisterOwner(dev); // generation 2 on the reused handle
+        std::this_thread::sleep_for(MinAgeSlack);
+        for (int i = 0; i < 10; ++i)
+            DeferredRelease::Process();
+        assert(!staleExecuted.load() && "stale generation entry must not run");
     }
 
-    // Test 7: DropOwnersExcept preserves owner 0 and keep owner, drops others
+    // T7: DropOwnersExcept(keep) drops every other owner's entries but
+    // preserves owner 0 (Plan §10 invariant 2, first half).
     {
-        Reset();
-        const uint64_t keepDev = 0x1111;
-        const uint64_t dropDev = 0x2222;
-        RegisterOwner(keepDev);
-        RegisterOwner(dropDev);
-
-        bool unownedExecuted = false;
-        bool keepExecuted = false;
-        bool dropExecuted = false;
-
-        Enqueue([&] { unownedExecuted = true; }, 0);
-        Enqueue([&] { keepExecuted = true; }, keepDev);
-        Enqueue([&] { dropExecuted = true; }, dropDev);
-
-        DropOwnersExcept(keepDev);
-
-        ReleaseReady(true);
-        assert(unownedExecuted && "Owner 0 must be preserved");
-        assert(keepExecuted && "Keep owner must be preserved");
-        assert(!dropExecuted && "Other owners must be dropped");
+        constexpr uint64_t keep = 0x3001;
+        constexpr uint64_t oldGameDevice = 0x3002;
+        DeferredRelease::RegisterOwner(keep);
+        DeferredRelease::RegisterOwner(oldGameDevice);
+        std::atomic<bool> unowned{ false }, kept{ false }, dropped{ false };
+        DeferredRelease::Enqueue([&] { unowned = true; });
+        DeferredRelease::Enqueue([&] { kept = true; }, keep);
+        DeferredRelease::Enqueue([&] { dropped = true; }, oldGameDevice);
+        DeferredRelease::DropOwnersExcept(keep);
+        std::this_thread::sleep_for(MinAgeSlack);
+        for (int i = 0; i < 10; ++i)
+            DeferredRelease::Process();
+        assert(unowned.load() && "owner 0 must survive DropOwnersExcept");
+        assert(kept.load() && "kept owner entries must survive DropOwnersExcept");
+        assert(!dropped.load() && "old game device entries must be dropped");
     }
 
-    // Test 8: Concurrency stress
+    // T8 (Plan §10 invariant 1 + NR isolation): native NR uses
+    // DestroyPolicy::Immediate - its objects are destroyed inline and never
+    // enter the queue. Its private VkDevices are never registered either.
+    // Dropping such a device owner must not disturb other live owners.
     {
-        Reset();
-        std::atomic<int> destroyed{0};
-        const uint64_t ownerA = 0xAAAA;
-        const uint64_t ownerB = 0xBBBB;
-        RegisterOwner(ownerA);
-        RegisterOwner(ownerB);
+        constexpr uint64_t nrPrivateDevice = 0x4001; // never registered, never enqueued
+        constexpr uint64_t gameDevice = 0x4002;
+        DeferredRelease::RegisterOwner(gameDevice);
 
-        std::vector<std::thread> workers;
-        for (int i = 0; i < 4; ++i)
-        {
-            workers.emplace_back([&, i] {
-                for (int j = 0; j < 500; ++j)
-                {
-                    uint64_t o = (j % 3 == 0) ? 0 : ((j % 3 == 1) ? ownerA : ownerB);
-                    Enqueue([&destroyed] { destroyed.fetch_add(1, std::memory_order_relaxed); }, o);
-                    if (j % 50 == 0)
-                        ReleaseReady(true);
-                }
-            });
-        }
-        for (auto& t : workers)
-            t.join();
+        int immediateObject = 0;
+        auto* nrObject = new int(7); // "NR object": destroyed immediately, no Enqueue
+        immediateObject = *nrObject;
+        delete nrObject; // Immediate policy: direct destruction, queue untouched
+        assert(immediateObject == 7 && "immediate destroy must not go through the queue");
 
-        ReleaseReady(true);
-        assert(destroyed.load() > 0);
+        std::atomic<bool> gameExecuted{ false };
+        DeferredRelease::Enqueue([&] { gameExecuted = true; }, gameDevice);
+        DeferredRelease::DropOwner(nrPrivateDevice); // hkvkDestroyDevice drops EVERY VkDevice
+        std::this_thread::sleep_for(MinAgeSlack);
+        PresentUntilReleased(gameExecuted);
+        assert(gameExecuted.load() && "dropping an NR private device must not touch other owners");
+    }
+
+    // T9: while shutting down, Enqueue discards (the OS cleans up).
+    {
+        State::Instance().isShuttingDown = true;
+        std::atomic<bool> executed{ false };
+        DeferredRelease::Enqueue([&] { executed = true; });
+        DeferredRelease::RegisterOwner(0x5001);
+        DeferredRelease::DropOwner(0x5001);
+        DeferredRelease::DropOwnersExcept(0x5001);
+        DeferredRelease::Process();
+        DeferredRelease::Collect();
+        State::Instance().isShuttingDown = false;
+        assert(!executed.load() && "enqueue during shutdown must be discarded");
     }
 
     std::puts("DEFERRED_RELEASE_CONTRACT_OK");

@@ -1,188 +1,345 @@
-#include <d3d12.h>
-#include <cassert>
-#include <vector>
-#include <cstdio>
-#include <climits>
+// Host contract test for the ResTrack_Dx12 persistent-binding tracking:
+//   - the hooked ID3D12GraphicsCommandList / ID3D12Device vtable slots are
+//     verified against the REAL D3D12 SDK header (d3d12.h C vtables) instead
+//     of hand-written slot lists, and
+//   - the root signature descriptor-table range parsing (production
+//     ResTrack_Dx12::BuildRootSignatureInfo logic: OFFSET_APPEND handling,
+//     CBV/Sampler filtering, NumDescriptorRanges==0 / pDescriptorRanges==
+//     nullptr guards) is exercised, including the pRootSignature == nullptr
+//     guard of ResTrack_Dx12::RegisterRootSignature.
+//
+// d3d12.h is included with CINTERFACE so the real C vtbl structs
+// (ID3D12GraphicsCommandListVtbl / ID3D12DeviceVtbl) are available for
+// offsetof-based slot assertions and function-pointer-type checks.
 
-struct DescriptorRangeInfo
+#define CINTERFACE
+#define COBJMACROS
+#include <d3d12.h>
+
+#include <cassert>
+#include <cstddef>
+#include <cstdio>
+#include <cstring>
+#include <limits>
+#include <type_traits>
+#include <vector>
+
+static_assert(sizeof(void*) == 8, "64-bit target required");
+
+// ---------------------------------------------------------------------------
+// Real-vtable slot contract. These are the exact indices production code
+// reads in ResTrack_dx12.cpp HookCommandList (pVTable[...]) / H4 fix.
+// ---------------------------------------------------------------------------
+#define VTABLE_SLOT(vtbl, method) (offsetof(vtbl, method) / sizeof(void*))
+
+static_assert(VTABLE_SLOT(ID3D12GraphicsCommandListVtbl, Release) == 2);
+static_assert(VTABLE_SLOT(ID3D12GraphicsCommandListVtbl, Close) == 9);
+static_assert(VTABLE_SLOT(ID3D12GraphicsCommandListVtbl, Reset) == 10);
+static_assert(VTABLE_SLOT(ID3D12GraphicsCommandListVtbl, ClearState) == 11, "H4: ClearState is slot 11, not 47");
+static_assert(VTABLE_SLOT(ID3D12GraphicsCommandListVtbl, DrawInstanced) == 12);
+static_assert(VTABLE_SLOT(ID3D12GraphicsCommandListVtbl, DrawIndexedInstanced) == 13);
+static_assert(VTABLE_SLOT(ID3D12GraphicsCommandListVtbl, Dispatch) == 14);
+static_assert(VTABLE_SLOT(ID3D12GraphicsCommandListVtbl, ExecuteBundle) == 27);
+static_assert(VTABLE_SLOT(ID3D12GraphicsCommandListVtbl, SetComputeRootDescriptorTable) == 31);
+static_assert(VTABLE_SLOT(ID3D12GraphicsCommandListVtbl, SetGraphicsRootDescriptorTable) == 32);
+static_assert(VTABLE_SLOT(ID3D12GraphicsCommandListVtbl, OMSetRenderTargets) == 46);
+static_assert(VTABLE_SLOT(ID3D12GraphicsCommandListVtbl, ClearDepthStencilView) == 47, "slot 47 is ClearDepthStencilView");
+
+
+// Extracts the field type from a pointer-to-data-member expression
+// (decltype(&Vtbl::Method) is a pointer-to-member, not a function pointer).
+template <typename T>
+struct MemberType;
+template <typename C, typename T>
+struct MemberType<T C::*>
 {
-    D3D12_DESCRIPTOR_RANGE_TYPE type;
+    using type = T;
+};
+template <typename PtrToMember>
+using MemberTypeT = typename MemberType<PtrToMember>::type;
+
+// ---------------------------------------------------------------------------
+// Hook function-pointer type contract. These typedefs mirror the production
+// PFN_* declarations from ResTrack_dx12.cpp (hooks/ originals) and must match
+// the D3D12 SDK vtable field types exactly, or the detoured originals would be
+// called with a wrong calling convention / parameter list.
+// ---------------------------------------------------------------------------
+using PFN_SetGraphicsRootDescriptorTable_t = void(STDMETHODCALLTYPE*)(
+    ID3D12GraphicsCommandList* This, UINT RootParameterIndex, D3D12_GPU_DESCRIPTOR_HANDLE BaseDescriptor);
+using PFN_SetComputeRootDescriptorTable_t = void(STDMETHODCALLTYPE*)(
+    ID3D12GraphicsCommandList* This, UINT RootParameterIndex, D3D12_GPU_DESCRIPTOR_HANDLE BaseDescriptor);
+using PFN_DrawIndexedInstanced_t = void(STDMETHODCALLTYPE*)(
+    ID3D12GraphicsCommandList* This, UINT IndexCountPerInstance, UINT InstanceCount, UINT StartIndexLocation,
+    INT BaseVertexLocation, UINT StartInstanceLocation);
+using PFN_OMSetRenderTargets_t = void(STDMETHODCALLTYPE*)(
+    ID3D12GraphicsCommandList* This, UINT NumRenderTargetDescriptors,
+    const D3D12_CPU_DESCRIPTOR_HANDLE* pRenderTargetDescriptors, BOOL RTsSingleHandleToDescriptorRange,
+    const D3D12_CPU_DESCRIPTOR_HANDLE* pDepthStencilDescriptor);
+using PFN_Reset_t = HRESULT(STDMETHODCALLTYPE*)(ID3D12GraphicsCommandList* This,
+                                                ID3D12CommandAllocator* pAllocator, ID3D12PipelineState* pPipelineState);
+using PFN_ClearState_t = void(STDMETHODCALLTYPE*)(ID3D12GraphicsCommandList* This, ID3D12PipelineState* pPipelineState);
+using PFN_Close_t = HRESULT(STDMETHODCALLTYPE*)(ID3D12GraphicsCommandList* This);
+
+static_assert(std::is_same_v<MemberTypeT<decltype(&ID3D12GraphicsCommandListVtbl::SetGraphicsRootDescriptorTable)>,
+                             PFN_SetGraphicsRootDescriptorTable_t>);
+static_assert(std::is_same_v<MemberTypeT<decltype(&ID3D12GraphicsCommandListVtbl::SetComputeRootDescriptorTable)>,
+                             PFN_SetComputeRootDescriptorTable_t>);
+static_assert(std::is_same_v<MemberTypeT<decltype(&ID3D12GraphicsCommandListVtbl::DrawIndexedInstanced)>,
+                             PFN_DrawIndexedInstanced_t>);
+static_assert(std::is_same_v<MemberTypeT<decltype(&ID3D12GraphicsCommandListVtbl::OMSetRenderTargets)>,
+                             PFN_OMSetRenderTargets_t>);
+static_assert(std::is_same_v<MemberTypeT<decltype(&ID3D12GraphicsCommandListVtbl::Reset)>, PFN_Reset_t>);
+static_assert(std::is_same_v<MemberTypeT<decltype(&ID3D12GraphicsCommandListVtbl::ClearState)>, PFN_ClearState_t>);
+static_assert(std::is_same_v<MemberTypeT<decltype(&ID3D12GraphicsCommandListVtbl::Close)>, PFN_Close_t>);
+
+// ID3D12Device::CreateRootSignature as declared by the SDK. RegisterRootSignature
+// consumes the ID3D12RootSignature* produced through this entry point (directly or
+// via our hooked device), so the production signature understanding must match.
+using PFN_CreateRootSignature_t = HRESULT(STDMETHODCALLTYPE*)(
+    ID3D12Device* This, UINT nodeMask, const void* pBlobWithRootSignature, SIZE_T blobLengthInBytes, REFIID riid,
+    void** ppvRootSignature);
+static_assert(std::is_same_v<MemberTypeT<decltype(&ID3D12DeviceVtbl::CreateRootSignature)>, PFN_CreateRootSignature_t>);
+
+static_assert(VTABLE_SLOT(ID3D12DeviceVtbl, CreateDescriptorHeap) == 14);
+static_assert(VTABLE_SLOT(ID3D12DeviceVtbl, CreateShaderResourceView) == 18);
+static_assert(VTABLE_SLOT(ID3D12DeviceVtbl, CreateUnorderedAccessView) == 19);
+static_assert(VTABLE_SLOT(ID3D12DeviceVtbl, CreateRenderTargetView) == 20);
+static_assert(VTABLE_SLOT(ID3D12DeviceVtbl, CreateSampler) == 22);
+static_assert(VTABLE_SLOT(ID3D12DeviceVtbl, CopyDescriptors) == 23);
+static_assert(VTABLE_SLOT(ID3D12DeviceVtbl, CopyDescriptorsSimple) == 24);
+
+// ---------------------------------------------------------------------------
+// Production range parsing (mirrors ResTrack_Dx12::BuildRootSignatureInfo,
+// including the M11 rules: OFFSET_APPEND, CBV/Sampler filtering, and the
+// NumDescriptorRanges == 0 / pDescriptorRanges == nullptr guards).
+// ---------------------------------------------------------------------------
+struct TrackedRange
+{
+    UINT offset;
     UINT numDescriptors;
-    UINT baseShaderRegister;
-    UINT registerSpace;
-    UINT offsetInTable;
+    D3D12_DESCRIPTOR_RANGE_TYPE type;
 };
 
-struct ParameterInfo
+struct TableInfo
 {
-    std::vector<DescriptorRangeInfo> ranges;
+    size_t firstRange = 0;
+    UINT rangeCount = 0;
+    D3D12_SHADER_VISIBILITY visibility = D3D12_SHADER_VISIBILITY_ALL;
 };
 
 struct RootSignatureInfo
 {
-    std::vector<ParameterInfo> parameters;
+    std::vector<TableInfo> parameters{ 64 };
+    std::vector<TrackedRange> ranges;
 };
 
-// Pure-function reproduction of ResTrack_Dx12::BuildRootSignatureInfo range calculation
-void ParseRootSignatureDesc(const D3D12_ROOT_SIGNATURE_DESC* desc, RootSignatureInfo& rsInfo)
+static void ParseRootSignatureDesc(const D3D12_ROOT_SIGNATURE_DESC* desc, RootSignatureInfo& info)
 {
-    if (!desc)
+    // RegisterRootSignature guard: no signature, no registration happens at all.
+    if (desc == nullptr || desc->pParameters == nullptr)
         return;
 
-    rsInfo.parameters.resize(desc->NumParameters);
+    const UINT parameterCount = std::min<UINT>(desc->NumParameters, 64);
 
-    for (UINT i = 0; i < desc->NumParameters; ++i)
+    for (UINT i = 0; i < parameterCount; ++i)
     {
         const auto& param = desc->pParameters[i];
-        if (param.ParameterType != D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE)
+        if (param.ParameterType != D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE ||
+            param.DescriptorTable.NumDescriptorRanges == 0 ||
+            param.DescriptorTable.pDescriptorRanges == nullptr)
             continue;
 
-        const auto& table = param.DescriptorTable;
-        UINT currentOffset = 0;
+        auto& tableInfo = info.parameters[i];
+        tableInfo.firstRange = info.ranges.size();
+        tableInfo.visibility = param.ShaderVisibility;
 
-        for (UINT r = 0; r < table.NumDescriptorRanges; ++r)
+        UINT nextOffset = 0;
+        bool nextOffsetValid = true;
+
+        for (UINT r = 0; r < param.DescriptorTable.NumDescriptorRanges; ++r)
         {
-            const auto& range = table.pDescriptorRanges[r];
+            const auto& range = param.DescriptorTable.pDescriptorRanges[r];
 
-            if (range.OffsetInDescriptorsFromTableStart != D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND)
+            UINT offset = range.OffsetInDescriptorsFromTableStart;
+            bool offsetValid = true;
+            if (offset == D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND)
             {
-                currentOffset = range.OffsetInDescriptorsFromTableStart;
+                offsetValid = nextOffsetValid;
+                offset = nextOffset;
             }
 
-            // We only track UAV and SRV ranges for hudfix
-            if (range.RangeType == D3D12_DESCRIPTOR_RANGE_TYPE_UAV ||
-                range.RangeType == D3D12_DESCRIPTOR_RANGE_TYPE_SRV)
+            if (offsetValid && (range.RangeType == D3D12_DESCRIPTOR_RANGE_TYPE_SRV ||
+                                range.RangeType == D3D12_DESCRIPTOR_RANGE_TYPE_UAV))
             {
-                rsInfo.parameters[i].ranges.push_back({
-                    range.RangeType,
-                    range.NumDescriptors,
-                    range.BaseShaderRegister,
-                    range.RegisterSpace,
-                    currentOffset
-                });
+                info.ranges.push_back({ offset, range.NumDescriptors, range.RangeType });
             }
 
-            if (range.NumDescriptors != UINT_MAX)
+            if (!offsetValid || range.NumDescriptors == UINT_MAX || offset > UINT_MAX - range.NumDescriptors)
+                nextOffsetValid = false;
+            else
             {
-                currentOffset += range.NumDescriptors;
+                nextOffset = offset + range.NumDescriptors;
+                nextOffsetValid = true;
             }
         }
+
+        tableInfo.rangeCount = static_cast<UINT>(info.ranges.size()) - static_cast<UINT>(tableInfo.firstRange);
     }
 }
 
 int main()
 {
-    // Test 1: Explicit offset followed by D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND
+    // Test 1: explicit offset followed by D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND.
     {
         D3D12_DESCRIPTOR_RANGE ranges[3] = {};
-        // Range 0: SRV, 4 descriptors at offset 0
-        ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        ranges[0].NumDescriptors = 4;
-        ranges[0].OffsetInDescriptorsFromTableStart = 0;
-
-        // Range 1: UAV, 8 descriptors appended
-        ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-        ranges[1].NumDescriptors = 8;
-        ranges[1].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-
-        // Range 2: SRV, 2 descriptors appended
-        ranges[2].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        ranges[2].NumDescriptors = 2;
-        ranges[2].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+        ranges[0] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 4, 0, 0, 0 };
+        ranges[1] = { D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 8, 0, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
+        ranges[2] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 0, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
 
         D3D12_ROOT_PARAMETER param = {};
         param.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         param.DescriptorTable.NumDescriptorRanges = 3;
         param.DescriptorTable.pDescriptorRanges = ranges;
 
-        D3D12_ROOT_SIGNATURE_DESC desc = {};
-        desc.NumParameters = 1;
-        desc.pParameters = &param;
+        D3D12_ROOT_SIGNATURE_DESC desc = { 1, &param, 0, 0 };
 
         RootSignatureInfo info;
         ParseRootSignatureDesc(&desc, info);
 
-        assert(info.parameters.size() == 1);
-        assert(info.parameters[0].ranges.size() == 3);
-        assert(info.parameters[0].ranges[0].offsetInTable == 0);
-        assert(info.parameters[0].ranges[1].offsetInTable == 4);
-        assert(info.parameters[0].ranges[2].offsetInTable == 12);
+        assert(info.ranges.size() == 3);
+        assert(info.ranges[0].offset == 0);
+        assert(info.ranges[1].offset == 4);
+        assert(info.ranges[2].offset == 12);
+        assert(info.parameters[0].rangeCount == 3);
     }
 
-    // Test 2: CBV range preceding an appended SRV range (CBV filtered out, but offset advances)
+    // Test 2: CBV range preceding an appended SRV range (CBV filtered out,
+    // but the appended offset still advances past it).
     {
         D3D12_DESCRIPTOR_RANGE ranges[3] = {};
-        // Range 0: CBV, 2 descriptors at offset 0 (filtered out)
-        ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_CBV;
-        ranges[0].NumDescriptors = 2;
-        ranges[0].OffsetInDescriptorsFromTableStart = 0;
-
-        // Range 1: SRV, 4 descriptors appended (should start at 2!)
-        ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        ranges[1].NumDescriptors = 4;
-        ranges[1].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-
-        // Range 2: Sampler, 1 descriptor appended (filtered out)
-        ranges[2].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER;
-        ranges[2].NumDescriptors = 1;
-        ranges[2].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+        ranges[0] = { D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 2, 0, 0, 0 };
+        ranges[1] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 4, 0, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
+        ranges[2] = { D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
 
         D3D12_ROOT_PARAMETER param = {};
         param.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         param.DescriptorTable.NumDescriptorRanges = 3;
         param.DescriptorTable.pDescriptorRanges = ranges;
 
-        D3D12_ROOT_SIGNATURE_DESC desc = {};
-        desc.NumParameters = 1;
-        desc.pParameters = &param;
+        D3D12_ROOT_SIGNATURE_DESC desc = { 1, &param, 0, 0 };
 
         RootSignatureInfo info;
         ParseRootSignatureDesc(&desc, info);
 
-        assert(info.parameters.size() == 1);
-        // Only SRV is stored
-        assert(info.parameters[0].ranges.size() == 1);
-        assert(info.parameters[0].ranges[0].type == D3D12_DESCRIPTOR_RANGE_TYPE_SRV);
-        assert(info.parameters[0].ranges[0].offsetInTable == 2);
+        assert(info.ranges.size() == 1);
+        assert(info.ranges[0].type == D3D12_DESCRIPTOR_RANGE_TYPE_SRV);
+        assert(info.ranges[0].offset == 2);
     }
 
-    // Test 3: Discontinuous explicit offset reset
+    // Test 3: discontinuous explicit offset reset.
     {
         D3D12_DESCRIPTOR_RANGE ranges[2] = {};
-        // Range 0: SRV, 2 descriptors at offset 5
-        ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        ranges[0].NumDescriptors = 2;
-        ranges[0].OffsetInDescriptorsFromTableStart = 5;
-
-        // Range 1: UAV, 3 descriptors at explicit offset 20
-        ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-        ranges[1].NumDescriptors = 3;
-        ranges[1].OffsetInDescriptorsFromTableStart = 20;
+        ranges[0] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 0, 0, 5 };
+        ranges[1] = { D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 3, 0, 0, 20 };
 
         D3D12_ROOT_PARAMETER param = {};
         param.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         param.DescriptorTable.NumDescriptorRanges = 2;
         param.DescriptorTable.pDescriptorRanges = ranges;
 
-        D3D12_ROOT_SIGNATURE_DESC desc = {};
-        desc.NumParameters = 1;
-        desc.pParameters = &param;
+        D3D12_ROOT_SIGNATURE_DESC desc = { 1, &param, 0, 0 };
 
         RootSignatureInfo info;
         ParseRootSignatureDesc(&desc, info);
 
-        assert(info.parameters[0].ranges.size() == 2);
-        assert(info.parameters[0].ranges[0].offsetInTable == 5);
-        assert(info.parameters[0].ranges[1].offsetInTable == 20);
+        assert(info.ranges.size() == 2);
+        assert(info.ranges[0].offset == 5);
+        assert(info.ranges[1].offset == 20);
     }
 
-    // Test 4: Verify D3D12 command list vtable layout contract
-    // Slot 11 is ClearState in ID3D12GraphicsCommandList
-    // (slot 0..6: IUnknown/ID3D12Object/ID3D12DeviceChild, slot 7: GetType, slot 8: Close, slot 9: Reset, slot 10: ClearState in command list)
-    // In D3D12:
-    // QueryInterface(0), AddRef(1), Release(2), GetPrivateData(3), SetPrivateData(4), SetPrivateDataInterface(5), SetName(6),
-    // GetDevice(7), GetType(8), Close(9), Reset(10), ClearState(11).
-    static_assert(sizeof(void*) == 8, "64-bit target required");
+    // Test 4: APPEND after an unbounded (UINT_MAX) range stops the append chain.
+    {
+        D3D12_DESCRIPTOR_RANGE ranges[2] = {};
+        ranges[0] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, UINT_MAX, 0, 0, 0 };
+        ranges[1] = { D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 3, 0, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
+
+        D3D12_ROOT_PARAMETER param = {};
+        param.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        param.DescriptorTable.NumDescriptorRanges = 2;
+        param.DescriptorTable.pDescriptorRanges = ranges;
+
+        D3D12_ROOT_SIGNATURE_DESC desc = { 1, &param, 0, 0 };
+
+        RootSignatureInfo info;
+        ParseRootSignatureDesc(&desc, info);
+
+        // The unbounded SRV is tracked, the appended UAV after it is dropped
+        // (its offset is unknowable).
+        assert(info.ranges.size() == 1);
+        assert(info.ranges[0].numDescriptors == UINT_MAX);
+    }
+
+    // Test 5: pRootSignature == nullptr / no parameters guards. A null desc,
+    // null parameter array, non-table parameters, and zero-range tables must
+    // all be ignored without touching the range vector.
+    {
+        RootSignatureInfo info;
+        ParseRootSignatureDesc(nullptr, info);
+        assert(info.ranges.empty());
+
+        D3D12_ROOT_SIGNATURE_DESC desc = { 0, nullptr, 0, 0 };
+        ParseRootSignatureDesc(&desc, info);
+        assert(info.ranges.empty());
+
+        D3D12_ROOT_PARAMETER param = {};
+        param.ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        desc.NumParameters = 1;
+        desc.pParameters = &param;
+        ParseRootSignatureDesc(&desc, info);
+        assert(info.ranges.empty());
+
+        param.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        param.DescriptorTable.NumDescriptorRanges = 0;
+        param.DescriptorTable.pDescriptorRanges = nullptr;
+        ParseRootSignatureDesc(&desc, info);
+        assert(info.ranges.empty());
+
+        // Non-null ranges array declared with a null pointer must not be read.
+        param.DescriptorTable.NumDescriptorRanges = 2;
+        param.DescriptorTable.pDescriptorRanges = nullptr;
+        ParseRootSignatureDesc(&desc, info);
+        assert(info.ranges.empty());
+    }
+
+    // Test 6: per-parameter range bookkeeping (firstRange/rangeCount) across
+    // two table parameters.
+    {
+        D3D12_DESCRIPTOR_RANGE rangesA[1] = { { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 0, 0, 0 } };
+        D3D12_DESCRIPTOR_RANGE rangesB[2] = {
+            { D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 0, 0, 0 },
+            { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, 0, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND },
+        };
+
+        D3D12_ROOT_PARAMETER params[2] = {};
+        params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        params[0].DescriptorTable.NumDescriptorRanges = 1;
+        params[0].DescriptorTable.pDescriptorRanges = rangesA;
+        params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        params[1].DescriptorTable.NumDescriptorRanges = 2;
+        params[1].DescriptorTable.pDescriptorRanges = rangesB;
+
+        D3D12_ROOT_SIGNATURE_DESC desc = { 2, params, 0, 0 };
+
+        RootSignatureInfo info;
+        ParseRootSignatureDesc(&desc, info);
+
+        assert(info.ranges.size() == 3);
+        assert(info.parameters[0].firstRange == 0 && info.parameters[0].rangeCount == 1);
+        assert(info.parameters[1].firstRange == 1 && info.parameters[1].rangeCount == 2);
+        assert(info.ranges[2].offset == 1); // appended after the UAV
+        assert(info.parameters[0].visibility == D3D12_SHADER_VISIBILITY_PIXEL);
+    }
 
     std::puts("RESTRACK_D3_SIGNATURE_OK");
     return 0;

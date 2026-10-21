@@ -80,7 +80,7 @@ call "%REPO%\tests\host\menu-localization.cmd" "%OUT%\menu" || goto fail
 "%OUT%\nr_install_status.exe" || goto fail
 %CXX% /utf-8 tests\host\fg_resource_readiness.cpp /Fe"%OUT%\fg_resource_readiness.exe" /Fo"%OUT%\fg_resource_readiness.obj" || goto fail
 "%OUT%\fg_resource_readiness.exe" || goto fail
-%CXX% /utf-8 tests\host\deferred_release_contract.cpp /Fe"%OUT%\deferred_release_contract.exe" /Fo"%OUT%\deferred_release_contract.obj" || goto fail
+%CXX% /utf-8 /I"tests\host\deferred_shim" tests\host\deferred_release_contract.cpp "%REPO%\OptiScaler-DLSSNR-PreSR-Multipass-main\OptiScaler\misc\DeferredRelease.cpp" /Fe"%OUT%\deferred_release_contract.exe" /Fo"%OUT%"\ || goto fail
 "%OUT%\deferred_release_contract.exe" || goto fail
 %CXX% /utf-8 tests\host\restrack_d3_signature.cpp /Fe"%OUT%\restrack_d3_signature.exe" /Fo"%OUT%\restrack_d3_signature.obj" /link d3d12.lib dxguid.lib || goto fail
 "%OUT%\restrack_d3_signature.exe" || goto fail
