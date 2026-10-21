@@ -6,6 +6,30 @@
 #include <Config.h>
 
 #include <framegen/IFGFeature_Dx12.h>
+#include <misc/DeferredRelease.h>
+
+namespace
+{
+struct ScopedCheckOwnership
+{
+    bool& flag;
+    explicit ScopedCheckOwnership(bool& value) : flag(value) { flag = true; }
+    ~ScopedCheckOwnership() { flag = false; }
+};
+}
+void Hudfix_Dx12::ReleaseBuffers()
+{
+    std::unique_lock<std::mutex> lock(_checkMutex, std::defer_lock);
+    if (!_checkMutexOwned)
+        lock.lock();
+
+    for (int i = 0; i < BUFFER_COUNT; ++i)
+    {
+        DeferredRelease::Release(_captureBuffer[i]);
+        delete _formatTransfer[i];
+        _formatTransfer[i] = nullptr;
+    }
+}
 
 inline static int GetFormatGroup(DXGI_FORMAT format)
 {
@@ -82,74 +106,6 @@ inline static bool CompareResourceFormats(DXGI_FORMAT sc, DXGI_FORMAT hudless)
     return scGroup == hudlessGroup;
 }
 
-bool Hudfix_Dx12::CreateObjects()
-{
-    if (_commandQueue != nullptr)
-        return true;
-
-    do
-    {
-        HRESULT result;
-
-        for (size_t i = 0; i < BUFFER_COUNT; i++)
-        {
-            result = State::Instance().currentD3D12Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
-                                                                                  IID_PPV_ARGS(&_commandAllocator[i]));
-            if (result != S_OK)
-            {
-                LOG_ERROR("CreateCommandAllocator: {:X}", (unsigned long) result);
-                break;
-            }
-            _commandAllocator[i]->SetName(L"Hudfix CommandAllocator");
-
-            result = State::Instance().currentD3D12Device->CreateCommandList(
-                0, D3D12_COMMAND_LIST_TYPE_DIRECT, _commandAllocator[i], NULL, IID_PPV_ARGS(&_commandList[i]));
-            if (result != S_OK)
-            {
-                LOG_ERROR("CreateCommandList: {:X}", (unsigned long) result);
-                break;
-            }
-
-            _commandList[i]->SetName(L"Hudfix CommandList");
-
-            result = _commandList[i]->Close();
-            if (result != S_OK)
-            {
-                LOG_ERROR("_hudlessCommandList->Close: {:X}", (unsigned long) result);
-                break;
-            }
-
-            result =
-                State::Instance().currentD3D12Device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&_fence[i]));
-            if (result != S_OK)
-            {
-                LOG_ERROR("CreateFence: {0:X}", (unsigned long) result);
-                break;
-            }
-        }
-
-        // Create a command queue for frame generation
-        D3D12_COMMAND_QUEUE_DESC queueDesc = {};
-        queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-        queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
-        queueDesc.NodeMask = 0;
-        queueDesc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_HIGH;
-
-        HRESULT hr = State::Instance().currentD3D12Device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&_commandQueue));
-        if (hr != S_OK)
-        {
-            LOG_ERROR("CreateCommandQueue: {:X}", (unsigned long) hr);
-            break;
-        }
-
-        _commandQueue->SetName(L"Hudfix CommandQueue");
-
-        return true;
-
-    } while (false);
-
-    return false;
-}
 
 bool Hudfix_Dx12::CreateBufferResource(ID3D12Device* InDevice, ResourceInfo* InSource, D3D12_RESOURCE_STATES InState,
                                        ID3D12Resource** OutResource)
@@ -164,10 +120,7 @@ bool Hudfix_Dx12::CreateBufferResource(ID3D12Device* InDevice, ResourceInfo* InS
         if (bufDesc.Width != (UINT64) (InSource->width) || bufDesc.Height != (UINT) (InSource->height) ||
             bufDesc.Format != InSource->format)
         {
-            // Maybe need to add a fence here
-            // To be sure it's not used anymore
-            (*OutResource)->Release();
-            (*OutResource) = nullptr;
+            DeferredRelease::Release(*OutResource);
             LOG_WARN("Release {}x{}, new one: {}x{}", bufDesc.Width, bufDesc.Height, InSource->width, InSource->height);
         }
         else
@@ -215,8 +168,7 @@ bool Hudfix_Dx12::CreateBufferResourceWithSize(ID3D12Device* InDevice, ResourceI
 
         if (bufDesc.Width != (UINT64) InWidth || bufDesc.Height != InHeight || bufDesc.Format != InSource->format)
         {
-            (*OutResource)->Release();
-            (*OutResource) = nullptr;
+            DeferredRelease::Release(*OutResource);
             LOG_WARN("Release {}x{}, new one: {}x{}", bufDesc.Width, bufDesc.Height, InWidth, InHeight);
         }
         else
@@ -579,6 +531,7 @@ bool Hudfix_Dx12::CheckForHudless(ID3D12GraphicsCommandList* cmdList, ResourceIn
         // Prevent double capture
         LOG_DEBUG("Waiting _checkMutex");
         std::lock_guard<std::mutex> lock(_checkMutex);
+        ScopedCheckOwnership ownership(_checkMutexOwned);
 
         if (!ignoreBlocked && Config::Instance()->FGResourceBlocking.value_or_default())
         {
@@ -680,11 +633,6 @@ bool Hudfix_Dx12::CheckForHudless(ID3D12GraphicsCommandList* cmdList, ResourceIn
 
         LOG_TRACE("Capture resource: {:X}, index: {}", (size_t) resource->buffer, fIndex);
 
-        if (_commandQueue == nullptr && !CreateObjects())
-        {
-            LOG_WARN("Can't create command queue!");
-            return false;
-        }
 
         auto scWidth = s.currentSwapchainDesc.BufferDesc.Width;
         auto scHeight = s.currentSwapchainDesc.BufferDesc.Height;

@@ -8,7 +8,7 @@ using Microsoft::WRL::ComPtr;
 Shader_Dx12::Shader_Dx12(std::string InName, ID3D12Device* InDevice, Retirement retirement)
     : _name(InName), _retirement(retirement), _device(InDevice)
 {
-    GpuTime = std::make_unique<GpuTime_Dx12>(InDevice);
+    GpuTime = std::make_unique<GpuTime_Dx12>(InDevice, retirement == Retirement::Deferred);
 }
 
 Shader_Dx12::~Shader_Dx12()

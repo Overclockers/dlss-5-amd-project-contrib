@@ -4,6 +4,7 @@
 
 #include <Util.h>
 #include <Config.h>
+#include <misc/DeferredRelease.h>
 
 #include <magic_enum.hpp>
 
@@ -189,8 +190,7 @@ static bool CreateBufferResource(ID3D12Device* InDevice, ID3D12Resource* InResou
 
         if (bufDesc.Width != inDesc.Width || bufDesc.Height != inDesc.Height || bufDesc.Format != inDesc.Format)
         {
-            (*OutResource)->Release();
-            (*OutResource) = nullptr;
+            DeferredRelease::Release(*OutResource);
             LOG_WARN("Release {}x{}, new one: {}x{}", bufDesc.Width, bufDesc.Height, inDesc.Width, inDesc.Height);
         }
         else
@@ -214,6 +214,15 @@ static bool CreateBufferResource(ID3D12Device* InDevice, ID3D12Resource* InResou
 
     LOG_DEBUG("Created new one: {}x{}", inDesc.Width, inDesc.Height);
     return true;
+}
+
+static void ReleaseBuffers()
+{
+    for (size_t i = 0; i < BUFFER_COUNT; ++i)
+    {
+        DeferredRelease::Release(_hudless[i]);
+        DeferredRelease::Release(_interpolation[i]);
+    }
 }
 
 static void ResourceBarrier(ID3D12GraphicsCommandList* InCommandList, ID3D12Resource* InResource,
@@ -452,6 +461,7 @@ ffxReturnCode_t ffxDestroyContext_Dx12FG(ffxContext* context, const ffxAllocatio
     {
         LOG_INFO("Destroying FG Context: {:X}", (size_t) State::Instance().currentFG);
         State::Instance().currentFG->DestroyFGContext();
+        ReleaseBuffers();
         return FFX_API_RETURN_OK;
     }
 

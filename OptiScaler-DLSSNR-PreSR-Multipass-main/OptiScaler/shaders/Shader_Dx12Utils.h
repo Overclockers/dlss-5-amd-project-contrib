@@ -2,11 +2,13 @@
 #include <d3dx/d3dx12.h>
 #include <vector>
 #include <stdexcept>
+#include <misc/DeferredRelease.h>
 
 class FrameDescriptorHeap
 {
     ID3D12DescriptorHeap* heapCSU = nullptr; // Cbv + Srv + Uav
     ID3D12DescriptorHeap* heapRtv = nullptr;
+    bool _deferredRetirement = true;
 
     UINT descriptorSizeCSU = 0;
     UINT descriptorSizeRtv = 0;
@@ -25,6 +27,8 @@ class FrameDescriptorHeap
     }
 
   public:
+    void SetDeferredRetirement(bool deferred) { _deferredRetirement = deferred; }
+
     // Initialize the heap based on counts
     bool Initialize(ID3D12Device* device, UINT numSrv, UINT numUav, UINT numCbv, UINT numRtv = 0)
     {
@@ -116,14 +120,16 @@ class FrameDescriptorHeap
 
     void ReleaseHeaps()
     {
-        // Randomly crashing on release
-        // For now rely on OS to clean up on exit
-        // Need to check if it's about they are being use
-        // Also need to create shaders when they are used to prevent creating heaps when not used
-        // return;
-
-        SAFE_RELEASE(heapCSU);
-        SAFE_RELEASE(heapRtv);
+        if (_deferredRetirement)
+        {
+            DeferredRelease::Release(heapCSU);
+            DeferredRelease::Release(heapRtv);
+        }
+        else
+        {
+            SAFE_RELEASE(heapCSU);
+            SAFE_RELEASE(heapRtv);
+        }
     }
 
     ~FrameDescriptorHeap() { ReleaseHeaps(); }

@@ -2,10 +2,12 @@
 #include "GpuTime_Dx12.h"
 
 #include <State.h>
+#include <misc/DeferredRelease.h>
 
 #include <include/d3dx/d3dx12.h>
 
-GpuTime_Dx12::GpuTime_Dx12(ID3D12Device* device)
+GpuTime_Dx12::GpuTime_Dx12(ID3D12Device* device, bool deferredRetirement)
+    : _deferredRetirement(deferredRetirement)
 {
     if (device == nullptr)
     {
@@ -46,8 +48,16 @@ GpuTime_Dx12::GpuTime_Dx12(ID3D12Device* device)
 
 GpuTime_Dx12::~GpuTime_Dx12()
 {
-    SAFE_RELEASE(_queryHeap);
-    SAFE_RELEASE(_readbackBuffer);
+    if (_deferredRetirement)
+    {
+        DeferredRelease::Release(_queryHeap);
+        DeferredRelease::Release(_readbackBuffer);
+    }
+    else
+    {
+        SAFE_RELEASE(_queryHeap);
+        SAFE_RELEASE(_readbackBuffer);
+    }
 }
 
 void GpuTime_Dx12::Start(ID3D12GraphicsCommandList* cmdList)

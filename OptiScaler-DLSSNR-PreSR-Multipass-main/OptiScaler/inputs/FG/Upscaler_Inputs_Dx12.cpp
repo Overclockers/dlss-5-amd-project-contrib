@@ -117,6 +117,13 @@ void UpscalerInputsDx12::UpscaleStart(ID3D12GraphicsCommandList* InCmdList, NVSD
 
     fg->EvaluateState(_device, fgConstants);
 
+    if (DepthScale != nullptr &&
+        (!Config::Instance()->IsFGEnabled() || !Config::Instance()->FGEnableDepthScale.value_or_default()))
+    {
+        delete DepthScale;
+        DepthScale = nullptr;
+    }
+
     int reset = 0;
     InParameters->Get(NVSDK_NGX_Parameter_Reset, &reset);
 
@@ -199,8 +206,8 @@ void UpscalerInputsDx12::UpscaleStart(ID3D12GraphicsCommandList* InCmdList, NVSD
                 if (DepthScale == nullptr)
                     DepthScale = new DS_Dx12("Depth Scale", _device);
 
-                if (DepthScale->CreateBufferResource(_device, paramDepth, feature->DisplayWidth(),
-                                                     feature->DisplayHeight(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS) &&
+                if (DepthScale->CreateBufferResource(_device, paramDepth, 0, 0,
+                                                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS) &&
                     DepthScale->Buffer() != nullptr)
                 {
                     DepthScale->SetBufferState(InCmdList, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);

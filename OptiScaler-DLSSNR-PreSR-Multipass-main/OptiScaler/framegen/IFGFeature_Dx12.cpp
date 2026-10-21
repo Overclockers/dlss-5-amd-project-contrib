@@ -5,6 +5,7 @@
 
 #include <magic_enum.hpp>
 #include <misc/DeferredRelease.h>
+#include <hudfix/Hudfix_Dx12.h>
 
 bool IFGFeature_Dx12::GetResourceCopy(FG_ResourceType type, D3D12_RESOURCE_STATES bufferState, ID3D12Resource* output)
 {
@@ -291,6 +292,9 @@ void IFGFeature_Dx12::ReleaseResourceCopies()
 
     _mvFlip.reset();
     _depthFlip.reset();
+    _hudlessCompare.reset();
+    _renderUI.reset();
+    Hudfix_Dx12::ReleaseBuffers();
 }
 
 void IFGFeature_Dx12::FlipResource(Dx12Resource* resource)

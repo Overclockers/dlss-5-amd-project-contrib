@@ -137,8 +137,12 @@ Scaler OS_Dx12::ActiveScaler() const
 }
 
 OS_Dx12::OS_Dx12(std::string InName, ID3D12Device* InDevice, bool InUpsample, Scaler InScalerOverride)
-    : Shader_Dx12(InName, InDevice), _upsample(InUpsample), _scalerOverride(InScalerOverride)
+    : Shader_Dx12(InName, InDevice, InScalerOverride == Scaler::Count ? Retirement::Deferred : Retirement::Immediate),
+      _upsample(InUpsample), _scalerOverride(InScalerOverride)
 {
+    if (InScalerOverride != Scaler::Count)
+        for (auto& heap : _frameHeaps)
+            heap.SetDeferredRetirement(false);
     if (InDevice == nullptr)
     {
         LOG_ERROR("InDevice is nullptr!");
@@ -258,5 +262,8 @@ OS_Dx12::~OS_Dx12()
         _frameHeaps[i].ReleaseHeaps();
     }
 
-    SAFE_RELEASE(_buffer);
+    if (_retirement == Retirement::Deferred)
+        DeferredRelease::Release(_buffer);
+    else
+        SAFE_RELEASE(_buffer);
 }

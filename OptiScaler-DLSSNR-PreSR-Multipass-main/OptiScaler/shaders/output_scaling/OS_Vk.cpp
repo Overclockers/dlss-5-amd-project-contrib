@@ -35,7 +35,9 @@ Scaler OS_Vk::ActiveScaler() const
 
 OS_Vk::OS_Vk(std::string InName, VkDevice InDevice, VkPhysicalDevice InPhysicalDevice, bool InUpsample,
              Scaler InScalerOverride)
-    : Shader_Vk(InName, InDevice, InPhysicalDevice), _upsample(InUpsample), _scalerOverride(InScalerOverride)
+    : Shader_Vk(InName, InDevice, InPhysicalDevice,
+                InScalerOverride == Scaler::Count ? Retirement::Deferred : Retirement::Immediate),
+      _upsample(InUpsample), _scalerOverride(InScalerOverride)
 {
     if (InDevice == VK_NULL_HANDLE)
     {

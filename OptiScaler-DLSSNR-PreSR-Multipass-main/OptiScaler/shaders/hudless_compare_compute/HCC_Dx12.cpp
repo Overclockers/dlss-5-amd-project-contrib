@@ -151,5 +151,5 @@ HCC_Dx12::~HCC_Dx12()
         _frameHeaps[i].ReleaseHeaps();
     }
 
-    SAFE_RELEASE(_buffer);
+    DeferredRelease::Release(_buffer);
 }

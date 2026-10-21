@@ -292,10 +292,13 @@ static void hkvkDestroyInstance(VkInstance instance, const VkAllocationCallbacks
 VALIDATE_HOOK(hkvkDestroyDevice, PFN_vkDestroyDevice)
 static void hkvkDestroyDevice(VkDevice device, const VkAllocationCallbacks* pAllocator)
 {
+    bool gameDevice = false;
     {
         std::scoped_lock lock(_vkApiVersionMutex);
-        _devicePhysicalDevices.erase(device);
+        gameDevice = _devicePhysicalDevices.erase(device) != 0;
     }
+    if (gameDevice && !ScopedSkipVulkanHooks::Active() && !ScopedCreatingD3DDevice::Active())
+        DeferredRelease::DropOwner((uint64_t) device);
     o_vkDestroyDevice(device, pAllocator);
 }
 
@@ -401,12 +404,10 @@ static VkResult hkvkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevice
 
     auto result = o_vkCreateDevice(physicalDevice, &localCreteInfo, pAllocator, pDevice);
 
-    // Private NR devices returned above; creation cannot retire another live device.
-    if (result == VK_SUCCESS && !ScopedCreatingD3DDevice::Active())
-        DeferredRelease::RegisterOwner((uint64_t) *pDevice);
-
+    // Private NR devices returned above; translation devices never publish host ownership.
     if (result == VK_SUCCESS && !ScopedCreatingD3DDevice::Active())
     {
+        DeferredRelease::RegisterOwner((uint64_t) *pDevice);
         std::scoped_lock lock(_vkApiVersionMutex);
         _devicePhysicalDevices[*pDevice] = physicalDevice;
     }

@@ -2,6 +2,7 @@
 #include "GpuTime_Vk.h"
 
 #include <State.h>
+#include <misc/DeferredRelease.h>
 
 GpuTime_Vk::GpuTime_Vk(VkDevice device, VkPhysicalDevice physicalDevice) : _device(device)
 {
@@ -40,7 +41,8 @@ GpuTime_Vk::~GpuTime_Vk()
 
     if (_queryPool != VK_NULL_HANDLE)
     {
-        vkDestroyQueryPool(_device, _queryPool, nullptr);
+        DeferredRelease::Enqueue([device = _device, pool = _queryPool]() { vkDestroyQueryPool(device, pool, nullptr); },
+                                 (uint64_t) _device);
         _queryPool = VK_NULL_HANDLE;
     }
 }

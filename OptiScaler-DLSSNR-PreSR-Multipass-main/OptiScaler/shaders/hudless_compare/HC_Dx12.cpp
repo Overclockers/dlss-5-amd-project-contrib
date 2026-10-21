@@ -338,11 +338,12 @@ HC_Dx12::~HC_Dx12()
     if (!_init || State::Instance().isShuttingDown)
         return;
 
-    SAFE_RELEASE(_rootSignature);
-    SAFE_RELEASE(_constantBuffer);
+    DeferredRelease::Release(_rootSignature);
+    DeferredRelease::Release(_constantBuffer);
 
     for (int i = 0; i < HC_NUM_OF_HEAPS; i++)
     {
         _frameHeaps[i].ReleaseHeaps();
+        DeferredRelease::Release(_buffer[i]);
     }
 }
