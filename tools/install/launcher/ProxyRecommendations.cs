@@ -48,7 +48,7 @@ namespace OptScalerNR.Launcher
         const char OptiPatcherMark = '\u2728'; // sparkles
         const string DefaultProxy = "dxgi.dll";
 
-        const int DeadlineMs = 45000; // The wiki table is ~170 KiB; slow international links need a generous budget.
+        const int DeadlineMs = 25000; // Whole document must arrive within 25 s; otherwise the current recommendations stay in use.
         static readonly ProxyProfileDocument Seed = ReadSeed();
         public static readonly string[] ProxyNames = Seed.Proxies;
         static readonly Regex CommentExpression = new Regex("<!--.*?-->", RegexOptions.Singleline | RegexOptions.Compiled);
