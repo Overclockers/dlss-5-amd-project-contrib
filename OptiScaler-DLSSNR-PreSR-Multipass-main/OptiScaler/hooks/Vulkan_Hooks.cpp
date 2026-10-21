@@ -241,9 +241,9 @@ static VkResult hkvkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevice
 
     auto result = o_vkCreateDevice(physicalDevice, &localCreteInfo, pAllocator, pDevice);
 
-    // Private NR devices returned above; only a game device may discard old owners.
-    if (result == VK_SUCCESS)
-        DeferredRelease::DropOwnersExcept((uint64_t) *pDevice);
+    // Private NR devices returned above; creation cannot retire another live device.
+    if (result == VK_SUCCESS && !ScopedCreatingD3DDevice::Active())
+        DeferredRelease::RegisterOwner((uint64_t) *pDevice);
 
     if (Config::Instance()->DlssNrEnabled.value_or_default())
         LOG_INFO("DLSS-NR Vulkan: vkCreateDevice returned {} with {} extensions requested", (int) result,

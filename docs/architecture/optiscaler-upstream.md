@@ -143,6 +143,35 @@ review closed both query/arbitration findings and the coherent Release host/work
 build passed. This subset does not enable the D8 macro or certify full LL/D6 behavior.
 
 
+### Local owner-generation and process-exit closure
+
+Owned Vulkan deferred callbacks carry an explicit registered device generation.
+`RegisterOwner` is called only for successful game-device creation; `DropOwner`
+invalidates that exact device before destruction and drains an executing owned
+callback through a dispatch gate. Extracted callbacks recheck active generation,
+so a destroyed/reused handle cannot execute stale destruction. Other live devices
+and unowned COM callbacks retain their behavior. Creation no longer drops another
+live device. The actual implementation adapter passed extracted-callback cancellation,
+handle reuse, another live owner, active-callback draining and no implicit resurrection.
+
+A real 256×256 Small Mochizuki recording ran through the compiled host backend,
+CommandListProxy split/execute and fence retirement, using the sealed baseline runtime
+SHA-256 `3163fe265a377b14e320e27bb04921f9e22327546aa79233511a981339751dd9`
+with 836 hash-matched assets. On the physical RX 9070 XT LUID `0:1321c`, output was
+finite with mean 0.444368 and mean absolute neural correction 0.00575857. Session
+release/off transition and native process exit completed with exit code zero.
+
+The first adapter selected a second virtual DXGI alias and correctly failed Vulkan
+LUID matching; selecting the physical adapter fixed the adapter, not production
+identity checks. Earlier successful neural runs exposed a real process-exit SIGSEGV:
+debugger plus linker map identified the CRT destructor of `LmxxfCut::Pending()`'s
+last diagnostic queue after D3D12 shutdown. The diagnostic singleton now follows
+the existing process-lifetime registry pattern, retaining only its final queue while
+normal replacements still release old queues. Independent review and the native
+post-fix exit verified this repair. This does not certify native NVIDIA NR scalers,
+NR off/on replay permutations, actual game-device deferred-entry preservation during
+private Vulkan creation, or game visual/performance acceptance.
+
 ### Follow-up snapshot (2026-10-09)
 
 Reviewed through **434b9555d960e6e471a461c2b0d98b8e1fdacfa2**

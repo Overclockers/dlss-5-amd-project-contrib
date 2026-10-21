@@ -23,6 +23,13 @@ void Collect();
 // destroying the objects then would be invalid, leaking them is the safe option.
 void DropOwnersExcept(uint64_t keep);
 
+// Activate a successfully created game device. Reused handles start a new generation.
+void RegisterOwner(uint64_t owner);
+
+// Forgets one destroyed device's entries without invoking stale device callbacks.
+// Owner zero and entries belonging to other live devices remain untouched.
+void DropOwner(uint64_t owner);
+
 template <typename T> void Release(T*& object)
 {
     if (object == nullptr)
