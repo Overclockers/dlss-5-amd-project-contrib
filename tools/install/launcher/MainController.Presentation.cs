@@ -106,6 +106,7 @@ namespace OptScalerNR.Launcher
             var en = (Button)_window.FindName("LangEn");
             zh.Background = LauncherTheme.Brush(_language == "zh" ? "ThemeSurface" : "ThemeSubtle");
             en.Background = LauncherTheme.Brush(_language == "en" ? "ThemeSurface" : "ThemeSubtle");
+            RefreshDiagnosticModeUI();
             RefreshHardwareText();
             RefreshHeroState();
         }
@@ -116,7 +117,7 @@ namespace OptScalerNR.Launcher
         void RefreshHardwareText()
         {
             var label = (TextBlock)_window.FindName("HardwareInfo");
-            label.Text = (_hardwareDetails ?? (_hardwareComplete ? L("GPU 信息不可用", "GPU unavailable") : L("正在检测 GPU…", "Detecting GPU…"))) + L(" · 作者: TheAutomatic", " · Author: TheAutomatic");
+            label.Text = _hardwareDetails ?? (_hardwareComplete ? L("GPU 信息不可用", "GPU unavailable") : L("正在检测 GPU…", "Detecting GPU…"));
             label.ToolTip = L("检测到的物理显卡；不代表游戏当前使用的渲染显卡。", "Detected physical GPU; not a claim about the game's rendering adapter.") +
                 (string.IsNullOrWhiteSpace(_hardwareWindowsDriver) ? "" : L("\nWindows 驱动版本：", "\nWindows driver version: ") + _hardwareWindowsDriver);
         }
@@ -274,7 +275,7 @@ namespace OptScalerNR.Launcher
         void DetectPackageUpdate(GameInfo game, LauncherResult result, string requestedPackageRoot)
         {
             // Only the package selection captured by this inspection may resolve its root.
-            if (!string.Equals(ComparisonPath(requestedPackageRoot), ComparisonPath(_packageRoot), StringComparison.OrdinalIgnoreCase)) return;
+            if (!string.Equals(ComparisonPath(requestedPackageRoot ?? NormalPackageRoot), ComparisonPath(_packageRoot), StringComparison.OrdinalIgnoreCase)) return;
             RefreshPackageComparisons(result == null ? null : result.PackageRoot, true);
         }
         public void RefreshPackageComparisons(string packageRoot, bool force = false)

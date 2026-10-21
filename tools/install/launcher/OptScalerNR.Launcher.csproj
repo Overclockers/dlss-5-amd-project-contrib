@@ -23,6 +23,7 @@
     <Compile Include="LauncherTheme.cs"/>
     <Compile Include="MainController.Presentation.cs"/>
     <Compile Include="MainController.Profiles.cs"/>
+    <Compile Include="MainController.Diagnostics.cs"/>
     <Compile Include="IniProfiles.cs"/>
     <Compile Include="LocalArtwork.cs"/>
     <EmbeddedResource Include="MainWindow.xaml"><LogicalName>OptScalerNR.Launcher.MainWindow.xaml</LogicalName></EmbeddedResource>

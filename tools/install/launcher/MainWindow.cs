@@ -117,7 +117,7 @@ namespace OptScalerNR.Launcher
         string _recentGameId;
         string _eventStage;
         bool _isScanOnStartup = true;
-        string _packageRoot = "";
+        string _packageRoot = NormalPackageRoot;
         string _pendingAction = "";
         bool _writeBusy;
         bool _updatingBackends;
@@ -254,6 +254,7 @@ namespace OptScalerNR.Launcher
             _settingsPath = Path.Combine(_settingsDir, "settings.json");
             _libraryPath = Path.Combine(_settingsDir, "library.json");
             InitPresentation();
+            InitDiagnostics();
             InitLibraryActions();
             InitRecommendations();
             InitProfiles();
@@ -338,9 +339,7 @@ namespace OptScalerNR.Launcher
             {
                 _packageRootBox.LostKeyboardFocus += (s, e) =>
                 {
-                    _packageRoot = (_packageRootBox.Text ?? "").Trim();
-                    RefreshPackageComparisons(_packageRoot);
-                    SaveSettings();
+                    if (_diagnosticMode && CanChangePackageSource()) SetDiagnosticPackageRoot(_packageRootBox.Text);
                 };
             }
 
@@ -1009,8 +1008,8 @@ namespace OptScalerNR.Launcher
                 if (_scanOnStartup != null) _scanOnStartup.IsChecked = _isScanOnStartup;
                 if (!string.IsNullOrEmpty(rec.PackageRoot))
                 {
-                    _packageRoot = rec.PackageRoot;
-                    if (_packageRootBox != null) _packageRootBox.Text = _packageRoot;
+                    _diagnosticPackageRoot = rec.PackageRoot;
+                    if (_packageRootBox != null) _packageRootBox.Text = _diagnosticPackageRoot;
                 }
             }
         }
@@ -1026,7 +1025,7 @@ namespace OptScalerNR.Launcher
                     Language = _language,
                     Theme = _theme,
                     ScanOnStartup = _isScanOnStartup,
-                    PackageRoot = _packageRoot,
+                    PackageRoot = _diagnosticPackageRoot,
                     RecentGameId = _selectedGame != null ? _selectedGame.Id : _recentGameId,
                     BackendChoices = _backendChoices,
                     HiddenGames = _hiddenGames,
@@ -1156,24 +1155,15 @@ namespace OptScalerNR.Launcher
         {
             get
             {
-                var baseDir = AppDomain.CurrentDomain.BaseDirectory;
-                if (!string.IsNullOrEmpty(_packageRoot))
-                {
-                    var custom = Path.Combine(_packageRoot, "launcher-worker.ps1");
-                    if (File.Exists(custom)) return custom;
-                }
-                var packaged = Path.Combine(baseDir, "launcher-worker.ps1");
-                var fromTree = Path.GetFullPath(Path.Combine(baseDir, "..", "..", "tools", "install", "launcher-worker.ps1"));
-                var mock = Path.Combine(baseDir, "mock-worker.ps1");
-                if (File.Exists(packaged)) return packaged;
-                if (File.Exists(fromTree)) return fromTree;
-                if (File.Exists(mock)) return mock;
-                throw new FileNotFoundException(L("缺少 launcher-worker.ps1，请重新解压完整安装包。", "Complete package required: launcher-worker.ps1 is missing."));
+                var worker = Path.Combine(_packageRoot, "launcher-worker.ps1");
+                if (File.Exists(worker)) return worker;
+                throw new FileNotFoundException(L("请从完整解压的安装包启动 Setup.bat。若需指定其他安装包，请先确认开启诊断模式。", "Run Setup.bat from the complete extracted package. Enable diagnostic mode explicitly to select another package."));
             }
         }
 
         void BrowsePackageRoot()
         {
+            if (!_diagnosticMode || !CanChangePackageSource()) return;
             var dlg = new OpenFileDialog
             {
                 Title = L("选择完整安装包目录（选择 Setup.ps1 或 OptiScaler.dll）", "Select package folder (pick Setup.ps1 or OptiScaler.dll)"),
@@ -1182,11 +1172,7 @@ namespace OptScalerNR.Launcher
             };
             if (dlg.ShowDialog(_window) == true)
             {
-                _packageRoot = Path.GetDirectoryName(dlg.FileName);
-                if (_packageRootBox != null) _packageRootBox.Text = _packageRoot;
-                SaveSettings();
-                RefreshPackageComparisons(_packageRoot);
-                if (_selectedGame != null) InspectGame(_selectedGame);
+                SetDiagnosticPackageRoot(Path.GetDirectoryName(dlg.FileName));
             }
         }
 
@@ -2178,6 +2164,10 @@ namespace OptScalerNR.Launcher
                 DialogTheme.Show(_window, _language == "zh" ? "操作正在进行中…" : "An operation is already in progress.", _window.Title);
                 return;
             }
+            if (installing && !HasLocalPackage()) {
+                DialogTheme.Show(_window, L("请从完整解压的安装包启动 Setup.bat。若需使用其他目录，请在设置中确认开启诊断模式并选择完整包。", "Run Setup.bat from a complete extracted package. To use another folder, explicitly enable diagnostic mode in Settings and select a complete package."), _window.Title);
+                return;
+            }
 
             // Decisions are valid only for this attempt and its explicit needsInput retries.
             if (!keepModelChoice) _decisions.ForeignProxy.Clear();
@@ -2386,7 +2376,7 @@ namespace OptScalerNR.Launcher
         void ApplyInspect(LauncherResult result, string requestedPackageRoot = null)
         {
             if (result == null) return;
-            if (!string.Equals(ComparisonPath(requestedPackageRoot), ComparisonPath(_packageRoot), StringComparison.OrdinalIgnoreCase)) return;
+            if (!string.Equals(ComparisonPath(requestedPackageRoot ?? NormalPackageRoot), ComparisonPath(_packageRoot), StringComparison.OrdinalIgnoreCase)) return;
             _lastInspectResult = result;
             if (!string.IsNullOrEmpty(result.Status) && result.Status != "success") {
                 RefreshInspectionText();
@@ -2587,10 +2577,12 @@ namespace OptScalerNR.Launcher
 
         void ReleaseLock()
         {
-            if (_targetMutex == null) return;
-            try { _targetMutex.ReleaseMutex(); } catch { }
-            _targetMutex.Dispose();
-            _targetMutex = null;
+            if (_targetMutex != null) {
+                try { _targetMutex.ReleaseMutex(); } catch { }
+                _targetMutex.Dispose();
+                _targetMutex = null;
+            }
+            RefreshDiagnosticModeUI();
         }
 
         void SetBusy(bool busy, string action)
@@ -2600,8 +2592,7 @@ namespace OptScalerNR.Launcher
             _presentationAction = action;
             if (_gameList != null) _gameList.IsEnabled = !_writeBusy;
             RefreshProfileActions();
-            if (_packageBrowse != null) _packageBrowse.IsEnabled = !_writeBusy;
-            if (_packageRootBox != null) _packageRootBox.IsEnabled = !_writeBusy;
+            RefreshDiagnosticModeUI();
             if (busy) _eventStage = action;
             if (_addButton != null) _addButton.IsEnabled = !busy;
             if (_removeGameMenuItem != null) _removeGameMenuItem.IsEnabled = !busy && _removeGameMenuItem.Tag is GameInfo;

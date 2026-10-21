@@ -115,6 +115,9 @@ try {
         try {
             $expected = if ($savedTheme -in @('auto', 'light', 'dark')) { $savedTheme } else { 'auto' }
             Check ([IO.File]::ReadAllText($path) -ceq $original) "Loading $savedTheme theme rewrote settings"
+            Check (-not $controllerType.GetField('_diagnosticMode', $flags).GetValue($loaded.Tag)) 'Saved settings enabled diagnostic mode without confirmation'
+            Check ($controllerType.GetField('_packageRoot', $flags).GetValue($loaded.Tag) -eq (Split-Path -Parent $assembly.Location)) 'Historical package override became the normal source'
+            Check ($loaded.FindName('DiagnosticPackagePanel').Visibility -eq 'Collapsed') 'Normal mode exposed package override'
             Check ($loaded.FindName('ThemeCombo').SelectedItem.Tag -eq $expected) "Loading $savedTheme theme did not select $expected"
             Check-SharedResources $loaded $themeResources
             foreach ($theme in @('auto', 'light', 'dark')) {
@@ -133,6 +136,47 @@ try {
             Check ([IO.File]::ReadAllText($path) -ceq $persisted) 'Loading the explicitly saved theme rewrote settings'
         } finally { $loaded.Close() }
     }
+    # A remembered source is inert until this session explicitly enables diagnostic mode.
+    $normalRoot = Split-Path -Parent $assembly.Location
+    $diagnosticRoot = Join-Path ([string]$arguments[1]) 'diagnostic-package'
+    [void][IO.Directory]::CreateDirectory($diagnosticRoot)
+    [IO.File]::WriteAllText((Join-Path $diagnosticRoot 'launcher-worker.ps1'), '# isolated diagnostic worker')
+    [IO.File]::WriteAllText((Join-Path $diagnosticRoot 'VERSION'), '9.8.7-test')
+    $controllerType.GetField('_diagnosticPackageRoot', $flags).SetValue($controller, $diagnosticRoot)
+    Call 'SetDiagnosticPackageRoot' @($diagnosticRoot) | Out-Null
+    Check ((Field '_packageRoot') -eq $normalRoot) 'Normal mode allowed editing the active override'
+    Call 'SetDiagnosticMode' @($true) | Out-Null
+    Check ((Field '_diagnosticMode') -and (Field '_packageRoot') -eq $diagnosticRoot) 'Enabled diagnostic mode did not use its remembered source'
+    Check ($controllerType.GetProperty('WorkerScript', $flags).GetValue($controller, $null) -eq (Join-Path $diagnosticRoot 'launcher-worker.ps1')) 'Worker did not follow the authorized diagnostic source'
+    Check ($window.FindName('DiagnosticModeIndicator').Visibility -eq 'Visible' -and $window.FindName('DiagnosticPackagePanel').Visibility -eq 'Visible') 'Active diagnostic mode is not visible'
+    Check ([string]$window.FindName('DiagnosticModeIndicator').ToolTip -match '9.8.7-test') 'Diagnostic source version is not visible in details'
+    Call 'SetBusy' @($true, 'install') | Out-Null
+    Call 'SetDiagnosticMode' @($false) | Out-Null
+    Call 'SetDiagnosticPackageRoot' @('Z:\must-not-activate') | Out-Null
+    Check ((Field '_diagnosticMode') -and (Field '_packageRoot') -eq $diagnosticRoot) 'In-flight installation source changed'
+    Check (-not $window.FindName('DiagnosticModeButton').IsEnabled -and -not $window.FindName('PackageBrowse').IsEnabled) 'Source controls enabled during writes'
+    Call 'SetBusy' @($false, '') | Out-Null
+    Call 'SaveSettings' | Out-Null
+    $restart = $controllerType.GetMethod('Create', [Reflection.BindingFlags]'NonPublic,Static').Invoke($null, $arguments)
+    try {
+        Check (-not $controllerType.GetField('_diagnosticMode', $flags).GetValue($restart.Tag)) 'Diagnostic mode survived restart'
+        Check ($controllerType.GetField('_packageRoot', $flags).GetValue($restart.Tag) -eq $normalRoot) 'Restart activated remembered diagnostic source'
+        Check ($controllerType.GetField('_diagnosticPackageRoot', $flags).GetValue($restart.Tag) -eq $diagnosticRoot) 'Restart lost the remembered diagnostic path'
+    } finally { $restart.Close() }
+    Check (Call 'TryLockTarget' @([string]$arguments[1])) 'Cannot acquire diagnostic failure fixture lock'
+    Call 'SetBusy' @($true, 'update') | Out-Null
+    Call 'SetBusy' @($false, '') | Out-Null
+    Check (-not $window.FindName('DiagnosticModeButton').IsEnabled) 'Live target lock permitted package source changes'
+    Call 'ReleaseLock' | Out-Null
+    Check ($window.FindName('DiagnosticModeButton').IsEnabled -and $window.FindName('PackageBrowse').IsEnabled) 'Completed mutation left diagnostic controls disabled'
+    Call 'SetDiagnosticPackageRoot' @('Z:\invalid"source') | Out-Null
+    Check (-not (Call 'HasLocalPackage')) 'Malformed diagnostic source passed preflight'
+    Call 'SetDiagnosticPackageRoot' @($diagnosticRoot) | Out-Null
+    Call 'SetDiagnosticMode' @($false) | Out-Null
+    Check ((Field '_packageRoot') -eq $normalRoot -and $window.FindName('DiagnosticModeIndicator').Visibility -eq 'Collapsed') 'Disabling mode did not restore ordinary package routing'
+    $controllerType.GetField('_diagnosticPackageRoot', $flags).SetValue($controller, '')
+    Check ($window.FindName('AuthorLink').NavigateUri.AbsoluteUri -eq 'https://github.com/TheAutomatic/dlss-5-amd-project') 'Footer author link points elsewhere'
+
 
     $backendType = $assembly.GetType('OptScalerNR.Launcher.BackendInfo', $true)
     $resultType = $assembly.GetType('OptScalerNR.Launcher.LauncherResult', $true)
@@ -565,7 +609,7 @@ try {
         [Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Windows.Threading.DispatcherPriority]::ApplicationIdle, [Action]{})
     }
     Check (-not (Call 'PackageDiffers' @($installed))) 'Reinspection retained a stale installed proxy hash'
-    $controllerType.GetField('_packageRoot', $flags).SetValue($controller, '')
+    $controllerType.GetField('_packageRoot', $flags).SetValue($controller, (Split-Path -Parent $assembly.Location))
     # Stable IDs, search composition, separator and identity survive language/filter refresh.
     $installed.Source = 'GOG'
     $manual = [Activator]::CreateInstance($gameType)
