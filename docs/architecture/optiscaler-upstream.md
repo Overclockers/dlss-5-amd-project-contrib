@@ -72,6 +72,25 @@ provider/model execution and NR smoke are separate acceptance; these CPU checks 
 not establish GPU behavior. The Witcher camera-motion rule needs the native XeFG
 input consumer in D8 before that behavior can be claimed functional.
 
+Hardware smoke after public integration: a throwaway export relinked 214 actual
+compiled host objects with the original DLL entrypoint; production sources/exports
+were unchanged. The driver was loaded from the installed 26.10.1 DriverStore, not
+bundled binaries. RX 9070 XT executed FP8, destroyed the completed context, then
+executed INT8; each 128×128→256×256 dispatch used reset, completed its D3D12 fence,
+kept the device healthy and reported the expected actual model (not FSR3 fallback).
+Radeon 780M independently executed one INT8 context with the same completion/model
+checks. The earlier expectation that 780M must reject FSR4 was disproved; the official
+RDNA3 effective INT8 capability path is distinct from its absent real FP8 capability.
+RDNA2 INT8 and Lite were listed but not executed. This does not validate NR hardware
+support, ML frame generation, pixel quality, timing or real games.
+
+The production DLL SHA-256 was
+`6d54d59f2da56671d099ae44f9422051711075beab7be3d21610f31870bf85fb`
+(host source fingerprint `5548accbcac78fc0b02c494993b72544d833331907186e4f246293e64ed0dbb3`).
+The private-Vulkan scope test passed again; it is CPU isolation evidence only, not
+an actual Mochizuki private-device/NR-on-off smoke. That GPU acceptance remains open.
+
+
 ### Follow-up snapshot (2026-10-09)
 
 Reviewed through **434b9555d960e6e471a461c2b0d98b8e1fdacfa2**
