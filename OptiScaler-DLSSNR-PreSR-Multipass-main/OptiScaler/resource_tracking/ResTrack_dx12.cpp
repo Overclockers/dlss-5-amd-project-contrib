@@ -829,11 +829,8 @@ bool ResTrack_Dx12::CheckResource(ID3D12Resource* resource)
 
     if (resDesc.Height != height || resDesc.Width != width)
     {
-        // 5% resolution tolerance, matching upstream 71541762. Extended HUDfix
-        // resource matching keeps the exact swapchain resolution requirement.
-        if (Config::Instance()->FGHUDFixExtended.value_or_default())
-            return false;
-
+        // 5% resolution tolerance, applied unconditionally like upstream 71541762.
+        // FGHUDFixExtended only widens the accepted formats (Hudfix_*), not the size check.
         const auto toleranceX = width / 20;
         const auto toleranceY = height / 20;
 
