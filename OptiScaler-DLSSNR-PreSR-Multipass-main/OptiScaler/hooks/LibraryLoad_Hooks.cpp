@@ -28,8 +28,6 @@
 #include <hooks/Gdi32_Hooks.h>
 #include <hooks/Streamline_Hooks.h>
 
-#include <fsr4/FSR4ModelSelection.h>
-#include <fsr4/FSR4Upgrade.h>
 #include <misc/IdentifyGpu.h>
 #include <low_latency/input/input_uell.h>
 

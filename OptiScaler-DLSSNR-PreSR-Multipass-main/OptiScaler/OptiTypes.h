@@ -98,8 +98,24 @@ enum class FSR4Support : uint8_t
     None = 0,
     FP8 = 1,
     INT8 = 2,
+    INT8_2 = 3,
+    INT8Lite = 4,
     Count
 };
+
+enum class FSR4Model : uint8_t
+{
+    FP8 = 0,
+    INT8 = 1,
+    INT8_2 = 2,
+    INT8Lite = 3,
+    Count
+};
+
+inline bool IsFsr4Int8(FSR4Support support)
+{
+    return support == FSR4Support::INT8 || support == FSR4Support::INT8_2 || support == FSR4Support::INT8Lite;
+}
 
 typedef struct _version_t
 {

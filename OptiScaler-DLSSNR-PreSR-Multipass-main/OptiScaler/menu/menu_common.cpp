@@ -28,6 +28,9 @@
 #include <proxies/XeFG_Proxy.h>
 #include <proxies/XeLL_Proxy.h>
 #include <proxies/FfxApi_Proxy.h>
+#include <upscalers/ffx/FFXFeature.h>
+#include <fsr4/FSR4Models.h>
+#include <fsr4/FSR4Presets.h>
 #include <proxies/Streamline_Proxy.h>
 
 #include <framegen/nvngx/Nvngx_FG.h>
@@ -509,6 +512,22 @@ void MenuCommon::GetCurrentBackendInfo(const API api, Upscaler& upscaler, std::s
 {
     upscaler = GetBackendCode(api);
     *name = UpscalerDisplayName(upscaler, api);
+}
+
+static State::FfxVersionList* GetFfxVersionList(Upscaler backend, API api)
+{
+    auto& state = State::Instance();
+    if (backend == Upscaler::FFX_on12 || (backend == Upscaler::FFX && api == DX12))
+    {
+        FFXFeature::EnsureVersionsDx12();
+        return &state.ffxUpscalerVersionsDx12;
+    }
+    if (backend == Upscaler::FFX && api == Vulkan)
+    {
+        FFXFeature::EnsureVersionsVulkan();
+        return &state.ffxUpscalerVersionsVk;
+    }
+    return nullptr;
 }
 
 void MenuCommon::RenderUpscalerCombo(const API api, Upscaler currentUpscaler, const std::vector<Upscaler>& options)
@@ -2792,17 +2811,19 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
             if (_ffxUpscalerIndex < 0)
                 _ffxUpscalerIndex = config->FfxUpscalerIndex.value_or_default();
 
-            if (currentBackend == Upscaler::FFX ||
-                currentBackend == Upscaler::FFX_on12 && state.ffxUpscalerVersionNames.size() > 0)
+            if (auto* versions = GetFfxVersionList(currentBackend, state.api);
+                versions != nullptr && !versions->names.empty())
             {
+                if (_ffxUpscalerIndex < 0 || _ffxUpscalerIndex >= versions->names.size())
+                    _ffxUpscalerIndex = 0;
                 ImGui::PushItemWidth(135.0f * menuResScale);
 
-                auto currentName = StrFmt("FSR %s", state.ffxUpscalerVersionNames[_ffxUpscalerIndex]);
+                auto currentName = StrFmt("FSR %s", versions->names[_ffxUpscalerIndex]);
                 if (MenuUi::BeginCombo("FFX Upscaler", currentName.c_str()))
                 {
-                    for (int n = 0; n < state.ffxUpscalerVersionIds.size(); n++)
+                    for (int n = 0; n < versions->ids.size(); n++)
                     {
-                        auto name = StrFmt("FSR %s##%d", state.ffxUpscalerVersionNames[n], n);
+                        auto name = StrFmt("FSR %s##%d", versions->names[n], n);
                         if (MenuUi::Selectable(name.c_str(), config->FfxUpscalerIndex.value_or_default() == n))
                             _ffxUpscalerIndex = n;
                     }
@@ -2901,10 +2922,51 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                     ImGui::SameLine();
                     if (state.currentFsr4Preset.has_value())
                         MenuUi::TextDisabled("(Active: %d)", state.currentFsr4Preset.value());
-                    else if (FSR4ModelSelection::IsInt8FsrHooked())
+                    else if (FSR4Presets::IsAnyModuleHooked())
                         MenuUi::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)), "(Potential FSR3 fallback)");
                     else
                         MenuUi::TextDisabled("(Failed to hook)");
+
+                    HMODULE upscalerModule = nullptr;
+                    const auto index = config->FfxUpscalerIndex.value_or_default();
+                    if (versions == &state.ffxUpscalerVersionsDx12 && index >= 0 && index < versions->ids.size())
+                        upscalerModule = FfxApiProxy::UpscalerModule(versions->ids[index]);
+
+                    if (auto models = FSR4Models::SelectableModels(upscalerModule); !models.empty())
+                    {
+                        auto& selectedModel = config->Fsr4Model;
+                        const char* selectedName = selectedModel.has_value() ? FSR4Models::Name(*selectedModel) : "Auto";
+                        bool modelChanged = false;
+                        ImGui::SetNextItemWidth(150.0f * menuResScale);
+                        if (MenuUi::BeginCombo("FSR4 Model", selectedName))
+                        {
+                            if (MenuUi::Selectable("Auto", !selectedModel.has_value()) && selectedModel.has_value())
+                            {
+                                selectedModel.reset();
+                                modelChanged = true;
+                            }
+                            for (auto model : models)
+                            {
+                                if (MenuUi::Selectable(FSR4Models::Name(model), selectedModel == model) && selectedModel != model)
+                                {
+                                    selectedModel = model;
+                                    modelChanged = true;
+                                }
+                            }
+                            ImGui::EndCombo();
+                        }
+                        if (modelChanged)
+                        {
+                            state.newBackend = currentBackend;
+                            MARK_ALL_BACKENDS_CHANGED();
+                        }
+                        ShowHelpMarker("FSR 4 network to run. Auto lets FFX pick the best model supported by the GPU.");
+                        ImGui::SameLine();
+                        if (auto activeModel = FSR4Models::ActiveModel(upscalerModule))
+                            MenuUi::TextDisabled("(Active: %s)", FSR4Models::Name(*activeModel));
+                        else
+                            MenuUi::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)), "(Potential FSR3 fallback)");
+                    }
                 }
 
                 if (majorFsrVersion >= 3)
@@ -6064,6 +6126,17 @@ void MenuCommon::RenderInitializationSettings(RenderMenuContext& ctx)
                            "Try using if colours flickering or\n"
                            "objects have ghosting trails");
 
+            ImGui::EndDisabled();
+
+            ImGui::TableNextColumn();
+            ImGui::BeginDisabled(currentBackend != Upscaler::FFX && currentBackend != Upscaler::FFX_on12);
+            if (bool drs = currentFeature->DynamicResolution(); MenuUi::Checkbox("SR Dynamic Resolution (DRS)", &drs))
+            {
+                config->DynamicResolution = drs;
+                ReInitUpscaler();
+            }
+            ShowResetButton(&config->DynamicResolution, "R##DRS");
+            ShowHelpMarker("Follow the game's changing render size in FSR. This is not Mochizuki's NR resolution policy.");
             ImGui::EndDisabled();
 
             ImGui::TableNextColumn();

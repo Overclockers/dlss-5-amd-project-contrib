@@ -547,9 +547,7 @@ static void RenderEarlyCommandListWrap(Config* config)
     if (config->LmxxfEarlyExeWrap.value_for_config() != CompatibilityMenuBaseline(config).earlyExe)
         RenderNrCompatibilityNotice("Save Settings and restart the game to apply early wrapping.");
     // Independent sub-item: any-module early wrap (LmxxfEarlyAnyModuleWrap).
-    std::string exeLower = State::Instance().gameExe;
-    for (char& c : exeLower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    const bool autoAny = exeLower.find("forza") != std::string::npos;
+    const bool autoAny = GetNrGamePolicy(State::Instance().gameExe).earlyAnyModuleWrap;
     const char* anyNames[] = {autoAny ? "auto (current: on)" : "auto (current: off)", "force on", "force off"};
     int anyIndex = config->LmxxfEarlyAnyModuleWrap.has_value() ? (*config->LmxxfEarlyAnyModuleWrap ? 1 : 2) : 0;
     ImGui::Indent();

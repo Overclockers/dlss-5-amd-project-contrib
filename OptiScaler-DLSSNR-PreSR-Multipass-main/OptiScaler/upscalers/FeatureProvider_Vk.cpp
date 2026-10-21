@@ -134,6 +134,9 @@ bool FeatureProvider_Vk::ChangeFeature(Upscaler upscaler, VkInstance instance, V
             const bool isPassthrough = state.newBackend == Upscaler::DLSSD || state.newBackend == Upscaler::DLSS;
 
             contextData->createParams = isPassthrough ? parameters : GetNGXParameters(API::Vulkan, false);
+            unsigned int dynamicResolution = 0;
+            parameters->Get("OptiScaler.DynamicResolution", &dynamicResolution);
+            contextData->createParams->Set("OptiScaler.DynamicResolution", dynamicResolution);
             contextData->createParams->Set(NVSDK_NGX_Parameter_DLSS_Feature_Create_Flags, dc->GetFeatureFlags());
             contextData->createParams->Set(NVSDK_NGX_Parameter_Width, dc->RenderWidth());
             contextData->createParams->Set(NVSDK_NGX_Parameter_Height, dc->RenderHeight());

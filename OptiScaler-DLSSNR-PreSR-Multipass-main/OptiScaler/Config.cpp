@@ -9,6 +9,7 @@
 #include "nvapi/fakenvapi.h"
 #include <hooks/Streamline_Hooks.h>
 #include <misc/IdentifyGpu.h>
+#include <misc/GameConfigs.h>
 #include <menu/input/shortcut_keys.h>
 
 #include <SimpleIni.h>
@@ -290,10 +291,18 @@ bool Config::Reload(std::filesystem::path iniPath)
             FsrUseMaskForTransparency.set_from_config(readBool("FSR", "UseReactiveMaskForTransparency"));
             DlssReactiveMaskBias.set_from_config(readFloat("FSR", "DlssReactiveMaskBias"));
 
-            if (auto v = readEnum<FSR4Support>("FSR", "Fsr4ForceModel"))
-                Fsr4ForceModel.set_from_config(*v);
+            if (auto v = readEnum<FSR4Support>("FSR", "Fsr4GpuSupport"))
+                Fsr4GpuSupport.set_from_config(*v);
             else
-                Fsr4ForceModel.reset();
+                Fsr4GpuSupport.reset();
+
+            // Older nightlies used this key for GPU capability, not model selection.
+            if (!Fsr4GpuSupport.has_value())
+            {
+                if (auto v = readEnum<FSR4Support>("FSR", "Fsr4ForceModel"))
+                    Fsr4GpuSupport.set_from_config(*v);
+            }
+            Fsr4Model.set_from_config(readEnum<FSR4Model>("FSR", "Fsr4Model"));
 
             Fsr4EnableWatermark.set_from_config(readBool("FSR", "Fsr4EnableWatermark"));
             Fsr4DoNotLoadAmdxc64.set_from_config(readBool("FSR", "Fsr4DoNotLoadAmdxc64"));
@@ -1187,6 +1196,8 @@ bool Config::Reload(std::filesystem::path iniPath)
         // Init Flags
         {
             AutoExposure.set_from_config(readBool("InitFlags", "AutoExposure"));
+            DynamicResolution.set_from_config(readBool("InitFlags", "DynamicResolution"));
+            ReprojectionDepthCutoff.set_from_config(readFloat("Reprojection", "DepthCutoff"));
             HDR.set_from_config(readBool("InitFlags", "HDR"));
             DepthInverted.set_from_config(readBool("InitFlags", "DepthInverted"));
             JitterCancellation.set_from_config(readBool("InitFlags", "JitterCancellation"));
@@ -1483,7 +1494,7 @@ bool Config::ExeIsForza()
             name.erase(0, slash + 1);
         for (wchar_t& c : name)
             c = static_cast<wchar_t>(::towlower(c));
-        return name.find(L"forza") != std::wstring::npos;
+        return GetNrGamePolicy(wstring_to_string(name)).enhancedBarriers;
     }();
     return forza;
 }
@@ -1491,13 +1502,8 @@ bool Config::ExeIsForza()
 bool Config::EarlyExeWrapAuto()
 {
     const auto& state = State::Instance();
-    std::string name = state.gameExe;
-    if (const auto slash = name.find_last_of("\\/"); slash != std::string::npos)
-        name.erase(0, slash + 1);
-    for (char& c : name)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return state.gameEngine == GameEngineType::Unreal || (state.gameQuirks & GameQuirk::ForceUnrealEngine) ||
-           name.find("forza") != std::string::npos || name == "acmirage.exe" || name == "007firstlight.exe";
+    return GetNrGamePolicy(state.gameExe, state.gameEngine == GameEngineType::Unreal ||
+                                         (state.gameQuirks & GameQuirk::ForceUnrealEngine)).earlyExeWrap;
 }
 
 bool Config::EarlyExeWrapEffective()
@@ -1780,7 +1786,9 @@ bool Config::SaveIni()
                      GetBoolValue(Instance()->FsrUseMaskForTransparency.value_for_config()).c_str());
         ini.SetValue("FSR", "DlssReactiveMaskBias",
                      GetFloatValue(Instance()->DlssReactiveMaskBias.value_for_config()).c_str());
-        ini.SetValue("FSR", "Fsr4ForceModel", GetIntValue(Instance()->Fsr4ForceModel.value_for_config()).c_str());
+        ini.SetValue("FSR", "Fsr4GpuSupport", GetIntValue(Instance()->Fsr4GpuSupport.value_for_config()).c_str());
+        ini.SetValue("FSR", "Fsr4Model", GetIntValue(Instance()->Fsr4Model.value_for_config()).c_str());
+        ini.Delete("FSR", "Fsr4ForceModel");
         ini.SetValue("FSR", "Fsr4Preset", GetIntValue(Instance()->Fsr4Preset.value_for_config()).c_str());
         ini.SetValue("FSR", "Fsr4EnableWatermark",
                      GetBoolValue(Instance()->Fsr4EnableWatermark.value_for_config()).c_str());
@@ -2367,6 +2375,8 @@ bool Config::SaveIni()
     // InitFlags
     {
         ini.SetValue("InitFlags", "AutoExposure", GetBoolValue(Instance()->AutoExposure.value_for_config()).c_str());
+        ini.SetValue("InitFlags", "DynamicResolution", GetBoolValue(Instance()->DynamicResolution.value_for_config()).c_str());
+        ini.SetValue("Reprojection", "DepthCutoff", GetFloatValue(Instance()->ReprojectionDepthCutoff.value_for_config()).c_str());
         ini.SetValue("InitFlags", "HDR", GetBoolValue(Instance()->HDR.value_for_config()).c_str());
         ini.SetValue("InitFlags", "DepthInverted", GetBoolValue(Instance()->DepthInverted.value_for_config()).c_str());
         ini.SetValue("InitFlags", "JitterCancellation",

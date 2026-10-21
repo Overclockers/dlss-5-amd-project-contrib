@@ -356,7 +356,10 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="framegen\nvngx\Nvngx_Combo.h" />
-    <ClInclude Include="fsr4\FSR4Upgrade.h" />
+    <ClInclude Include="fsr4\FSR4DriverProvider.h" />
+    <ClInclude Include="fsr4\FSR4DriverProviderDx12.h" />
+    <ClInclude Include="fsr4\FSR4Models.h" />
+    <ClInclude Include="fsr4\FSR4Presets.h" />
     <ClInclude Include="gpu_time\GpuTime_Dx11.h" />
     <ClInclude Include="gpu_time\GpuTime_Dx12.h" />
     <ClInclude Include="hooks\Amdxc64_Hooks.h" />
@@ -379,7 +382,6 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="dlssnr\SrOutputExtent.h" />
     <ClInclude Include="framegen\IFGFeature_Dx12.h" />
     <ClInclude Include="framegen\nvngx\Nvngx_FG.h" />
-    <ClInclude Include="fsr4\FSR4ModelSelection.h" />
     <ClInclude Include="hooks\D3D12_Hooks.h" />
     <ClInclude Include="hooks\DxgiFactory_Hooks.h" />
     <ClInclude Include="hooks\DxgiSwapchainSizing.h" />
@@ -534,6 +536,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="menu\font\Hack_Compressed.h" />
     <ClInclude Include="misc\FrameLimit.h" />
     <ClInclude Include="misc\DeferredRelease.h" />
+    <ClInclude Include="misc\GameConfigs.h" />
     <ClInclude Include="..\external\streamline\sl_helpers_vk.h" />
     <ClInclude Include="misc\Quirks.h" />
     <ClInclude Include="OwnedMutex.h" />
@@ -630,6 +633,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="hooks\Reflex_Hooks.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="scanner\scanner.h" />
+    <ClInclude Include="scanner\rtti.h" />
     <ClInclude Include="shaders\bias\Bias_Common.h" />
     <ClInclude Include="shaders\bias\Bias_Dx11.h" />
     <ClInclude Include="shaders\bias\Bias_Dx12.h" />
@@ -665,7 +669,10 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="framegen\nvngx\Nvngx_Combo.cpp" />
-    <ClCompile Include="fsr4\FSR4Upgrade.cpp" />
+    <ClCompile Include="fsr4\FSR4DriverProvider.cpp" />
+    <ClCompile Include="fsr4\FSR4DriverProviderDx12.cpp" />
+    <ClCompile Include="fsr4\FSR4Models.cpp" />
+    <ClCompile Include="fsr4\FSR4Presets.cpp" />
     <ClCompile Include="gpu_time\GpuTime_Dx11.cpp" />
     <ClCompile Include="gpu_time\GpuTime_Dx12.cpp" />
     <ClCompile Include="hooks\Amdxc64_Hooks.cpp" />
@@ -674,7 +681,6 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="framegen\IFGFeature.cpp" />
     <ClCompile Include="framegen\IFGFeature_Dx12.cpp" />
     <ClCompile Include="framegen\nvngx\Nvngx_FG.cpp" />
-    <ClCompile Include="fsr4\FSR4ModelSelection.cpp" />
     <ClCompile Include="hooks\D3D12_Hooks.cpp" />
     <ClCompile Include="hooks\DxgiFactory_Hooks.cpp" />
     <ClCompile Include="hooks\DxgiFactory_WrappedCalls.cpp" />
@@ -804,6 +810,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="inputs\XeSS_Vulkan.cpp" />
     <ClCompile Include="misc\FrameLimit.cpp" />
     <ClCompile Include="misc\DeferredRelease.cpp" />
+    <ClCompile Include="misc\GameConfigs.cpp" />
     <ClCompile Include="nvapi\fakenvapi.cpp" />
     <ClCompile Include="nvapi\NvApiHooks.cpp" />
     <ClCompile Include="nvapi\NvApiTypes.cpp" />
@@ -904,6 +911,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="upscalers\xess\XeSSFeature_Dx12.cpp" />
     <ClInclude Include="upscalers\xess\XeSSFeature_Dx12.h" />
     <ClCompile Include="scanner\scanner.cpp" />
+    <ClCompile Include="scanner\rtti.cpp" />
     <ClCompile Include="shaders\bias\Bias_Dx11.cpp" />
     <ClCompile Include="shaders\bias\Bias_Dx12.cpp" />
     <ClCompile Include="shaders\format_transfer\FT_Dx12.cpp" />

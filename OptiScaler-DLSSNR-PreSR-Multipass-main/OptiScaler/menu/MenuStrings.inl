@@ -1258,3 +1258,7 @@
 {"Network passes", "网络层数"},
 {"NR flicker diagnostics", "NR 闪烁诊断"},
 {"Default off. Enables coverage details, per-frame trace, game-thread timing and file logging.\nSave Settings and restart, reproduce for 30-60 seconds after the model is ready, then exit normally.\nSend OptiScaler*.log, mochizuki_nr.log*, NrFrameDiag.log* and OptiScaler.ini.\nLeaves processing and compatibility settings unchanged. INI: NrFlickerDiag.", "默认关闭。统一开启处理覆盖详细日志、逐帧追踪、游戏线程计时及文件日志。\n保存设置并重启，等待模型就绪后复现 30–60 秒，再正常退出游戏。\n发送 OptiScaler*.log、mochizuki_nr.log*、NrFrameDiag.log* 和 OptiScaler.ini。\n不改变处理与兼容性设置。INI：NrFlickerDiag。"},
+{"FSR4 Model", "FSR4 模型"},
+{"FSR 4 network to run. Auto lets FFX pick the best model supported by the GPU.", "选择 FSR 4 网络。自动模式由 FFX 选择显卡支持的最佳模型。"},
+{"SR Dynamic Resolution (DRS)", "超分动态分辨率（DRS）"},
+{"Follow the game's changing render size in FSR. This is not Mochizuki's NR resolution policy.", "让 FSR 跟随游戏动态变化的渲染尺寸。这不是 Mochizuki 的 NR 分辨率策略。"},

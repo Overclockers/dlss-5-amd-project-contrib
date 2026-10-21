@@ -5,7 +5,7 @@
 #include "Streamline_Hooks.h"
 #include "LibraryLoad_Hooks.h"
 
-#include <fsr4/FSR4ModelSelection.h>
+#include <fsr4/FSR4DriverProvider.h>
 
 #include <Util.h>
 #include <State.h>
@@ -183,6 +183,15 @@ HMODULE WINAPI KernelHooks::hk_K32_GetModuleHandleW(LPCWSTR lpModuleName)
             }
 
             return original;
+        }
+
+        // Driver providers require a signed SDK module; only their own calls get a stand-in.
+        if (_wcsnicmp(lpModuleName, L"amd_fidelityfx_", 15) == 0)
+        {
+            if (auto original = o_K32_GetModuleHandleW(lpModuleName); original != nullptr)
+                return original;
+
+            return FSR4DriverDll::SdkModuleStandIn(lpModuleName, Util::GetCallerModule(_ReturnAddress()));
         }
     }
 

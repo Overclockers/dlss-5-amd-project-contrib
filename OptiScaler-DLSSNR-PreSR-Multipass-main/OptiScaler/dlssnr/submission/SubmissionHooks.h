@@ -8,6 +8,7 @@
 #include <mutex>
 #include <optional>
 #include <string_view>
+#include <misc/GameConfigs.h>
 
 // G1 Create/Execute wrap for lmxxf submission.
 // Default: disarmed. Product must not call Arm until G1/P3 gates.
@@ -72,7 +73,7 @@ inline void SetWrapOpenLists(bool on) { g_wrapOpenLists.store(on, std::memory_or
 
 inline bool WantsEarlyUnityPlayerWrap(std::string_view exeLower, bool unityLoaded, std::optional<bool> forced)
 {
-    return unityLoaded && forced.value_or(exeLower == "aniimo.exe");
+    return unityLoaded && forced.value_or(GetNrGamePolicy(exeLower).earlyUnityPlayerWrap);
 }
 
 inline bool IsHostExecutableCaller(void *address)

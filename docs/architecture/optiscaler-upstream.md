@@ -44,6 +44,34 @@ worker build passed after adding upstream's explicit `vulkan_beta.h` include for
 existing CUDA launch hook declarations. No GPU smoke or game acceptance ran in this
 foundation window; existing native NR replay limitations above remain unverified.
 
+### v10 public configuration and A1/A2 integration
+
+The DX12 driver-provider source and model/preset ownership cutover use the fixed
+snapshot. Capability override (`Fsr4GpuSupport`) and actual model preference
+(`Fsr4Model`) are independent; the old key migrates only to capability. Per-API
+version lists drive menu selection. DRS provenance lives in the originating NGX
+parameter block, not global State; all three backend-recreation adapters copy that
+raw input capability, while explicit INI overrides take priority. Non-FSR parameter
+blocks default false. NR render-subrect and post-SR active-output sizing are unchanged.
+
+All previous executable/UE aliases migrate to `GameConfigs`; config-level Quirk
+flags and their second application table are removed. Locally required Stellar Blade
+compute/extended-state restoration and TLOU Part I/ROTTR HUD exclusions remain.
+Game-defaulted settings use SoftDefault so an explicit choice equal to the compile
+default survives saving. Local NR defaults are registry metadata, not materialized
+INI values: the existing `forza` substring enables EXE/any-module wrapping and
+enhanced barriers, Unreal enables EXE wrapping, exact ACMirage/007FirstLight enables
+EXE wrapping, and exact Aniimo enables UnityPlayer wrapping. Explicit preferences
+and missing-Unity behavior remain unchanged. No additional games are opted in.
+
+Independent source review's three actionable compatibility/DRS findings were repaired
+and approved. The release host/worker build and focused existing config-priority tests
+passed after those repairs (explicit-default save/reload, DRS context isolation and
+three-API recreation, NR automatic-policy/explicit-choice behavior). Actual driver
+provider/model execution and NR smoke are separate acceptance; these CPU checks do
+not establish GPU behavior. The Witcher camera-motion rule needs the native XeFG
+input consumer in D8 before that behavior can be claimed functional.
+
 ### Follow-up snapshot (2026-10-09)
 
 Reviewed through **434b9555d960e6e471a461c2b0d98b8e1fdacfa2**

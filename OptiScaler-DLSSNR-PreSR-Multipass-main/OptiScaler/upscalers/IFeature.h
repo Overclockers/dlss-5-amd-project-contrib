@@ -19,6 +19,7 @@ struct InitFlags
     bool AutoExposure;
     bool DepthInverted;
     bool JitteredMV;
+    bool DynamicResolution;
 };
 
 static auto sumOpts(const auto&... opts) -> std::optional<double>
@@ -158,6 +159,7 @@ class IFeature
     virtual bool JitteredMV() { return _initFlags.JitteredMV; }
     virtual bool LowResMV() { return _initFlags.LowResMV; }
     virtual bool SharpenEnabled() { return _initFlags.SharpenEnabled; }
+    virtual bool DynamicResolution() { return _initFlags.DynamicResolution; }
 
     virtual bool CallsUpscalerEndByItself() { return false; }
 

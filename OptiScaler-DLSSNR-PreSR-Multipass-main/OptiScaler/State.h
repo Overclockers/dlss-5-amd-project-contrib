@@ -255,8 +255,13 @@ class State
     std::vector<std::string> detectedQuirks {};
 
     // FFX
-    std::vector<const char*> ffxUpscalerVersionNames {};
-    std::vector<uint64_t> ffxUpscalerVersionIds {};
+    struct FfxVersionList
+    {
+        std::vector<const char*> names;
+        std::vector<uint64_t> ids;
+    };
+    FfxVersionList ffxUpscalerVersionsDx12;
+    FfxVersionList ffxUpscalerVersionsVk;
     std::vector<const char*> ffxFGVersionNames {};
     std::vector<uint64_t> ffxFGVersionIds {};
     std::optional<uint32_t> currentFsr4Preset {};

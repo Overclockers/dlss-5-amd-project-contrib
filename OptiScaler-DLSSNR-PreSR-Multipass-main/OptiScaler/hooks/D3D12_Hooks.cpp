@@ -3021,7 +3021,7 @@ static void HookToDevice(ID3D12Device* InDevice)
                         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
                     const bool isUnreal = st.gameEngine == GameEngineType::Unreal ||
                                           (st.gameQuirks & GameQuirk::ForceUnrealEngine);
-                    const bool isForza = exeLower.find("forza") != std::string::npos;
+                    const bool isForza = GetNrGamePolicy(exeLower).earlyAnyModuleWrap;
                     const bool allowEarly = Config::Instance()->EarlyExeWrapEffective();
                     const auto forced = Config::Instance()->LmxxfEarlyExeWrap;
                     const bool allowUnityPlayer = DlssNr::Submission::Hooks::WantsEarlyUnityPlayerWrap(
