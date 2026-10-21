@@ -91,6 +91,28 @@ The private-Vulkan scope test passed again; it is CPU isolation evidence only, n
 an actual Mochizuki private-device/NR-on-off smoke. That GPU acceptance remains open.
 
 
+### v10 A9 dedicated exposure
+
+Dedicated `AE_Dx12` replaces the old smaller-color padding workaround; its direct
+DeferredRelease dependency and project registrations are explicit. The paired source
+branch repair was reviewed, and the Release host/worker build passed. A real GPU
+readback of uniform linear HDR RGB=1 with preExposure=2/reset returned 0.208333,
+matching the scalar exposure reference with zero observed error.
+
+A bounded same-driver FP8 comparison used initialized HDR quadrants, preExposure=2,
+reset and a 128×128→256×256 active extent. Driver automatic exposure versus dedicated
+AE plus FSR both completed their fences and retained the FP8 model. Both readbacks
+were finite, RGB range 0.249878–1.999023; mean/max absolute difference were zero and
+the tone-mapped images showed the same four quadrants. The single cold debug-layer
+timestamp pair was 0.20140 ms versus 0.10728 ms; this is not a repeatable performance
+or game-speedup claim. The comparison adapter's initial Close failure was its own
+readback allocation missing the 512-byte footprint offset; D3D12 diagnostics identified
+the bounds error, which was repaired only in that throwaway adapter.
+
+This synthetic comparison does not cover game visual quality, nonlinear input,
+allocation padding or NR-network replacement at runtime; NR COMPUTE_READ preservation
+is source-reviewed and the combined NR smoke remains required.
+
 ### Follow-up snapshot (2026-10-09)
 
 Reviewed through **434b9555d960e6e471a461c2b0d98b8e1fdacfa2**

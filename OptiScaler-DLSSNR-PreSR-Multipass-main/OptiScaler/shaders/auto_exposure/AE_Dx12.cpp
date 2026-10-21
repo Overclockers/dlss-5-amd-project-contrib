@@ -5,6 +5,7 @@
 #include "precompile/AE_Shader.h"
 
 #include <Config.h>
+#include <misc/DeferredRelease.h>
 
 using Microsoft::WRL::ComPtr;
 
