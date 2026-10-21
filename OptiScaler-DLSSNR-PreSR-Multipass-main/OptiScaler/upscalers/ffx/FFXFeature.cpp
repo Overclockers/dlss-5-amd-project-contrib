@@ -6,6 +6,7 @@
 #include <proxies/D3d12_Proxy.h>
 #include <misc/IdentifyGpu.h>
 #include <misc/VulkanCallScope.h>
+#include <fsr4/FSR4DriverProviderVk.h>
 
 static void FfxLogCallback(uint32_t type, const wchar_t* message)
 {
@@ -61,13 +62,25 @@ bool FFXFeature::QueryVersionsDx12(ID3D12Device* device)
 
 bool FFXFeature::QueryVersionsVulkan()
 {
-    const auto query = FfxApiProxy::VULKAN_Query();
-    if (!query) return false;
-    ffxQueryDescGetVersions desc {};
-    desc.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
-    desc.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
-    return QueryFfxVersions(desc, State::Instance().ffxUpscalerVersionsVk,
-                            [query](ffxQueryDescHeader* header) { return query(nullptr, header); });
+    State::FfxVersionList versions;
+    bool result = false;
+    if (const auto query = FfxApiProxy::VULKAN_Query())
+    {
+        ffxQueryDescGetVersions desc {};
+        desc.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
+        desc.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
+        result = QueryFfxVersions(desc, versions,
+                                 [query](ffxQueryDescHeader* header) { return query(nullptr, header); });
+    }
+    if (FSR4DriverProviderVk::Init())
+    {
+        versions.ids.push_back(FSR4DriverProviderVk::VersionId());
+        versions.names.push_back(FSR4DriverProviderVk::VersionName());
+        result = true;
+    }
+    if (result)
+        State::Instance().ffxUpscalerVersionsVk = std::move(versions);
+    return result;
 }
 
 void FFXFeature::EnsureVersionsDx12()
@@ -148,12 +161,9 @@ void FFXFeature::EnsureVersionsDx12()
 
 void FFXFeature::EnsureVersionsVulkan()
 {
-    static bool queryTried = false;
-    if (queryTried || !State::Instance().ffxUpscalerVersionsVk.names.empty())
-        return;
-    queryTried = true;
-    if (FfxApiProxy::InitFfxVk() && !QueryVersionsVulkan())
-        LOG_ERROR("Querying FFX Vulkan upscaler versions failed");
+    FfxApiProxy::InitFfxVk();
+    if (!QueryVersionsVulkan())
+        LOG_DEBUG("No Vulkan FFX versions available yet");
 }
 
 void FFXFeature::InitFlags()

@@ -27,7 +27,7 @@ std::vector<FSR4DriverDll*>& DriverDlls()
     return dlls;
 }
 
-HMODULE LoadDriverDll(const wchar_t* name)
+HMODULE LoadDriverDll(const wchar_t* name, std::optional<LUID> actualLuid)
 {
     HMODULE module = nullptr;
     HMODULE memModule = nullptr;
@@ -43,7 +43,14 @@ HMODULE LoadDriverDll(const wchar_t* name)
         return module;
     }
 
-    const auto gpu = IdentifyGpu::getActiveGpu();
+    auto gpu = actualLuid.has_value() ? GpuInformation {} : IdentifyGpu::getActiveGpu();
+    if (actualLuid.has_value())
+        for (const auto& candidate : IdentifyGpu::getAllGpus())
+            if (IsEqualLUID(candidate.luid, *actualLuid))
+            {
+                gpu = candidate;
+                break;
+            }
     if (!gpu.driverStore.empty())
     {
         auto dllPath = gpu.driverStore / name;
@@ -107,12 +114,12 @@ FSR4DriverDll::FSR4DriverDll(const wchar_t* name, std::vector<std::wstring> sdkM
     DriverDlls().push_back(this);
 }
 
-HMODULE FSR4DriverDll::Load()
+HMODULE FSR4DriverDll::Load(std::optional<LUID> actualLuid)
 {
     std::call_once(_loadOnce,
-                   [this]
+                   [this, actualLuid]
                    {
-                       auto module = LoadDriverDll(_name.c_str());
+                       auto module = LoadDriverDll(_name.c_str(), actualLuid);
                        if (module == nullptr)
                            return;
 

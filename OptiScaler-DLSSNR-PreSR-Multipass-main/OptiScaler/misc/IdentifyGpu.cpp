@@ -8,6 +8,7 @@
 #include <proxies/D3d12_Proxy.h>
 #include "nvapi/NvApiTypes.h"
 #include <hooks/Amdxc64_Hooks.h>
+#include <hooks/Vulkan_Hooks.h>
 
 using Microsoft::WRL::ComPtr;
 
@@ -370,6 +371,17 @@ GpuInformation IdentifyGpu::getPrimaryGpu()
 GpuInformation IdentifyGpu::getActiveGpu()
 {
     auto gpus = getAllGpus();
+    if (State::Instance().api == API::Vulkan)
+    {
+        LUID actualLuid {};
+        const auto physicalDevice = VulkanHooks::GetPhysicalDevice(State::Instance().currentVkDevice);
+        if (!VulkanHooks::GetPhysicalDeviceLuid(physicalDevice, actualLuid))
+            return {};
+        for (const auto& gpu : gpus)
+            if (IsEqualLUID(gpu.luid, actualLuid))
+                return gpu;
+        return {};
+    }
     if (auto device = State::Instance().currentD3D12Device)
     {
         ScopedSkipSpoofingThread skipSpoofingThread {};

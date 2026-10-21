@@ -87,7 +87,7 @@ class FSR4DriverDll
     FSR4DriverDll& operator=(const FSR4DriverDll&) = delete;
 
     // Loads the dll on the first call, from the game folder and then from the driver store
-    HMODULE Load();
+    HMODULE Load(std::optional<LUID> actualLuid = std::nullopt);
 
     // nullptr until Load() succeeds
     HMODULE Module() const { return _module; }
