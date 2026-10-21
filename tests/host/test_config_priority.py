@@ -464,6 +464,16 @@ int main() {
                 "XeFGFramerateTargetDMFG",
                 "XeFGRoundingDMFG",
                 "XeFGDynamicAllow1X",
+                # Host-owned public INI keys (foundation A1/A2, D1-D3, LL input, HUDless binding
+                # capture): no upstream runtime environment aliases cross the boundary.
+                "Fsr4GpuSupport", "Fsr4Model",
+                "DynamicResolution",
+                "ReprojectionDepthCutoff", "ReprojectionFillMode", "ReprojectionCutoffExpand", "ReprojectionLateLatch",
+                "ReprojectionDirectionCache", "ReprojectionParallaxAuto", "ReprojectionParallaxScale",
+                "ReprojectionThirdPersonDetection",
+                "XeFGTargetAsCapDMFG", "XeFGOverrideInterpolationCount",
+                "LowLatencyInput", "LowLatencyOutput",
+                "HudfixUITexture", "HudfixUIUnblend", "HudfixPersistentBindings",
                 "QueuePriority",
                 "QueuePriorityLegacy",
                 "Inline",

@@ -17,6 +17,7 @@
 
 #include <framegen/nvngx/Nvngx_FG.h>
 #include "FG/FSR3_Dx12_FG.h"
+#include "FG/XeFG_Inputs_Dx12.h"
 #include "FG/Upscaler_Inputs_Dx12.h"
 
 #include <imgui/ImGuiNotify.hpp>
@@ -1074,6 +1075,7 @@ static NVSDK_NGX_Result TryEvaluateOptiFeature(ID3D12GraphicsCommandList* InCmdL
     // Prepare upscaling inputs
     UpscalerInputsDx12::UpscaleStart(InCmdList, InParameters, feature);
     FSR3FG::SetUpscalerInputs(InCmdList, InParameters, feature);
+    XeFGInputs::SetUpscalerInputs(InCmdList, InParameters, feature);
 
     // Evaluate the feature
     bool evalSuccess = false;

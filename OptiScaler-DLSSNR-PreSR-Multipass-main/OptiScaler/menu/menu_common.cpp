@@ -40,6 +40,9 @@
 
 #include <nvapi/fakenvapi.h>
 #include <hooks/Reflex_Hooks.h>
+#ifdef LOW_LATENCY_INPUTS
+#include <inputs/FG/XeFG_Inputs_Dx12.h>
+#endif
 
 #include <version_check.h>
 
@@ -3921,6 +3924,70 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
         const bool dlssgInputOrOutput =
             state.activeFgOutput == FGOutput::DLSSG || state.activeFgInput == FGInput::DLSSG;
 
+#ifdef LOW_LATENCY_INPUTS
+        // XeFG input to XeFG output: the game's own XeFG on OptiScaler's libraries, like Override DLSSG Ratio
+        if (XeFGInputs::Passthrough() && XeFGInputs::MaxInterpolations() >= 1)
+        {
+            // 0 = Default (no override), 1 = Off, 2+ = ratio (interpolated frame count + 1)
+            int64_t currentXeFG = 0;
+            if (config->FGXeFGOverrideInterpolationCount.has_value())
+            {
+                currentXeFG = config->FGXeFGOverrideInterpolationCount.value() == 0
+                                  ? 1
+                                  : std::min<int64_t>(config->FGXeFGOverrideInterpolationCount.value(),
+                                                      XeFGInputs::MaxInterpolations()) + 1;
+            }
+
+            const auto xefgRatioLabel = [](int64_t index)
+            {
+                if (index == 0)
+                    return std::string("Default");
+                if (index == 1)
+                    return std::string("Off");
+                return std::to_string(index) + "X";
+            };
+
+            ImGui::PushItemWidth(95.0f * menuResScale);
+
+            if (MenuUi::BeginCombo("Override XeFG Ratio", xefgRatioLabel(currentXeFG).c_str()))
+            {
+                for (int64_t i = 0; i <= static_cast<int64_t>(XeFGInputs::MaxInterpolations()) + 1; i++)
+                {
+                    const auto mode = xefgRatioLabel(i);
+                    if (MenuUi::Selectable(mode.c_str(), (currentXeFG == i)))
+                    {
+                        if (i == 0)
+                        {
+                            config->FGXeFGOverrideInterpolationCount.reset();
+                        }
+                        else
+                        {
+                            const int framesToGenerate = i == 1 ? 0 : static_cast<int>(i - 1);
+                            LOG_DEBUG("XeFG input interpolation count set to: {}", framesToGenerate);
+                            config->FGXeFGOverrideInterpolationCount = framesToGenerate;
+                        }
+                    }
+                }
+
+                ImGui::EndCombo();
+            }
+
+            ShowHelpMarker("The game's own XeFG runs on OptiScaler's XeFG libraries (XeFG input with XeFG output).\n"
+                           "Default leaves the game's count, Off disables its frame generation,\n"
+                           "a ratio replaces the game's count within what its context was created with.");
+
+            ImGui::PopItemWidth();
+
+            ImGui::SameLine(0.0f, 16.0f);
+
+            MenuUi::TextDisabled("XeFG input: the game's own XeFG (passthrough)");
+        }
+        else if (state.activeFgInput == FGInput::XeFG)
+        {
+            MenuUi::TextDisabled("XeFG input: feeding the selected Frame Generation output");
+        }
+#endif
+
         ImGui::BeginDisabled(state.dlssgGameDMFGSupported && config->FGDLSSGOverrideForceDMFG.value_or_default());
         if (state.dlssgMfgMax.has_value() && state.dlssgMfgMax.value() >= 1 && !dlssgInputOrOutput)
         {
@@ -4555,26 +4622,28 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
         // Match the runtime controller's capability check instead of a product version.
         if (liveMultiplier)
         {
-            ImGui::BeginDisabled(maxInterpolationCount <= 1);
+            // Frame Gen at 2X: Dynamic MFG switches between off (1X) and 2X
+            ImGui::BeginDisabled(maxInterpolationCount < 1);
             bool dynamicMfg = config->FGXeFGDynamicMFG.value_or_default();
             if (MenuUi::Checkbox("Dynamic MFG##xefg", &dynamicMfg))
                 config->FGXeFGDynamicMFG = dynamicMfg;
             ShowHelpMarker("Picks the multiplier every frame, up to the Frame Gen setting,\n"
-                           "the lowest that reaches the target. It can go above the target,\n"
-                           "only the FPS limit or V-Sync caps the presented frame rate.\n"
-                           "When the target can't be reached, a higher multiplier is kept\n"
-                           "only if it raises the frame rate enough: each generated frame\n"
-                           "costs GPU time.");
+                           "the lowest that reaches the target. At a 2X Frame Gen it turns\n"
+                           "frame generation off and on instead of changing the multiplier.\n"
+                           "It can go above the target, only the FPS limit or V-Sync caps\n"
+                           "the presented frame rate. When the target can't be reached, a\n"
+                           "higher multiplier is kept only if it raises the frame rate\n"
+                           "enough: each generated frame costs GPU time.");
             ImGui::EndDisabled();
 
-            if (maxInterpolationCount <= 1)
+            if (maxInterpolationCount < 1)
             {
-                MenuUi::TextWrapped("Dynamic MFG unavailable: XeFG currently reports a 2X limit.");
+                MenuUi::TextWrapped("Dynamic MFG unavailable: XeFG currently reports no frame generation.");
                 if (!config->LoadAsiPlugins.value_or_default())
                     MenuUi::TextWrapped("ASI plugin loading is off. Enable LoadAsiPlugins in OptiScaler.ini and restart the game.");
             }
 
-            if (dynamicMfg && maxInterpolationCount > 1)
+            if (dynamicMfg && maxInterpolationCount >= 1)
             {
                 static float targetFps = config->FGXeFGFramerateTargetDMFG.value_or_default();
                 ImGui::PushItemWidth(95.0f * menuResScale);
@@ -4598,16 +4667,21 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                 }
                 ImGui::EndDisabled();
 
+                // Use target as cap: no rounding band and no 1X, rounding and Allow 1X don't apply to it
+                const bool targetAsCap = config->FGXeFGTargetAsCapDMFG.value_or_default();
                 int rounding = std::clamp(config->FGXeFGRoundingDMFG.value_or_default(), 0, 2);
-                const char* roundingItems[] = { "Down", "Nearest", "Up" };
+                const char* roundingItems[] = { "At most target", "Around target", "At least target" };
                 ImGui::PushItemWidth(95.0f * menuResScale);
+                ImGui::BeginDisabled(targetAsCap);
                 if (MenuUi::Combo("DMFG Rounding##xefg", &rounding, roundingItems, 3))
                     config->FGXeFGRoundingDMFG = rounding;
-                ShowHelpMarker("How the multiplier the target asks for (target / real frame rate) is rounded.\n"
-                               "It changes only when clearly off, so the frame rate can sit under the target.\n"
-                               "Down: stays under the target (2X from 61% of it).\n"
-                               "Nearest: around the target (2X from 71%, 6X from 88%).\n"
-                               "Up: reaches the target (2X from 87%, 6X from 95%).");
+                ShowHelpMarker("Where FPS may land, as multipliers only come in steps: at most, around\n"
+                               "or at least the target FPS. It changes only when clearly off, so the\n"
+                               "frame rate can sit under the target.\n"
+                               "At most target: 2X from 61% of it.\n"
+                               "Around target: 2X from 71%, 6X from 88%.\n"
+                               "At least target: 2X from 87%, 6X from 95%.");
+                ImGui::EndDisabled();
                 ImGui::PopItemWidth();
 
                 ImGui::SameLine(0.0f, 16.0f);
@@ -4617,6 +4691,14 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                 ShowHelpMarker("Lets Dynamic MFG turn frame generation off (1X) when the game alone\n"
                                "is close enough to the target (to nearest: from 56% of it).\n"
                                "Turning it back on shows one real frame without generated frames.");
+
+                ImGui::SameLine(0.0f, 16.0f);
+                bool targetAsCapValue = config->FGXeFGTargetAsCapDMFG.value_or_default();
+                if (MenuUi::Checkbox("Use Target as FPS Cap##xefg", &targetAsCapValue))
+                    config->FGXeFGTargetAsCapDMFG = targetAsCapValue;
+                ShowHelpMarker("Also limits FPS to the target and uses the lowest multiplier that reaches it.\n"
+                               "No rounding band and no 1X: any sustained shortfall steps up, and a step\n"
+                               "down is undone if the target can't be held. Needs a Frame Gen setting above 2X.");
             }
         }
 
@@ -4790,7 +4872,9 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
 
         auto maxInterpolationCount = fgOutput->GetMaxInterpolationCount();
 
-        if (maxInterpolationCount > 1)
+        // 0 = XeFG can't generate frames; at a 2X limit (1) the combo keeps 2X selectable, Dynamic
+        // MFG switches between 1X and 2X with it
+        if (maxInterpolationCount >= 1)
         {
             ImGui::SameLine(0.0f, 16.0f);
 
@@ -5889,6 +5973,7 @@ void MenuCommon::RenderLowLatencySettings(RenderMenuContext& ctx)
         { LowLatencyMode::XeLL, "XeLL" },
         { LowLatencyMode::AntiLagVk, "AntiLag Vk" },
         { LowLatencyMode::Reflex, "Reflex" },
+        { LowLatencyMode::FpsLimiter, "FPS Limiter", "Only limits the FPS" },
     };
 
     LowLatencyInput activeInput {};
@@ -5939,6 +6024,13 @@ void MenuCommon::RenderLowLatencySettings(RenderMenuContext& ctx)
         PopulateCombo("Output", config->LowLatencyOutput, lowLatencyOutput);
 
         ImGui::EndTable();
+    }
+
+    if (InputCommon::xefg_output_change_pending())
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)));
+        ImGui::TextWrapped("Save Settings and restart the game: XeFG keeps the low latency output it started with");
+        ImGui::PopStyleColor();
     }
 
     if (activeOutput == LowLatencyMode::LatencyFlex)

@@ -201,6 +201,15 @@ void* __stdcall NvApiHooks::hkNvAPI_QueryInterface(unsigned int InterfaceId)
     // a Reflex query would disable it, so forward to the real function table.
     if (State::Instance().externalFrameGeneration)
         return o_NvAPI_QueryInterface ? o_NvAPI_QueryInterface(InterfaceId) : nullptr;
+#ifdef LOW_LATENCY_INPUTS
+    // Frame generation reports its multiplier through Reflex Sync, OptiScaler's own FG output reports its own
+    if (InterfaceId == GET_ID(NvAPI_D3D_SetReflexSync))
+    {
+        if (auto hooked = ReflexHooks::getHookedReflexSync(o_NvAPI_QueryInterface))
+            return hooked;
+    }
+#endif
+
 
     if (!o_NvAPI_QueryInterface)
         if (Config::Instance()->UseFakenvapi.value_or_default())
@@ -223,7 +232,11 @@ void* __stdcall NvApiHooks::hkNvAPI_QueryInterface(unsigned int InterfaceId)
         InterfaceId == GET_ID(NvAPI_D3D12_SetAsyncFrameMarker) || InterfaceId == GET_ID(NvAPI_Vulkan_GetLatency) ||
         InterfaceId == GET_ID(NvAPI_Vulkan_SetLatencyMarker) || InterfaceId == GET_ID(NvAPI_Vulkan_SetSleepMode)
 #ifdef LOW_LATENCY_INPUTS
-        || InterfaceId == GET_ID(NvAPI_D3D_GetSleepStatus)
+        || InterfaceId == GET_ID(NvAPI_D3D_GetSleepStatus) ||
+        InterfaceId == GET_ID(NvAPI_Vulkan_InitLowLatencyDevice) ||
+        InterfaceId == GET_ID(NvAPI_Vulkan_DestroyLowLatencyDevice) ||
+        InterfaceId == GET_ID(NvAPI_Vulkan_GetSleepStatus) || InterfaceId == GET_ID(NvAPI_Vulkan_Sleep) ||
+        InterfaceId == GET_ID(NvAPI_Vulkan_NotifyOutOfBandVkQueue)
 #endif
     )
     {
@@ -240,6 +253,22 @@ void* __stdcall NvApiHooks::hkNvAPI_QueryInterface(unsigned int InterfaceId)
             return InputReflex::D3D_SetLatencyMarker;
         else if (InterfaceId == GET_ID(NvAPI_D3D12_SetAsyncFrameMarker))
             return InputReflex::D3D12_SetAsyncFrameMarker;
+        else if (InterfaceId == GET_ID(NvAPI_Vulkan_InitLowLatencyDevice))
+            return InputReflex::Vulkan_InitLowLatencyDevice;
+        else if (InterfaceId == GET_ID(NvAPI_Vulkan_DestroyLowLatencyDevice))
+            return InputReflex::Vulkan_DestroyLowLatencyDevice;
+        else if (InterfaceId == GET_ID(NvAPI_Vulkan_GetSleepStatus))
+            return InputReflex::Vulkan_GetSleepStatus;
+        else if (InterfaceId == GET_ID(NvAPI_Vulkan_SetSleepMode))
+            return InputReflex::Vulkan_SetSleepMode;
+        else if (InterfaceId == GET_ID(NvAPI_Vulkan_Sleep))
+            return InputReflex::Vulkan_Sleep;
+        else if (InterfaceId == GET_ID(NvAPI_Vulkan_GetLatency))
+            return InputReflex::Vulkan_GetLatency;
+        else if (InterfaceId == GET_ID(NvAPI_Vulkan_SetLatencyMarker))
+            return InputReflex::Vulkan_SetLatencyMarker;
+        else if (InterfaceId == GET_ID(NvAPI_Vulkan_NotifyOutOfBandVkQueue))
+            return InputReflex::Vulkan_NotifyOutOfBandVkQueue;
 #endif
 
         // LOG_DEBUG("counter: {}, hookReflex()", qiCounter);

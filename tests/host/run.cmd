@@ -21,7 +21,10 @@ call "%REPO%\tests\_lib\msvc-env.cmd" 2>nul || exit /b 1
 rem Repo-rooted includes (#include "OptiScaler-..." / "third_party/..."). The repo root goes at the END of
 rem INCLUDE, not in /I: /I is searched before the SDK/STL dirs, and on a case-insensitive disk
 rem <version> would then resolve to the repo's VERSION file.
-set "INCLUDE=%INCLUDE%;%REPO%"
+rem The product source root and the external SDK roots follow for the same reason: product header
+rem chains (like <misc/GameConfigs.h>, <nvsdk_ngx.h>, <spdlog/spdlog.h>) mirror the vcxproj set.
+set "EXT=%REPO%\OptiScaler-DLSSNR-PreSR-Multipass-main\external"
+set "INCLUDE=%INCLUDE%;%REPO%;%REPO%\OptiScaler-DLSSNR-PreSR-Multipass-main\OptiScaler;%EXT%\nvngx_dlss_sdk;%EXT%\xess\inc\xess;%EXT%\xess\inc\xell;%EXT%\xess\inc\xess_fg;%EXT%\FidelityFX-SDK\ffx-api\include\ffx_api;%EXT%\simpleini;%EXT%\unordered_dense\include;%EXT%\spdlog\include;%EXT%\freetype;%EXT%\streamline;%EXT%\streamline1;%EXT%\nvapi;%EXT%\nlohmann;%EXT%\fakenvapi;%EXT%\magic_enum\include\magic_enum;%EXT%\AntiLag2-SDK;%EXT%\latencyflex;%EXT%\vulkan\include"
 set "INC=%REPO%\OptiScaler-DLSSNR-PreSR-Multipass-main\OptiScaler\include"
 set "DETOURS=%REPO%\OptiScaler-DLSSNR-PreSR-Multipass-main\OptiScaler\library\detours\detours.lib"
 set "CXX=cl /nologo /std:c++20 /EHsc /W4"

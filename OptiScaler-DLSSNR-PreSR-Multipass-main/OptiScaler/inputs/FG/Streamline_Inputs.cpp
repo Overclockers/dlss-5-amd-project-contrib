@@ -1,5 +1,5 @@
 #include "pch.h"
-#include "Streamline_Inputs_Dx12.h"
+#include "Streamline_Inputs.h"
 #include <Config.h>
 #include <resource_tracking/ResTrack_dx12.h>
 #include <magic_enum.hpp>

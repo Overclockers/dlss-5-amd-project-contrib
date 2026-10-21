@@ -16,6 +16,7 @@
 
 #include <proxies/XeSS_Proxy.h>
 #include <proxies/XeFG_Proxy.h>
+#include "inputs/FG/XeFG_Inputs_Dx12.h"
 #include <proxies/XeLL_Proxy.h>
 #include <proxies/NVNGX_Proxy.h>
 #include <proxies/FfxApi_Proxy.h>
@@ -1468,10 +1469,15 @@ void CheckMemoryForProxies()
     FfxApiProxy::InitFfxDx12_Denoiser();
     FfxApiProxy::InitFfxDx12_Radiance();
 
+    // Only the game's XeFG already in memory, the one OptiScaler loads next is hooked once the game loads it too
+    auto gameXeFG = KernelBaseProxy::GetModuleHandleW_()(L"libxess_fg.dll");
+
     XeSSProxy::InitXeSS();
     XeSSProxy::InitXeSSDx11();
     XeFGProxy::InitXeFG();
     XeLLProxy::InitXeLL();
+    XeFGInputs::Hook(gameXeFG);
+
 
     XellHooks::Hook();
 
@@ -1633,6 +1639,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         if (State::Instance().activeFgInput == FGInput::NvngxFG)
             State::Instance().activeFgOutput = FGOutput::NoFG;
 
+        // XeFG input to XeFG output runs the game's own XeFG, without OptiScaler's FG pipeline
+        if (XeFGInputs::Passthrough())
+            State::Instance().activeFgOutput = FGOutput::NoFG;
+
         // Init Kernel proxies
         NtdllProxy::Init();
         KernelBaseProxy::Init();
@@ -1642,9 +1652,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         spdlog::info("");
         State::Instance().isRunningOnLinux = IsRunningOnWine();
 
-    OSVERSIONINFOW winVer { 0 };
-    if (Util::GetRealWindowsVersion(winVer))
-        State::Instance().isWindows10 = winVer.dwMajorVersion == 10 && winVer.dwBuildNumber < 22000;
+        if (Util::GetRealWindowsVersion(winVer))
+            State::Instance().isWindows10 = winVer.dwMajorVersion == 10 && winVer.dwBuildNumber < 22000;
 
         // Not foolproof
         // calls LoadLibraryExW inside DllMain but seems mostly fine if we only call NvAPI_GetInterfaceVersionString

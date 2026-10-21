@@ -363,6 +363,16 @@ double Util::MillisecondsNow()
     return milliseconds;
 }
 
+uint64_t Util::GetTimestamp()
+{
+    FILETIME fileTime;
+    GetSystemTimePreciseAsFileTime(&fileTime);
+
+    uint64_t time = (static_cast<uint64_t>(fileTime.dwHighDateTime) << 32) | fileTime.dwLowDateTime;
+
+    return time * 100;
+}
+
 std::filesystem::path Util::ExePath()
 {
     static std::filesystem::path exe;

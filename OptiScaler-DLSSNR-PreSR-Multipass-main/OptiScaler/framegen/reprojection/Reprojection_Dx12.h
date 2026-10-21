@@ -1,12 +1,17 @@
 #pragma once
 
 #include <framegen/IFGFeature_Dx12.h>
+#include <shaders/reproject/Reproject_Dx12.h>
 
 class Reprojection_Dx12 : public virtual IFGFeature_Dx12
 {
   protected:
     void ReleaseObjects() override final;
     void CreateObjects(ID3D12Device* InDevice) override final;
+
+  private:
+    std::unique_ptr<Reproject_Dx12> _reproject;
+    bool _reprojectionActive = false;
 
   public:
     // IFGFeature
@@ -15,11 +20,11 @@ class Reprojection_Dx12 : public virtual IFGFeature_Dx12
     HWND Hwnd() override final { return _hwnd; };
 
     // IFGFeature_Dx12
-    bool CreateSwapchainInternal(IDXGIFactory* factory, ID3D12CommandQueue* cmdQueue, DXGI_SWAP_CHAIN_DESC* desc,
-                                 IDXGISwapChain** swapChain) override final;
-    bool CreateSwapchain1Internal(IDXGIFactory* factory, ID3D12CommandQueue* cmdQueue, HWND hwnd,
-                                  DXGI_SWAP_CHAIN_DESC1* desc, DXGI_SWAP_CHAIN_FULLSCREEN_DESC* pFullscreenDesc,
-                                  IDXGISwapChain1** swapChain) override final;
+    bool CreateSwapchain(IDXGIFactory* factory, ID3D12CommandQueue* cmdQueue, DXGI_SWAP_CHAIN_DESC* desc,
+                         IDXGISwapChain** swapChain, bool readyToRelease) override final;
+    bool CreateSwapchain1(IDXGIFactory* factory, ID3D12CommandQueue* cmdQueue, HWND hwnd,
+                          DXGI_SWAP_CHAIN_DESC1* desc, DXGI_SWAP_CHAIN_FULLSCREEN_DESC* pFullscreenDesc,
+                          IDXGISwapChain1** swapChain, bool readyToRelease) override final;
 
     bool ReleaseSwapchain(HWND hwnd) override final;
 
@@ -48,4 +53,5 @@ class Reprojection_Dx12 : public virtual IFGFeature_Dx12
     // Inherited via IFGFeature_Dx12
     bool SetInterpolatedFrameCount(UINT interpolatedFrameCount) override { return true; };
     bool HasReprojection() override final { return true; };
+    const Reproject* GetReproject() const override final { return _reproject.get(); };
 };

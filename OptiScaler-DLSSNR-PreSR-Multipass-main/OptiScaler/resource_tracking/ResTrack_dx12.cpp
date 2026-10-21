@@ -11,6 +11,32 @@
 
 #include <menu/menu_overlay_dx.h>
 
+// Flattens a root signature's descriptor tables: each table parameter records where its ranges
+// start in the shared vector, so table bindings can be walked without re-reading the D3D desc.
+template <typename T>
+static void BuildRootSignatureInfo(RootSignatureInfo& info, UINT numParameters, const T* parameters)
+{
+    for (UINT i = 0; i < numParameters && i < info.parameters.size(); ++i)
+    {
+        const auto& parameter = parameters[i];
+
+        if (parameter.ParameterType != D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE)
+            continue;
+
+        const auto& table = parameter.DescriptorTable;
+
+        RootParameterTableInfo& tableInfo = info.parameters[i];
+        tableInfo.firstRange = static_cast<UINT>(info.ranges.size());
+        tableInfo.rangeCount = table.NumDescriptorRanges;
+        tableInfo.visibility = parameter.ShaderVisibility;
+
+        for (UINT r = 0; r < table.NumDescriptorRanges; ++r)
+        {
+            const auto& range = table.pDescriptorRanges[r];
+            info.ranges.push_back({ range.OffsetInDescriptorsFromTableStart, range.NumDescriptors, range.RangeType });
+        }
+    }
+}
 void ResTrack_Dx12::RegisterRootSignature(ID3D12RootSignature* rootSignature,
                                           const D3D12_VERSIONED_ROOT_SIGNATURE_DESC* desc)
 {
@@ -303,6 +329,16 @@ std::shared_ptr<RootSignatureInfo> ResTrack_Dx12::FindRootSignatureInfo(ID3D12Ro
     std::lock_guard<std::mutex> lock(_rootSignatureInfoMutex);
     auto it = _rootSignatureInfos.find(rootSignature);
     return it != _rootSignatureInfos.end() ? it->second : nullptr;
+}
+
+// Descriptor types the HUDless policy may pick up, SRV/UAV can be turned off for problematic games
+static bool IsDescriptorEnabled(ResourceType type)
+{
+    if (type == SRV)
+        return !Config::Instance()->FGHudfixDisableSRV.value_or_default();
+    if (type == UAV)
+        return !Config::Instance()->FGHudfixDisableUAV.value_or_default();
+    return true;
 }
 
 bool ResTrack_Dx12::ResolveRenderTargetBinding(SIZE_T cpuHandle, ResourceInfo& outInfo)
@@ -2657,6 +2693,9 @@ void ResTrack_Dx12::HookDevice(ID3D12Device* device)
     if (initializeTracking)
     {
         _useShards = Config::Instance()->FGUseShards.value_or_default();
+        _bindingTrackingEnabled.store(Config::Instance()->FGAlwaysTrackHeaps.value_or_default() ||
+                                          Config::Instance()->FGHUDFix.value_or_default(),
+                                      std::memory_order_release);
         std::scoped_lock lock(_trackedResourcesMutex);
         _trackedResources.reserve(1024);
     }
@@ -3014,4 +3053,13 @@ bool ResTrack_Dx12::TrackResourceRelease(ID3D12Resource* resource)
 
     notifier->Release();
     return true;
+}
+
+void __stdcall ResTrack_Dx12::ResourceDestroyed(void* data)
+{
+    if (data == nullptr || State::Instance().isShuttingDown)
+        return;
+
+    std::lock_guard trackedLock(_trackedResourcesMutex);
+    _trackedResources.erase(static_cast<ID3D12Resource*>(data));
 }

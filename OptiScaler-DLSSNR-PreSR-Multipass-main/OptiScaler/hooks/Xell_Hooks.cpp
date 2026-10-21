@@ -3,6 +3,7 @@
 #include <detours/detours.h>
 #include <magic_enum.hpp>
 #include <proxies/XeLL_Proxy.h>
+#include <misc/FrameLimit.h>
 
 #define HOOK(name)                                                                                                     \
     if (o_##name)                                                                                                      \
@@ -10,43 +11,17 @@
 
 bool XellHooks::Hook()
 {
-#ifndef LOW_LATENCY_INPUTS
-    // Detouring libxell's exports makes MFG Unlocker set hostLatency and skip
-    // its frame-count unlock. XeLLProxy already calls the real exports.
-    return true;
-#else
     if (!XeLLProxy::InitXeLL())
         return false;
 
-    if (o_xellDestroyContext)
-    {
-        // spdlog::info("Already hooked");
-        return true;
-    }
-
-    o_xellDestroyContext = XeLLProxy::DestroyContext();
-    o_xellSetSleepMode = XeLLProxy::SetSleepMode();
-    o_xellGetSleepMode = XeLLProxy::GetSleepMode();
-    o_xellSleep = XeLLProxy::Sleep();
-    o_xellAddMarkerData = XeLLProxy::AddMarkerData();
-    o_xellGetVersion = XeLLProxy::GetVersion();
-    o_xellSetLoggingCallback = XeLLProxy::SetLoggingCallback();
-    o_xellD3D12CreateContext = XeLLProxy::D3D12CreateContext();
-
-    DetourTransactionBegin();
-    DetourUpdateThread(GetCurrentThread());
-
-    HOOK(xellDestroyContext);
-    HOOK(xellSetSleepMode);
-    HOOK(xellGetSleepMode);
-    HOOK(xellSleep);
-    HOOK(xellAddMarkerData);
-    HOOK(xellGetVersion);
-    HOOK(xellSetLoggingCallback);
-    HOOK(xellD3D12CreateContext);
-
-    DetourTransactionCommit();
-
+#ifdef LOW_LATENCY_INPUTS
+    // The game's XeLL calls already come to OptiScaler's XeLL exports
+    // (XeLLProxy::RedirectToInput): no detours, MFG Unlocker's hostLatency and
+    // frame-count unlock stay intact.
+    return true;
+#else
+    // Detouring libxell's exports makes MFG Unlocker set hostLatency and skip
+    // its frame-count unlock. XeLLProxy already calls the real exports.
     return true;
 #endif
 }
@@ -87,9 +62,9 @@ bool XellHooks::update()
     gamesContextCanLimitFps = true;
 
     static float lastFpslimit = 0.0f;
-    if (lastFpslimit == Config::Instance()->FramerateLimit.value_or_default())
+    if (lastFpslimit == FrameLimit::targetFps())
         return false;
-    lastFpslimit = Config::Instance()->FramerateLimit.value_or_default();
+    lastFpslimit = FrameLimit::targetFps();
     if (lastFpslimit <= 0.0f)
         currentParams.minimumIntervalUs = 0u;
     else

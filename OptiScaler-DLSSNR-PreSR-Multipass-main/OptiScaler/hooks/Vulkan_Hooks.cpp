@@ -849,7 +849,7 @@ static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPres
         // Tick feature to let it know if it's frozen
         if (auto currentFeature = State::Instance().currentFeature; currentFeature != nullptr)
         {
-            if (auto currentFg = State::Instance().CurrentFG(); currentFg != nullptr)
+            if (auto currentFg = State::Instance().currentVkFG; currentFg != nullptr)
                 currentFeature->TickFrozenCheck(currentFg->GetInterpolatedFrameCount() + 1);
             else
                 currentFeature->TickFrozenCheck();

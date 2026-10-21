@@ -253,6 +253,47 @@ outside this follow-up's validation scope; game resize/exit acceptance is still 
 - Existing quirk mappings extended for Granblue Fantasy Relink, Trails in the Sky
   2nd Chapter and Sword and Fairy 7. The existing config precedence remains in force.
 
+## Low-latency inputs integration (2026-10-21)
+
+The dedicated low-latency slice (`wt-opti-low-latency`, baseline `0a31a5ec` + owned
+dirty files) merged onto `b00afe91`: 13 new files and 23 base-identical files copied
+directly; `hooks/Streamline_Hooks.cpp` was three-way merged against `0a31a5ec` so the
+early `6500de32` A5/B1/B3 hunks and the full D6 Reflex/PCL/common/localDLSSG
+`PluginModuleSlots` conversion coexist. Public-file patches `003`–`012`, `014`, `016`–
+`018`, `020` applied; `001`, `002` and `013` were dropped because foundation commits
+(`d3a65657` and earlier) already landed their exact content (config keys, quirks,
+`FpsLimiter` enum, SL1 `IsFGEnabled` readers). The Vulkan low-latency lifecycle
+request (§1–§5) required no new work: V4 `5eab8613` already carried the full
+`Vulkan_Hooks` surface including the present-path `InputCommon::update()` caller and
+the `!InputCommon::can_limit_fps()` fallback-limiter guard.
+
+`inputs/FG/Streamline_Inputs_Dx12.*` renamed to `Streamline_Inputs.*` following
+upstream `b4712c0` (a pure file move upstream); the local B4 frame-boundary rotation
+(`presentMarked || fgDispatched`) and `_frameBoundaryMutex` are preserved, and the
+project, filter, `State.h` and doc references were completed here because upstream
+deferred them to later commits outside this integration's scope. The class remains
+`Sl_Inputs_Dx12` — upstream's later Vulkan split renamed it beyond `b4712c0`.
+
+### R4 resolution: Choice B (documented mutual exclusion)
+
+MFG Unlocker × XeLL input is a material conflict, not a bug: with
+`LOW_LATENCY_INPUTS` on, `XeLLProxy::RedirectToInput` detours the real `libxell.dll`
+exports, and the unlocker's `host_xell_redirected` breaker then deliberately keeps
+`maxSupportedInterpolations` locked ("a host already owns low latency"). Deferring the
+redirect cannot work because the game caches resolved `xell*` pointers before the
+unlocker finishes its scan, which would silently drop the XeLL input.
+
+**Choice B is adopted**: keep the redirect as-is, and treat "XeLL input (macro ON)
+or unlocker above-2X unlock" as a per-game, config-documented mutual exclusion.
+External frame generation (`[FrameGen] External=true`) already skips every LL-input
+interception, and `RedirectToInput` logs that the unlocker keeps its frame count
+locked when it detects the host-managed context. No silent loss on either side;
+NR ceiling/readiness (`_nrMultiplier`, `ResolveInterpolation`) are unaffected.
+Choices A (callsite capture via GetProcAddress/IAT with plugin-module filtering) and
+C (patching the pinned unlocker submodule) stay recorded in
+`wt-opti-low-latency/work/notes/2026-10-21-xefg-mfg-unlocker-xell-input-blocker.md`
+for a future dedicated slice.
+
 ## Deliberately separate work
 
 FakeNVAPI call tables and implementations already match this snapshot. Low-latency
