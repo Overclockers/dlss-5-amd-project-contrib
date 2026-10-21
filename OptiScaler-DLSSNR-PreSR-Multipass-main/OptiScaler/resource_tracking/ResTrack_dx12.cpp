@@ -13,28 +13,60 @@
 
 // Flattens a root signature's descriptor tables: each table parameter records where its ranges
 // start in the shared vector, so table bindings can be walked without re-reading the D3D desc.
-template <typename T>
-static void BuildRootSignatureInfo(RootSignatureInfo& info, UINT numParameters, const T* parameters)
+template <typename RootParameterT>
+static void BuildRootSignatureInfo(RootSignatureInfo& info, UINT numParameters, const RootParameterT* parameters)
 {
-    for (UINT i = 0; i < numParameters && i < info.parameters.size(); ++i)
-    {
-        const auto& parameter = parameters[i];
+    if (parameters == nullptr)
+        return;
 
-        if (parameter.ParameterType != D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE)
+    const auto parameterCount =
+        std::min<UINT>(numParameters, static_cast<UINT>(CommandListBindingState::MAX_ROOT_PARAMETERS));
+
+    for (UINT parameterIndex = 0; parameterIndex < parameterCount; ++parameterIndex)
+    {
+        const auto& parameter = parameters[parameterIndex];
+        if (parameter.ParameterType != D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE ||
+            parameter.DescriptorTable.NumDescriptorRanges == 0 ||
+            parameter.DescriptorTable.pDescriptorRanges == nullptr)
             continue;
 
-        const auto& table = parameter.DescriptorTable;
-
-        RootParameterTableInfo& tableInfo = info.parameters[i];
+        auto& tableInfo = info.parameters[parameterIndex];
         tableInfo.firstRange = static_cast<UINT>(info.ranges.size());
-        tableInfo.rangeCount = table.NumDescriptorRanges;
         tableInfo.visibility = parameter.ShaderVisibility;
 
-        for (UINT r = 0; r < table.NumDescriptorRanges; ++r)
+        UINT nextOffset = 0;
+        bool nextOffsetValid = true;
+
+        for (UINT rangeIndex = 0; rangeIndex < parameter.DescriptorTable.NumDescriptorRanges; ++rangeIndex)
         {
-            const auto& range = table.pDescriptorRanges[r];
-            info.ranges.push_back({ range.OffsetInDescriptorsFromTableStart, range.NumDescriptors, range.RangeType });
+            const auto& range = parameter.DescriptorTable.pDescriptorRanges[rangeIndex];
+
+            UINT offset = range.OffsetInDescriptorsFromTableStart;
+            bool offsetValid = true;
+            if (offset == D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND)
+            {
+                offsetValid = nextOffsetValid;
+                offset = nextOffset;
+            }
+
+            if (offsetValid && (range.RangeType == D3D12_DESCRIPTOR_RANGE_TYPE_SRV ||
+                                range.RangeType == D3D12_DESCRIPTOR_RANGE_TYPE_UAV))
+            {
+                info.ranges.push_back({ offset, range.NumDescriptors, range.RangeType });
+            }
+
+            if (!offsetValid || range.NumDescriptors == UINT_MAX || offset > UINT_MAX - range.NumDescriptors)
+            {
+                nextOffsetValid = false;
+            }
+            else
+            {
+                nextOffset = offset + range.NumDescriptors;
+                nextOffsetValid = true;
+            }
         }
+
+        tableInfo.rangeCount = static_cast<UINT>(info.ranges.size()) - tableInfo.firstRange;
     }
 }
 void ResTrack_Dx12::RegisterRootSignature(ID3D12RootSignature* rootSignature,
@@ -777,20 +809,34 @@ bool ResTrack_Dx12::CheckResource(ID3D12Resource* resource)
     if (resDesc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D)
         return false;
 
+    // depth etc
+    if (resDesc.DepthOrArraySize != 1 || resDesc.SampleDesc.Count != 1)
+        return false;
+
+    // depth, rt, video etc
+    constexpr auto unsupportedFlags =
+        D3D12_RESOURCE_FLAG_RAYTRACING_ACCELERATION_STRUCTURE | D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL |
+        D3D12_RESOURCE_FLAG_VIDEO_DECODE_REFERENCE_ONLY | D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE |
+        D3D12_RESOURCE_FLAG_VIDEO_ENCODE_REFERENCE_ONLY;
+
+    // Early reject
+    if ((resDesc.Flags & unsupportedFlags) != 0)
+        return false;
+
     auto& s = State::Instance();
+    const uint32_t width = s.currentSwapchainDesc.BufferDesc.Width;
+    const uint32_t height = s.currentSwapchainDesc.BufferDesc.Height;
 
-    if (resDesc.Height != s.currentSwapchainDesc.BufferDesc.Height ||
-        resDesc.Width != s.currentSwapchainDesc.BufferDesc.Width)
+    if (resDesc.Height != height || resDesc.Width != width)
     {
-        auto result = Config::Instance()->FGRelaxedResolutionCheck.value_or_default() &&
-                      resDesc.Height >= s.currentSwapchainDesc.BufferDesc.Height - 32 &&
-                      resDesc.Height <= s.currentSwapchainDesc.BufferDesc.Height + 32 &&
-                      resDesc.Width >= s.currentSwapchainDesc.BufferDesc.Width - 32 &&
-                      resDesc.Width <= s.currentSwapchainDesc.BufferDesc.Width + 32;
+        const auto toleranceX = width / 20;
+        const auto toleranceY = height / 20;
 
-        // LOG_TRACK("Resource: {}x{} ({}), Swapchain: {}x{} ({}), Relaxed Result: {}", resDesc.Width, resDesc.Height,
-        //           (UINT) resDesc.Format, scDesc.BufferDesc.Width, scDesc.BufferDesc.Height,
-        //           (UINT) scDesc.BufferDesc.Format, result);
+        auto result = Config::Instance()->FGRelaxedResolutionCheck.value_or_default() &&
+                      resDesc.Height >= height - toleranceY &&
+                      resDesc.Height <= height + toleranceY &&
+                      resDesc.Width >= width - toleranceX &&
+                      resDesc.Width <= width + toleranceX;
 
         return result;
     }
@@ -2201,6 +2247,10 @@ void ResTrack_Dx12::hkDrawIndexedInstanced(ID3D12GraphicsCommandList* This, UINT
 
     LOG_TRACK("CmdList: {:X}", (size_t) This);
 
+    if (!Config::Instance()->FGHudfixDisableDII.value_or_default() &&
+        ProcessGraphicsBindings(This, CaptureInfo::DrawIndexedInstanced))
+        return;
+
     auto fIndex = Hudfix_Dx12::ActivePresentFrame() % BUFFER_COUNT;
 
     if (!_useShards)
@@ -2545,6 +2595,14 @@ void ResTrack_Dx12::HookCommandList(ID3D12Device* InDevice)
 
             // Get the vtable pointer
             PVOID* pVTable = *(PVOID**) realCL;
+            const bool persistentBindings = Config::Instance()->FGHudfixPersistentBindings.value_or_default();
+
+            // Persistent command-list binding invalidation
+            if (persistentBindings)
+            {
+                o_Reset = (PFN_Reset) pVTable[10];
+                o_ClearState = (PFN_ClearState) pVTable[11];
+            }
 
             // hudless shader
             o_OMSetRenderTargets = (PFN_OMSetRenderTargets) pVTable[46];
@@ -2554,8 +2612,6 @@ void ResTrack_Dx12::HookCommandList(ID3D12Device* InDevice)
             o_DrawIndexedInstanced = (PFN_DrawIndexedInstanced) pVTable[13];
             o_Dispatch = (PFN_Dispatch) pVTable[14];
             o_Close = (PFN_Close) pVTable[9];
-            o_Reset = (PFN_Reset) pVTable[10];
-            o_ClearState = (PFN_ClearState) pVTable[47];
 
             // hudless compute
             o_SetComputeRootDescriptorTable = (PFN_SetComputeRootDescriptorTable) pVTable[31];
@@ -2570,6 +2626,12 @@ void ResTrack_Dx12::HookCommandList(ID3D12Device* InDevice)
                 // Only needed for hudfix
                 if (State::Instance().activeFgInput == FGInput::Upscaler)
                 {
+                    if (o_Reset != nullptr)
+                        DetourAttach(&(PVOID&) o_Reset, hkReset);
+
+                    if (o_ClearState != nullptr)
+                        DetourAttach(&(PVOID&) o_ClearState, hkClearState);
+
                     if (o_OMSetRenderTargets != nullptr)
                         DetourAttach(&(PVOID&) o_OMSetRenderTargets, hkOMSetRenderTargets);
 
@@ -2589,15 +2651,6 @@ void ResTrack_Dx12::HookCommandList(ID3D12Device* InDevice)
                         DetourAttach(&(PVOID&) o_Dispatch, hkDispatch);
                 }
 
-                if (Config::Instance()->FGHudfixPersistentBindings.value_or_default())
-                {
-                    if (o_Reset != nullptr)
-                        DetourAttach(&(PVOID&) o_Reset, hkReset);
-
-                    if (o_ClearState != nullptr)
-                        DetourAttach(&(PVOID&) o_ClearState, hkClearState);
-                }
-
                 if (o_Close != nullptr)
                     DetourAttach(&(PVOID&) o_Close, hkClose);
 
@@ -2608,6 +2661,7 @@ void ResTrack_Dx12::HookCommandList(ID3D12Device* InDevice)
                 if (detourResult != NO_ERROR)
                 {
                     LOG_ERROR("Failed to hook CommandList methods: {:X}", detourResult);
+                    _bindingTrackingEnabled.store(false, std::memory_order_release);
                     o_OMSetRenderTargets = nullptr;
                     o_SetGraphicsRootDescriptorTable = nullptr;
                     o_DrawInstanced = nullptr;
@@ -2618,6 +2672,10 @@ void ResTrack_Dx12::HookCommandList(ID3D12Device* InDevice)
                     o_ClearState = nullptr;
                     o_SetComputeRootDescriptorTable = nullptr;
                     o_ExecuteBundle = nullptr;
+                }
+                else if (State::Instance().activeFgInput == FGInput::Upscaler)
+                {
+                    _bindingTrackingEnabled.store(persistentBindings, std::memory_order_release);
                 }
             }
 
@@ -2693,9 +2751,6 @@ void ResTrack_Dx12::HookDevice(ID3D12Device* device)
     if (initializeTracking)
     {
         _useShards = Config::Instance()->FGUseShards.value_or_default();
-        _bindingTrackingEnabled.store(Config::Instance()->FGAlwaysTrackHeaps.value_or_default() ||
-                                          Config::Instance()->FGHUDFix.value_or_default(),
-                                      std::memory_order_release);
         std::scoped_lock lock(_trackedResourcesMutex);
         _trackedResources.reserve(1024);
     }
@@ -2794,6 +2849,12 @@ void ResTrack_Dx12::ReleaseDeviceHooks()
         DetourDetach(&(PVOID&) o_ExecuteCommandLists, hkExecuteCommandLists);
 
     // CommandList
+    if (o_Reset != nullptr)
+        DetourDetach(&(PVOID&) o_Reset, hkReset);
+
+    if (o_ClearState != nullptr)
+        DetourDetach(&(PVOID&) o_ClearState, hkClearState);
+
     if (o_OMSetRenderTargets != nullptr)
         DetourDetach(&(PVOID&) o_OMSetRenderTargets, hkOMSetRenderTargets);
 
@@ -2841,6 +2902,8 @@ void ResTrack_Dx12::ReleaseDeviceHooks()
         o_ExecuteCommandLists = nullptr;
 
         // CommandList
+        o_Reset = nullptr;
+        o_ClearState = nullptr;
         o_OMSetRenderTargets = nullptr;
         o_SetGraphicsRootDescriptorTable = nullptr;
         o_SetComputeRootDescriptorTable = nullptr;
@@ -2852,6 +2915,9 @@ void ResTrack_Dx12::ReleaseDeviceHooks()
 
         // Resource
         o_Release = nullptr;
+
+        _bindingTrackingEnabled.store(false, std::memory_order_release);
+        ClearBindingStates();
     }
 }
 
@@ -2897,6 +2963,12 @@ void ResTrack_Dx12::ReleaseHooks()
 
     // o_Release = nullptr;
 
+    if (o_Reset != nullptr)
+        DetourDetach(&(PVOID&) o_Reset, hkReset);
+
+    if (o_ClearState != nullptr)
+        DetourDetach(&(PVOID&) o_ClearState, hkClearState);
+
     if (o_OMSetRenderTargets != nullptr)
         DetourDetach(&(PVOID&) o_OMSetRenderTargets, hkOMSetRenderTargets);
 
@@ -2928,6 +3000,8 @@ void ResTrack_Dx12::ReleaseHooks()
     }
     else
     {
+        o_Reset = nullptr;
+        o_ClearState = nullptr;
         o_OMSetRenderTargets = nullptr;
         o_SetGraphicsRootDescriptorTable = nullptr;
         o_SetComputeRootDescriptorTable = nullptr;
@@ -2936,6 +3010,9 @@ void ResTrack_Dx12::ReleaseHooks()
         o_Dispatch = nullptr;
         o_Close = nullptr;
         o_ExecuteBundle = nullptr;
+
+        _bindingTrackingEnabled.store(false, std::memory_order_release);
+        ClearBindingStates();
     }
 }
 

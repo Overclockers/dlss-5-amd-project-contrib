@@ -211,7 +211,7 @@ RCAS_Dx12::RCAS_Dx12(std::string InName, ID3D12Device* InDevice) : Shader_Dx12(I
 
 RCAS_Dx12::~RCAS_Dx12()
 {
-    if (!_init || State::Instance().isShuttingDown)
+    if (State::Instance().isShuttingDown)
         return;
 
     DeferredRelease::Release(_pipelineStateDA);

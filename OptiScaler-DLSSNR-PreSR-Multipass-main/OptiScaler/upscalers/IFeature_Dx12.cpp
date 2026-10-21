@@ -36,7 +36,9 @@ bool IFeature_Dx12::Init(ID3D12Device* InDevice, ID3D12GraphicsCommandList* InCo
 
         OutputScaler = std::make_unique<OS_Dx12>("Output Scaling", InDevice, (TargetWidth() < DisplayWidth()));
         RCAS = std::make_unique<RCAS_Dx12>("RCAS", InDevice);
-        Bias = std::make_unique<Bias_Dx12>("Bias", InDevice); // TODO: not needed on DLSS/DLSSD
+        // DLSS/DLSSD take the bias mask as is
+        if (GetUpscalerType() != Upscaler::DLSS && GetUpscalerType() != Upscaler::DLSSD)
+            Bias = std::make_unique<Bias_Dx12>("Bias", InDevice);
         Magnifier = std::make_unique<Magnifier_Dx12>("Magnifier", InDevice);
 
         UpscalerTime = std::make_unique<GpuTime_Dx12>(InDevice);

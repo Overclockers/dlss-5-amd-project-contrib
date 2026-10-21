@@ -97,6 +97,7 @@ std::vector<GpuInformation> IdentifyGpu::checkGpuInfo()
             ComPtr<IDXGIVkInteropAdapter> interopAdapter;
             if (SUCCEEDED(adapter->QueryInterface(__uuidof(IDXGIVkInteropAdapter), (void**) &interopAdapter)))
             {
+                gpuInfo.dxgiIsDxvk = true;
                 gpuInfo.usesDxvk = true;
 
                 // Try to get the real GPU info when using dxvk.conf to spoof
@@ -368,6 +369,10 @@ GpuInformation IdentifyGpu::getPrimaryGpu()
     return !allGpus.empty() ? allGpus.front() : GpuInformation {};
 }
 
+bool IdentifyGpu::gameUsesDxvk() { return State::Instance().api == DX11 && getPrimaryGpu().dxgiIsDxvk; }
+
+bool IdentifyGpu::gameUsesVkd3dProton() { return State::Instance().api == DX12 && getPrimaryGpu().d3d12IsVkd3dProton; }
+
 GpuInformation IdentifyGpu::getActiveGpu()
 {
     auto gpus = getAllGpus();
@@ -464,7 +469,9 @@ void IdentifyGpu::updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3
 
                 ComPtr<ID3D12DXVKInteropDevice> vkd3dInterop;
                 if (localDevice && SUCCEEDED(localDevice->QueryInterface(IID_PPV_ARGS(&vkd3dInterop))))
+                {
                     res.usesVkd3dProton = true;
+                }
 
                 // Kinda questionable, may need to reconsider
                 if (Config::Instance()->Fsr4GpuSupport.value_or_default() != FSR4Support::None)
@@ -609,6 +616,7 @@ void IdentifyGpu::updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3
             {
                 if (IsEqualLUID(gpuInfo.luid, res.luid))
                 {
+                    gpuInfo.d3d12IsVkd3dProton = res.usesVkd3dProton;
                     gpuInfo.usesVkd3dProton = res.usesVkd3dProton;
                     gpuInfo.fsr4Support = res.fsr4Support;
                     gpuInfo.realFsr4Support = res.realFsr4Support;
@@ -664,7 +672,7 @@ void IdentifyGpu::updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3
         gpus += std::format("{}{}\n", indent, gpu.name);
         gpus += std::format("{}    vendorId: {:X}, deviceId: {:X}, VRAM: {}MB\n", indent, (uint32_t) gpu.vendorId,
                             gpu.deviceId, gpu.dedicatedVramInBytes / (1024 * 1024));
-        gpus += std::format("{}    dxvk: {}, vkd3d-proton: {}\n", indent, gpu.usesDxvk, gpu.usesVkd3dProton);
+        gpus += std::format("{}    dxgi is dxvk: {}, d3d12 is vkd3d-proton: {}\n", indent, gpu.dxgiIsDxvk, gpu.d3d12IsVkd3dProton);
         gpus += std::format("{}    Upscaler support - fsr4: {}, dlss: {}\n", indent, fsr4Support, gpu.dlssCapable);
     }
 

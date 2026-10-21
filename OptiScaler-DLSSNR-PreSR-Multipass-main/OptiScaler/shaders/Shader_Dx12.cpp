@@ -154,13 +154,16 @@ bool Shader_Dx12::CreateBufferResource(ID3D12Device* InDevice, ID3D12Resource* I
     D3D12_HEAP_FLAGS heapFlags;
     HRESULT hr = InResource->GetHeapProperties(&heapProperties, &heapFlags);
 
+    // Reserved resources have no heap
     if (hr != S_OK)
-    {
-        LOG_ERROR("GetHeapProperties result: {:X}", (UINT64) hr);
-        return false;
-    }
+        heapProperties = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
 
-    inDesc.Flags |= ResourceFlags;
+    // Only what the shader needs, source flags like ALLOW_DEPTH_STENCIL or DENY_SHADER_RESOURCE
+    // are invalid together with UAV and inherited mips would only waste memory
+    inDesc.Flags = ResourceFlags;
+    inDesc.MipLevels = 1;
+    inDesc.Alignment = 0;
+    inDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
 
     hr = InDevice->CreateCommittedResource(&heapProperties, D3D12_HEAP_FLAG_NONE, &inDesc, InState, nullptr,
                                            IID_PPV_ARGS(OutResource));

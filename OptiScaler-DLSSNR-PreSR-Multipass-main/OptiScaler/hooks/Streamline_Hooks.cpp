@@ -2,6 +2,7 @@
 
 #include "Streamline_Hooks.h"
 
+#include <shaders/reproject/mouseInputs/InputCollection.h>
 #include <Util.h>
 #include <Config.h>
 
@@ -348,7 +349,7 @@ static int OutputMaxInterpolationCount()
 {
     auto& state = State::Instance();
 
-    if (auto fg = state.currentFG; fg != nullptr && fg->GetMaxInterpolationCount() > 1)
+    if (auto fg = state.CurrentFG(); fg != nullptr && fg->GetMaxInterpolationCount() > 1)
         return fg->GetMaxInterpolationCount();
 
     if (state.activeFgOutput == FGOutput::XeFG)
@@ -373,7 +374,7 @@ static int OutputMaxInterpolationCount()
 // Reports Opti's FG output capabilities to the game when DLSSG is used as FG Input
 static void FillDlssgInputState(sl::DLSSGState& state)
 {
-    auto fg = State::Instance().currentFG;
+    auto fg = State::Instance().CurrentFG();
 
     if (fg != nullptr && fg->IsActive() && !fg->IsPaused())
         state.numFramesActuallyPresented = fg->GetInterpolatedFrameCount() + 1;
@@ -444,9 +445,9 @@ sl::Result StreamlineHooks::hkslGetFeatureFunction(sl::Feature feature, const ch
 sl::Result StreamlineHooks::hkslSetTag(const sl::ViewportHandle& viewport, const sl::ResourceTag* tags,
                                        uint32_t numTags, sl::CommandBuffer* cmdBuffer)
 {
-    if (renderApi == sl::RenderAPI::eD3D11 || renderApi == sl::RenderAPI::eVulkan)
+    if (renderApi == sl::RenderAPI::eD3D11)
     {
-        LOG_ERROR("hkslSetTag only supports DX12");
+        LOG_ERROR("hkslSetTag doesn't support DX11");
         return o_slSetTag(viewport, tags, numTags, cmdBuffer);
     }
 
@@ -500,7 +501,7 @@ sl::Result StreamlineHooks::hkslSetTag(const sl::ViewportHandle& viewport, const
         }
 
         // Cyberpunk hudless state fix for RDNA 2
-        if (State::Instance().gameQuirks & GameQuirk::CyberpunkHudlessState &&
+        if (State::Instance().gameQuirks & GameQuirk::CyberpunkHudlessState && renderApi != sl::RenderAPI::eVulkan &&
             tags[i].resource->state ==
                 (D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE) &&
             tags[i].type == sl::kBufferTypeHUDLessColor)
@@ -515,7 +516,7 @@ sl::Result StreamlineHooks::hkslSetTag(const sl::ViewportHandle& viewport, const
              tags[i].type == sl::kBufferTypeMotionVectors || tags[i].type == sl::kBufferTypeUIColorAndAlpha ||
              tags[i].type == sl::kBufferTypeBidirectionalDistortionField))
         {
-            State::Instance().slFGInputs.reportResource(tags[i], (ID3D12GraphicsCommandList*) cmdBuffer, 0);
+            State::Instance().slFGInputs.reportResource(tags[i], cmdBuffer, 0);
         }
         else if (State::Instance().activeFgInput == FGInput::NvngxFG)
         {
@@ -531,9 +532,9 @@ sl::Result StreamlineHooks::hkslSetTagForFrame(const sl::FrameToken& frame, cons
                                                const sl::ResourceTag* resources, uint32_t numResources,
                                                sl::CommandBuffer* cmdBuffer)
 {
-    if (renderApi == sl::RenderAPI::eD3D11 || renderApi == sl::RenderAPI::eVulkan)
+    if (renderApi == sl::RenderAPI::eD3D11)
     {
-        LOG_ERROR("hkslSetTagForFrame only supports DX12");
+        LOG_ERROR("hkslSetTagForFrame doesn't support DX11");
         return o_slSetTagForFrame(frame, viewport, resources, numResources, cmdBuffer);
     }
 
@@ -594,7 +595,7 @@ sl::Result StreamlineHooks::hkslSetTagForFrame(const sl::FrameToken& frame, cons
              resources[i].type == sl::kBufferTypeMotionVectors || resources[i].type == sl::kBufferTypeUIColorAndAlpha ||
              resources[i].type == sl::kBufferTypeBidirectionalDistortionField))
         {
-            State::Instance().slFGInputs.reportResource(resources[i], (ID3D12GraphicsCommandList*) cmdBuffer,
+            State::Instance().slFGInputs.reportResource(resources[i], cmdBuffer,
                                                         (uint32_t) frame);
         }
         else if (State::Instance().activeFgInput == FGInput::NvngxFG)
@@ -1795,11 +1796,15 @@ sl::Result StreamlineHooks::hkslPCLSetMarker(sl::PCLMarker marker, const sl::Fra
             auto result = o_slGetNewFrameToken(newFramePointer, &newFrameId);
 
             LOG_WARN("Simulation start marker sent after end marker, offset: {}", correction_offset);
+            InputCollection::getInstance().startCollectingForFrame(newFrameId);
 
             result = original(marker, *newFramePointer);
             return result;
         }
     }
+
+    if (marker == sl::PCLMarker::eSimulationStart)
+        InputCollection::getInstance().startCollectingForFrame(frame);
 
     if (State::Instance().activeFgInput == FGInput::DLSSG)
     {

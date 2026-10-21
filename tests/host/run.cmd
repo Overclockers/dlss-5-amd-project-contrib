@@ -80,6 +80,10 @@ call "%REPO%\tests\host\menu-localization.cmd" "%OUT%\menu" || goto fail
 "%OUT%\nr_install_status.exe" || goto fail
 %CXX% /utf-8 tests\host\fg_resource_readiness.cpp /Fe"%OUT%\fg_resource_readiness.exe" /Fo"%OUT%\fg_resource_readiness.obj" || goto fail
 "%OUT%\fg_resource_readiness.exe" || goto fail
+%CXX% /utf-8 tests\host\deferred_release_contract.cpp /Fe"%OUT%\deferred_release_contract.exe" /Fo"%OUT%\deferred_release_contract.obj" || goto fail
+"%OUT%\deferred_release_contract.exe" || goto fail
+%CXX% /utf-8 tests\host\restrack_d3_signature.cpp /Fe"%OUT%\restrack_d3_signature.exe" /Fo"%OUT%\restrack_d3_signature.obj" /link d3d12.lib dxguid.lib || goto fail
+"%OUT%\restrack_d3_signature.exe" || goto fail
 %CXX% /utf-8 tests\host\nr_performance.cpp /Fe"%OUT%\nr_performance.exe" /Fo"%OUT%\nr_performance.obj" || goto fail
 "%OUT%\nr_performance.exe" || goto fail
 %CXX% /utf-8 tests\host\nr_status_display.cpp /Fe"%OUT%\nr_status_display.exe" /Fo"%OUT%\nr_status_display.obj" || goto fail

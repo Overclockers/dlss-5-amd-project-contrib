@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "Reflex_Hooks.h"
 #include <Config.h>
+#include <shaders/reproject/mouseInputs/InputCollection.h>
 
 #include <nvapi/fakenvapi.h>
 
@@ -171,9 +172,11 @@ NvAPI_Status ReflexHooks::processGameMarker(IUnknown* pDev, NV_LATENCY_MARKER_PA
     _lastFrameId[pSetLatencyMarkerParams->markerType] = pSetLatencyMarkerParams->frameID;
     _lastDev[pSetLatencyMarkerParams->markerType] = pDev;
 
-    // Upstream also feeds SIMULATION_START into the mouse reprojection input collection here
-    // (shaders/reproject/mouseInputs); that feature is not part of this tree yet.
-    if (pSetLatencyMarkerParams->markerType == SIMULATION_END)
+    if (pSetLatencyMarkerParams->markerType == SIMULATION_START)
+    {
+        InputCollection::getInstance().startCollectingForFrame(pSetLatencyMarkerParams->frameID);
+    }
+    else if (pSetLatencyMarkerParams->markerType == SIMULATION_END)
     {
         _lastMarkerFrame = State::Instance().fgLastFrame;
     }

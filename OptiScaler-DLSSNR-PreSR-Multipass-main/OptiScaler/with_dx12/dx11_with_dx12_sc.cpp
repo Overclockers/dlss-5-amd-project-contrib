@@ -359,7 +359,7 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::Present(UINT SyncInterval, UINT Flags)
               dx11Index, _real3 != nullptr ? _real3->GetCurrentBackBufferIndex() : 0xFFFFFFFF, _currentFakeIndex,
               _bufferCount);
 
-    if (_real != nullptr)
+    if (_real != nullptr && !State::Instance().isRunningOnLinux)
     {
         UINT realFlags = Flags;
 

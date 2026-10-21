@@ -254,7 +254,7 @@ OS_Dx12::OS_Dx12(std::string InName, ID3D12Device* InDevice, bool InUpsample, Sc
 
 OS_Dx12::~OS_Dx12()
 {
-    if (!_init || State::Instance().isShuttingDown)
+    if (State::Instance().isShuttingDown)
         return;
 
     for (int i = 0; i < OS_NUM_OF_HEAPS; i++)

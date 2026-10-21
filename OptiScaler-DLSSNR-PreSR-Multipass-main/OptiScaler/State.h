@@ -143,7 +143,7 @@ class State
     FGNvngxReplacement activeFgNvngx = FGNvngxReplacement::None;
 
     // Streamline FG inputs
-    Sl_Inputs_Dx12 slFGInputs = {};
+    Sl_Inputs slFGInputs = {};
     Sl1_Inputs_Dx12 s_sl1FGInputs {};
 
     // OptiFG
@@ -361,6 +361,20 @@ class State
 
     std::vector<ID3D12Device*> d3d12Devices;
     std::vector<ID3D11Device*> d3d11Devices;
+
+    // The FG output of whichever API the game uses
+    IFGFeature* CurrentFG() const
+    {
+        if (currentFG != nullptr)
+            return currentFG;
+
+        return currentVkFG;
+    }
+
+    bool FGSwapchainExists() const
+    {
+        return currentFGSwapchain != nullptr || (currentVkFG != nullptr && currentVkFG->HasSwapchain());
+    }
 
     static UINT GetOwner()
     {

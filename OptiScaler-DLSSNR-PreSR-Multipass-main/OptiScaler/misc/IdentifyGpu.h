@@ -55,6 +55,10 @@ struct GpuInformation
     uint32_t subsystemId = 0x0;
     uint32_t revisionId = 0x0;
     size_t dedicatedVramInBytes = 0;
+    // Only says which implementation backs the API, not that the game renders through it
+    // Use IdentifyGpu::gameUsesDxvk/gameUsesVkd3dProton for that
+    bool dxgiIsDxvk = false;         // Adapter was enumerated through DXVK's DXGI
+    bool d3d12IsVkd3dProton = false; // D3D12 device creation goes through vkd3d-proton
     bool usesDxvk = false;
     bool usesVkd3dProton = false;
     bool softwareAdapter = false;
@@ -97,6 +101,11 @@ class IdentifyGpu
     static std::vector<GpuInformation> getAllGpus();
     static GpuInformation getPrimaryGpu();
     static GpuInformation getActiveGpu();
+
+    // Game is rendering through the translation layer, based on the API it's currently using
+    static bool gameUsesDxvk();
+    static bool gameUsesVkd3dProton();
+
     static void updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3D12CreateDevice = nullptr);
     static void updateInt8Support(bool sdkSupportsInt8, bool driverSupportsInt8);
     static bool queryAmdAsicInfo(LUID luid, uint32_t vendorId, uint32_t deviceId, uint32_t& family, uint32_t& revision);

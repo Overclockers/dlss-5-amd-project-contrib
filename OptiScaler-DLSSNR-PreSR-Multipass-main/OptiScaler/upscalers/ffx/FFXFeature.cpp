@@ -161,9 +161,21 @@ void FFXFeature::EnsureVersionsDx12()
 
 void FFXFeature::EnsureVersionsVulkan()
 {
-    FfxApiProxy::InitFfxVk();
+    static bool queryTried = false;
+
+    if (queryTried || !State::Instance().ffxUpscalerVersionsVk.names.empty())
+        return;
+
+    queryTried = true;
+
+    // Driver provided FSR 4 doesn't need amd_fidelityfx_vk.dll
+    if (!FfxApiProxy::InitFfxVk() && !FSR4DriverProviderVk::Init())
+        return;
+
+    ScopedSkipSpoofingGlobal skipSpoofingGlobal {};
+
     if (!QueryVersionsVulkan())
-        LOG_DEBUG("No Vulkan FFX versions available yet");
+        LOG_ERROR("Querying FFX Vulkan upscaler versions failed");
 }
 
 void FFXFeature::InitFlags()

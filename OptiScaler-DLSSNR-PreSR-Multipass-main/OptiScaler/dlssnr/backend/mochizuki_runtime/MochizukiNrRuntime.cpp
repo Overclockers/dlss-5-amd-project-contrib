@@ -2205,10 +2205,11 @@ struct ProductRuntime : nr::Runtime
     uint64_t id = 0;
     bool graphAco = false; // Actual compiler provenance, not requested ACO mode.
     NetworkKey key {};
+    VkQueue queue {};
 
     ProductRuntime(const nr::HostDevice& host, const nr::RuntimeConfig& config,
                    const nr::TemporalConfig& temporal, const NetworkKey& key, Vulkan& vk)
-        : nr::Runtime(host, config, nr::ControlMaskConfig {}, temporal), id(++g_nextNetworkId), key(key)
+        : nr::Runtime(host, config, nr::ControlMaskConfig {}, temporal), id(++g_nextNetworkId), key(key), queue(vk.queue)
     {
         nr::logf("[mochizuki] network #%llu created (%ux%u, model=%u, maxPasses=%u, renodx=%d)",
                  static_cast<unsigned long long>(id), key.width, key.height, key.networkModel, key.maxPasses,
@@ -4698,6 +4699,7 @@ struct Session
             // This one-shot reference is not a model cache and is never searched across Sessions.
             auto donor = old ? old : runtime;
             if (inlineQueue || !donor || !donor->key.SameGraphSemantics(key) ||
+                donor->queue != vk.queue ||
                 donor->network() != (key.networkModel ? nr::NetworkModel::Small : nr::NetworkModel::Original) ||
                 donor->int4_mixed() != key.int4 || !donor->network_note().empty())
                 donor.reset();
@@ -4828,6 +4830,8 @@ struct Session
                 const bool importing = !nr::binary::directory().empty();
                 if (donor && donor->graphAco == importing)
                     local.share = donor->share_for(config.width, config.height);
+                if (!local.share)
+                    donor.reset();
                 // share_for can reject geometries; the core can reject arguments. Both use its real full build.
                 // No with_slot_of: its per-plan mutable tail/noise protocol needs transactional enqueue proof.
                 return std::make_shared<ProductRuntime>(host, local, temporal, key, vk);

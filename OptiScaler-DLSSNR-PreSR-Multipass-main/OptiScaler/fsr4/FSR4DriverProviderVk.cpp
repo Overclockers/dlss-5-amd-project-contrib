@@ -349,7 +349,7 @@ static bool CallIsSupported(const DriverProvider& provider, VkDevice device, VkP
 
 bool FSR4DriverProviderVk::Init(VkPhysicalDevice physicalDevice)
 {
-    static bool initTried = false;
+    static std::atomic<bool> initTried = false;
 
     if (initTried)
         return IsAvailable();
@@ -388,7 +388,7 @@ bool FSR4DriverProviderVk::IsSupported(VkDevice device, VkPhysicalDevice physica
 
 bool FSR4DriverProviderVk::InitFg(VkPhysicalDevice physicalDevice)
 {
-    static bool initTried = false;
+    static std::atomic<bool> initTried = false;
 
     if (initTried)
         return IsFgAvailable();

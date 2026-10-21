@@ -1701,7 +1701,8 @@ void MenuCommon::HandleMenuShortcuts(RenderMenuContext& ctx)
                 StreamlineHooks::updateDlssgOptions();
             }
             else if (!state.externalFrameGeneration && state.activeFgInput != FGInput::NoFG &&
-                     state.activeFgOutput != FGOutput::NoFG && state.currentFGSwapchain != nullptr)
+                     state.activeFgOutput != FGOutput::NoFG &&
+                     (state.FGSwapchainExists() || state.activeFgInput == FGInput::NvngxFG))
             {
                 if (fgHotkeyLeftDefault)
                 {
@@ -3682,14 +3683,13 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
 
     // XeFG input requirements
     auto constexpr xefgInputIndex = (uint32_t) FGInput::XeFG;
-    inputOptions[xefgInputIndex].set_disabled(true, "Support not implemented, they meant FG Output");
+    inputOptions[xefgInputIndex].set_disabled(state.swapchainApi != API::DX12, "Unsupported API");
 
     // OptiFG requirements
     auto constexpr optiFgIndex = (uint32_t) FGInput::Upscaler;
-    inputOptions[optiFgIndex].set_disabled(state.swapchainApi == API::Vulkan, "Unsupported API");
-
-    if (!inputOptions[optiFgIndex].disabled && state.activeFgOutput == FGOutput::FSRFG && !FfxApiProxy::IsFGReady() &&
-        !ffxInitTried)
+    // FSR FG's Vulkan dll is loaded with the device
+    if (state.swapchainApi != API::Vulkan && !inputOptions[optiFgIndex].disabled &&
+        state.activeFgOutput == FGOutput::FSRFG && !FfxApiProxy::IsFGReady() && !ffxInitTried)
     {
         ffxInitTried = true;
         FfxApiProxy::InitFfxDx12();
@@ -3731,8 +3731,8 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
         { FGOutput::FSRFG, "FSR FG", "FSR3/4-FG, RDNA4 autoupgrades to FSR4-FG\n\nFSR4-FG sometimes better/worse than XeFG" },
         { FGOutput::DLSSG, "DLSSG", "DLSSG output\ncan be used in conjuction with Nukem's for example" },
         { FGOutput::XeFG, "XeFG", "XeFG - heaviest, but best universal FG\n\nXeFG 3 overall deals best with HUD\n\nEnable UI Composition if HUD ghosting" },
-        { FGOutput::Reprojection, "Reprojection",
-          "Reprojects the last real frame instead of interpolating\n\nNo game FG SDK required, works from depth and motion vectors" },
+        { FGOutput::Reprojection, "Reprojection (WIP)",
+          "Reprojects the game image using new mouse data\nKinda like Reflex 2, perceived latency improvement\n\n- REQUIRES DLSSG VIA STREAMLINE AS INPUT\n- Only works with first person perspective games\n- Only mouse, no controller\n- If possible, disable any mouse/camera smoothing in the game\n" },
     };
 
     // clang-format on
@@ -3749,7 +3749,6 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
             "No real DLSSG, unsupported hardware\nOnly Nvngx FG replacements available";
     }
 
-    outputOptions[dlssgOutputIndex].set_disabled(state.swapchainApi == API::Vulkan, "Unsupported API");
     outputOptions[dlssgOutputIndex].set_disabled(!supportsDlssg && !hasDlssgReplacement,
                                                  "Unsupported hardware and no replacements");
 
@@ -3760,17 +3759,9 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
         (streamlineVersion == feature_version { 0, 0, 0 } || streamlineVersion > feature_version { 2, 0, 1 });
     inputOptions[nvngxInputIndex].set_disabled(nukemsUnsupportedApi, "Unsupported API");
 
-    // FSR FG output requirements
-    auto constexpr fsrfgOutputIndex = (uint32_t) FGOutput::FSRFG;
-    outputOptions[fsrfgOutputIndex].set_disabled(state.swapchainApi == API::Vulkan, "Unsupported API");
-
     // XeFG output requirements
     auto constexpr xefgOutputIndex = (uint32_t) FGOutput::XeFG;
     outputOptions[xefgOutputIndex].set_disabled(state.swapchainApi == API::Vulkan, "Unsupported API");
-
-    // Reprojection output requirements
-    auto constexpr reprojectionOutputIndex = (uint32_t) FGOutput::Reprojection;
-    outputOptions[reprojectionOutputIndex].set_disabled(state.swapchainApi == API::Vulkan, "Unsupported API");
     // Unsupported FG input selected
     const auto currentInputIndex = (uint32_t) state.activeFgInput;
     if (config->FGInput != FGInput::NoFG && inputOptions.size() > currentInputIndex &&
@@ -3845,10 +3836,12 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
     nvngxOptions[fgNvngxArtursIndex].set_disabled(!state.artursFgFileAvailable, "Missing dlss-enabler-headless.dll");
 
     auto constexpr fgNvngxFfxIndex = (uint32_t) FGNvngxReplacement::FFX;
+    nvngxOptions[fgNvngxFfxIndex].set_disabled(state.swapchainApi == API::Vulkan, "Unsupported API");
     nvngxOptions[fgNvngxFfxIndex].set_disabled(!FfxApiProxy::IsFGReady(false),
                                                "Missing amd_fidelityfx_framegeneration_dx12.dll");
 
     auto constexpr fgNvngxComboIndex = (uint32_t) FGNvngxReplacement::Combo;
+    nvngxOptions[fgNvngxComboIndex].set_disabled(state.swapchainApi == API::Vulkan, "Unsupported API");
     nvngxOptions[fgNvngxComboIndex].set_disabled(
         !FfxApiProxy::IsFGReady(false) || !state.artursFgFileAvailable,
         "Missing amd_fidelityfx_framegeneration_dx12.dll\nor missing dlss-enabler-headless.dll");
@@ -4239,14 +4232,15 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
     auto& currentFeature = ctx.currentFeature;
     auto& menuResScale = ctx.menuResScale;
     auto& primaryGpu = *ctx.primaryGpu;
-    auto fgOutput = state.currentFG;
+    auto fgOutput = state.CurrentFG();
 
     // FSR FG controls
     if (state.activeFgOutput == FGOutput::FSRFG && state.activeFgInput != FGInput::NoFG &&
-        state.currentFGSwapchain != nullptr)
+        state.FGSwapchainExists())
     {
         if (state.activeFgInput != FGInput::Upscaler ||
-            (currentFeature != nullptr && !currentFeature->IsFrozen()) && FfxApiProxy::IsFGReady())
+            (currentFeature != nullptr && !currentFeature->IsFrozen()) &&
+                (state.currentVkFG != nullptr || FfxApiProxy::IsFGReady()))
         {
             MenuSectionTitle("Frame Generation (FSR FG)");
 
@@ -4840,8 +4834,8 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
     }
 
     // DLSSG controls
-    if (state.activeFgOutput == FGOutput::DLSSG && state.activeFgInput != FGInput::NoFG &&
-        state.currentFGSwapchain != nullptr && StreamlineProxy::LoadStreamline() && fgOutput)
+    if (auto dlssg = state.CurrentFG(); state.activeFgOutput == FGOutput::DLSSG && state.activeFgInput != FGInput::NoFG &&
+        state.FGSwapchainExists() && StreamlineProxy::LoadStreamline() && dlssg)
     {
         MenuSectionTitle("Frame Generation (DLSSG)");
 

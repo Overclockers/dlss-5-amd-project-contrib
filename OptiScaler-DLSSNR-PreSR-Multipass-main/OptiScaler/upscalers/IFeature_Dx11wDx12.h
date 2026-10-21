@@ -14,6 +14,8 @@
 class IFeature_Dx11wDx12 : public virtual IFeature_Dx11
 {
   private:
+    std::vector<DetailedGpuTime> detailedGpuTimes;
+
     template <typename F, typename Default> auto CallFeature(F&& f, Default&& def)
     {
         if (auto feature = dx12Feature.get(); feature)
@@ -73,14 +75,50 @@ class IFeature_Dx11wDx12 : public virtual IFeature_Dx11
     std::optional<double> ReadUpscalerTime(void* deviceContextVoid) override
     {
         if (auto feature = dx12Feature.get(); feature && Dx12CommandQueue)
-            return feature->ReadUpscalerTime(Dx12CommandQueue);
+        {
+            auto dx12UpscalerTime = feature->ReadUpscalerTime(Dx12CommandQueue);
+
+            feature->ReadDetailedGpuTimes(Dx12CommandQueue, detailedGpuTimes);
+
+            // Count up shader times that are included in upscalerWithInterop but not in dx12UpscalerTime
+            double deductedUpscalerTime = 0.0;
+            for (const auto& time : detailedGpuTimes)
+            {
+                if (!time.includedInUpscalerTime)
+                {
+                    deductedUpscalerTime += time.time;
+                }
+            }
+
+            auto upscalerWithInterop = UpscalerTime->ReadGpuTime((ID3D11DeviceContext*) deviceContextVoid);
+
+            if (dx12UpscalerTime)
+            {
+                if (upscalerWithInterop)
+                {
+                    const double interopTime = *upscalerWithInterop - *dx12UpscalerTime - deductedUpscalerTime;
+
+                    if (std::isfinite(interopTime) && interopTime > 0.0)
+                    {
+                        detailedGpuTimes.push_back({ "Interop", interopTime, true });
+                        return *dx12UpscalerTime + interopTime;
+                    }
+                }
+
+                // Dx11 timing has issue use Dx12 timing.
+                return dx12UpscalerTime;
+            }
+
+            return upscalerWithInterop;
+        }
 
         return std::nullopt;
     };
+
     void ReadDetailedGpuTimes(void* deviceContextVoid, std::vector<DetailedGpuTime>& detailedGpuTimes) override
     {
-        if (auto feature = dx12Feature.get(); feature && Dx12CommandQueue)
-            return feature->ReadDetailedGpuTimes(Dx12CommandQueue, detailedGpuTimes);
+        // We already queried and prepared detailedGpuTimes in ReadUpscalerTime
+        detailedGpuTimes = this->detailedGpuTimes;
     };
 
     feature_version Version() final

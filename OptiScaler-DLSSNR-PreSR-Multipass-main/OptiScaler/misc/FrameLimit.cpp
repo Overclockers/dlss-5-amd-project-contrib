@@ -86,7 +86,7 @@ void FrameLimit::sleep(bool fgActive)
         // The limit counts presented frames, the real frames come once per batch
         if (fgActive)
         {
-            auto fg = State::Instance().currentFG;
+            auto fg = State::Instance().CurrentFG();
             min_interval_us *= fg != nullptr ? fg->GetInterpolatedFrameCount() + 1 : 2;
         }
 

@@ -580,5 +580,20 @@ int main() {
 
 
 
+    def test_upstream_integrated_keys_contract(self):
+        ini = (ROOT / "OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler.ini").read_text(encoding="utf-8")
+        known = KEYS.split("kKnown[]", 1)[1]
+        for key, ini_name in [
+            ("XeFGTargetAsCapDMFG", "TargetAsCapDMFG"),
+            ("LowLatencyInput", "LowLatencyInput"),
+            ("LowLatencyOutput", "LowLatencyOutput"),
+            ("HudfixUITexture", "HUDFixUITexture"),
+            ("HudfixUIUnblend", "HUDFixUIUnblend"),
+        ]:
+            self.assertIn(f'{key} = "{ini_name}"', KEYS)
+            self.assertIn(key, known)
+            self.assertRegex(ini, rf"(?m)^{ini_name}=auto$")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

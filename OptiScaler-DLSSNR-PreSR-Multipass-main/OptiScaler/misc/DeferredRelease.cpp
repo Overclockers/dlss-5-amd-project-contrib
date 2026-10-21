@@ -54,9 +54,12 @@ void DeferredRelease::Enqueue(std::function<void()> destroy, uint64_t owner)
     if (owner != 0)
     {
         const auto it = owners.find(owner);
-        if (it == owners.end() || !it->second.active)
-            return;
-        generation = it->second.generation;
+        if (it != owners.end())
+        {
+            if (!it->second.active)
+                return;
+            generation = it->second.generation;
+        }
     }
     entries.push_back({ std::move(destroy), owner, generation, presentCounter, std::chrono::steady_clock::now() });
 }
@@ -147,7 +150,7 @@ static void ReleaseReady(bool present)
         {
             std::lock_guard lock(mutex);
             const auto it = owners.find(entry.owner);
-            if (it == owners.end() || !it->second.active || it->second.generation != entry.generation)
+            if (it != owners.end() && (!it->second.active || it->second.generation != entry.generation))
                 continue;
         }
         entry.destroy();

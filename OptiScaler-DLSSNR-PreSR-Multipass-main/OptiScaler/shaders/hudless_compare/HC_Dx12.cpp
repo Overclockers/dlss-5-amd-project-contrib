@@ -335,7 +335,7 @@ bool HC_Dx12::Dispatch(IDXGISwapChain3* sc, ID3D12GraphicsCommandList* cmdList, 
 
 HC_Dx12::~HC_Dx12()
 {
-    if (!_init || State::Instance().isShuttingDown)
+    if (State::Instance().isShuttingDown)
         return;
 
     DeferredRelease::Release(_rootSignature);
