@@ -132,6 +132,17 @@ require the separate B1 hook subset before end-to-end game-follow acceptance.
 DX12 HUD exit-buffer collection remains B10; DX11/game and NR-enabled GPU acceptance
 are not implied by this CPU build.
 
+The early A5/B1/B3 callback subset subsequently landed with the temporary XeFG
+capability-query dependency and local MFG Unlocker export-resolution handshake.
+Game DLSSG options now publish enabled/count state; the real/dummy state reports
+share output capabilities. SL1 managed-plugin JSON suppression covers owned DLSSG
+output while retaining the 16-slot callback leases. Dynamic XeFG arbitration is
+excluded when following the game, including the static-update early-return path;
+NR overrides, ForceXeLL and reinitialization gates remain. Independent source
+review closed both query/arbitration findings and the coherent Release host/worker
+build passed. This subset does not enable the D8 macro or certify full LL/D6 behavior.
+
+
 ### Follow-up snapshot (2026-10-09)
 
 Reviewed through **434b9555d960e6e471a461c2b0d98b8e1fdacfa2**

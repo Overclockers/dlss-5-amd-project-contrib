@@ -7,6 +7,7 @@
 
 #include <nvapi/fakenvapi.h>
 #include <misc/IdentifyGpu.h>
+#include <framegen/xefg/XeFG_Dx12.h>
 #include <hooks/Reflex_Hooks.h>
 #include <menu/menu_overlay_base.h>
 #include <framegen/nvngx/Nvngx_FG.h>
@@ -18,22 +19,27 @@
 #include <magic_enum.hpp>
 #include "detours/detours.h"
 
-static bool IsSL1AndDLSSGActive()
-{
-    return State::Instance().streamlineVersion.major == 1 && State::Instance().activeFgInput == FGInput::DLSSG &&
-           (State::Instance().activeFgOutput == FGOutput::FSRFG || State::Instance().activeFgOutput == FGOutput::XeFG);
-}
-
 static bool IsSL1AndFGActive()
 {
     const auto& state = State::Instance();
 
-    return state.streamlineVersion.major == 1 && state.activeFgInput == FGInput::DLSSG;
+    return state.streamlineVersion.major == 1 && state.activeFgInput == FGInput::DLSSG &&
+           state.activeFgOutput != FGOutput::NoFG;
+}
+
+// Game's SL1 DLSSG has to stay inert when we use its inputs or provide DLSSG ourselves,
+// otherwise its swapchain hooks end up stacked on top of our FG swapchain
+static bool IsSL1AndDLSSGManaged()
+{
+    const auto& state = State::Instance();
+
+    return state.streamlineVersion.major == 1 &&
+           (state.activeFgInput == FGInput::DLSSG || state.activeFgOutput == FGOutput::DLSSG);
 }
 
 static void PatchSL1PluginJson(nlohmann::json& configJson)
 {
-    if (!IsSL1AndFGActive())
+    if (!IsSL1AndDLSSGManaged())
         return;
 
     LOG_DEBUG("Patching SL1 plugin JSON for external FG management");
@@ -308,21 +314,79 @@ sl::Result StreamlineHooks::hkslGetFeatureVersion(sl::Feature feature, sl::Featu
     return o_slGetFeatureVersion(feature, version);
 }
 
+// Games usually ask for the max before our FG swapchain exists, so the output can't tell us yet
+static int OutputMaxInterpolationCount()
+{
+    auto& state = State::Instance();
+
+    if (auto fg = state.currentFG; fg != nullptr && fg->GetMaxInterpolationCount() > 1)
+        return fg->GetMaxInterpolationCount();
+
+    if (state.activeFgOutput == FGOutput::XeFG)
+    {
+        static int xefgMax = 0;
+        static bool xefgQueried = false;
+
+        // GetState can be called every frame, only try once
+        if (!xefgQueried && state.currentD3D12Device != nullptr)
+        {
+            xefgQueried = true;
+            xefgMax = XeFG_Dx12::QueryMaxInterpolationCount(state.currentD3D12Device);
+        }
+
+        if (xefgMax > 0)
+            return xefgMax;
+    }
+
+    return 1;
+}
+
+// Reports Opti's FG output capabilities to the game when DLSSG is used as FG Input
+static void FillDlssgInputState(sl::DLSSGState& state)
+{
+    auto fg = State::Instance().currentFG;
+
+    if (fg != nullptr && fg->IsActive() && !fg->IsPaused())
+        state.numFramesActuallyPresented = fg->GetInterpolatedFrameCount() + 1;
+    else
+        state.numFramesActuallyPresented = 1;
+
+    if (state.structVersion >= sl::kStructVersion2)
+        state.numFramesToGenerateMax = OutputMaxInterpolationCount();
+}
+
 static sl::Result dummy_slDLSSGGetState(const sl::ViewportHandle& viewport, sl::DLSSGState& state,
                                         const sl::DLSSGOptions* options)
 {
-    state.numFramesActuallyPresented = 1; // TODO: can do better
-    if(state.structVersion >= 2) {
-        state.numFramesToGenerateMax = 1;
-        state.bIsVsyncSupportAvailable = sl::Boolean::eTrue;
-    }
+    FillDlssgInputState(state);
     state.estimatedVRAMUsageInBytes = 300 * 1024 * 1024;
+
+    if (state.structVersion >= sl::kStructVersion2)
+        state.bIsVsyncSupportAvailable = sl::Boolean::eTrue;
 
     return sl::Result::eOk;
 }
 
 static sl::Result dummy_slDLSSGSetOptions(const sl::ViewportHandle& viewport, const sl::DLSSGOptions& options)
 {
+    auto& state = State::Instance();
+
+    // Only reading v1 fields, safe for any struct version
+    const bool enabled = options.mode != sl::DLSSGMode::eOff;
+    const int count = std::max(static_cast<int>(options.numFramesToGenerate), 1);
+
+    if (enabled != state.dlssgInputGameEnabled || count != state.dlssgInputGameInterpolationCount)
+    {
+        LOG_INFO("Game requested DLSSG mode: {}, numFramesToGenerate: {}", magic_enum::enum_name(options.mode),
+                 options.numFramesToGenerate);
+
+        if (enabled && !state.dlssgInputGameEnabled && Config::Instance()->FGFollowsGame())
+            state.fgChanged = true;
+
+        state.dlssgInputGameEnabled = enabled;
+        state.dlssgInputGameInterpolationCount = count;
+    }
+
     return sl::Result::eOk;
 }
 
@@ -1303,28 +1367,10 @@ sl::Result StreamlineHooks::hkslDLSSGGetState(const sl::ViewportHandle& viewport
 
     if (optiState.activeFgInput == FGInput::DLSSG)
     {
-        auto fg = optiState.currentFG;
-
-        if (fg != nullptr)
-        {
-            if (options != nullptr && options->flags & sl::DLSSGFlags::eRequestVRAMEstimate)
-                state.estimatedVRAMUsageInBytes = static_cast<uint64_t>(256 * 1024) * 1024;
-
-            if (fg->IsActive() && !fg->IsPaused())
-            {
-                state.numFramesActuallyPresented = fg->GetInterpolatedFrameCount() + 1;
-            }
-            else
-            {
-                state.numFramesActuallyPresented = 1;
-            }
-        }
-        else
-        {
-            state.numFramesActuallyPresented = 1;
-        }
-
-        if(originalStructVersion >= 2) state.numFramesToGenerateMax = 1;
+        if (optiState.currentFG != nullptr && options != nullptr &&
+            options->flags & sl::DLSSGFlags::eRequestVRAMEstimate)
+            state.estimatedVRAMUsageInBytes = static_cast<uint64_t>(256 * 1024) * 1024;
+        FillDlssgInputState(state);
 
         LOG_DEBUG("Status: {}, numFramesActuallyPresented: {}", magic_enum::enum_name(state.status),
                   state.numFramesActuallyPresented);
@@ -1478,7 +1524,7 @@ void* StreamlineHooks::hkdlssg_slGetPluginFunction(const char* functionName)
         return Callback<&hkslDLSSGGetState>(currentPlugin);
     }
 
-    if (strcmp(functionName, "slGetPluginJSONConfig") == 0 && IsSL1AndDLSSGActive())
+    if (strcmp(functionName, "slGetPluginJSONConfig") == 0 && IsSL1AndDLSSGManaged())
     {
         Calls().o_dlssg_slGetPluginJSONConfig_sl1.store(
             reinterpret_cast<PFN_slGetPluginJSONConfig_sl1>(Calls().o_dlssg_slGetPluginFunction.load()(functionName)));
@@ -1575,6 +1621,15 @@ void* StreamlineHooks::hkreflex_slGetPluginFunction(const char* functionName)
 
 sl::Result StreamlineHooks::hkslPCLSetMarker(sl::PCLMarker marker, const sl::FrameToken& frame)
 {
+    if (o_slPCLSetMarker == nullptr)
+        return sl::Result::eErrorFeatureMissing;
+    const void* volatile framePtr = &frame;
+    if (framePtr == nullptr)
+    {
+        LOG_WARN("Null frame token for marker {}", (uint32_t) marker);
+        return o_slPCLSetMarker(marker, frame);
+    }
+
     // if (State::Instance().activeFgOutput == FGOutput::DLSSG && StreamlineProxy::IsD3D12Inited() &&
     //     Config::Instance()->FGDLSSGUseGamesReflexMarkers.value_or_default())
     //{

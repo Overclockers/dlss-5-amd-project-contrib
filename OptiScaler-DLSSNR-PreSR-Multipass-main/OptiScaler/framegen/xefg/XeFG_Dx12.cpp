@@ -37,6 +37,36 @@ void XeFG_Dx12::xefgLogCallback(const char* message, xefg_swapchain_logging_leve
     }
 }
 
+int XeFG_Dx12::QueryMaxInterpolationCount(ID3D12Device* device)
+{
+    if (device == nullptr || (XeFGProxy::Module() == nullptr && !XeFGProxy::InitXeFG()) ||
+        XeFGProxy::D3D12CreateContext() == nullptr || XeFGProxy::GetProperties() == nullptr ||
+        XeFGProxy::Destroy() == nullptr)
+        return 0;
+
+    // MFG Unlocker completes its export hooks on this lookup, including for temporary contexts.
+    GetProcAddress(XeFGProxy::Module(), "xefgSwapChainD3D12CreateContext");
+#ifndef DONT_USE_XMX
+    ScopedSkipSpoofingGlobal skipSpoofingGlobal {};
+#endif
+    xefg_swapchain_handle_t context = nullptr;
+    auto result = XeFGProxy::D3D12CreateContext()(device, &context);
+    if (result != XEFG_SWAPCHAIN_RESULT_SUCCESS)
+    {
+        LOG_ERROR("D3D12CreateContext error: {} ({})", magic_enum::enum_name(result), (UINT) result);
+        return 0;
+    }
+    xefg_swapchain_properties_t properties {};
+    result = XeFGProxy::GetProperties()(context, &properties);
+    XeFGProxy::Destroy()(context);
+    if (result != XEFG_SWAPCHAIN_RESULT_SUCCESS)
+    {
+        LOG_ERROR("GetProperties error: {} ({})", magic_enum::enum_name(result), (UINT) result);
+        return 0;
+    }
+    return static_cast<int>(properties.maxSupportedInterpolations);
+}
+
 bool XeFG_Dx12::CreateSwapchainContext(ID3D12Device* device)
 {
     if (XeFGProxy::Module() == nullptr && !XeFGProxy::InitXeFG())
@@ -760,7 +790,7 @@ bool XeFG_Dx12::Dispatch()
         int maxTargetCount = resolved.target;
 
         // Dynamic MFG: the configured Frame Gen / NR override setting is the ceiling, and the count follows the real frame rate
-        const bool dynamic = config->FGXeFGDynamicMFG.value_or_default() && maxTargetCount > 1;
+        const bool dynamic = config->FGXeFGDynamicMFG.value_or_default() && !config->FGFollowsGame() && maxTargetCount > 1;
 
         if (dynamic)
         {
@@ -1161,7 +1191,7 @@ void XeFG_Dx12::UpdateInterpolationCount()
     request.enabled = config->IsFGEnabled() && State::Instance().activeFgInput != FGInput::ForceXeLL;
     request.nrRunning = request.nrOverride > 0 && request.enabled && DlssNr::IsActiveForFrameGeneration();
     const auto resolved = FrameGeneration::ResolveInterpolation(request);
-    if (config->FGXeFGDynamicMFG.value_or_default() && resolved.target > 1 && request.liveSupported)
+    if (config->FGXeFGDynamicMFG.value_or_default() && !config->FGFollowsGame() && resolved.target > 1 && request.liveSupported)
     {
         return;
     }
