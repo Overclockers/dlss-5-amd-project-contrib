@@ -446,6 +446,51 @@
     <ClInclude Include="framegen\IFGFeature_Dx12.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="framegen\IFGFeature_Vk.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="framegen\dlssg\DLSSG_Common.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="framegen\dlssg\DLSSG_Vk.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="framegen\ffx\FSRFG_Vk.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="hudfix\Hudfix_Vk.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="inputs\FG\Upscaler_Inputs.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="inputs\FG\Upscaler_Inputs_Vk.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="shaders\hud_copy\HudCopy_Vk.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="shaders\hud_copy\precompile\HudCopy_Shader_Vk.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="shaders\hudless_compare_compute\HCC_Vk.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="shaders\hudless_compare_compute\precompile\HCC_Shader_Vk.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="shaders\resource_flip\RF_Vk.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="shaders\resource_flip\precompiled\RF_Shader_Vk.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="shaders\ui_unblend\UiUnblend_Vk.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="shaders\ui_unblend\precompile\UiUnblend_Shader_Vk.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="hudfix\Hudfix_Dx12.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -1448,6 +1493,33 @@
     <ClCompile Include="framegen\dlssg\DLSSG_Dx12.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="framegen\IFGFeature_Vk.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="framegen\dlssg\DLSSG_Common.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="framegen\dlssg\DLSSG_Vk.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="framegen\ffx\FSRFG_Vk.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="hudfix\Hudfix_Vk.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="inputs\FG\Upscaler_Inputs.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="inputs\FG\Upscaler_Inputs_Vk.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="shaders\hud_copy\HudCopy_Vk.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="shaders\resource_flip\RF_Vk.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="OptiTypes.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -1628,6 +1700,11 @@
       <Filter>Source Files</Filter>
     </None>
     <None Include="shaders\magnifier\precompile\Magnifier_Shader_Vk.spv" />
+    <None Include="shaders\hud_copy\precompile\HudCopy_Shader_Vk.spv" />
+    <None Include="shaders\hudless_compare_compute\precompile\HCC_Shader_Vk.spv" />
+    <None Include="shaders\resource_flip\precompiled\RF_Shader_Vk.spv" />
+    <None Include="shaders\ui_unblend\precompile\UiUnblend.hlsl" />
+    <None Include="shaders\ui_unblend\precompile\UiUnblend_Shader_Vk.spv" />
   </ItemGroup>
 
   <ItemGroup>

@@ -5,6 +5,7 @@
 #include "misc/SkipSpoof.h"
 #include "misc/VulkanCallScope.h"
 #include "framegen/IFGFeature_Dx12.h"
+#include "framegen/IFGFeature_Vk.h"
 #include <inputs/FG/Streamline_Inputs_Dx12.h>
 #include <inputs/FG/Streamline_Inputs_Sl1_Dx12.h>
 
@@ -345,6 +346,7 @@ class State
 
     IFeature* currentFeature = nullptr;
     IFGFeature_Dx12* currentFG = nullptr;
+    IFGFeature_Vk* currentVkFG = nullptr;
     IDXGISwapChain* currentSwapchain = nullptr;
     IDXGISwapChain* currentWrappedSwapchain = nullptr;
     IDXGISwapChain* currentRealSwapchain = nullptr;
