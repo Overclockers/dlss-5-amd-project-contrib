@@ -20,6 +20,11 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <map>
+#include <regex>
+#include <sstream>
+#include <string>
 #include <limits>
 #include <type_traits>
 #include <vector>
@@ -187,8 +192,95 @@ static void ParseRootSignatureDesc(const D3D12_ROOT_SIGNATURE_DESC* desc, RootSi
     }
 }
 
-int main()
+// ---------------------------------------------------------------------------
+// Production slot contract. The static_asserts above only pin the SDK layout;
+// this reads the literal pVTable[N] indices in the shipped ResTrack_dx12.cpp and
+// requires each one to equal the SDK slot of the method its PFN_* names. A
+// regression such as H4 (ClearState hooked through pVTable[47]) fails here.
+// ---------------------------------------------------------------------------
+static int CheckProductionVtableSlots(const char* path)
 {
+    std::ifstream file(path, std::ios::binary);
+    if (!file)
+    {
+        std::fprintf(stderr, "cannot open %s\n", path);
+        return 1;
+    }
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    const std::string source = buffer.str();
+
+    const std::map<std::string, size_t> expected = {
+        { "Release", VTABLE_SLOT(ID3D12GraphicsCommandListVtbl, Release) },
+        { "Close", VTABLE_SLOT(ID3D12GraphicsCommandListVtbl, Close) },
+        { "Reset", VTABLE_SLOT(ID3D12GraphicsCommandListVtbl, Reset) },
+        { "ClearState", VTABLE_SLOT(ID3D12GraphicsCommandListVtbl, ClearState) },
+        { "DrawInstanced", VTABLE_SLOT(ID3D12GraphicsCommandListVtbl, DrawInstanced) },
+        { "DrawIndexedInstanced", VTABLE_SLOT(ID3D12GraphicsCommandListVtbl, DrawIndexedInstanced) },
+        { "Dispatch", VTABLE_SLOT(ID3D12GraphicsCommandListVtbl, Dispatch) },
+        { "ExecuteBundle", VTABLE_SLOT(ID3D12GraphicsCommandListVtbl, ExecuteBundle) },
+        { "SetComputeRootDescriptorTable", VTABLE_SLOT(ID3D12GraphicsCommandListVtbl, SetComputeRootDescriptorTable) },
+        { "SetGraphicsRootDescriptorTable", VTABLE_SLOT(ID3D12GraphicsCommandListVtbl, SetGraphicsRootDescriptorTable) },
+        { "OMSetRenderTargets", VTABLE_SLOT(ID3D12GraphicsCommandListVtbl, OMSetRenderTargets) },
+        { "ExecuteCommandLists", VTABLE_SLOT(ID3D12CommandQueueVtbl, ExecuteCommandLists) },
+        { "CreateDescriptorHeap", VTABLE_SLOT(ID3D12DeviceVtbl, CreateDescriptorHeap) },
+        { "CreateShaderResourceView", VTABLE_SLOT(ID3D12DeviceVtbl, CreateShaderResourceView) },
+        { "CreateUnorderedAccessView", VTABLE_SLOT(ID3D12DeviceVtbl, CreateUnorderedAccessView) },
+        { "CreateRenderTargetView", VTABLE_SLOT(ID3D12DeviceVtbl, CreateRenderTargetView) },
+        { "CreateSampler", VTABLE_SLOT(ID3D12DeviceVtbl, CreateSampler) },
+        { "CopyDescriptors", VTABLE_SLOT(ID3D12DeviceVtbl, CopyDescriptors) },
+        { "CopyDescriptorsSimple", VTABLE_SLOT(ID3D12DeviceVtbl, CopyDescriptorsSimple) },
+    };
+
+    // Only live code: lines whose first non-blank characters are "//" are skipped.
+    const std::regex slot(R"(\(PFN_(\w+)\)\s*pVTable\[(\d+)\])");
+    std::map<std::string, bool> seen;
+    int failures = 0;
+    std::istringstream lines(source);
+    std::string line;
+    while (std::getline(lines, line))
+    {
+        const auto first = line.find_first_not_of(" \t");
+        if (first == std::string::npos || line.compare(first, 2, "//") == 0)
+            continue;
+        std::smatch match;
+        if (!std::regex_search(line, match, slot))
+            continue;
+        const std::string name = match[1].str();
+        const size_t index = static_cast<size_t>(std::stoul(match[2].str()));
+        const auto entry = expected.find(name);
+        if (entry == expected.end())
+        {
+            std::fprintf(stderr, "unknown hooked slot PFN_%s pVTable[%zu]: add it to the contract\n", name.c_str(), index);
+            ++failures;
+            continue;
+        }
+        if (entry->second != index)
+        {
+            std::fprintf(stderr, "PFN_%s uses pVTable[%zu], SDK slot is %zu\n", name.c_str(), index, entry->second);
+            ++failures;
+        }
+        seen[name] = true;
+    }
+    for (const char* required : { "Reset", "ClearState", "DrawIndexedInstanced", "SetGraphicsRootDescriptorTable",
+                                  "SetComputeRootDescriptorTable", "OMSetRenderTargets" })
+    {
+        if (!seen.count(required))
+        {
+            std::fprintf(stderr, "PFN_%s pVTable[...] assignment not found in %s\n", required, path);
+            ++failures;
+        }
+    }
+    return failures;
+}
+
+int main(int argc, char** argv)
+{
+    const char* production = argc > 1 ? argv[1]
+                                      : "OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/resource_tracking/ResTrack_dx12.cpp";
+    if (CheckProductionVtableSlots(production) != 0)
+        return 1;
+
     // Test 1: explicit offset followed by D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND.
     {
         D3D12_DESCRIPTOR_RANGE ranges[3] = {};

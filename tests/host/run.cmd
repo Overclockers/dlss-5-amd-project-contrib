@@ -83,7 +83,7 @@ call "%REPO%\tests\host\menu-localization.cmd" "%OUT%\menu" || goto fail
 %CXX% /utf-8 /I"tests\host\deferred_shim" tests\host\deferred_release_contract.cpp "%REPO%\OptiScaler-DLSSNR-PreSR-Multipass-main\OptiScaler\misc\DeferredRelease.cpp" /Fe"%OUT%\deferred_release_contract.exe" /Fo"%OUT%"\ || goto fail
 "%OUT%\deferred_release_contract.exe" || goto fail
 %CXX% /utf-8 tests\host\restrack_d3_signature.cpp /Fe"%OUT%\restrack_d3_signature.exe" /Fo"%OUT%\restrack_d3_signature.obj" /link d3d12.lib dxguid.lib || goto fail
-"%OUT%\restrack_d3_signature.exe" || goto fail
+"%OUT%\restrack_d3_signature.exe" "%REPO%\OptiScaler-DLSSNR-PreSR-Multipass-main\OptiScaler\resource_tracking\ResTrack_dx12.cpp" || goto fail
 %CXX% /utf-8 tests\host\nr_performance.cpp /Fe"%OUT%\nr_performance.exe" /Fo"%OUT%\nr_performance.obj" || goto fail
 "%OUT%\nr_performance.exe" || goto fail
 %CXX% /utf-8 tests\host\nr_status_display.cpp /Fe"%OUT%\nr_status_display.exe" /Fo"%OUT%\nr_status_display.obj" || goto fail
@@ -127,6 +127,7 @@ mkdir "%OUT%\retirement"
 "%AMD_TEST_PYTHON%" -B -m unittest tests\host\test_retirement_stats.py || goto fail
 powershell -NoProfile -ExecutionPolicy Bypass -File "%REPO%\tests\host\hip_load.ps1" "%OUT%\hip" || goto fail
 "%AMD_TEST_PYTHON%" -B tests\host\test_config_priority.py || goto fail
+"%AMD_TEST_PYTHON%" -B tests\host\test_nr_deferred_release_scope.py || goto fail
 
 call tests\host\person-inference.cmd || goto fail
 call tests\host\person-worker.cmd || goto fail
