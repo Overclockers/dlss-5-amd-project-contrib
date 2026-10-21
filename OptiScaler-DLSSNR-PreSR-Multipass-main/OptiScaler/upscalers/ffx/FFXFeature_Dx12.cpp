@@ -470,9 +470,6 @@ bool FFXFeatureDx12::EvaluateInternal(ID3D12GraphicsCommandList* InCommandList, 
         params.upscaleSize.height = TargetHeight();
     }
 
-        params.upscaleSize.height = TargetHeight();
-    }
-
     if (_customAutoExposure)
     {
         if (_autoExposure->Dispatch(InCommandList, paramColor, params.renderSize.width, params.renderSize.height,
@@ -483,6 +480,8 @@ bool FFXFeatureDx12::EvaluateInternal(ID3D12GraphicsCommandList* InCommandList, 
         else
         {
             LOG_ERROR("Auto exposure dispatch failed");
+        }
+    }
 
     LOG_DEBUG("Dispatch!!");
     const auto probe = DlssNr::Backend::LmxxfProbe::CurrentEvidence();
