@@ -293,15 +293,24 @@ namespace OptScalerNR.Launcher
             var byName = new Dictionary<string, ProxyProfile>(StringComparer.OrdinalIgnoreCase);
             var byStripped = new Dictionary<string, ProxyProfile>(StringComparer.OrdinalIgnoreCase);
             var usedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var previousWikiEntries = 0;
             if (seed.Profiles != null)
                 foreach (var source in seed.Profiles) {
-                    if (source == null || string.IsNullOrEmpty(source.Id) || !usedIds.Add(source.Id)) continue;
+                    if (source == null || string.IsNullOrEmpty(source.Id)) continue;
+                    // Machine-generated entries are rebuilt from the live rows below. Keeping them would
+                    // preserve games the wiki has since removed or marked broken with their old advice.
+                    if (string.Equals(source.SourceFormat, "wiki", StringComparison.OrdinalIgnoreCase)) { previousWikiEntries++; continue; }
+                    if (!usedIds.Add(source.Id)) continue;
                     var profile = CloneProfile(source);
                     profiles.Add(profile);
                     foreach (var name in profile.Names) IndexIdentity(byName, byStripped, name, profile);
                     foreach (var segment in profile.PathSegments) IndexIdentity(byName, byStripped, segment, profile);
                 }
-            foreach (var row in ReadWikiRows(markdown)) {
+            var rows = ReadWikiRows(markdown);
+            // A page whose table layout changed parses to few rows; refuse it instead of dropping the seed.
+            if (previousWikiEntries > 0 && rows.Count * 2 < previousWikiEntries)
+                throw new InvalidDataException("Wiki table parsed to too few rows.");
+            foreach (var row in rows) {
                 var analysis = AnalyzeProxies(row.Notes);
                 ProxyProfile existing;
                 var titleKey = NormalizeIdentity(row.Title);
@@ -412,6 +421,12 @@ namespace OptScalerNR.Launcher
                     hasLink = true;
                     url = target.StartsWith("http", StringComparison.OrdinalIgnoreCase)
                         ? target : "https://github.com/optiscaler/OptiScaler/wiki/" + target;
+                    // Validate() only accepts https://github.com sources; an external title link must not
+                    // invalidate the whole refresh, the row falls back to the compatibility list page.
+                    Uri parsed;
+                    if (!Uri.TryCreate(url, UriKind.Absolute, out parsed) || parsed.Scheme != "https" || parsed.Host != "github.com") {
+                        url = null; hasLink = false;
+                    }
                 }
             }
             title = CollapseWhitespace(title.Replace("**", "").Replace("`", ""));
@@ -666,12 +681,19 @@ namespace OptScalerNR.Launcher
         {
             if (_disposed || Interlocked.Exchange(ref _updating, 1) != 0) return "busy";
             var timer = Stopwatch.StartNew();
+            HttpWebRequest request;
+            try {
+                // OPTSCALERNR_WIKI_URL may name a file:// or ftp:// URI that WebRequest maps to another type.
+                request = WebRequest.Create(_url) as HttpWebRequest;
+                if (request != null) {
+                    request.UserAgent = "OptScalerNR-Launcher/1";
+                    request.Timeout = request.ReadWriteTimeout = DeadlineMs;
+                    request.AllowAutoRedirect = false;
+                    if (!string.IsNullOrEmpty(_etag)) request.Headers[HttpRequestHeader.IfNoneMatch] = _etag;
+                }
+            } catch (Exception) { request = null; }
+            if (request == null) { Interlocked.Exchange(ref _updating, 0); return "invalid"; }
             var deadline = new CancellationTokenSource();
-            var request = (HttpWebRequest)WebRequest.Create(_url);
-            request.UserAgent = "OptScalerNR-Launcher/1";
-            request.Timeout = request.ReadWriteTimeout = DeadlineMs;
-            request.AllowAutoRedirect = false;
-            if (!string.IsNullOrEmpty(_etag)) request.Headers[HttpRequestHeader.IfNoneMatch] = _etag;
             lock (_gate) {
                 if (_disposed) { Interlocked.Exchange(ref _updating, 0); deadline.Dispose(); return "cancelled"; }
                 _request = request;
