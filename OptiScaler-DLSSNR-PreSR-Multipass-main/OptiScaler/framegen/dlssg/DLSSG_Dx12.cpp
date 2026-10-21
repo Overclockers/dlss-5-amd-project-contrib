@@ -317,19 +317,13 @@ bool DLSSG_Dx12::Dispatch()
 
     auto& state = State::Instance();
 
-    if (Config::Instance()->FGDLSSGInterpolationCount.value_or_default() > _maxInterpolationCount)
+    const auto requestedCount = std::clamp(Config::Instance()->FGInterpolationCount(
+                                             Config::Instance()->FGDLSSGInterpolationCount.value_or_default()),
+                                         1, static_cast<int>(_maxInterpolationCount));
+    if (_framesToInterpolate != requestedCount)
     {
-        Config::Instance()->FGDLSSGInterpolationCount = _maxInterpolationCount;
-        LOG_WARN("Requested interpolation count is higher than max supported, setting to max: {}",
-                 _maxInterpolationCount);
-    }
-
-    if (_framesToInterpolate != Config::Instance()->FGDLSSGInterpolationCount.value_or_default())
-    {
-        LOG_INFO("Interpolation count changed {} -> {}", _framesToInterpolate,
-                 Config::Instance()->FGDLSSGInterpolationCount.value_or_default());
-
-        _framesToInterpolate = Config::Instance()->FGDLSSGInterpolationCount.value_or_default();
+        LOG_INFO("Interpolation count changed {} -> {}", _framesToInterpolate, requestedCount);
+        _framesToInterpolate = requestedCount;
     }
 
     sl::DLSSGOptions options {};
@@ -564,7 +558,7 @@ void DLSSG_Dx12::EvaluateState(ID3D12Device* device, FG_Constants& fgConstants)
     _constants = fgConstants;
 
     // If FG Enabled from menu
-    if (Config::Instance()->FGEnabled.value_or_default())
+    if (Config::Instance()->IsFGEnabled())
     {
         if (_device == nullptr)
         {

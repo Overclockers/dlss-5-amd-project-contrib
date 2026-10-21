@@ -363,7 +363,7 @@ bool XeFG_Dx12::CreateSwapchain(IDXGIFactory* factory, ID3D12CommandQueue* cmdQu
 
     // For old libxess_fg versions we use max to control interpolation count
     if (XeFGProxy::SetNumInterpolatedFrames() == nullptr)
-        intTarget = Config::Instance()->FGXeFGInterpolationCount.value_or_default();
+        intTarget = Config::Instance()->FGInterpolationCount(Config::Instance()->FGXeFGInterpolationCount.value_or_default());
 
     if (intTarget < 1 || intTarget > _maxInterpolationCount)
     {
@@ -517,7 +517,7 @@ bool XeFG_Dx12::CreateSwapchain1(IDXGIFactory* factory, ID3D12CommandQueue* cmdQ
 
     // For old libxess_fg versions we use max to control interpolation count
     if (XeFGProxy::SetNumInterpolatedFrames() == nullptr)
-        intTarget = Config::Instance()->FGXeFGInterpolationCount.value_or_default();
+        intTarget = Config::Instance()->FGInterpolationCount(Config::Instance()->FGXeFGInterpolationCount.value_or_default());
 
     if (intTarget < 1 || intTarget > _maxInterpolationCount)
     {
@@ -750,11 +750,11 @@ bool XeFG_Dx12::Dispatch()
     {
         const auto config = Config::Instance();
         FrameGeneration::InterpolationRequest request;
-        request.baseline = config->FGXeFGInterpolationCount.value_or_default();
+        request.baseline = config->FGInterpolationCount(config->FGXeFGInterpolationCount.value_or_default());
         request.nrOverride = config->DlssNrXeFGInterpolationCount.value_or_default();
         request.maximum = _maxInterpolationCount;
         request.liveSupported = true;
-        request.enabled = config->FGEnabled.value_or_default() && state.activeFgInput != FGInput::ForceXeLL;
+        request.enabled = config->IsFGEnabled() && state.activeFgInput != FGInput::ForceXeLL;
         request.nrRunning = request.nrOverride > 0 && request.enabled && DlssNr::IsActiveForFrameGeneration();
         const auto resolved = FrameGeneration::ResolveInterpolation(request);
         int maxTargetCount = resolved.target;
@@ -1154,11 +1154,11 @@ void XeFG_Dx12::UpdateInterpolationCount()
         return;
     const auto config = Config::Instance();
     FrameGeneration::InterpolationRequest request;
-    request.baseline = config->FGXeFGInterpolationCount.value_or_default();
+    request.baseline = config->FGInterpolationCount(config->FGXeFGInterpolationCount.value_or_default());
     request.nrOverride = config->DlssNrXeFGInterpolationCount.value_or_default();
     request.maximum = _maxInterpolationCount;
     request.liveSupported = XeFGProxy::SetNumInterpolatedFrames() != nullptr;
-    request.enabled = config->FGEnabled.value_or_default() && State::Instance().activeFgInput != FGInput::ForceXeLL;
+    request.enabled = config->IsFGEnabled() && State::Instance().activeFgInput != FGInput::ForceXeLL;
     request.nrRunning = request.nrOverride > 0 && request.enabled && DlssNr::IsActiveForFrameGeneration();
     const auto resolved = FrameGeneration::ResolveInterpolation(request);
     if (config->FGXeFGDynamicMFG.value_or_default() && resolved.target > 1 && request.liveSupported)
@@ -1212,7 +1212,7 @@ void XeFG_Dx12::EvaluateState(ID3D12Device* device, FG_Constants& fgConstants)
     UpdateInterpolationCount();
 
     // If FG Enabled from menu
-    if (Config::Instance()->FGEnabled.value_or_default())
+    if (Config::Instance()->IsFGEnabled())
     {
         // If FG context is nullptr
         if (_fgContext == nullptr)

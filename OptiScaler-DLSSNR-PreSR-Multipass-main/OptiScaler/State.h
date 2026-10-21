@@ -149,6 +149,9 @@ class State
     bool fgOnlyGenerated = false;
     bool fgHudlessCompare = false;
     bool fgChanged = false;
+    bool dlssgInputGameEnabled = false;
+    int dlssgInputGameInterpolationCount = 1;
+    float xefgDynamicCapFps = 0.0f;
     bool scChanged = false;
     inline static thread_local bool skipHeapCapture = false;
 
@@ -253,6 +256,13 @@ class State
 
     // quirks
     std::vector<std::string> detectedQuirks {};
+    struct LoadedAsiPlugin
+    {
+        std::string name;
+        bool isOptiPatcher;
+    };
+    std::vector<LoadedAsiPlugin> loadedAsiPlugins;
+    std::mutex loadedAsiPluginsMutex;
 
     // FFX
     struct FfxVersionList

@@ -113,6 +113,25 @@ This synthetic comparison does not cover game visual quality, nonlinear input,
 allocation padding or NR-network replacement at runtime; NR COMPUTE_READ preservation
 is source-reviewed and the combined NR smoke remains required.
 
+### v10 host stability and DX11 HUD integration
+
+The GLM-authored host slice and five independently reviewed Codex repairs are
+integrated: depth-view format mapping, failed FG-create latching, lexical path and
+ReShade naming fixes, proxy unload protection, FG release order, per-instance DX11
+interop resources and retained MV/depth inputs, and DX11 HUD tracking. Transfer
+retirement takes each slot's exclusive lock and invalidates all frame entries;
+HUD converters follow actual output-format changes, centered captures initialize
+uncovered pixels, and shader bindings survive capture-window resets.
+
+Public swapchain creation/tearing/description hooks, loaded-ASI registration/listing,
+Nvngx FG shortcut and step-marked multiplier controls accompany that source. All
+runtime FG enablement consumers use the common accessor; local NR multiplier
+resolution/readiness guards remain. The Release host/worker build passed.
+Game-follow callback publication and the temporary XeFG capability query still
+require the separate B1 hook subset before end-to-end game-follow acceptance.
+DX12 HUD exit-buffer collection remains B10; DX11/game and NR-enabled GPU acceptance
+are not implied by this CPU build.
+
 ### Follow-up snapshot (2026-10-09)
 
 Reviewed through **434b9555d960e6e471a461c2b0d98b8e1fdacfa2**

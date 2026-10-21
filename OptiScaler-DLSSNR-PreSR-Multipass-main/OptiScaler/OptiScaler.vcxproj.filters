@@ -197,6 +197,12 @@
     <ClInclude Include="shaders\auto_exposure\precompile\AE_Shader.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="hudfix\Hudfix_Dx11.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="resource_tracking\ResTrack_dx11.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="State.h">
       <Filter>Config</Filter>
     </ClInclude>
@@ -1119,6 +1125,12 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="shaders\auto_exposure\AE_Dx12.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="hudfix\Hudfix_Dx11.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="resource_tracking\ResTrack_dx11.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="shaders\bias\Bias_Dx11.cpp">

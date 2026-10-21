@@ -1053,7 +1053,7 @@ class Config
         L"qtwebengineprocess.exe|platformprocess.exe|bugsplathd64.exe|bssndrpt64.exe|pspcsdkappmgr.exe|pspcsdkcore.exe|"
         L"pspcsdkstttts.exe|pspcsdktelemetry.exe|pspcsdkui.exe|pspcsdkupdatechecker.exe|pspcsdkvoicechat.exe|"
         L"pspcsdkwebview.exe|windhawk.exe|vscodium.exe|crash_reporter.exe|steamerrorreporter64.exe|crashreportclient."
-        L"exe|edcefcrashpadprocess.exe|edcefrenderprocess.exe"
+        L"exe|edcefcrashpadprocess.exe|edcefrenderprocess.exe|unicrashreporter.exe"
     };
 
     // Hotfixes
@@ -1270,6 +1270,8 @@ class Config
     CustomOptional<float> FGXeFGFramerateTargetDMFG { 0.0f }; // 0 = the FPS limit, else just under the refresh rate
     CustomOptional<int> FGXeFGRoundingDMFG { 1 };             // 0 down, 1 nearest, 2 up
     CustomOptional<bool> FGXeFGDynamicAllow1X { true };       // Dynamic MFG may turn frame generation off (1X)
+    CustomOptional<bool> FGXeFGTargetAsCapDMFG { false };
+    CustomOptional<int, NoDefault> FGXeFGOverrideInterpolationCount;
 
     // DLSSG
     CustomOptional<int> FGDLSSGInterpolationCount { 1 }; // For Opti's own SL instance
@@ -1339,6 +1341,10 @@ class Config
     bool SaveXeFG();
 
     void CheckUpscalerFiles();
+    static bool FGCanFollowGame();
+    bool FGFollowsGame() const;
+    bool IsFGEnabled() const;
+    int FGInterpolationCount(int outputCount) const;
 
     std::vector<std::string> GetConfigLog();
 

@@ -232,12 +232,16 @@ bool Config::Reload(std::filesystem::path iniPath)
             FGXeFGForceBorderless.set_from_config(readBool("XeFG", "ForceBorderless"));
             FGXeFGDynamicMFG.set_from_config(readBool(CfgKey::kXeFGSection, CfgKey::XeFGDynamicMFG));
             FGXeFGFramerateTargetDMFG.set_from_config(readFloat(CfgKey::kXeFGSection, CfgKey::XeFGFramerateTargetDMFG));
-            if (FGXeFGFramerateTargetDMFG.has_value() && FGXeFGFramerateTargetDMFG.value() < 0.0f)
+            if (FGXeFGFramerateTargetDMFG.has_value() && FGXeFGFramerateTargetDMFG.value() < 10.0f)
                 FGXeFGFramerateTargetDMFG.reset();
             FGXeFGRoundingDMFG.set_from_config(readInt(CfgKey::kXeFGSection, CfgKey::XeFGRoundingDMFG));
             if (FGXeFGRoundingDMFG.has_value() && (FGXeFGRoundingDMFG.value() < 0 || FGXeFGRoundingDMFG.value() > 2))
                 FGXeFGRoundingDMFG.reset();
             FGXeFGDynamicAllow1X.set_from_config(readBool(CfgKey::kXeFGSection, CfgKey::XeFGDynamicAllow1X));
+            FGXeFGTargetAsCapDMFG.set_from_config(readBool(CfgKey::kXeFGSection, CfgKey::XeFGTargetAsCapDMFG));
+            FGXeFGOverrideInterpolationCount.set_from_config(readInt(CfgKey::kXeFGSection, CfgKey::XeFGOverrideInterpolationCount));
+            if (FGXeFGOverrideInterpolationCount.has_value() && (*FGXeFGOverrideInterpolationCount < 0 || *FGXeFGOverrideInterpolationCount > 5))
+                FGXeFGOverrideInterpolationCount.reset();
         }
 
         {
@@ -1672,6 +1676,10 @@ bool Config::SaveIni()
                      GetIntValue(Instance()->FGXeFGRoundingDMFG.value_for_config()).c_str());
         ini.SetValue(CfgKey::kXeFGSection, CfgKey::XeFGDynamicAllow1X,
                      GetBoolValue(Instance()->FGXeFGDynamicAllow1X.value_for_config()).c_str());
+        ini.SetValue(CfgKey::kXeFGSection, CfgKey::XeFGTargetAsCapDMFG,
+                     GetBoolValue(Instance()->FGXeFGTargetAsCapDMFG.value_for_config()).c_str());
+        ini.SetValue(CfgKey::kXeFGSection, CfgKey::XeFGOverrideInterpolationCount,
+                     GetIntValue(Instance()->FGXeFGOverrideInterpolationCount.value_for_config()).c_str());
     }
 
     {
@@ -2913,4 +2921,26 @@ Config* Config::Instance()
         _config = new Config();
 
     return _config;
+}
+
+bool Config::FGCanFollowGame()
+{
+    const auto& state = State::Instance();
+    return !state.externalFrameGeneration && state.activeFgInput == FGInput::DLSSG && state.streamlineVersion.major >= 2;
+}
+
+bool Config::FGFollowsGame() const { return !FGEnabled.has_value() && FGCanFollowGame(); }
+
+bool Config::IsFGEnabled() const
+{
+    if (State::Instance().externalFrameGeneration)
+        return false;
+    if (FGDLSSGForceDMFG.value_or_default() && State::Instance().activeFgOutput == FGOutput::DLSSG)
+        return true;
+    return FGFollowsGame() ? State::Instance().dlssgInputGameEnabled : FGEnabled.value_or_default();
+}
+
+int Config::FGInterpolationCount(int outputCount) const
+{
+    return FGFollowsGame() ? State::Instance().dlssgInputGameInterpolationCount : outputCount;
 }

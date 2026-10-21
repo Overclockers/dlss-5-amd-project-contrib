@@ -1262,3 +1262,7 @@
 {"FSR 4 network to run. Auto lets FFX pick the best model supported by the GPU.", "选择 FSR 4 网络。自动模式由 FFX 选择显卡支持的最佳模型。"},
 {"SR Dynamic Resolution (DRS)", "超分动态分辨率（DRS）"},
 {"Follow the game's changing render size in FSR. This is not Mochizuki's NR resolution policy.", "让 FSR 跟随游戏动态变化的渲染尺寸。这不是 Mochizuki 的 NR 分辨率策略。"},
+{"Loaded ASI Plugins", "已加载的 ASI 插件"},
+{"Quirks / ASI", "游戏兼容规则 / ASI"},
+{"Frame Gen", "帧生成"},
+{"Max Frame Gen", "帧生成倍率上限"},

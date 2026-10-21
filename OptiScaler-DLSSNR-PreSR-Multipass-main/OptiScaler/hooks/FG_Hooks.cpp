@@ -180,6 +180,9 @@ HRESULT FGHooks::CreateSwapChain(IDXGIFactory* pFactory, IUnknown* pDevice, DXGI
             LOG_WARN("DXGI_SWAP_EFFECT_DISCARD is not supported in DX12, changing to FLIP_DISCARD");
             pDesc->SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
         }
+        resizeTrace.Step("create-sdk.begin");
+        scResult = fg->CreateSwapchain(pFactory, cq, pDesc, ppSwapChain, true);
+        resizeTrace.Step("create-sdk.end", scResult ? S_OK : E_FAIL);
 
         // Looks like game is creating new swapchain,
         // without releasing old one, be sure gpu is in idle state
@@ -210,9 +213,6 @@ HRESULT FGHooks::CreateSwapChain(IDXGIFactory* pFactory, IUnknown* pDevice, DXGI
             oldSwapChain = State::Instance().currentFGSwapchain;
         }
 
-        resizeTrace.Step("create-sdk.begin");
-        scResult = fg->CreateSwapchain(pFactory, cq, pDesc, ppSwapChain, true);
-        resizeTrace.Step("create-sdk.end", scResult ? S_OK : E_FAIL);
 
         if (Config::Instance()->FGDontUseSwapchainBuffers.value_or_default())
             State::Instance().skipHeapCapture = false;
@@ -298,6 +298,9 @@ HRESULT FGHooks::CreateSwapChainForHwnd(IDXGIFactory* pFactory, IUnknown* pDevic
             LOG_WARN("DXGI_SWAP_EFFECT_DISCARD is not supported in DX12, changing to FLIP_DISCARD");
             pDesc->SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
         }
+        resizeTrace.Step("create-sdk.begin");
+        scResult = fg->CreateSwapchain1(pFactory, cq, hWnd, pDesc, pFullscreenDesc, ppSwapChain, true);
+        resizeTrace.Step("create-sdk.end", scResult ? S_OK : E_FAIL);
 
         // Looks like game is creating new swapchain,
         // without releasing old one, be sure gpu is in idle state
@@ -328,9 +331,6 @@ HRESULT FGHooks::CreateSwapChainForHwnd(IDXGIFactory* pFactory, IUnknown* pDevic
             oldSwapChain = State::Instance().currentFGSwapchain;
         }
 
-        resizeTrace.Step("create-sdk.begin");
-        scResult = fg->CreateSwapchain1(pFactory, cq, hWnd, pDesc, pFullscreenDesc, ppSwapChain, true);
-        resizeTrace.Step("create-sdk.end", scResult ? S_OK : E_FAIL);
 
         if (Config::Instance()->FGDontUseSwapchainBuffers.value_or_default())
             State::Instance().skipHeapCapture = false;
@@ -754,8 +754,10 @@ HRESULT FGHooks::hkResizeBuffers(IDXGISwapChain* This, UINT BufferCount, UINT Wi
             }
         }
 
-        // Docs say you cannot do that
-        // SwapChainFlags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+        // DLSSG creates its swapchain with this immutable resize flag.
+        if (State::Instance().activeFgOutput == FGOutput::DLSSG &&
+            !(SwapChainFlags & DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING))
+            SwapChainFlags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
     }
 
     State::Instance().SCAllowTearing = (SwapChainFlags & DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING) > 0;
@@ -998,7 +1000,9 @@ HRESULT FGHooks::hkResizeBuffers1(IDXGISwapChain3* This, UINT BufferCount, UINT 
             }
         }
 
-        // SwapChainFlags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+        if (State::Instance().activeFgOutput == FGOutput::DLSSG &&
+            !(SwapChainFlags & DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING))
+            SwapChainFlags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
     }
 
     State::Instance().SCAllowTearing = (SwapChainFlags & DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING) > 0;

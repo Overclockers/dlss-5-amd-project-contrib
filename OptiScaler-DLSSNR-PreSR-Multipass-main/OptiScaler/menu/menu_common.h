@@ -182,6 +182,8 @@ class MenuCommon
     static void RenderVsyncSettings(RenderMenuContext& ctx);
     static void RenderActiveUpscalerSettings(RenderMenuContext& ctx);
     static void RenderFrameGenerationSelection(RenderMenuContext& ctx);
+    static void RenderFGModeSlider(RenderMenuContext& ctx, const char* label, int maxInterpolationCount,
+                                   CustomOptional<int>* countConfig, const char* tooltip);
     static void RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx);
     static void RenderFsrCommonSettings(RenderMenuContext& ctx);
     static void RenderFramerateSettings(RenderMenuContext& ctx);

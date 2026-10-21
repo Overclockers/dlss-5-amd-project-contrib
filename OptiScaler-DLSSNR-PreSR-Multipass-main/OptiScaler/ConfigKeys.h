@@ -262,6 +262,8 @@ inline constexpr const char *XeFGDynamicMFG = "DynamicMFG";
 inline constexpr const char *XeFGFramerateTargetDMFG = "FramerateTargetDMFG";
 inline constexpr const char *XeFGRoundingDMFG = "RoundingDMFG";
 inline constexpr const char *XeFGDynamicAllow1X = "DynamicAllow1X";
+inline constexpr const char *XeFGTargetAsCapDMFG = "TargetAsCapDMFG";
+inline constexpr const char *XeFGOverrideInterpolationCount = "OverrideInterpolationCount";
 inline constexpr const char *QueuePriority = "QueuePriority";
 inline constexpr const char *QueuePriorityLegacy = "AmdQueuePriority";
 // AmdInline=1 means daniel Async=0 (same-frame). Write Async on Save.
@@ -280,6 +282,7 @@ inline constexpr const char *const kKnown[] = {
     "Enabled",
     XeFGInterpolationCount,
     XeFGDynamicMFG, XeFGFramerateTargetDMFG, XeFGRoundingDMFG, XeFGDynamicAllow1X,
+    XeFGTargetAsCapDMFG, XeFGOverrideInterpolationCount,
     "RunBeforeSR",
     "ApplyAfterRR",
     "RRPasses",

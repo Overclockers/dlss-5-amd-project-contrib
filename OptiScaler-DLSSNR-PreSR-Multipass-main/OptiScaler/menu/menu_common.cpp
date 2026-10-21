@@ -73,6 +73,8 @@ static ImVec4 SdrColors[ImGuiCol_COUNT];
 static bool inputMenu = false;
 static bool inputFG = false;
 static bool inputFps = false;
+static int fgHotkeySavedOverride = -1;
+static bool fgHotkeyLeftDefault = false;
 static bool inputFpsCycle = false;
 static uint64_t lastInputTick = 0;
 constexpr uint64_t debounceThreshold = 1000;
@@ -513,6 +515,94 @@ void MenuCommon::GetCurrentBackendInfo(const API api, Upscaler& upscaler, std::s
     upscaler = GetBackendCode(api);
     *name = UpscalerDisplayName(upscaler, api);
 }
+
+static void DrawSliderStepMarks(const ImVec2& framePos, float frameWidth, float frameHeight, int stepCount)
+{
+    if (stepCount < 2)
+        return;
+
+    constexpr float grabPadding = 2.0f; // Hardcoded in ImGui as well
+    const float sliderSize = frameWidth - grabPadding * 2.0f;
+    const float grabSize =
+        std::min(std::max(sliderSize / (float) stepCount, ImGui::GetStyle().GrabMinSize), sliderSize);
+    const float firstGrabCenter = framePos.x + grabPadding + grabSize * 0.5f;
+    const float grabTravel = (sliderSize - grabSize) / (float) (stepCount - 1);
+    const float inset = frameHeight * 0.2f;
+    const ImU32 color = ImGui::GetColorU32(ImGuiCol_Text, 0.35f);
+    auto drawList = ImGui::GetWindowDrawList();
+
+    for (int step = 1; step < stepCount; step++)
+    {
+        // Snapped to the pixel grid to keep the 1 px line sharp, AddLine already centers it on the pixel
+        const float x = std::floor(firstGrabCenter + grabTravel * ((float) step - 0.5f));
+        drawList->AddLine(ImVec2(x, framePos.y + inset), ImVec2(x, framePos.y + frameHeight - inset), color);
+    }
+}
+
+// Integer slider over [0, stepCount) with step marks and stepName(step) as the shown text
+// Clicking a step applies it right away, while dragging only applies the step it's released on,
+// so switching e.g. from Off to 4X doesn't go through every mode in between
+// Returns true when step got changed
+static bool RenderStepSlider(const char* label, int& step, int stepCount,
+                             const std::function<std::string(int)>& stepName)
+{
+    // Step under the grab during a drag, -1 when not dragging
+    auto storage = ImGui::GetStateStorage();
+    const ImGuiID id = ImGui::GetID(label);
+    const int draggedStep = storage->GetInt(id, -1);
+    int shownStep = draggedStep >= 0 ? draggedStep : step;
+
+    const ImVec2 sliderPos = ImGui::GetCursorScreenPos();
+    const float sliderWidth = ImGui::CalcItemWidth();
+    const float sliderHeight = ImGui::GetFrameHeight();
+    const auto localizedLabel = MenuLocale::Label(label);
+    ImGui::SliderInt(localizedLabel.c_str(), &shownStep, 0, stepCount - 1, stepName(shownStep).c_str(), ImGuiSliderFlags_NoInput);
+    DrawSliderStepMarks(sliderPos, sliderWidth, sliderHeight, stepCount);
+
+    // The click itself moves the grab on the activation frame, that's the only change applied immediately
+    const bool apply = (ImGui::IsItemActivated() || ImGui::IsItemDeactivated()) && shownStep != step;
+
+    if (ImGui::IsItemActive())
+        storage->SetInt(id, shownStep);
+    else if (draggedStep >= 0)
+        storage->SetInt(id, -1);
+
+    if (!apply)
+        return false;
+
+    step = shownStep;
+    return true;
+}
+
+// Slider for overriding the game's FG ratio: Off, Default (no override), 2X, 3X... up to maxInterpolationCount
+// Use for config->FGDLSSGOverrideInterpolationCount and FGXeFGOverrideInterpolationCount (B1-independent)
+static bool RenderRatioOverrideSlider(const char* label, CustomOptional<int, NoDefault>& setting,
+                                      int maxInterpolationCount)
+{
+    // 0 = Off, 1 = Default, 2+ = ratio (interpolated frame count + 1)
+    int index = 1;
+    if (setting.has_value())
+        index = setting.value() == 0 ? 0 : std::min(setting.value(), maxInterpolationCount) + 1;
+
+    auto stepName = [](int step) -> std::string
+    {
+        return step == 0 ? "Off" : step == 1 ? "Default" : std::format("{}X", step);
+    };
+
+    if (!RenderStepSlider(label, index, maxInterpolationCount + 2, stepName))
+        return false;
+
+    if (index == 1)
+        setting.reset();
+    else
+        setting = index == 0 ? 0 : index - 1;
+
+    return true;
+}
+
+
+
+
 
 static State::FfxVersionList* GetFfxVersionList(Upscaler backend, API api)
 {
@@ -1312,6 +1402,87 @@ struct MenuCommon::RenderMenuContext
 
 static std::string splashMessage;
 
+void MenuCommon::RenderFGModeSlider(RenderMenuContext& ctx, const char* label, int maxInterpolationCount,
+                                    CustomOptional<int>* countConfig, const char* tooltip)
+{
+    auto& state = ctx.state;
+    auto config = ctx.config;
+
+    // -1 = Default (follow game), 0 = Off, >0 = interpolated frame count
+    auto modeName = [&](int mode) -> std::string
+    {
+        if (mode < 0)
+            return "Default";
+
+        if (mode == 0)
+            return "Off";
+
+        if (maxInterpolationCount == 0)
+            return "On";
+
+        return std::format("{}X", mode + 1);
+    };
+
+    const int maxMode = std::max(maxInterpolationCount, 1);
+
+    int current = 0;
+    if (config->FGFollowsGame())          // B1
+        current = -1;
+    else if (config->IsFGEnabled())
+        current = countConfig != nullptr ? std::clamp(countConfig->value_or_default(), 1, maxMode) : 1;
+
+    // Slider order: Off, (Default), 2X, 3X... up to the output's max
+    std::vector<int> modes { 0 };
+    if (Config::FGCanFollowGame())        // B1
+        modes.push_back(-1);
+
+    for (int mode = 1; mode <= maxMode; mode++)
+        modes.push_back(mode);
+
+    int index = (int) (std::find(modes.begin(), modes.end(), current) - modes.begin());
+    if (index >= (int) modes.size())
+        index = 0;
+
+    auto stepName = [&](int step) -> std::string
+    {
+        const int mode = modes[step];
+        if (mode >= 0)
+            return modeName(mode);
+
+        const int gameMode =
+            state.dlssgInputGameEnabled ? std::min(state.dlssgInputGameInterpolationCount, maxMode) : 0; // B1
+        return std::format("{} ({})", modeName(mode), modeName(gameMode));
+    };
+
+    ImGui::PushItemWidth(150.0f * ctx.menuResScale);
+
+    if (RenderStepSlider(label, index, (int) modes.size(), stepName) && modes[index] != current)
+    {
+        const int mode = modes[index];
+        fgHotkeyLeftDefault = false;      // B1: pairs with the shortcut restore below
+
+        if (mode < 0)
+        {
+            config->FGEnabled.reset();
+        }
+        else
+        {
+            config->FGEnabled = mode > 0;
+
+            if (mode > 0 && countConfig != nullptr)
+                *countConfig = mode;
+        }
+
+        LOG_DEBUG("FG mode set to: {}", modeName(mode));
+
+        state.fgChanged = true;
+    }
+
+    ImGui::PopItemWidth();
+
+    if (tooltip != nullptr)
+        MenuCommon::ShowTooltip(tooltip);
+}
 void MenuCommon::UpdateRenderTiming(RenderMenuContext& ctx)
 {
     auto& state = ctx.state;
@@ -1382,14 +1553,35 @@ void MenuCommon::HandleMenuShortcuts(RenderMenuContext& ctx)
         {
             inputFG = false;
 
-            if (state.activeFgInput != FGInput::NoFG && state.activeFgOutput != FGOutput::NoFG &&
-                (state.currentFGSwapchain != nullptr || state.activeFgInput == FGInput::NvngxFG))
+            if (state.activeFgInput == FGInput::NvngxFG && state.dlssgMfgMax.value_or(0) >= 1)
             {
-                config->FGEnabled = !config->FGEnabled.value_or_default();
-                LOG_DEBUG("FG toggle key pressed, setting FGEnabled to {}", config->FGEnabled.value_or_default());
-
-                if (config->FGEnabled.value_or_default())
-                    state.fgChanged = true;
+                auto& ratio = config->FGDLSSGOverrideInterpolationCount;
+                if (ratio.has_value() && *ratio == 0)
+                {
+                    if (fgHotkeySavedOverride > 0) ratio = fgHotkeySavedOverride;
+                    else ratio.reset();
+                }
+                else
+                {
+                    fgHotkeySavedOverride = ratio.value_or(-1);
+                    ratio = 0;
+                }
+                StreamlineHooks::updateDlssgOptions();
+            }
+            else if (!state.externalFrameGeneration && state.activeFgInput != FGInput::NoFG &&
+                     state.activeFgOutput != FGOutput::NoFG && state.currentFGSwapchain != nullptr)
+            {
+                if (fgHotkeyLeftDefault)
+                {
+                    config->FGEnabled.reset();
+                    fgHotkeyLeftDefault = false;
+                }
+                else
+                {
+                    fgHotkeyLeftDefault = config->FGFollowsGame();
+                    config->FGEnabled = !config->IsFGEnabled();
+                }
+                state.fgChanged = true;
             }
         }
 
@@ -3589,53 +3781,9 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
 
             if (maxInterpolationCount >= 1)
             {
-                // Map config value to UI index
-                int64_t currentSet = 0;
-                if (config->FGDLSSGOverrideInterpolationCount.has_value())
-                {
-                    currentSet = static_cast<int64_t>(config->FGDLSSGOverrideInterpolationCount.value()) + 1;
-                }
-
-                const auto ratioLabel = [](int64_t index)
-                {
-                    if (index == 0)
-                        return std::string("Default");
-                    if (index == 1)
-                        return std::string("Off");
-                    return std::to_string(index) + "X";
-                };
-                const auto currentIntCount = ratioLabel(currentSet);
-
-                ImGui::PushItemWidth(95.0f * menuResScale);
-
-                if (MenuUi::BeginCombo("Override DLSSG Ratio", currentIntCount.c_str()))
-                {
-                    for (int64_t i = 0; i <= static_cast<int64_t>(maxInterpolationCount) + 1; i++)
-                    {
-                        const auto mode = ratioLabel(i);
-                        if (MenuUi::Selectable(mode.c_str(), (currentSet == i)))
-                        {
-                            if (i == 0)
-                            {
-                                // Default, no override
-                                config->FGDLSSGOverrideInterpolationCount.reset();
-                            }
-                            else
-                            {
-                                // UI index, store value
-                                int framesToGenerate = static_cast<int>(i - 1);
-
-                                LOG_DEBUG("DLSSG Interpolation Count set to: {}", framesToGenerate);
-                                config->FGDLSSGOverrideInterpolationCount = framesToGenerate;
-                            }
-
-                            StreamlineHooks::updateDlssgOptions();
-                        }
-                    }
-
-                    ImGui::EndCombo();
-                }
-
+                ImGui::PushItemWidth(150.0f * menuResScale);
+                if (RenderRatioOverrideSlider("Override DLSSG Ratio", config->FGDLSSGOverrideInterpolationCount, maxInterpolationCount))
+                    StreamlineHooks::updateDlssgOptions();
                 ImGui::PopItemWidth();
             }
         }
@@ -3921,23 +4069,14 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                 }
             }
 
-            bool fgActive = config->FGEnabled.value_or_default();
-            if (MenuUi::Checkbox("Active##2", &fgActive))
-            {
-                config->FGEnabled = fgActive;
-                LOG_DEBUG("FGEnabled set FGEnabled: {}", fgActive);
-
-                if (config->FGEnabled.value_or_default())
-                    state.fgChanged = true;
-            }
-            ShowHelpMarker("Enable Frame Generation");
+            RenderFGModeSlider(ctx, "Frame Gen##fsr", 0, nullptr, "Enable Frame Generation");
 
             bool fgAsync = config->FGAsync.value_or_default();
             if (MenuUi::Checkbox("Allow Async", &fgAsync))
             {
                 config->FGAsync = fgAsync;
 
-                if (config->FGEnabled.value_or_default())
+                if (config->IsFGEnabled())
                 {
                     state.fgChanged = true;
                     state.scChanged = true;
@@ -3953,7 +4092,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
             {
                 config->FGDebugView = fgDV;
 
-                if (config->FGEnabled.value_or_default())
+                if (config->IsFGEnabled())
                 {
                     state.fgChanged = true;
                     LOG_DEBUG("DebugView set FGChanged");
@@ -4198,50 +4337,11 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
 
         ImGui::BeginDisabled(!correctMVs || cantActivate);
 
-        bool fgActive = config->FGEnabled.value_or_default();
-        if (MenuUi::Checkbox("Active##3", &fgActive))
-        {
-            config->FGEnabled = fgActive;
-            LOG_DEBUG("Enabled set FGEnabled: {}", fgActive);
-
-            if (config->FGEnabled.value_or_default())
-                state.fgChanged = true;
-        }
-
-        ShowHelpMarker("Enable Frame Generation");
-
         auto maxInterpolationCount = fgOutput->GetMaxInterpolationCount();
-
-        if (maxInterpolationCount > 1)
-        {
-            ImGui::SameLine(0.0f, 16.0f);
-
-            const auto currentCount = config->FGXeFGInterpolationCount.value_or_default();
-            const auto currentIntCount = std::to_string(static_cast<uint64_t>(currentCount) + 1) + "X";
-
-            ImGui::PushItemWidth(95.0f * menuResScale);
-
-            if (MenuUi::BeginCombo("MFG", currentIntCount.c_str()))
-            {
-                for (int i = 0; i < maxInterpolationCount; i++)
-                {
-                    const auto mode = std::to_string(static_cast<int64_t>(i) + 2) + "X";
-                    if (MenuUi::Selectable(mode.c_str(), (currentCount == static_cast<UINT>(i + 1))))
-                    {
-                        LOG_DEBUG("XeFG Interpolation Count set to: {}", i + 1);
-                        if (XeFGProxy::SetNumInterpolatedFrames() == nullptr)
-                            state.fgChanged = true;
-                        config->FGXeFGInterpolationCount = i + 1;
-                    }
-                }
-
-                ImGui::EndCombo();
-            }
-
-            ImGui::PopItemWidth();
-
-            ShowHelpMarker("Base XeFG multiplier. Kept unchanged while the NR override is active.");
-        }
+        RenderFGModeSlider(ctx, "Max Frame Gen##xefg", maxInterpolationCount,
+                           &config->FGXeFGInterpolationCount,
+                           "Base XeFG multiplier. Kept unchanged while the NR override is active.");
+        const bool fgActive = config->IsFGEnabled();
 
         ImGui::SameLine(0.0f, 16.0f);
         ImGui::BeginDisabled(!fgOutput->IsUsingHudlessAny() || XeFGProxy::SetUiCompositionState() == nullptr);
@@ -4480,17 +4580,10 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
             MenuUi::TextColored(toneMapColor(ImVec4(1.f, 0.f, 0.f, 1.f)), "OFF");
         }
 
-        bool fgActive = config->FGEnabled.value_or_default();
-        if (MenuUi::Checkbox("Active##4", &fgActive))
-        {
-            config->FGEnabled = fgActive;
-            LOG_DEBUG("Enabled set FGEnabled: {}", fgActive);
-
-            if (config->FGEnabled.value_or_default())
-                state.fgChanged = true;
-        }
-
-        ShowHelpMarker("Enable Frame Generation");
+        ImGui::BeginDisabled(config->FGDLSSGForceDMFG.value_or_default());
+        RenderFGModeSlider(ctx, "Frame Gen##dlssg", fgOutput->GetMaxInterpolationCount(),
+                           &config->FGDLSSGInterpolationCount, "Set DLSSG interpolation count");
+        ImGui::EndDisabled();
 
         auto maxInterpolationCount = fgOutput->GetMaxInterpolationCount();
 
@@ -4498,33 +4591,6 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
         {
             ImGui::SameLine(0.0f, 16.0f);
 
-            ImGui::BeginDisabled(config->FGDLSSGForceDMFG.value_or_default());
-
-            const auto currentCount = fgOutput->GetInterpolatedFrameCount();
-            const auto currentIntCount = std::to_string(static_cast<uint64_t>(currentCount) + 1) + "X";
-
-            ImGui::PushItemWidth(95.0f * menuResScale);
-
-            if (MenuUi::BeginCombo("MFG", currentIntCount.c_str()))
-            {
-                for (int i = 0; i < maxInterpolationCount; i++)
-                {
-                    const auto mode = std::to_string(static_cast<int64_t>(i) + 2) + "X";
-                    if (MenuUi::Selectable(mode.c_str(), (currentCount == static_cast<UINT>(i + 1))))
-                    {
-                        LOG_DEBUG("DLSSG Interpolation Count set to: {}", i + 1);
-                        config->FGDLSSGInterpolationCount = i + 1;
-                    }
-                }
-
-                ImGui::EndCombo();
-            }
-
-            ImGui::PopItemWidth();
-
-            ShowHelpMarker("Set DLSSG interpolation count");
-
-            ImGui::EndDisabled();
 
             if (fgOutput->GetDMFGSupport())
             {
@@ -5107,7 +5173,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                 {
                     config->FGAsync = fgAsync;
 
-                    if (config->FGEnabled.value_or_default())
+                    if (config->IsFGEnabled())
                     {
                         state.fgChanged = true;
                         LOG_DEBUG("Async set FGChanged");
@@ -5121,7 +5187,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                 {
                     config->FGDebugView = fgDV;
 
-                    if (config->FGEnabled.value_or_default())
+                    if (config->IsFGEnabled())
                     {
                         state.fgChanged = true;
                         LOG_DEBUG("DebugView set FGChanged");
@@ -6342,19 +6408,25 @@ void MenuCommon::RenderQuirksSettings(RenderMenuContext& ctx)
 {
     auto& state = ctx.state;
 
-    // QUIRKS -----------------------------
-    if (state.detectedQuirks.size() > 0)
+    std::vector<std::string> plugins;
     {
-        ImGui::Spacing();
-        if (auto ch = ScopedCollapsingHeader("Active Quirks"); ch.IsHeaderOpen())
+        std::lock_guard lock(state.loadedAsiPluginsMutex);
+        for (const auto& plugin : state.loadedAsiPlugins)
+            if (!plugin.isOptiPatcher) plugins.push_back(plugin.name);
+    }
+    if (state.detectedQuirks.empty() && plugins.empty()) return;
+    const char* title = state.detectedQuirks.empty() ? "Loaded ASI Plugins" :
+                        plugins.empty() ? "Active Quirks" : "Quirks / ASI";
+    ImGui::Spacing();
+    if (auto ch = ScopedCollapsingHeader(title); ch.IsHeaderOpen())
+    {
+        ScopedIndent indent {};
+        for (const auto& quirk : state.detectedQuirks)
+            MenuUi::TextWrapped("%s", quirk.c_str());
+        if (!plugins.empty())
         {
-            ScopedIndent indent {};
-            ImGui::Spacing();
-
-            for (const auto& quirk : state.detectedQuirks)
-            {
-                MenuUi::TextWrapped("%s", quirk.c_str());
-            }
+            MenuSectionTitle("Loaded ASI Plugins");
+            for (const auto& name : plugins) MenuUi::TextWrapped("%s", name.c_str());
         }
     }
 }

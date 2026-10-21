@@ -209,6 +209,20 @@ static void RunAgilityUpgrade(HMODULE dx12Module)
     }
 }
 
+static void RegisterLoadedAsi(const std::filesystem::path& path, bool hasPatchResult)
+{
+    std::string name = wstring_to_string(path.filename().wstring());
+    std::string lowerName(name);
+    std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    auto& state = State::Instance();
+    std::lock_guard lock(state.loadedAsiPluginsMutex);
+    for (const auto& plugin : state.loadedAsiPlugins)
+        if (plugin.name == name)
+            return;
+    state.loadedAsiPlugins.push_back({ name, hasPatchResult || lowerName.find("optipatcher") != std::string::npos });
+}
+
 void LoadAsiPlugins()
 {
     std::filesystem::path pluginPath(Config::Instance()->PluginPath.value_or(L"plugins"));
@@ -247,6 +261,7 @@ void LoadAsiPlugins()
 
                 auto init = (PFN_InitializeASI) KernelBaseProxy::GetProcAddress_()(hMod, "InitializeASI");
                 auto patchResult = (PFN_PatchResult) KernelBaseProxy::GetProcAddress_()(hMod, "PatchResult");
+                RegisterLoadedAsi(entry.path(), patchResult != nullptr);
 
                 if (init != nullptr)
                     init();
@@ -308,6 +323,7 @@ void LoadAsiPlugins()
 
                                     auto patchResult =
                                         (PFN_PatchResult) KernelBaseProxy::GetProcAddress_()(hMod, "PatchResult");
+                                    RegisterLoadedAsi(entry.path(), patchResult != nullptr);
 
                                     if (init != nullptr)
                                         init();
@@ -1139,7 +1155,7 @@ static void CheckWorkingMode()
     if (reshadeModule == nullptr && Config::Instance()->LoadReShade.value_or_default() &&
         !Config::Instance()->CreateD3D12DeviceForLuma.value_or_default())
     {
-        auto rsFile = Util::ExePath().parent_path() / L"ReShade64.dll";
+        auto rsFile = Util::ReShadePath();
         SetEnvironmentVariableW(L"RESHADE_DISABLE_LOADING_CHECK", L"1");
 
         if (skModule != nullptr)
@@ -1149,7 +1165,7 @@ static void CheckWorkingMode()
         reshadeModule = NtdllProxy::LoadLibraryExW_Ldr(rsFile.c_str(), NULL, 0);
         State::DisableServeOriginal(201);
 
-        LOG_INFO("Loading ReShade64.dll, result: {0:X}", (size_t) reshadeModule);
+        LOG_INFO("Loading {}, result: {:X}", wstring_to_string(rsFile.filename().wstring()), (size_t) reshadeModule);
     }
 
     // Version check

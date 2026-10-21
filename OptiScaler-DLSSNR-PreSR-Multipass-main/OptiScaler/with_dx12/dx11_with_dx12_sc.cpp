@@ -479,7 +479,7 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::ResizeBuffers(UINT BufferCount, UINT Widt
     {
         _RefreshCachedSwapchainDesc();
 
-        if (Config::Instance()->FGEnabled.value_or_default())
+        if (Config::Instance()->IsFGEnabled())
         {
             State::Instance().fgResetCapturedResources = true;
             State::Instance().fgOnlyUseCapturedResources = false;
@@ -735,7 +735,7 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::ResizeBuffers1(UINT BufferCount, UINT Wid
     {
         _RefreshCachedSwapchainDesc();
 
-        if (Config::Instance()->FGEnabled.value_or_default())
+        if (Config::Instance()->IsFGEnabled())
         {
             State::Instance().fgResetCapturedResources = true;
             State::Instance().fgOnlyUseCapturedResources = false;
