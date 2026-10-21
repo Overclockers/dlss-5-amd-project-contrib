@@ -172,6 +172,24 @@ post-fix exit verified this repair. This does not certify native NVIDIA NR scale
 NR off/on replay permutations, actual game-device deferred-entry preservation during
 private Vulkan creation, or game visual/performance acceptance.
 
+### B8/B10/V3 paired integration
+
+The reviewed Vulkan bridge/timer core and host resource-reclamation slice are now
+paired with the generation-safe public owner API. Per-command-buffer pending
+submissions support multiple bridge instances and RDR2 legacy submit metadata;
+local D3D12 feature-initialization uploads and NR pre/restore/post seams remain.
+`GpuTime_Vk` replaces the global timer, with bridge slot reuse certified by its
+copy-back timeline. Private NR/translation scopes do not publish game identities.
+Known game-device destruction invalidates/drains only its own deferred generation.
+
+Public shader/helper/timestamp retirement follows upstream deferred reclamation;
+native NR base objects, 48 DX12 heaps, supersample helper buffers/heaps and standalone
+timers retain their explicit immediate/time-queue opt-outs. AMD runtime recording
+leases are unchanged. HUD exit-buffer release closes the shared FG-copy release path.
+The combined Release host/worker build passed. Runtime VRAM-drop observation, Vulkan
+game multi-instance/resize behavior and native NVIDIA NR scaler acceptance remain
+separate checks; this CPU build is not evidence those executions passed.
+
 ### Follow-up snapshot (2026-10-09)
 
 Reviewed through **434b9555d960e6e471a461c2b0d98b8e1fdacfa2**

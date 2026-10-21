@@ -593,7 +593,7 @@
     <ClInclude Include="hooks\D3D11_Hooks.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="upscaler_time\UpscalerTime_Vk.h">
+    <ClInclude Include="gpu_time\GpuTime_Vk.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="hooks\DxgiFactory_WrappedCalls.h">
@@ -1334,7 +1334,7 @@
     <ClCompile Include="hooks\D3D11_Hooks.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="upscaler_time\UpscalerTime_Vk.cpp">
+    <ClCompile Include="gpu_time\GpuTime_Vk.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="hooks\DxgiFactory_WrappedCalls.cpp">

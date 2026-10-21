@@ -40,7 +40,6 @@
 
 #include <version_check.h>
 
-#include <upscaler_time/UpscalerTime_Vk.h>
 
 #include <imgui/imgui_internal.h>
 #include <imgui/ImGuiNotify.hpp>
