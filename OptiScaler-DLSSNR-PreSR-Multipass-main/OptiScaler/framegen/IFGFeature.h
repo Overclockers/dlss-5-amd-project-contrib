@@ -5,6 +5,7 @@
 #include <atomic>
 #include "InterpolationOverride.h"
 #include <dxgi1_6.h>
+#include <shaders/reproject/Reproject.h>
 #include <flag-set-cpp/flag_set.hpp>
 
 enum class FG_Flags : uint64_t
@@ -32,6 +33,7 @@ enum FG_ResourceType : uint32_t
     HudlessColor,
     UIColor,
     Distortion,
+    Color, // The presented frame, hudless + UI
 
     ResourceTypeCOUNT
 };
@@ -93,11 +95,18 @@ class IFGFeature
     bool _noUi[BUFFER_COUNT] = { true, true, true, true };
     bool _noDistortionField[BUFFER_COUNT] = { true, true, true, true };
     bool _waitingExecute[BUFFER_COUNT] {};
+    uint64_t _timeSinceSimStart = 0;
+    bool _reprojectionActive = false;
+
 
     IID streamlineRiid {};
 
     bool CheckForRealObject(std::string functionName, IUnknown* pObject, IUnknown** ppRealObject);
     int GetDispatchIndex(UINT64& willDispatchFrame);
+    // The frame's camera and the mouse input since its simulation start, for the reprojection of the presented frame
+    // Depth and motion vector sizes are left to the caller
+    void FilloutReprojectionData(FilloutData& data, int fIndex);
+
     virtual void NewFrame() = 0;
 
   public:
@@ -166,6 +175,10 @@ class IFGFeature
     UINT64 FrameCount();
     UINT64 TargetFrame();
     UINT64 LastDispatchedFrame();
+    virtual bool HasReprojection() { return false; };
+    bool IsReprojectionActive() const { return _reprojectionActive; };
+    virtual const Reproject* GetReproject() const { return nullptr; };
+    uint64_t GetLastTimeSinceSimStartNs() const { return _timeSinceSimStart; };
 
     IFGFeature() {}
 };
