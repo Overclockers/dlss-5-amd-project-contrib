@@ -287,6 +287,7 @@ class State
 
     // Linux checks
     bool isRunningOnLinux = false;
+    bool isWindows10 = false;
 
     // Other checks
     WorkingMode workingMode = WorkingMode::Other;

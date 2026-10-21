@@ -464,6 +464,9 @@ VALIDATE_HOOK(hkSetDescriptorHeaps, PFN_SetDescriptorHeaps)
 static void hkSetDescriptorHeaps(ID3D12GraphicsCommandList* commandList, UINT NumDescriptorHeaps,
                                  ID3D12DescriptorHeap* const* ppDescriptorHeaps)
 {
+    if (Config::Instance()->FGHudfixPersistentBindings.value_or_default() && commandList != nullptr)
+        ResTrack_Dx12::OnSetDescriptorHeaps(commandList, NumDescriptorHeaps, ppDescriptorHeaps);
+
     if (!lateInProgressSetDescriptorHeaps && !isUpscalerActive && commandList != nullptr &&
         ppDescriptorHeaps != nullptr)
     {
@@ -502,6 +505,9 @@ UINT GetRootParameterCount(ID3D12RootSignature* pRootSignature)
 VALIDATE_HOOK(hkSetComputeRootSignature, PFN_SetComputeRootSignature)
 static void hkSetComputeRootSignature(ID3D12GraphicsCommandList* commandList, ID3D12RootSignature* pRootSignature)
 {
+    if (Config::Instance()->FGHudfixPersistentBindings.value_or_default() && commandList != nullptr)
+        ResTrack_Dx12::OnSetComputeRootSignature(commandList, pRootSignature);
+
     if (!lateInProgressSetComputeRootSignature && Config::Instance()->RestoreComputeSignature.value_or_default() &&
         !isUpscalerActive && commandList != nullptr && pRootSignature != nullptr)
     {
@@ -670,6 +676,9 @@ static void hkSetComputeRootUnorderedAccessView(ID3D12GraphicsCommandList* comma
 VALIDATE_HOOK(hkSetGraphicsRootSignature, PFN_SetGraphicsRootSignature)
 static void hkSetGraphicsRootSignature(ID3D12GraphicsCommandList* commandList, ID3D12RootSignature* pRootSignature)
 {
+    if (Config::Instance()->FGHudfixPersistentBindings.value_or_default() && commandList != nullptr)
+        ResTrack_Dx12::OnSetGraphicsRootSignature(commandList, pRootSignature);
+
     if (!lateInProgressSetGraphicsRootSignature && Config::Instance()->RestoreGraphicSignature.value_or_default() &&
         !isUpscalerActive && commandList != nullptr && pRootSignature != nullptr)
     {
@@ -2678,8 +2687,12 @@ VALIDATE_HOOK(hkCreateRootSignature, PFN_CreateRootSignature)
 static HRESULT hkCreateRootSignature(ID3D12Device* device, UINT nodeMask, const void* pBlobWithRootSignature,
                                      SIZE_T blobLengthInBytes, REFIID riid, void** ppvRootSignature)
 {
+    const bool trackHudfixRootSignature = Config::Instance()->FGHudfixPersistentBindings.value_or_default() &&
+                                          State::Instance().activeFgInput == FGInput::Upscaler &&
+                                          !Config::Instance()->FGDisableHUDFix.value_or_default();
+
     if (!Config::Instance()->MipmapBiasOverride.has_value() && !Config::Instance()->AnisotropyOverride.has_value() &&
-        !Config::Instance()->ExtendedStateRestore.value_or_default())
+        !Config::Instance()->ExtendedStateRestore.value_or_default() && !trackHudfixRootSignature)
     {
         return o_CreateRootSignature(device, nodeMask, pBlobWithRootSignature, blobLengthInBytes, riid,
                                      ppvRootSignature);
@@ -2724,6 +2737,9 @@ static HRESULT hkCreateRootSignature(ID3D12Device* device, UINT nodeMask, const 
                                                        desc->Desc_1_2.NumParameters);
             }
         }
+
+        if (SUCCEEDED(result) && trackHudfixRootSignature && ppvRootSignature != nullptr && *ppvRootSignature != nullptr)
+            ResTrack_Dx12::RegisterRootSignature(static_cast<ID3D12RootSignature*>(*ppvRootSignature), desc);
 
         deserializer->Release();
         return result;
@@ -2825,6 +2841,9 @@ static HRESULT hkCreateRootSignature(ID3D12Device* device, UINT nodeMask, const 
         result =
             o_CreateRootSignature(device, nodeMask, pBlobWithRootSignature, blobLengthInBytes, riid, ppvRootSignature);
     }
+
+    if (SUCCEEDED(result) && trackHudfixRootSignature && ppvRootSignature != nullptr && *ppvRootSignature != nullptr)
+        ResTrack_Dx12::RegisterRootSignature(static_cast<ID3D12RootSignature*>(*ppvRootSignature), desc);
 
     deserializer->Release();
     return result;
