@@ -234,6 +234,15 @@ enum class LowLatencyMode : uint32_t
     _
 };
 
+enum class ReprojectionFill : uint32_t
+{
+    StrechEdge,
+    Dithering,
+    Noise,
+    Debug,
+    SoftEdge
+};
+
 class Config
 {
   public:
@@ -1131,7 +1140,15 @@ class Config
     CustomOptional<uint32_t, NoDefault> Fsr4Preset;
     CustomOptional<bool> Fsr4EnableWatermark { false };
     CustomOptional<bool, SoftDefault> Fsr4DoNotLoadAmdxc64 { false };
+    // Reprojection
     CustomOptional<float, SoftDefault> ReprojectionDepthCutoff { 0.1f };
+    CustomOptional<ReprojectionFill> ReprojectionFillMode { ReprojectionFill::Dithering };
+    CustomOptional<uint32_t> ReprojectionCutoffExpand { 1 };
+    CustomOptional<bool> ReprojectionLateLatch { true };
+    CustomOptional<bool> ReprojectionDirectionCache { true };
+    CustomOptional<bool> ReprojectionParallaxAuto { true };   // estimated from the motion vectors
+    CustomOptional<float> ReprojectionParallaxScale { 0.0f }; // when not auto, 0 = rotation only
+    CustomOptional<bool> ReprojectionThirdPersonDetection { true };
 
     // FSR Common
     CustomOptional<float> FsrVerticalFov { 60.0f };

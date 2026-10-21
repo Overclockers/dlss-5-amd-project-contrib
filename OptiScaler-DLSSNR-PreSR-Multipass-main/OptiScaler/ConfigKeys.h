@@ -29,6 +29,13 @@ inline constexpr const char *Fsr4GpuSupport = "Fsr4GpuSupport";
 inline constexpr const char *Fsr4Model = "Fsr4Model";
 inline constexpr const char *DynamicResolution = "DynamicResolution";
 inline constexpr const char *ReprojectionDepthCutoff = "DepthCutoff";
+inline constexpr const char *ReprojectionFillMode = "FillMode";
+inline constexpr const char *ReprojectionCutoffExpand = "CutoffExpand";
+inline constexpr const char *ReprojectionLateLatch = "LateLatch";
+inline constexpr const char *ReprojectionDirectionCache = "DirectionCache";
+inline constexpr const char *ReprojectionParallaxAuto = "ParallaxAuto";
+inline constexpr const char *ReprojectionParallaxScale = "ParallaxScale";
+inline constexpr const char *ReprojectionThirdPersonDetection = "ThirdPersonDetection";
 inline constexpr const char *kDanielSection = "DlssNrOnAmd";
 
 // Cross-layer product keys use the upstream DLSS5_* names so ini == env == txt.
@@ -282,6 +289,8 @@ inline constexpr const char *const kKnown[] = {
     Fsr4Model,
     DynamicResolution,
     ReprojectionDepthCutoff,
+    ReprojectionFillMode, ReprojectionCutoffExpand, ReprojectionLateLatch, ReprojectionDirectionCache,
+    ReprojectionParallaxAuto, ReprojectionParallaxScale, ReprojectionThirdPersonDetection,
     MenuLanguage, MenuWindowWidth, MenuWindowHeight, MenuWindowAnchor, MenuBlur, MenuBlurStrength,
     FpsOverlayColorR, FpsOverlayColorG, FpsOverlayColorB, // [Menu], no runtime env aliases
     "Enabled",

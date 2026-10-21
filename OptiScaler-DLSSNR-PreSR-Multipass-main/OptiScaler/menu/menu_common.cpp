@@ -3728,6 +3728,8 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
         { FGOutput::FSRFG, "FSR FG", "FSR3/4-FG, RDNA4 autoupgrades to FSR4-FG\n\nFSR4-FG sometimes better/worse than XeFG" },
         { FGOutput::DLSSG, "DLSSG", "DLSSG output\ncan be used in conjuction with Nukem's for example" },
         { FGOutput::XeFG, "XeFG", "XeFG - heaviest, but best universal FG\n\nXeFG 3 overall deals best with HUD\n\nEnable UI Composition if HUD ghosting" },
+        { FGOutput::Reprojection, "Reprojection",
+          "Reprojects the last real frame instead of interpolating\n\nNo game FG SDK required, works from depth and motion vectors" },
     };
 
     // clang-format on
@@ -3762,6 +3764,10 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
     // XeFG output requirements
     auto constexpr xefgOutputIndex = (uint32_t) FGOutput::XeFG;
     outputOptions[xefgOutputIndex].set_disabled(state.swapchainApi == API::Vulkan, "Unsupported API");
+
+    // Reprojection output requirements
+    auto constexpr reprojectionOutputIndex = (uint32_t) FGOutput::Reprojection;
+    outputOptions[reprojectionOutputIndex].set_disabled(state.swapchainApi == API::Vulkan, "Unsupported API");
     // Unsupported FG input selected
     const auto currentInputIndex = (uint32_t) state.activeFgInput;
     if (config->FGInput != FGInput::NoFG && inputOptions.size() > currentInputIndex &&
@@ -4693,6 +4699,62 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
             ImGui::Spacing();
             ImGui::Spacing();
         }
+    }
+
+    // Reprojection controls
+    if (state.activeFgOutput == FGOutput::Reprojection && state.activeFgInput != FGInput::NoFG && fgOutput)
+    {
+        MenuSectionTitle("Frame Generation (Reprojection)");
+
+        static const char *fillModes[] = { "Stretch Edge", "Dithering", "Noise", "Debug", "Soft Edge" };
+        int fillMode = static_cast<int>(config->ReprojectionFillMode.value_or_default());
+        if (MenuUi::Combo("Fill Mode", &fillMode, fillModes, IM_ARRAYSIZE(fillModes)))
+            config->ReprojectionFillMode = static_cast<ReprojectionFill>(fillMode);
+        ShowHelpMarker("How disoccluded areas left after reprojection are filled");
+
+        float depthCutoff = config->ReprojectionDepthCutoff.value_or_default();
+        if (MenuUi::SliderFloat("Depth Cutoff", &depthCutoff, 0.0f, 1.0f, "%.3f"))
+            config->ReprojectionDepthCutoff = depthCutoff;
+        ShowHelpMarker("Depth difference above this cutoff marks pixels as disoccluded");
+
+        int cutoffExpand = static_cast<int>(config->ReprojectionCutoffExpand.value_or_default());
+        if (MenuUi::InputInt("Cutoff Expand", &cutoffExpand, 1, 5))
+        {
+            if (cutoffExpand >= 0)
+                config->ReprojectionCutoffExpand = static_cast<uint32_t>(cutoffExpand);
+            else
+                config->ReprojectionCutoffExpand.reset();
+        }
+        ShowHelpMarker("Grows the disocclusion mask by this many pixels");
+
+        bool lateLatch = config->ReprojectionLateLatch.value_or_default();
+        if (MenuUi::Checkbox("Late Latch", &lateLatch))
+            config->ReprojectionLateLatch = lateLatch;
+        ShowHelpMarker("Copies motion vectors and depth as late as possible before presentation");
+
+        bool directionCache = config->ReprojectionDirectionCache.value_or_default();
+        if (MenuUi::Checkbox("Direction Cache", &directionCache))
+            config->ReprojectionDirectionCache = directionCache;
+        ShowHelpMarker("Caches the reprojection direction between frames while the camera is static");
+
+        bool parallaxAuto = config->ReprojectionParallaxAuto.value_or_default();
+        if (MenuUi::Checkbox("Parallax Auto", &parallaxAuto))
+            config->ReprojectionParallaxAuto = parallaxAuto;
+        ShowHelpMarker("Estimates the camera parallax from the motion vectors");
+
+        ImGui::BeginDisabled(parallaxAuto);
+        float parallaxScale = config->ReprojectionParallaxScale.value_or_default();
+        if (MenuUi::SliderFloat("Parallax Scale", &parallaxScale, 0.0f, 2.0f, "%.3f"))
+            config->ReprojectionParallaxScale = parallaxScale;
+        ShowHelpMarker("Manual parallax strength, 0 keeps rotation only");
+        ImGui::EndDisabled();
+
+        bool thirdPerson = config->ReprojectionThirdPersonDetection.value_or_default();
+        if (MenuUi::Checkbox("Third Person Detection", &thirdPerson))
+            config->ReprojectionThirdPersonDetection = thirdPerson;
+        ShowHelpMarker("Detects third person cameras and limits reprojection to the skybox");
+
+        ImGui::Spacing();
     }
 
     // DLSSG controls

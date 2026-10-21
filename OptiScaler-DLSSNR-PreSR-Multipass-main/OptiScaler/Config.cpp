@@ -109,6 +109,8 @@ bool Config::Reload(std::filesystem::path iniPath)
                     FGOutput.set_from_config(FGOutput::XeFG);
                 else if (lstrcmpiA(FGOutputString.value().c_str(), "dlssg") == 0)
                     FGOutput.set_from_config(FGOutput::DLSSG);
+                else if (lstrcmpiA(FGOutputString.value().c_str(), "reprojection") == 0)
+                    FGOutput.set_from_config(FGOutput::Reprojection);
             }
 
             const bool canUseNvngxReplacement =
@@ -1212,6 +1214,30 @@ bool Config::Reload(std::filesystem::path iniPath)
             DisableReactiveMask.set_from_config(readBool("InitFlags", "DisableReactiveMask"));
         }
 
+        // Reprojection
+        {
+            if (auto fillMode = readString("Reprojection", "FillMode"); fillMode.has_value())
+            {
+                if (lstrcmpiA(fillMode.value().c_str(), "strech") == 0)
+                    ReprojectionFillMode.set_from_config(ReprojectionFill::StrechEdge);
+                else if (lstrcmpiA(fillMode.value().c_str(), "dithering") == 0)
+                    ReprojectionFillMode.set_from_config(ReprojectionFill::Dithering);
+                else if (lstrcmpiA(fillMode.value().c_str(), "noise") == 0)
+                    ReprojectionFillMode.set_from_config(ReprojectionFill::Noise);
+                else if (lstrcmpiA(fillMode.value().c_str(), "debug") == 0)
+                    ReprojectionFillMode.set_from_config(ReprojectionFill::Debug);
+                else if (lstrcmpiA(fillMode.value().c_str(), "soft") == 0)
+                    ReprojectionFillMode.set_from_config(ReprojectionFill::SoftEdge);
+            }
+
+            ReprojectionCutoffExpand.set_from_config(readUInt("Reprojection", "CutoffExpand"));
+            ReprojectionLateLatch.set_from_config(readBool("Reprojection", "LateLatch"));
+            ReprojectionDirectionCache.set_from_config(readBool("Reprojection", "DirectionCache"));
+            ReprojectionParallaxAuto.set_from_config(readBool("Reprojection", "ParallaxAuto"));
+            ReprojectionParallaxScale.set_from_config(readFloat("Reprojection", "ParallaxScale"));
+            ReprojectionThirdPersonDetection.set_from_config(readBool("Reprojection", "ThirdPersonDetection"));
+        }
+
         // DRS
         {
             DrsMinOverrideEnabled.set_from_config(readBool("DRS", "DrsMinOverrideEnabled"));
@@ -1588,6 +1614,8 @@ bool Config::SaveIni()
                 FGOutputString = "XeFG";
             else if (FGOutputHeld.value() == FGOutput::DLSSG)
                 FGOutputString = "DLSSG";
+            else if (FGOutputHeld.value() == FGOutput::Reprojection)
+                FGOutputString = "Reprojection";
         }
         ini.SetValue("FrameGen", "FGOutput", FGOutputString.c_str());
 
@@ -2410,6 +2438,37 @@ bool Config::SaveIni()
                      GetBoolValue(Instance()->DisplayResolution.value_for_config()).c_str());
         ini.SetValue("InitFlags", "DisableReactiveMask",
                      GetBoolValue(Instance()->DisableReactiveMask.value_for_config()).c_str());
+    }
+
+    // Reprojection
+    {
+        std::string fillMode = "auto";
+        if (auto held = Instance()->ReprojectionFillMode.value_for_config(); held.has_value())
+        {
+            if (held.value() == ReprojectionFill::StrechEdge)
+                fillMode = "strech";
+            else if (held.value() == ReprojectionFill::Dithering)
+                fillMode = "dithering";
+            else if (held.value() == ReprojectionFill::Noise)
+                fillMode = "noise";
+            else if (held.value() == ReprojectionFill::Debug)
+                fillMode = "debug";
+            else if (held.value() == ReprojectionFill::SoftEdge)
+                fillMode = "soft";
+        }
+        ini.SetValue("Reprojection", "FillMode", fillMode.c_str());
+        ini.SetValue("Reprojection", "CutoffExpand",
+                     GetIntValue(Instance()->ReprojectionCutoffExpand.value_for_config()).c_str());
+        ini.SetValue("Reprojection", "LateLatch",
+                     GetBoolValue(Instance()->ReprojectionLateLatch.value_for_config()).c_str());
+        ini.SetValue("Reprojection", "DirectionCache",
+                     GetBoolValue(Instance()->ReprojectionDirectionCache.value_for_config()).c_str());
+        ini.SetValue("Reprojection", "ParallaxAuto",
+                     GetBoolValue(Instance()->ReprojectionParallaxAuto.value_for_config()).c_str());
+        ini.SetValue("Reprojection", "ParallaxScale",
+                     GetFloatValue(Instance()->ReprojectionParallaxScale.value_for_config()).c_str());
+        ini.SetValue("Reprojection", "ThirdPersonDetection",
+                     GetBoolValue(Instance()->ReprojectionThirdPersonDetection.value_for_config()).c_str());
     }
 
     // Upscale Ratio Override
