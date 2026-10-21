@@ -349,11 +349,16 @@ static bool CallIsSupported(const DriverProvider& provider, VkDevice device, VkP
 
 bool FSR4DriverProviderVk::Init(VkPhysicalDevice physicalDevice)
 {
-    static std::atomic<bool> initTried = false;
+    // Serialize initialization: a racing caller must not observe the "tried"
+    // flag set while _upscaler is still being populated, or it would cache a
+    // permanent false. The mutex makes concurrent callers wait until the
+    // attempt finishes and then return the real IsAvailable() state.
+    static std::mutex initMutex;
+    std::lock_guard lock(initMutex);
+    static bool initTried = false;
 
     if (initTried)
         return IsAvailable();
-
     if (physicalDevice == VK_NULL_HANDLE)
         physicalDevice = VulkanHooks::GetPhysicalDevice(State::Instance().currentVkDevice);
     LUID actualLuid {};
@@ -388,11 +393,14 @@ bool FSR4DriverProviderVk::IsSupported(VkDevice device, VkPhysicalDevice physica
 
 bool FSR4DriverProviderVk::InitFg(VkPhysicalDevice physicalDevice)
 {
-    static std::atomic<bool> initTried = false;
+    // Same concurrency contract as Init (R3): concurrent callers wait for the
+    // attempt to finish instead of racing on the tried flag.
+    static std::mutex initFgMutex;
+    std::lock_guard lock(initFgMutex);
+    static bool initTried = false;
 
     if (initTried)
         return IsFgAvailable();
-
     if (physicalDevice == VK_NULL_HANDLE)
         physicalDevice = VulkanHooks::GetPhysicalDevice(State::Instance().currentVkDevice);
     LUID actualLuid {};

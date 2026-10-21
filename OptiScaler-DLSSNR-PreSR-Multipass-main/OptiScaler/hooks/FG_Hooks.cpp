@@ -1423,7 +1423,7 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
     // DXVK's DXGI presents through Vulkan where the limiter already sleeps, the low latency output
     // limits through its own sleep call
     if (willPresent && !state.reflexLimitsFps && state.activeFgOutput != FGOutput::NoFG &&
-        !IdentifyGpu::getPrimaryGpu().usesDxvk && !XellHooks::canLimit() && !InputCommon::can_limit_fps())
+        !IdentifyGpu::getPrimaryGpu().dxgiIsDxvk && !XellHooks::canLimit() && !InputCommon::can_limit_fps())
     {
         FrameLimit::sleep(fg != nullptr ? fg->IsActive() && !fg->IsPaused() : false);
     }

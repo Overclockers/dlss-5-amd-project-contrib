@@ -1252,7 +1252,7 @@ void InputCommon::xefg_marker(void* xellContext, uint32_t frame_id, uint32_t mar
         return;
 
     // Without generated frames XeFG sends both right away, DLSSG doesn't send them
-    auto fg = State::Instance().currentFG;
+    auto fg = State::Instance().CurrentFG();
 
     if (fg == nullptr || !fg->IsActive() || fg->IsPaused())
     {

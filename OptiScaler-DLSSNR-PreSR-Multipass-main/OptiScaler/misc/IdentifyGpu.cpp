@@ -98,7 +98,6 @@ std::vector<GpuInformation> IdentifyGpu::checkGpuInfo()
             if (SUCCEEDED(adapter->QueryInterface(__uuidof(IDXGIVkInteropAdapter), (void**) &interopAdapter)))
             {
                 gpuInfo.dxgiIsDxvk = true;
-                gpuInfo.usesDxvk = true;
 
                 // Try to get the real GPU info when using dxvk.conf to spoof
                 ComPtr<IDXGIVkInteropFactory> interopFactory;
@@ -426,7 +425,7 @@ void IdentifyGpu::updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3
     struct D3d12Result
     {
         LUID luid;
-        bool usesVkd3dProton = false;
+        bool isVkd3dProton = false;
         FSR4Support fsr4Support = FSR4Support::None;     // Includes force
         FSR4Support realFsr4Support = FSR4Support::None; // Doesn't include force
         bool fsr4ForcedSupport = false;
@@ -435,7 +434,7 @@ void IdentifyGpu::updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3
 
     for (auto& gpuInfo : cache)
     {
-        if (gpuInfo.vendorId != VendorId::AMD && !gpuInfo.usesDxvk &&
+        if (gpuInfo.vendorId != VendorId::AMD && !gpuInfo.dxgiIsDxvk &&
             Config::Instance()->Fsr4GpuSupport.value_or_default() == FSR4Support::None)
         {
             continue;
@@ -470,7 +469,7 @@ void IdentifyGpu::updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3
                 ComPtr<ID3D12DXVKInteropDevice> vkd3dInterop;
                 if (localDevice && SUCCEEDED(localDevice->QueryInterface(IID_PPV_ARGS(&vkd3dInterop))))
                 {
-                    res.usesVkd3dProton = true;
+                    res.isVkd3dProton = true;
                 }
 
                 // Kinda questionable, may need to reconsider
@@ -483,7 +482,7 @@ void IdentifyGpu::updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3
                 if (gpuInfo.vendorId == VendorId::AMD)
                 {
                     // Query vkd3d-proton for extensions it's using to look for the required one for FSR 4
-                    if (res.usesVkd3dProton)
+                    if (res.isVkd3dProton)
                     {
                         UINT extensionCount = 0;
 
@@ -535,7 +534,7 @@ void IdentifyGpu::updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3
 
                         // Query amdxc for a specific intrinsics support, FSR 4 checks more but hopefully this one
                         // is enough amdxc on Windows hates vkd3d-proton's device, on Linux it's fine
-                        if (localDevice && (State::Instance().isRunningOnLinux || !res.usesVkd3dProton) &&
+                        if (localDevice && (State::Instance().isRunningOnLinux || !res.isVkd3dProton) &&
                             AmdExtD3DCreateInterface)
                         {
                             IAmdExtD3DFactory* amdExtD3DFactory = nullptr;
@@ -616,8 +615,7 @@ void IdentifyGpu::updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3
             {
                 if (IsEqualLUID(gpuInfo.luid, res.luid))
                 {
-                    gpuInfo.d3d12IsVkd3dProton = res.usesVkd3dProton;
-                    gpuInfo.usesVkd3dProton = res.usesVkd3dProton;
+                    gpuInfo.d3d12IsVkd3dProton = res.isVkd3dProton;
                     gpuInfo.fsr4Support = res.fsr4Support;
                     gpuInfo.realFsr4Support = res.realFsr4Support;
                     gpuInfo.fsr4ForcedSupport = res.fsr4ForcedSupport;

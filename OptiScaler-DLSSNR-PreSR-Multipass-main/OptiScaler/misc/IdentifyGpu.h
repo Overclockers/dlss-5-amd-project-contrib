@@ -59,8 +59,6 @@ struct GpuInformation
     // Use IdentifyGpu::gameUsesDxvk/gameUsesVkd3dProton for that
     bool dxgiIsDxvk = false;         // Adapter was enumerated through DXVK's DXGI
     bool d3d12IsVkd3dProton = false; // D3D12 device creation goes through vkd3d-proton
-    bool usesDxvk = false;
-    bool usesVkd3dProton = false;
     bool softwareAdapter = false;
     std::filesystem::path driverStore {};
 

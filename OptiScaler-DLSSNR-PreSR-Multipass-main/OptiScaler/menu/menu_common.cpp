@@ -2247,14 +2247,14 @@ void MenuCommon::RenderPerformanceOverlay(RenderMenuContext& ctx)
                              ImGuiWindowFlags_NoNav))
         {
             std::string api;
-            if (IdentifyGpu::getPrimaryGpu().usesDxvk && state.api == DX11)
+            if (IdentifyGpu::gameUsesDxvk())
             {
                 if (state.swapchainInteropApi == SwapchainInteropApi::None)
                     api = "DXVK";
                 else
                     api = "DXVK w/Dx12";
             }
-            else if (IdentifyGpu::getPrimaryGpu().usesVkd3dProton && state.api == DX12)
+            else if (IdentifyGpu::gameUsesVkd3dProton())
             {
                 api = "VKD3D";
             }
@@ -2311,7 +2311,7 @@ void MenuCommon::RenderPerformanceOverlay(RenderMenuContext& ctx)
             std::string secondLine = "";
             std::string thirdLine = "";
 
-            auto fg = state.currentFG;
+            auto fg = state.CurrentFG();
             auto fgText = (fg != nullptr && fg->IsActive() && !fg->IsPaused()) ? (" (" + std::string(fg->Name()) + ")")
                                                                                : std::string();
 
@@ -2934,7 +2934,7 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
         case DX11:
             MenuUi::Text(primaryGpu.name.c_str());
 
-            MenuUi::Text("D3D11 %s| %s %d.%d.%d%s", primaryGpu.usesDxvk ? "(DXVK) " : "",
+            MenuUi::Text("D3D11 %s| %s %d.%d.%d%s", IdentifyGpu::gameUsesDxvk() ? "(DXVK) " : "",
                         currentFeature->ShortName().c_str(), currentFeature->Version().major,
                         currentFeature->Version().minor, currentFeature->Version().patch,
                         usesDx12CompatLayer ? " w/Dx12" : "");
@@ -2953,7 +2953,7 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
         case DX12:
             MenuUi::Text(primaryGpu.name.c_str());
 
-            MenuUi::Text("D3D12 %s| %s %d.%d.%d", primaryGpu.usesDxvk ? "(DXVK) " : "",
+            MenuUi::Text("D3D12 %s| %s %d.%d.%d", IdentifyGpu::gameUsesVkd3dProton() ? "(VKD3D) " : "",
                         currentFeature->ShortName().c_str(), currentFeature->Version().major,
                         currentFeature->Version().minor, currentFeature->Version().patch);
             ImGui::SameLine(0.0f, 6.0f);
@@ -2971,7 +2971,7 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
         default:
             MenuUi::Text(primaryGpu.name.c_str());
 
-            MenuUi::Text("Vulkan %s| %s %d.%d.%d%s", primaryGpu.usesDxvk ? "(DXVK) " : "",
+            MenuUi::Text("Vulkan %s| %s %d.%d.%d%s", primaryGpu.dxgiIsDxvk ? "(DXVK) " : "",
                         currentFeature->ShortName().c_str(), currentFeature->Version().major,
                         currentFeature->Version().minor, currentFeature->Version().patch,
                         usesDx12CompatLayer ? " w/Dx12" : "");
@@ -4031,7 +4031,7 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
             ImGui::EndDisabled();
         }
 
-        auto fgOutput = reinterpret_cast<IFGFeature_Dx12*>(state.currentFG);
+        auto fgOutput = reinterpret_cast<IFGFeature_Dx12*>(state.CurrentFG());
         if (((state.activeFgOutput == FGOutput::FSRFG || state.activeFgOutput == FGOutput::XeFG ||
               state.activeFgOutput == FGOutput::DLSSG) &&
              state.activeFgInput != FGInput::NoFG && state.activeFgInput != FGInput::NvngxFG) &&
@@ -4086,7 +4086,7 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
 
                 if (showOutputSpecificFGSettings)
                 {
-                    auto fgOutput = reinterpret_cast<IFGFeature_Dx12*>(state.currentFG);
+                    auto fgOutput = reinterpret_cast<IFGFeature_Dx12*>(state.CurrentFG());
                     if (fgOutput)
                     {
                         ImGui::BeginDisabled(!fgOutput->IsActive());
@@ -4317,7 +4317,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
 
             ImGui::SameLine(0.0f, 16.0f);
 
-            if (state.currentFG && state.currentFG->Version().major > 3)
+            if (state.CurrentFG() && state.CurrentFG()->Version().major > 3)
             {
                 if (bool fgwm = config->FSRFGEnableWatermark.value_or_default();
                     MenuUi::Checkbox("Enable Watermark", &fgwm))
@@ -4408,7 +4408,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                     ImGui::TreePop();
                 }
 
-                auto fg = state.currentFG;
+                auto fg = state.CurrentFG();
                 if (fg != nullptr && strcmp(fg->Name(), "FSR-FG") == 0 &&
                     FfxApiProxy::VersionDx12_FG() >= feature_version { 3, 1, 3 })
                 {
@@ -5345,7 +5345,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                 const bool isDllProxyNvngxType =
                     activeNvngxFg == FGNvngxReplacement::Nukems || activeNvngxFg == FGNvngxReplacement::Arturs;
                 if (isDllProxyNvngxType && !primaryGpu.dlssCapable && primaryGpu.fsr4Support == FSR4Support::None &&
-                    !primaryGpu.usesVkd3dProton && !isUnrealEngine)
+                    !primaryGpu.d3d12IsVkd3dProton && !isUnrealEngine)
                 {
                     if (bool makeDepthCopy = config->NvngxFGMakeDepthCopy.value_or_default();
                         MenuUi::Checkbox("Fix broken visuals", &makeDepthCopy))
@@ -5563,12 +5563,12 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
     }
 
     // FSR-FG Inputs
-    if (state.currentFGSwapchain != nullptr &&
+    if (state.FGSwapchainExists() &&
         (state.activeFgInput == FGInput::FSRFG || state.activeFgInput == FGInput::FSRFG30))
     {
         SeparatorWithHelpMarker("Frame Generation (FSR-FG Inputs)", "Select FSR-FG in-game");
 
-        auto fgOutput = reinterpret_cast<IFGFeature_Dx12*>(state.currentFG);
+        auto fgOutput = reinterpret_cast<IFGFeature_Dx12*>(state.CurrentFG());
         if (fgOutput != nullptr)
         {
             MenuUi::Text("Current FSR-FG state:");
@@ -5604,11 +5604,11 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
     }
 
     // Streamline FG Inputs
-    if (state.currentFGSwapchain != nullptr && state.activeFgInput == FGInput::DLSSG)
+    if (state.FGSwapchainExists() && state.activeFgInput == FGInput::DLSSG)
     {
         SeparatorWithHelpMarker("Frame Generation (Streamline FG Inputs)", "Select DLSS-FG in-game");
 
-        auto fgOutput = reinterpret_cast<IFGFeature_Dx12*>(state.currentFG);
+        auto fgOutput = reinterpret_cast<IFGFeature_Dx12*>(state.CurrentFG());
 
         if (!ReflexHooks::isReflexHooked())
         {
@@ -8409,7 +8409,7 @@ void MenuCommon::RenderHudlessResourcesWindow(RenderMenuContext& ctx, ImGuiWindo
     auto config = ctx.config;
     auto& io = ctx.io;
 
-    auto fg = state.currentFG;
+    auto fg = state.CurrentFG();
     if (_showHudlessWindow && config->FGHUDFix.value_or_default() && fg != nullptr && fg->IsActive())
     {
         auto posX = (io.DisplaySize.x - 400.0f) / 2.0f;

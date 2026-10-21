@@ -341,7 +341,7 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
     }
 
     // DXVK check, it's here because of upscaler time calculations
-    if (IdentifyGpu::getPrimaryGpu().usesDxvk)
+    if (IdentifyGpu::getPrimaryGpu().dxgiIsDxvk)
     {
         if (pPresentParameters == nullptr)
             presentResult = pSwapChain->Present(SyncInterval, Flags);
@@ -740,11 +740,11 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::Present(UINT SyncInterval, UIN
         // where the limiter already sleeps, the low latency output limits through its own sleep call
 #ifdef LOW_LATENCY_INPUTS
         if (!State::Instance().reflexLimitsFps && State::Instance().activeFgOutput == FGOutput::NoFG &&
-            !IdentifyGpu::getPrimaryGpu().usesDxvk && !XellHooks::canLimit() && !InputCommon::can_limit_fps())
+            !IdentifyGpu::getPrimaryGpu().dxgiIsDxvk && !XellHooks::canLimit() && !InputCommon::can_limit_fps())
             FrameLimit::sleep(false);
 #else
         if (!State::Instance().reflexLimitsFps && State::Instance().activeFgOutput == FGOutput::NoFG &&
-            !IdentifyGpu::getPrimaryGpu().usesDxvk && !XellHooks::canLimit())
+            !IdentifyGpu::getPrimaryGpu().dxgiIsDxvk && !XellHooks::canLimit())
             FrameLimit::sleep(false);
 #endif
     }
@@ -1115,11 +1115,11 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::Present1(UINT SyncInterval, UI
         // where the limiter already sleeps, the low latency output limits through its own sleep call
 #ifdef LOW_LATENCY_INPUTS
         if (!State::Instance().reflexLimitsFps && State::Instance().activeFgOutput == FGOutput::NoFG &&
-            !IdentifyGpu::getPrimaryGpu().usesDxvk && !XellHooks::canLimit() && !InputCommon::can_limit_fps())
+            !IdentifyGpu::getPrimaryGpu().dxgiIsDxvk && !XellHooks::canLimit() && !InputCommon::can_limit_fps())
             FrameLimit::sleep(false);
 #else
         if (!State::Instance().reflexLimitsFps && State::Instance().activeFgOutput == FGOutput::NoFG &&
-            !IdentifyGpu::getPrimaryGpu().usesDxvk && !XellHooks::canLimit())
+            !IdentifyGpu::getPrimaryGpu().dxgiIsDxvk && !XellHooks::canLimit())
             FrameLimit::sleep(false);
 #endif
     }
