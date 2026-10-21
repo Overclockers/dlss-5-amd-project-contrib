@@ -190,6 +190,25 @@ The combined Release host/worker build passed. Runtime VRAM-drop observation, Vu
 game multi-instance/resize behavior and native NVIDIA NR scaler acceptance remain
 separate checks; this CPU build is not evidence those executions passed.
 
+### V1/V2 native Vulkan provider
+
+The final driver provider/pipeline-layout workaround is integrated after V3, with
+native API version-list/model menu routing and explicit project registrations.
+The coherent Release host/worker build passed. A bounded actual-host-object probe
+created a hooked game Vulkan instance/device, verified physical/logical LUID
+`0:1321c`, and loaded installed `amdvkffx64.dll` provider `4.1.2 *`, ID
+`f5a5ca1e81001002`. FP8 and then INT8 contexts each dispatched 128×128→256×256 with
+reset, completed their Vulkan fence and reported the expected actual model before
+destruction; device/instance destruction and process exit completed normally.
+An unknown-metadata initialization attempt returned false without consuming the
+subsequent valid attempt. RDNA2/Lite were listed but not executed.
+
+The probe's initial empty model list came from missing normal startup game-state/
+capability initialization in the adapter, not a provider patch: binding the actual
+game device/API and running normal capability discovery restored the expected
+identity. This does not certify Vulkan FG, repeated long-run switches, real games,
+overlay coexistence or other GPUs' models; those remain separate acceptance.
+
 ### Follow-up snapshot (2026-10-09)
 
 Reviewed through **434b9555d960e6e471a461c2b0d98b8e1fdacfa2**

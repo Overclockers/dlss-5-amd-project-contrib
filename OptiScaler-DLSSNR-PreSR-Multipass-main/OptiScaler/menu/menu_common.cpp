@@ -31,6 +31,7 @@
 #include <upscalers/ffx/FFXFeature.h>
 #include <fsr4/FSR4Models.h>
 #include <fsr4/FSR4Presets.h>
+#include <fsr4/FSR4DriverProviderVk.h>
 #include <proxies/Streamline_Proxy.h>
 
 #include <framegen/nvngx/Nvngx_FG.h>
@@ -3122,6 +3123,9 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                     const auto index = config->FfxUpscalerIndex.value_or_default();
                     if (versions == &state.ffxUpscalerVersionsDx12 && index >= 0 && index < versions->ids.size())
                         upscalerModule = FfxApiProxy::UpscalerModule(versions->ids[index]);
+                    else if (versions == &state.ffxUpscalerVersionsVk && index >= 0 && index < versions->ids.size() &&
+                             FSR4DriverProviderVk::IsAvailable() && versions->ids[index] == FSR4DriverProviderVk::VersionId())
+                        upscalerModule = FSR4DriverProviderVk::Module()->dll;
 
                     if (auto models = FSR4Models::SelectableModels(upscalerModule); !models.empty())
                     {

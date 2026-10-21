@@ -371,6 +371,8 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="framegen\nvngx\Nvngx_Combo.h" />
     <ClInclude Include="fsr4\FSR4DriverProvider.h" />
     <ClInclude Include="fsr4\FSR4DriverProviderDx12.h" />
+    <ClInclude Include="fsr4\FSR4DriverProviderVk.h" />
+    <ClInclude Include="fsr4\FSR4PipelineLayouts.h" />
     <ClInclude Include="fsr4\FSR4Models.h" />
     <ClInclude Include="fsr4\FSR4Presets.h" />
     <ClInclude Include="gpu_time\GpuTime_Dx11.h" />
@@ -684,6 +686,8 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="framegen\nvngx\Nvngx_Combo.cpp" />
     <ClCompile Include="fsr4\FSR4DriverProvider.cpp" />
     <ClCompile Include="fsr4\FSR4DriverProviderDx12.cpp" />
+    <ClCompile Include="fsr4\FSR4DriverProviderVk.cpp" />
+    <ClCompile Include="fsr4\FSR4PipelineLayouts.cpp" />
     <ClCompile Include="fsr4\FSR4Models.cpp" />
     <ClCompile Include="fsr4\FSR4Presets.cpp" />
     <ClCompile Include="gpu_time\GpuTime_Dx11.cpp" />
