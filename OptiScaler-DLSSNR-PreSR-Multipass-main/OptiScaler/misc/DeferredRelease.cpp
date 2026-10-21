@@ -99,8 +99,13 @@ void DeferredRelease::DropOwner(uint64_t owner)
         return;
     std::lock_guard dispatchLock(dispatchMutex);
     std::lock_guard lock(mutex);
-    if (auto it = owners.find(owner); it != owners.end())
-        it->second.active = false;
+    // Record the drop even for owners that were never registered: ReleaseReady
+    // rechecks extracted entries against this map, and a missing entry would
+    // let an unregistered-but-dropped owner's callback slip through and run on
+    // a destroyed device. Generation stays 0 so a later RegisterOwner on the
+    // reused handle starts a fresh generation and invalidates stale entries.
+    auto& state = owners[owner];
+    state.active = false;
     const auto dropped = std::erase_if(entries, [owner](const Entry& entry) { return entry.owner == owner; });
     if (dropped > 0)
         LOG_WARN("Dropped {} deferred objects of a destroyed device", dropped);

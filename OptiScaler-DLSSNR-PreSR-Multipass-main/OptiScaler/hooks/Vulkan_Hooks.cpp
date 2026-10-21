@@ -573,13 +573,16 @@ static void hkvkDestroyInstance(VkInstance instance, const VkAllocationCallbacks
 VALIDATE_HOOK(hkvkDestroyDevice, PFN_vkDestroyDevice)
 static void hkvkDestroyDevice(VkDevice device, const VkAllocationCallbacks* pAllocator)
 {
-    bool gameDevice = false;
     {
         std::scoped_lock lock(_vkApiVersionMutex);
-        gameDevice = _devicePhysicalDevices.erase(device) != 0;
+        _devicePhysicalDevices.erase(device);
     }
-    if (gameDevice && !ScopedSkipVulkanHooks::Active() && !ScopedCreatingD3DDevice::Active())
-        DeferredRelease::DropOwner((uint64_t) device);
+    // Any destroyed VkDevice must stop owning deferred callbacks. Unregistered
+    // devices can still hold queued entries (Enqueue accepts unknown owners),
+    // and a handle reuse after destruction must not revive stale generations.
+    // NR private devices never enqueue (native NR uses Immediate), so dropping
+    // them is a no-op that only guarantees no callback outlives the device.
+    DeferredRelease::DropOwner(reinterpret_cast<uint64_t>(device));
     o_vkDestroyDevice(device, pAllocator);
 }
 
