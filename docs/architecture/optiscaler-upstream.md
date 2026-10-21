@@ -383,3 +383,73 @@ sources and clearing, overlapping traversal, retirement/address reuse, and indep
 calls. A controlled /O2 CPU fixture compares the same lookup/copy workload (not game
 FPS): 200,000 16-descriptor copies reduce lookups from 6,400,000 to 400,000. Single-item
 lookup counts remain unchanged. No persistent cache or HUD tracking rewrite is included.
+
+## Review follow-up audit (2026-10-21, second review round)
+
+Records required by `REVIEW-opti-9df512d-integration.md` (M5/L9/L12) that the
+integration history did not write down. Full commit-by-commit resolution log:
+`work/plan/PLAN-OPTISCALER-V10-INTEGRATION-REVIEW.md`.
+
+**U3 (M5) — `amdxcffx64.dll` driver function table patch, compliance and risk.**
+`FSR4DriverProvider`/`FSR4DriverProviderDx12` do not ship, modify or
+redistribute any AMD binary. The mechanism is in-process only: the already
+installed driver's `amdxcffx64.dll` is loaded from the driver store, and the
+FFX API function table it publishes for `amd_fidelityfx_dx12.dll` consumers is
+patched in this process's memory so FSR4 contexts created by the game resolve
+to the driver provider. No file on disk is rewritten and no binary is copied
+into our packages, so no AMD EULA redistribution question applies. Callers
+from the game module (as opposed to the driver DLL) are rejected with
+`E_NOINTERFACE` (`FSR4DriverProvider.cpp:208`, `FSR4DriverProviderDx12.cpp:193`),
+the same answer the driver gives when it has no provider for the effect, so a
+game that probes for the interface observes absent support instead of crashing.
+The residual risk is deliberate: if AMD changes the provider ABI, loading
+fails closed (`QueryProvider` returns no provider) rather than patching a
+mis-matched table.
+
+**T1 (L9) — `ScopedSkipSpoofingGlobal` vs the thread-local scope.**
+`FSR4DriverProviderVk` runs its provider probes (`isSupported`, context
+creation) on threads it does not own: the driver's Vulkan backend spawns its
+own internal threads inside a single `isSupported` call, and those threads
+query the same Vulkan entry points our spoofing layer hooks. A thread-local
+`ScopedSkipSpoofingThread` would unspoof only the calling thread and leave the
+driver's internal threads reading spoofed adapter identities mid-probe, which
+produces a half-spoofed provider decision. `ScopedSkipSpoofingGlobal`
+(`State.h`) suppresses spoofing process-wide for the duration of the probe,
+which is the correct scope for "let the driver see the real GPU while it
+decides FSR4 support". The thread-local scope is retained for future callers
+that hook only their own thread's queries (upstream `ScopedSkipSpoofing`), and
+DX12 probing uses the equivalent thread scope where the AMD extension entry
+points are only called from the probing thread. No spoofing-state leak from
+driver-internal threads exists by construction: those threads never install
+scopes, they only observe the global one.
+
+**D9 (L9) — Alt+Tab minimized-window resize.**
+Audited: this tree has no `MenuOverlayBase::CheckForResize` entry point; the
+local menu rewrite creates and recreates its render targets from the hooked
+swapchain's own `DXGI_SWAP_CHAIN_DESC` at present time (`menu_overlay_dx.cpp`),
+not from `GetClientRect`, so a 0×0 minimized client rect never feeds overlay
+target creation, and there is no zero-rect branch to port. Hardware Alt+Tab
+minimize/restore acceptance stays in the real-machine gap list (§12.4).
+
+**L12 — `FSRFG_Dx12` reprojection present callback removal.**
+The local FSRFG rewrite never implemented `SetFrameGenerationConfig`
+present-time reprojection callback plumbing that upstream later removed as
+dead code; there is no dead callback left in this tree. Recorded here so the
+modification list and upstream history agree on why no removal commit exists.
+
+**V4 / D1–D3 / D10 acceptance notes.**
+V4's Vulkan FG runtime is wired through `State::CurrentFG()` /
+`FGSwapchainExists()` (menu, frame limiter, Reflex/Streamline reporting);
+Vulkan DLSSG input transport and the `70ee896` FPS reporting fix are in, and
+the FSR4 provider init race is closed with per-init mutexes. D1 mouse
+collection now has its producers (`Reflex_Hooks`, `Streamline_Hooks` PCL
+markers call `InputCollection::startCollectingForFrame`), validated by the
+host input tests. D3 persistent bindings hook `ClearState` at vtable slot 11
+(compile-time asserted against `d3d12.h`), process `DrawIndexedInstanced`
+through the binding tracker, parse `D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND`
+with CBV/Sampler filtering, apply the upstream 5% resolution tolerance, and
+detach/reset tracking state on device release; `tests/host/restrack_d3_signature.cpp`
+links the SDK vtables and asserts every hooked slot and hook typedef. D10's
+menu/UX consequences are covered by the localization and layout host tests.
+Remaining real-machine gaps (a Vulkan FG game, Streamline game exit, HDR,
+Alt+Tab) are unchanged and listed in §12.4 of the plan.
