@@ -4,6 +4,8 @@
 #include <vulkan/vulkan.h>
 #include <string>
 #include <vector>
+#include <memory>
+#include <gpu_time/GpuTime_Vk.h>
 
 // Matches NVSDK_NGX_ImageViewInfo_VK
 struct VkImageInfo
@@ -24,6 +26,8 @@ class Shader_Vk
 
     VkDevice _device = VK_NULL_HANDLE;
     VkPhysicalDevice _physicalDevice = VK_NULL_HANDLE;
+
+    std::unique_ptr<GpuTime_Vk> GpuTime;
 
     // Pipeline Layouts
     VkPipeline _pipeline = VK_NULL_HANDLE;
@@ -84,6 +88,8 @@ class Shader_Vk
   public:
     bool IsInit() const { return _init; }
     bool CanRender() const { return _init && _pipeline != VK_NULL_HANDLE; }
+    std::string Name() const { return _name; }
+    std::optional<double> ReadGpuTime() { return GpuTime ? GpuTime->ReadGpuTime() : std::nullopt; }
 
     VkImageView GetImageView() const { return _intermediateImageView; }
     VkImage GetImage() const { return _intermediateImage; }

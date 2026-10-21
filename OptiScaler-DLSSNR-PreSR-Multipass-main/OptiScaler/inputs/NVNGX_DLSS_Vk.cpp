@@ -11,7 +11,6 @@
 
 #include "upscalers/FeatureProvider_Vk.h"
 
-#include <upscaler_time/UpscalerTime_Vk.h>
 
 #include <vulkan/vulkan.h>
 #include <ankerl/unordered_dense.h>
@@ -247,7 +246,6 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_Init_Ext2(
 
     State::Instance().currentVkDevice = InDevice;
 
-    UpscalerTimeVk::Init(InDevice, InPD);
 
     State::Instance().nvngxVkInited = true;
 
@@ -1071,7 +1069,6 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_EvaluateFeature(VkCommandBuffer 
     deviceContext = VkContexts[handleId].feature.get();
     state.currentFeature = deviceContext;
 
-    UpscalerTimeVk::UpscaleStart(InCmdList);
 
     auto upscaleResult = deviceContext->Evaluate(InCmdList, InParameters);
 
@@ -1086,7 +1083,6 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_EvaluateFeature(VkCommandBuffer 
         return NVSDK_NGX_Result_Success;
     }
 
-    UpscalerTimeVk::UpscaleEnd(InCmdList);
 
     // Same pass, for OptiScaler's own upscalers rather than native DLSS. Natively on Vulkan now: the
     // model exports a complete Vulkan surface and OptiScaler's vkCreateDevice hook already adds the
