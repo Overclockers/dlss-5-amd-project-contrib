@@ -1196,12 +1196,18 @@ public:
 // their own standard command-list/device identity. Recover our logical proxy,
 // not its native producer (which changes at a split). Keep the returned COM
 // reference alive for the entire Evaluate call. No private interface: no change.
-inline Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> QueryLogicalCommandList(IUnknown* list)
+inline Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> QueryLogicalCommandList(
+    IUnknown* list, bool* outRequiresOuterUnwrap = nullptr) noexcept
 {
+    if (outRequiresOuterUnwrap)
+        *outRequiresOuterUnwrap = false;
     Microsoft::WRL::ComPtr<ILogicalCommandList> logical;
     Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> proxy;
     if (!list) return proxy;
     if (SUCCEEDED(list->QueryInterface(IID_PPV_ARGS(&logical))) && logical) {
+        // Either list is our proxy or a transparent wrapper (e.g. ReShade) whose
+        // _orig delegates to it: recording through the caller's outer object keeps
+        // outer dispatch/bind callbacks alive and still follows Cur() across splits.
         logical.As(&proxy);
         return proxy;
     }
@@ -1213,8 +1219,13 @@ inline Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> QueryLogicalCommandList
         {0xAD, 0x9F, 0x1B, 0x37, 0x37, 0x92, 0x84, 0xFF}};
     Microsoft::WRL::ComPtr<IUnknown> native;
     if (SUCCEEDED(list->QueryInterface(streamlineNative, reinterpret_cast<void**>(native.GetAddressOf()))) && native &&
-        SUCCEEDED(native.As(&logical)) && logical)
+        SUCCEEDED(native.As(&logical)) && logical) {
+        // The outer wrapper is opaque (Streamline interposer style) and may record
+        // to a stale native producer after NR splits; the caller must unwrap it.
+        if (outRequiresOuterUnwrap)
+            *outRequiresOuterUnwrap = true;
         logical.As(&proxy);
+    }
     return proxy;
 }
 

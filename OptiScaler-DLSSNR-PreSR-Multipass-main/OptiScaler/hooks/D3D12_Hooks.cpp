@@ -21,6 +21,7 @@
 #include <proxies/XeSS_Proxy.h>
 #include <proxies/IGDExt_Proxy.h>
 #include <proxies/Streamline_Proxy.h>
+#include <hooks/Reflex_Hooks.h>
 #include <proxies/KernelBase_Proxy.h>
 
 #include <detours/detours.h>
@@ -464,6 +465,9 @@ VALIDATE_HOOK(hkSetDescriptorHeaps, PFN_SetDescriptorHeaps)
 static void hkSetDescriptorHeaps(ID3D12GraphicsCommandList* commandList, UINT NumDescriptorHeaps,
                                  ID3D12DescriptorHeap* const* ppDescriptorHeaps)
 {
+    if (Config::Instance()->FGHudfixPersistentBindings.value_or_default() && commandList != nullptr)
+        ResTrack_Dx12::OnSetDescriptorHeaps(commandList, NumDescriptorHeaps, ppDescriptorHeaps);
+
     if (!lateInProgressSetDescriptorHeaps && !isUpscalerActive && commandList != nullptr &&
         ppDescriptorHeaps != nullptr)
     {
@@ -502,6 +506,9 @@ UINT GetRootParameterCount(ID3D12RootSignature* pRootSignature)
 VALIDATE_HOOK(hkSetComputeRootSignature, PFN_SetComputeRootSignature)
 static void hkSetComputeRootSignature(ID3D12GraphicsCommandList* commandList, ID3D12RootSignature* pRootSignature)
 {
+    if (Config::Instance()->FGHudfixPersistentBindings.value_or_default() && commandList != nullptr)
+        ResTrack_Dx12::OnSetComputeRootSignature(commandList, pRootSignature);
+
     if (!lateInProgressSetComputeRootSignature && Config::Instance()->RestoreComputeSignature.value_or_default() &&
         !isUpscalerActive && commandList != nullptr && pRootSignature != nullptr)
     {
@@ -670,6 +677,9 @@ static void hkSetComputeRootUnorderedAccessView(ID3D12GraphicsCommandList* comma
 VALIDATE_HOOK(hkSetGraphicsRootSignature, PFN_SetGraphicsRootSignature)
 static void hkSetGraphicsRootSignature(ID3D12GraphicsCommandList* commandList, ID3D12RootSignature* pRootSignature)
 {
+    if (Config::Instance()->FGHudfixPersistentBindings.value_or_default() && commandList != nullptr)
+        ResTrack_Dx12::OnSetGraphicsRootSignature(commandList, pRootSignature);
+
     if (!lateInProgressSetGraphicsRootSignature && Config::Instance()->RestoreGraphicSignature.value_or_default() &&
         !isUpscalerActive && commandList != nullptr && pRootSignature != nullptr)
     {
@@ -2168,6 +2178,7 @@ static HRESULT hkD3D12CreateDevice(IUnknown* pAdapter, D3D_FEATURE_LEVEL Minimum
                 reflexConst.mode = sl::ReflexMode::eLowLatency;
                 reflexConst.useMarkersToOptimize = false;
 
+                ScopedOptiScalerReflex optiScalerCall {};
                 auto result = StreamlineProxy::ReflexSetOptions()(reflexConst);
                 LOG_TRACE("ReflexSetOptions");
             }
@@ -2678,8 +2689,12 @@ VALIDATE_HOOK(hkCreateRootSignature, PFN_CreateRootSignature)
 static HRESULT hkCreateRootSignature(ID3D12Device* device, UINT nodeMask, const void* pBlobWithRootSignature,
                                      SIZE_T blobLengthInBytes, REFIID riid, void** ppvRootSignature)
 {
+    const bool trackHudfixRootSignature = Config::Instance()->FGHudfixPersistentBindings.value_or_default() &&
+                                          State::Instance().activeFgInput == FGInput::Upscaler &&
+                                          !Config::Instance()->FGDisableHUDFix.value_or_default();
+
     if (!Config::Instance()->MipmapBiasOverride.has_value() && !Config::Instance()->AnisotropyOverride.has_value() &&
-        !Config::Instance()->ExtendedStateRestore.value_or_default())
+        !Config::Instance()->ExtendedStateRestore.value_or_default() && !trackHudfixRootSignature)
     {
         return o_CreateRootSignature(device, nodeMask, pBlobWithRootSignature, blobLengthInBytes, riid,
                                      ppvRootSignature);
@@ -2724,6 +2739,9 @@ static HRESULT hkCreateRootSignature(ID3D12Device* device, UINT nodeMask, const 
                                                        desc->Desc_1_2.NumParameters);
             }
         }
+
+        if (SUCCEEDED(result) && trackHudfixRootSignature && ppvRootSignature != nullptr && *ppvRootSignature != nullptr)
+            ResTrack_Dx12::RegisterRootSignature(static_cast<ID3D12RootSignature*>(*ppvRootSignature), desc);
 
         deserializer->Release();
         return result;
@@ -2825,6 +2843,9 @@ static HRESULT hkCreateRootSignature(ID3D12Device* device, UINT nodeMask, const 
         result =
             o_CreateRootSignature(device, nodeMask, pBlobWithRootSignature, blobLengthInBytes, riid, ppvRootSignature);
     }
+
+    if (SUCCEEDED(result) && trackHudfixRootSignature && ppvRootSignature != nullptr && *ppvRootSignature != nullptr)
+        ResTrack_Dx12::RegisterRootSignature(static_cast<ID3D12RootSignature*>(*ppvRootSignature), desc);
 
     deserializer->Release();
     return result;
@@ -3021,7 +3042,7 @@ static void HookToDevice(ID3D12Device* InDevice)
                         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
                     const bool isUnreal = st.gameEngine == GameEngineType::Unreal ||
                                           (st.gameQuirks & GameQuirk::ForceUnrealEngine);
-                    const bool isForza = exeLower.find("forza") != std::string::npos;
+                    const bool isForza = GetNrGamePolicy(exeLower).earlyAnyModuleWrap;
                     const bool allowEarly = Config::Instance()->EarlyExeWrapEffective();
                     const auto forced = Config::Instance()->LmxxfEarlyExeWrap;
                     const bool allowUnityPlayer = DlssNr::Submission::Hooks::WantsEarlyUnityPlayerWrap(

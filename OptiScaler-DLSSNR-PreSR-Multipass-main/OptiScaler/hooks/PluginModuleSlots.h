@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstring>
 #include <mutex>
+#include <utility>
 
 // Bounded, generation-stable callback identities. Never reuse a published slot:
 // clients can retain our callback address after unloading the originating DLL.
@@ -62,7 +63,18 @@ public:
                 FreeLibrary(held);
         }
         ~Lease() { if (module_) FreeLibrary(module_); }
+        Lease() = default;
         Lease(const Lease&) = delete;
+        Lease(Lease&& other) noexcept : module_(std::exchange(other.module_, nullptr)) {}
+        Lease& operator=(Lease&& other) noexcept
+        {
+            if (this != &other)
+            {
+                if (module_) FreeLibrary(module_);
+                module_ = std::exchange(other.module_, nullptr);
+            }
+            return *this;
+        }
         explicit operator bool() const { return module_ != nullptr; }
     };
 

@@ -86,17 +86,13 @@ class Hudfix_Dx12
     inline static std::mutex _checkMutex;
     inline static std::mutex _captureMutex;
     inline static std::mutex _counterMutex;
+    inline static thread_local bool _checkMutexOwned = false;
     inline static INT64 _captureCounter[BUFFER_COUNT] = { 0, 0, 0, 0 };
     inline static FT_Dx12* _formatTransfer[BUFFER_COUNT] = { nullptr, nullptr, nullptr, nullptr };
 
-    inline static ID3D12CommandQueue* _commandQueue = nullptr;
-    inline static ID3D12GraphicsCommandList* _commandList[BUFFER_COUNT] = { nullptr, nullptr, nullptr, nullptr };
-    inline static ID3D12CommandAllocator* _commandAllocator[BUFFER_COUNT] = { nullptr, nullptr, nullptr, nullptr };
-    inline static ID3D12Fence* _fence[BUFFER_COUNT] = { nullptr, nullptr, nullptr, nullptr };
 
     inline static bool _skipHudlessChecks = false;
 
-    static bool CreateObjects();
     static bool CreateBufferResource(ID3D12Device* InDevice, ResourceInfo* InSource, D3D12_RESOURCE_STATES InState,
                                      ID3D12Resource** OutResource);
     static bool CreateBufferResourceWithSize(ID3D12Device* InDevice, ResourceInfo* InSource,
@@ -142,6 +138,8 @@ class Hudfix_Dx12
 
     // Reset frame counters
     static void ResetCounters();
+
+    static void ReleaseBuffers();
 
     static bool GetSkipStatus() { return _skipTracking; }
     static void SetSkipStatus(bool status) { _skipTracking = status; }

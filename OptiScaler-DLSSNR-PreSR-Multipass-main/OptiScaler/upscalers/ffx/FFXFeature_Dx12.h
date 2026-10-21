@@ -1,6 +1,7 @@
 #pragma once
 #include "FFXFeature.h"
 #include <upscalers/IFeature_Dx12.h>
+#include <shaders/auto_exposure/AE_Dx12.h>
 
 #include "dx12/ffx_api_dx12.h"
 #include "proxies/FfxApi_Proxy.h"
@@ -8,7 +9,8 @@
 class FFXFeatureDx12 : public FFXFeature, public IFeature_Dx12
 {
   private:
-    ID3D12Resource* smallerColor[2];
+    std::unique_ptr<AE_Dx12> _autoExposure;
+    bool _customAutoExposure = false;
 
     NVSDK_NGX_Parameter* SetParameters(NVSDK_NGX_Parameter* InParameters);
 
@@ -37,7 +39,5 @@ class FFXFeatureDx12 : public FFXFeature, public IFeature_Dx12
         if (_context != nullptr)
             FfxApiProxy::D3D12_DestroyContext(&_context, NULL);
 
-        SAFE_RELEASE(smallerColor[0]);
-        SAFE_RELEASE(smallerColor[1]);
     }
 };

@@ -13,6 +13,12 @@
 ## 更新日志
 UI升级、NR强度及人脸保护等多重更新，详见 [Release 页](https://github.com/TheAutomatic/dlss-5-amd-project/releases)
 
+独立 v10 整合树的当前已验范围：DX12 驱动 FSR4 provider、模型选择、SR DRS 初始化标志与每游戏默认值迁移。
+RX 9070 XT / 26.10.1 驱动上已真实创建、提交并等 fence 完成 FP8 与 INT8 两种上下文，切换后核对实际模型，未回退 FSR3；这不是游戏画质、性能或全部 v10 功能验收。
+Radeon 780M 也已完成一次真实 INT8 上下文与提交后的模型核对；“780M 必须不支持”的旧预期已被实测纠正。RDNA2 INT8/Lite 仅列出可选项，未运行，不据此承诺其他显卡或 NR/ML 插帧支持。
+`Fsr4ForceModel` 旧选择迁到能力覆盖 `Fsr4GpuSupport`，真正的网络选择使用 `Fsr4Model`；显式 INI/菜单选择优先于游戏默认值，NR 自动兼容规则保留。
+驱动 DLL 尚未取得适用再分发许可，当前只发现并使用已安装驱动，不随包附带；详见[配置与许可边界](OptiScaler-DLSSNR-PreSR-Multipass-main/Config.md#fsr4-provider-and-model-selection)及[整合验收记录](docs/architecture/optiscaler-upstream.md)。整合仍须按完整 A/B/V/D 范围完成，不分批发布、不自动替换游戏。
+
 ---
 
 ## 目录

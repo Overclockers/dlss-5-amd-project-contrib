@@ -12,9 +12,10 @@ class GpuTime_Dx12
 
     int _currentFrameIndex = 0;
     bool _init = false;
+    bool _deferredRetirement = true;
 
   public:
-    GpuTime_Dx12(ID3D12Device* device);
+    GpuTime_Dx12(ID3D12Device* device, bool deferredRetirement = true);
     ~GpuTime_Dx12();
 
     void Start(ID3D12GraphicsCommandList* cmdList);

@@ -42,6 +42,10 @@ class IFeature_Dx11 : public virtual IFeature
     // Only DX11 w/DX12 should be overriding those
     virtual bool Init(ID3D11Device* InDevice, ID3D11DeviceContext* InContext, NVSDK_NGX_Parameter* InParameters);
     virtual bool Evaluate(ID3D11DeviceContext* DeviceContext, NVSDK_NGX_Parameter* InParameters);
+    // Dx11 w/Dx12 features return their shared-resource cache (a Dx11WithDx12::D3D11_UPSCALER_RESOURCE_CACHE_C*),
+    // nullptr for native Dx11 features. Void* to keep this header free of the Dx11WithDx12 types, RTTI is off in
+    // Debug so dynamic_cast is not an option here (upstream uses one).
+    virtual void* WithDx12ResourceCache() { return nullptr; }
 
     API Api() const override { return API::DX11; }
     std::optional<double> ReadUpscalerTime(void* deviceContextVoid) override;

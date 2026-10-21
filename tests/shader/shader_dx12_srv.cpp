@@ -8,6 +8,11 @@
 #include "OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/shaders/Shader_Common.cpp"
 #include "OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/shaders/Shader_Dx12.cpp"
 #include "OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/gpu_time/GpuTime_Dx12.cpp"
+// Shader_Dx12 defers COM releases through the production DeferredRelease;
+// compile the real implementation into this TU (it only needs pch.h, State and
+// SysUtils logging, all already provided above) so the linked contract is the
+// shipped one.
+#include "OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/misc/DeferredRelease.cpp"
 
 // Keep production defaults, without reading or writing a user's INI.
 Config::Config() = default;

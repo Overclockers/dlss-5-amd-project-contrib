@@ -131,6 +131,130 @@ int main() {
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
 
     @unittest.skipUnless(os.name == "nt" and shutil.which("cl"), "requires MSVC")
+    def test_game_defaults_preserve_explicit_compile_default_after_save(self):
+        product = ROOT / 'OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler'
+        header = (product / 'Config.h').read_text(encoding='utf-8')
+        registry = (product / 'misc/GameConfigs.cpp').read_text(encoding='utf-8')
+        optional = header[header.index('enum HasDefaultValue'):header.index('constexpr inline int UnboundKey')]
+        setting = registry[registry.index('template <auto Member> struct Setting'):registry.index('#define GAME_SETTING')]
+        names = ('SimulateWaitableObject', 'BuildPipelines', 'SpoofRegistry', 'FGAllowedFrameAhead',
+                 'FGDisableHUDFix', 'RestoreComputeSignature', 'UseNtdllHooks')
+        declarations = [re.search(r'    CustomOptional<[^;]+\b' + name + r'\s*\{[^;]+;', header).group(0)
+                        for name in names]
+        source = '''
+#include <optional>
+#include <concepts>
+#include <utility>
+#include <functional>
+#include <format>
+#include <string>
+#include <cassert>
+''' + optional + '\nstruct Config {\n' + '\n'.join(declarations) + '''
+static Config* Instance() { static Config c; return &c; }
+};
+struct ConfigDefault { std::string text; std::function<bool()> apply; };
+''' + setting + '\nint main() {\n'
+        for name in names:
+            source += '''{
+auto& option = Config::Instance()->''' + name + ''';
+const auto compiled = option.value_or_default();
+using T = decltype(compiled);
+const auto game = static_cast<T>(compiled == 0 ? 1 : 0);
+auto entry = Setting<&Config::''' + name + '''>{"''' + name + '''"} = game;
+assert(entry.apply() && option.value() == game);
+assert(!option.value_for_config().has_value());
+option = compiled;
+const auto saved = option.value_for_config();
+assert(saved.has_value() && *saved == compiled);
+option.reset(); option.set_from_config(saved);
+assert(!entry.apply() && option.value() == compiled);
+assert(option.value_for_config() == saved);
+}\n'''
+        source += '}\n'
+        work = ROOT / 'work/scratch/config-game-defaults'
+        out = ROOT / 'exports/tests/config-game-defaults'
+        work.mkdir(parents=True, exist_ok=True)
+        out.mkdir(parents=True, exist_ok=True)
+        cpp, exe = work / 'priority.cpp', out / 'priority.exe'
+        cpp.write_text(source, encoding='utf-8')
+        build = subprocess.run(['cl', '/nologo', '/std:c++20', '/EHsc', '/utf-8', str(cpp),
+                                '/Fo' + str(out / 'priority.obj'), '/Fe' + str(exe)],
+                               capture_output=True, text=True, errors='replace', timeout=60)
+        self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
+        run = subprocess.run([str(exe)], capture_output=True, text=True, errors='replace', timeout=10)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+
+    @unittest.skipUnless(os.name == "nt" and shutil.which("cl"), "requires MSVC")
+    def test_context_drs_recreation_and_nr_auto_policy(self):
+        product = ROOT / 'OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler'
+        header = (product / 'Config.h').read_text(encoding='utf-8')
+        registry = (product / 'misc/GameConfigs.h').read_text(encoding='utf-8')
+        feature = (product / 'upscalers/IFeature.cpp').read_text(encoding='utf-8')
+        optional = header[header.index('enum HasDefaultValue'):header.index('constexpr inline int UnboundKey')]
+        policy = registry[registry.index('struct NrGamePolicy'):registry.index('struct GameConfigContext')]
+        drs = feature[feature.index('        if (Config::Instance()->DynamicResolution.has_value())'):
+                      feature.index('        LOG_INFO("Init Flag AutoExposure:')]
+        source = '''
+#include <optional>
+#include <concepts>
+#include <utility>
+#include <string_view>
+#include <map>
+#include <string>
+#include <cassert>
+#define LOG_INFO(...) ((void)0)
+''' + optional + policy + '''
+struct Config { CustomOptional<bool,NoDefault> DynamicResolution;
+static Config* Instance() { static Config c; return &c; } };
+struct Params { std::map<std::string,unsigned int> values;
+void Set(const char* key,unsigned int value) { values[key]=value; }
+void Get(const char* key,unsigned int* value) { if(auto i=values.find(key);i!=values.end()) *value=i->second; }
+};
+bool Init(Params* InParameters) { struct {bool DynamicResolution=false;} _initFlags;
+''' + drs + '''return _initFlags.DynamicResolution; }
+int main() {
+Params fsr, native; fsr.Set("OptiScaler.DynamicResolution",1u);
+assert(Init(&fsr)); assert(!Init(&native)); assert(Init(&fsr));
+Config::Instance()->DynamicResolution=false; assert(!Init(&fsr));
+Config::Instance()->DynamicResolution=true; assert(Init(&native));
+Config::Instance()->DynamicResolution.reset();
+'''
+        for api in ('Dx11', 'Dx12', 'Vk'):
+            provider = (product / f'upscalers/FeatureProvider_{api}.cpp').read_text(encoding='utf-8')
+            start = provider.index('            unsigned int dynamicResolution = 0;')
+            end = provider.index('\n', provider.index('contextData->createParams->Set("OptiScaler.DynamicResolution", dynamicResolution);', start))
+            source += '''{ Params copy; struct {Params* createParams;} context {&copy}; auto* contextData=&context;
+auto* parameters=&fsr;
+''' + provider[start:end] + '''
+assert(Init(&copy)); Config::Instance()->DynamicResolution=false; assert(!Init(&copy));
+Config::Instance()->DynamicResolution.reset(); assert(Init(&copy)); }\n'''
+        source += '''
+auto forza=GetNrGamePolicy("FORZAHORIZON6.EXE");
+assert(forza.earlyExeWrap&&forza.earlyAnyModuleWrap&&forza.enhancedBarriers&&!forza.earlyUnityPlayerWrap);
+for(auto name:{"ACMirage.exe","007FirstLight.exe"}) { auto p=GetNrGamePolicy(name); assert(p.earlyExeWrap&&!p.earlyAnyModuleWrap&&!p.enhancedBarriers); }
+assert(!GetNrGamePolicy("acmirage_plus.exe").earlyExeWrap);
+assert(GetNrGamePolicy("aniimo.exe").earlyUnityPlayerWrap);
+assert(!GetNrGamePolicy("otherunity.exe").earlyUnityPlayerWrap);
+assert(GetNrGamePolicy("other.exe",true).earlyExeWrap);
+assert(!GetNrGamePolicy("other.exe").earlyExeWrap);
+CustomOptional<bool,NoDefault> preference; assert(!preference.has_value());
+assert(preference.value_or(forza.earlyExeWrap)); preference=false; assert(!preference.value_or(forza.earlyExeWrap));
+assert(preference.value_for_config()==false); preference.reset(); assert(!preference.value_for_config());
+}
+'''
+        work, out = ROOT / 'work/scratch/config-context', ROOT / 'exports/tests/config-context'
+        work.mkdir(parents=True, exist_ok=True)
+        out.mkdir(parents=True, exist_ok=True)
+        cpp, exe = work / 'context.cpp', out / 'context.exe'
+        cpp.write_text(source, encoding='utf-8')
+        build = subprocess.run(['cl', '/nologo', '/std:c++20', '/EHsc', '/utf-8', str(cpp),
+                                '/Fo' + str(out / 'context.obj'), '/Fe' + str(exe)],
+                               capture_output=True, text=True, errors='replace', timeout=60)
+        self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
+        run = subprocess.run([str(exe)], capture_output=True, text=True, errors='replace', timeout=10)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+
+    @unittest.skipUnless(os.name == "nt" and shutil.which("cl"), "requires MSVC")
     def test_mochizuki_reset_preserves_standalone_aco(self):
         product = ROOT / 'OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler'
         header = (product / 'Config.h').read_text(encoding='utf-8')
@@ -340,6 +464,16 @@ int main() {
                 "XeFGFramerateTargetDMFG",
                 "XeFGRoundingDMFG",
                 "XeFGDynamicAllow1X",
+                # Host-owned public INI keys (foundation A1/A2, D1-D3, LL input, HUDless binding
+                # capture): no upstream runtime environment aliases cross the boundary.
+                "Fsr4GpuSupport", "Fsr4Model",
+                "DynamicResolution",
+                "ReprojectionDepthCutoff", "ReprojectionFillMode", "ReprojectionCutoffExpand", "ReprojectionLateLatch",
+                "ReprojectionDirectionCache", "ReprojectionParallaxAuto", "ReprojectionParallaxScale",
+                "ReprojectionThirdPersonDetection",
+                "XeFGTargetAsCapDMFG", "XeFGOverrideInterpolationCount",
+                "LowLatencyInput", "LowLatencyOutput",
+                "HudfixUITexture", "HudfixUIUnblend", "HudfixPersistentBindings",
                 "QueuePriority",
                 "QueuePriorityLegacy",
                 "Inline",
@@ -444,6 +578,21 @@ int main() {
             self.assertNotIn(f'"{label}"', CONFIG)
             self.assertNotIn(f'"{label}"', KEYS)
 
+
+
+    def test_upstream_integrated_keys_contract(self):
+        ini = (ROOT / "OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler.ini").read_text(encoding="utf-8")
+        known = KEYS.split("kKnown[]", 1)[1]
+        for key, ini_name in [
+            ("XeFGTargetAsCapDMFG", "TargetAsCapDMFG"),
+            ("LowLatencyInput", "LowLatencyInput"),
+            ("LowLatencyOutput", "LowLatencyOutput"),
+            ("HudfixUITexture", "HUDFixUITexture"),
+            ("HudfixUIUnblend", "HUDFixUIUnblend"),
+        ]:
+            self.assertIn(f'{key} = "{ini_name}"', KEYS)
+            self.assertIn(key, known)
+            self.assertRegex(ini, rf"(?m)^{ini_name}=auto$")
 
 
 if __name__ == "__main__":

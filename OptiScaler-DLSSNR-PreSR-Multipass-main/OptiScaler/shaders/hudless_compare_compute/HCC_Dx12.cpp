@@ -143,7 +143,7 @@ HCC_Dx12::HCC_Dx12(std::string InName, ID3D12Device* InDevice) : Shader_Dx12(InN
 
 HCC_Dx12::~HCC_Dx12()
 {
-    if (!_init || State::Instance().isShuttingDown)
+    if (State::Instance().isShuttingDown)
         return;
 
     for (int i = 0; i < HCC_NUM_OF_HEAPS; i++)
@@ -151,5 +151,5 @@ HCC_Dx12::~HCC_Dx12()
         _frameHeaps[i].ReleaseHeaps();
     }
 
-    SAFE_RELEASE(_buffer);
+    DeferredRelease::Release(_buffer);
 }

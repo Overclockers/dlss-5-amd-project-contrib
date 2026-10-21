@@ -34,6 +34,37 @@ For selecting upscalers from in-game menus `Upscalers` section could be used.
 
 ![upscalers](images/Upscalers.png)
 
+### FSR4 provider and model selection
+
+`[FSR] Fsr4GpuSupport` overrides advertised capability (0 none, 1 FP8, 2 INT8,
+3 RDNA2 INT8, 4 INT8 Lite). It is not the actual model selector. Existing
+`Fsr4ForceModel` values migrate to this capability setting and are removed on save;
+an explicit new key takes priority. `[FSR] Fsr4Model` chooses an exposed network
+(0 FP8, 1 INT8, 2 RDNA2 INT8, 3 INT8 Lite); `auto` lets FFX choose. The menu lists
+only models exposed by the loaded provider; DX12 and Vulkan availability differs.
+A model change recreates the upscaler. A capability override or an FSR4 label alone
+does not prove that the provider did not fall back to FSR3.
+
+AMD driver libraries are discovered from the installed driver. The intended future
+bundling of `amdxcffx64.dll`/`amdvkffx64.dll` is **not licensed for distribution on
+the evidence available**: [26.10.1 release notes](https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-10-1.html)
+link the [AMD Software EULA](https://www.amd.com/en/legal/eula/amd-software-eula.html),
+whose §3(2) prohibits redistribution. The separate
+[SDK binary redistribution license](https://gpuopen.com/manuals/fsr_sdk/license/)
+does not establish coverage of these driver-extracted files. Installed-driver
+fallback remains until an applicable AMD grant is obtained; signatures/version
+numbers are identity evidence, not permission. Existing licensed SDK redistributables
+are separate.
+
+### Per-game defaults and explicit preferences
+
+The complete upstream `misc/GameConfigs.cpp` registry supplies defaults and gameplay
+quirks, including conditional NVIDIA/non-NVIDIA and FG-output rules. Explicit menu/
+INI choices take priority, even when equal to the compile default; saving does not
+turn those choices back into automatic game defaults. Game defaults remain volatile
+and are not written as user preferences. Local NR recording, early-wrap and enhanced
+barrier auto policies remain independent and preserve explicit user overrides.
+
 ### Pseudo SuperSampling
 With OptiScaler 0.4 there are new options for pseudo-supersampling under `[Upscalers]`
 
@@ -253,6 +284,12 @@ These can be changed and saved from the in-game menu, but usually the change wil
 
 ### Init Flags
 These settings allow you to override the DLSS init flags to fix some issues.
+
+`[InitFlags] DynamicResolution=auto` passes the FSR input's dynamic-render-size
+capability to SR; other input APIs default false. Explicit true/false overrides it.
+This context capability does not change NR's render-subrect/output extent or
+`[DlssNr] MochizukiDynamicResolution` working-size policy. The menu labels it
+**SR Dynamic Resolution (DRS)** to keep the two settings distinct.
 
 ```ini
 [Depth]

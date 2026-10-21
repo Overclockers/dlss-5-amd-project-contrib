@@ -6,6 +6,7 @@
 #include <framegen/ffx/FSRFG_Dx12.h>
 #include <framegen/xefg/XeFG_Dx12.h>
 #include <framegen/dlssg/DLSSG_Dx12.h>
+#include <framegen/reprojection/Reprojection_Dx12.h>
 
 #include <inputs/FG/FSR3_Dx12_FG.h>
 #include <inputs/FG/FfxApi_Dx12_FG.h>
@@ -17,6 +18,10 @@
 
 #include <misc/IdentifyGpu.h>
 #include <hooks/Reflex_Hooks.h>
+#ifdef LOW_LATENCY_INPUTS
+#include <low_latency/input/input_common.h>
+#include <proxies/XeFG_Proxy.h>
+#endif
 #include <menu/menu_overlay_dx.h>
 
 #include <d3d12.h>
@@ -153,6 +158,10 @@ HRESULT FGHooks::CreateSwapChain(IDXGIFactory* pFactory, IUnknown* pDevice, DXGI
         {
             State::Instance().currentFG = new DLSSG_Dx12();
         }
+        else if (State::Instance().activeFgOutput == FGOutput::Reprojection)
+        {
+            State::Instance().currentFG = new Reprojection_Dx12();
+        }
     }
 
     // Create FG swapchain
@@ -180,6 +189,9 @@ HRESULT FGHooks::CreateSwapChain(IDXGIFactory* pFactory, IUnknown* pDevice, DXGI
             LOG_WARN("DXGI_SWAP_EFFECT_DISCARD is not supported in DX12, changing to FLIP_DISCARD");
             pDesc->SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
         }
+        resizeTrace.Step("create-sdk.begin");
+        scResult = fg->CreateSwapchain(pFactory, cq, pDesc, ppSwapChain, true);
+        resizeTrace.Step("create-sdk.end", scResult ? S_OK : E_FAIL);
 
         // Looks like game is creating new swapchain,
         // without releasing old one, be sure gpu is in idle state
@@ -210,9 +222,6 @@ HRESULT FGHooks::CreateSwapChain(IDXGIFactory* pFactory, IUnknown* pDevice, DXGI
             oldSwapChain = State::Instance().currentFGSwapchain;
         }
 
-        resizeTrace.Step("create-sdk.begin");
-        scResult = fg->CreateSwapchain(pFactory, cq, pDesc, ppSwapChain, true);
-        resizeTrace.Step("create-sdk.end", scResult ? S_OK : E_FAIL);
 
         if (Config::Instance()->FGDontUseSwapchainBuffers.value_or_default())
             State::Instance().skipHeapCapture = false;
@@ -270,6 +279,10 @@ HRESULT FGHooks::CreateSwapChainForHwnd(IDXGIFactory* pFactory, IUnknown* pDevic
         {
             State::Instance().currentFG = new DLSSG_Dx12();
         }
+        else if (State::Instance().activeFgOutput == FGOutput::Reprojection)
+        {
+            State::Instance().currentFG = new Reprojection_Dx12();
+        }
     }
 
     // Create FG swapchain
@@ -298,6 +311,9 @@ HRESULT FGHooks::CreateSwapChainForHwnd(IDXGIFactory* pFactory, IUnknown* pDevic
             LOG_WARN("DXGI_SWAP_EFFECT_DISCARD is not supported in DX12, changing to FLIP_DISCARD");
             pDesc->SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
         }
+        resizeTrace.Step("create-sdk.begin");
+        scResult = fg->CreateSwapchain1(pFactory, cq, hWnd, pDesc, pFullscreenDesc, ppSwapChain, true);
+        resizeTrace.Step("create-sdk.end", scResult ? S_OK : E_FAIL);
 
         // Looks like game is creating new swapchain,
         // without releasing old one, be sure gpu is in idle state
@@ -328,9 +344,6 @@ HRESULT FGHooks::CreateSwapChainForHwnd(IDXGIFactory* pFactory, IUnknown* pDevic
             oldSwapChain = State::Instance().currentFGSwapchain;
         }
 
-        resizeTrace.Step("create-sdk.begin");
-        scResult = fg->CreateSwapchain1(pFactory, cq, hWnd, pDesc, pFullscreenDesc, ppSwapChain, true);
-        resizeTrace.Step("create-sdk.end", scResult ? S_OK : E_FAIL);
 
         if (Config::Instance()->FGDontUseSwapchainBuffers.value_or_default())
             State::Instance().skipHeapCapture = false;
@@ -754,8 +767,10 @@ HRESULT FGHooks::hkResizeBuffers(IDXGISwapChain* This, UINT BufferCount, UINT Wi
             }
         }
 
-        // Docs say you cannot do that
-        // SwapChainFlags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+        // DLSSG creates its swapchain with this immutable resize flag.
+        if (State::Instance().activeFgOutput == FGOutput::DLSSG &&
+            !(SwapChainFlags & DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING))
+            SwapChainFlags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
     }
 
     State::Instance().SCAllowTearing = (SwapChainFlags & DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING) > 0;
@@ -998,7 +1013,9 @@ HRESULT FGHooks::hkResizeBuffers1(IDXGISwapChain3* This, UINT BufferCount, UINT 
             }
         }
 
-        // SwapChainFlags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+        if (State::Instance().activeFgOutput == FGOutput::DLSSG &&
+            !(SwapChainFlags & DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING))
+            SwapChainFlags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
     }
 
     State::Instance().SCAllowTearing = (SwapChainFlags & DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING) > 0;
@@ -1267,7 +1284,10 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
                 tokenResult = StreamlineProxy::GetNewFrameToken()(localToken, &frameId);
 
                 if (tokenResult == sl::Result::eOk)
+                {
+                    ScopedOptiScalerReflex optiScalerCall {};
                     StreamlineProxy::PCLSetMarker()(sl::PCLMarker::ePresentStart, *localToken);
+                }
             }
         }
     }
@@ -1326,6 +1346,28 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
     if (willPresent)
         state.fgPresentIsCalled = true;
 
+#ifdef LOW_LATENCY_INPUTS
+    // FSR-FG and XeFG with the Reflex output: the game's present as DLSSG reports it
+    ID3D12CommandQueue* gameQueue = nullptr;
+    uint32_t frameMultiplier = 1;
+    void* xefgContext = nullptr;
+    uint64_t xefgFrameId = 0;
+
+    if (auto fg = state.currentFG; willPresent && fg != nullptr &&
+                                   (state.activeFgOutput == FGOutput::FSRFG || state.activeFgOutput == FGOutput::XeFG))
+    {
+        gameQueue = fg->GetCommandQueue();
+        frameMultiplier = fg->IsActive() && !fg->IsPaused() ? fg->GetInterpolatedFrameCount() + 1 : 1;
+        InputCommon::fg_game_present(gameQueue, false, frameMultiplier);
+
+        if (state.activeFgOutput == FGOutput::XeFG)
+        {
+            xefgContext = fg->SwapchainContext();
+            xefgFrameId = InputCommon::xefg_marked_frame_id();
+        }
+    }
+#endif
+
     HRESULT result;
     const auto presentStart = Util::MillisecondsNow();
     if (pPresentParameters == nullptr)
@@ -1343,22 +1385,45 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
             Util::GetDeviceRemovedReason(state.currentD3D12Device);
     }
 
+#ifdef LOW_LATENCY_INPUTS
+    if (gameQueue != nullptr)
+        InputCommon::fg_game_present(gameQueue, true, frameMultiplier);
+
+    // How many frames XeFG sends to its presenter for the batch it marked in this present
+    if (xefgContext != nullptr && XeFGProxy::GetLastPresentStatus() != nullptr)
+    {
+        xefg_swapchain_present_status_t status {};
+
+        if (XeFGProxy::GetLastPresentStatus()((xefg_swapchain_handle_t) xefgContext, &status) ==
+            XEFG_SWAPCHAIN_RESULT_SUCCESS)
+        {
+            InputCommon::xefg_present_status(xefgFrameId, status.framesPresented);
+        }
+    }
+#endif
+
     if (tokenResult == sl::Result::eOk && localToken != nullptr && fgFeatureActive &&
         (!ReflexHooks::gameIsSendingMarkers() || !config->FGDLSSGUseGamesReflexMarkers.value_or_default()) &&
         willPresent && state.activeFgOutput == FGOutput::DLSSG)
     {
         if (StreamlineProxy::PCLSetMarker() != nullptr)
+        {
+            ScopedOptiScalerReflex optiScalerCall {};
             StreamlineProxy::PCLSetMarker()(sl::PCLMarker::ePresentEnd, *localToken);
+        }
 
         LOG_DEBUG("Calling ReflexSleep");
+        ScopedOptiScalerReflex optiScalerCall {};
         StreamlineProxy::ReflexSleep()(*localToken);
     }
 
     if (state.swapchainInteropApi == SwapchainInteropApi::None)
         Hudfix_Dx12::PresentEnd();
 
+    // DXVK's DXGI presents through Vulkan where the limiter already sleeps, the low latency output
+    // limits through its own sleep call
     if (willPresent && !state.reflexLimitsFps && state.activeFgOutput != FGOutput::NoFG &&
-        !IdentifyGpu::getPrimaryGpu().usesDxvk && !XellHooks::canLimit())
+        !IdentifyGpu::getPrimaryGpu().dxgiIsDxvk && !XellHooks::canLimit() && !InputCommon::can_limit_fps())
     {
         FrameLimit::sleep(fg != nullptr ? fg->IsActive() && !fg->IsPaused() : false);
     }

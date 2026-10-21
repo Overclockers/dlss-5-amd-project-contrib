@@ -7,9 +7,8 @@
 
 #include "log.h"
 #include "config.h"
-#include <hooks/Reflex_Hooks.h>
-#include <framegen/nvngx/Nvngx_FG.h>
 #include <low_latency/input/input_common.h>
+#include <framegen/nvngx/Nvngx_FG.h>
 
 // private
 bool LowLatency::update_low_latency_tech(IUnknown* pDevice)
@@ -40,9 +39,8 @@ bool LowLatency::update_low_latency_tech(IUnknown* pDevice)
             }
         }
 
-        // Don't use AL2 and XeLL when using DMFG or MFG
+        // Don't use AL2 and XeLL when using DMFG
         if (!Config::Instance()->FN_ForceLatencyFlex.value_or_default() &&
-            State::Instance().dlssgDetectedInterpolationCount <= 1 &&
             State::Instance().dlssgLastSetMode != sl::DLSSGMode::eDynamic)
         {
             auto new_tech_al2 = std::make_shared<AntiLag2>();
@@ -232,6 +230,9 @@ NvAPI_Status LowLatency::Sleep(IUnknown* pDevice)
 
     if (auto current_tech = currently_active_tech.load())
     {
+        // fakenvapi's own tech is the only sleeper without the low latency inputs (macro off), with
+        // them this stays the measurement of the output that actually slept: the shared writer keeps
+        // the last sleep of a frame, never a sum
         auto sleepStart = Util::MillisecondsNow();
         current_tech->sleep();
         InputCommon::record_sleep_ms(Util::MillisecondsNow() - sleepStart);

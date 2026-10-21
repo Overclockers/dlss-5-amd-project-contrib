@@ -22,8 +22,6 @@ class FFXFeature : public virtual IFeature
 
     double GetDeltaTime();
 
-    bool QueryVersionsDx12(ID3D12Device* device);
-    bool QueryVersionsVulkan();
 
     void InitFlags();
 
@@ -90,6 +88,11 @@ class FFXFeature : public virtual IFeature
 
   public:
     feature_version Version() override { return _version; }
+
+    static bool QueryVersionsDx12(ID3D12Device* device);
+    static bool QueryVersionsVulkan();
+    static void EnsureVersionsDx12();
+    static void EnsureVersionsVulkan();
 
     FFXFeature(unsigned int InHandleId, NVSDK_NGX_Parameter* InParameters);
 

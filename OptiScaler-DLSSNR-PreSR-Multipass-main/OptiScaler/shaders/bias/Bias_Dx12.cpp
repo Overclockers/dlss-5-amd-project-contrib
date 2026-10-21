@@ -121,5 +121,5 @@ Bias_Dx12::~Bias_Dx12()
         _frameHeaps[i].ReleaseHeaps();
     }
 
-    SAFE_RELEASE(_buffer);
+    DeferredRelease::Release(_buffer);
 }

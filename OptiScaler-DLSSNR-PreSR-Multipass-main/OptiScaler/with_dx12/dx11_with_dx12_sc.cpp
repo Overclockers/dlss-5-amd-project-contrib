@@ -9,6 +9,8 @@
 
 #include <Util.h>
 #include <Config.h>
+#include <hudfix/Hudfix_Dx11.h>
+#include <resource_tracking/ResTrack_dx11.h>
 
 #include <d3d11.h>
 #include <d3d11_4.h>
@@ -115,6 +117,12 @@ Dx11wDx12SC::Dx11wDx12SC(IDXGISwapChain* real, IDXGISwapChain4* fgSC, ID3D11Devi
             if (FAILED(context4Result))
                 LOG_WARN("ID3D11DeviceContext4 unavailable: {:X}", (UINT) context4Result);
         }
+    }
+
+    if (_dx11Device != nullptr && State::Instance().activeFgInput == FGInput::Upscaler &&
+        !Config::Instance()->FGDisableHUDFix.value_or_default())
+    {
+        ResTrack_Dx11::HookDevice(_dx11Device);
     }
 
     if (WithDx12::PrepareD3D12ForD3D11(_dx11Device, D3D_FEATURE_LEVEL_11_0))
@@ -260,6 +268,8 @@ ULONG STDMETHODCALLTYPE Dx11wDx12SC::Release()
             fg->ReleaseSwapchain(_handle);
         }
 
+        ResTrack_Dx11::OnDeviceReleased(_dx11Device);
+
         delete this;
     }
 
@@ -305,6 +315,14 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::Present(UINT SyncInterval, UINT Flags)
     if ((Flags & DXGI_PRESENT_TEST) != 0)
         return _real->Present(SyncInterval, Flags);
 
+    const bool dx11HudfixPresent = Config::Instance()->FGHUDFix.value_or_default() &&
+                                   State::Instance().activeFgInput == FGInput::Upscaler &&
+                                   State::Instance().swapchainInteropApi == SwapchainInteropApi::Dx11wDx12;
+    if (dx11HudfixPresent)
+    {
+        Hudfix_Dx11::PresentStart();
+    }
+
     if (!_InitInteropObjects())
         return DXGI_ERROR_DEVICE_REMOVED;
 
@@ -341,7 +359,7 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::Present(UINT SyncInterval, UINT Flags)
               dx11Index, _real3 != nullptr ? _real3->GetCurrentBackBufferIndex() : 0xFFFFFFFF, _currentFakeIndex,
               _bufferCount);
 
-    if (_real != nullptr)
+    if (_real != nullptr && !State::Instance().isRunningOnLinux)
     {
         UINT realFlags = Flags;
 
@@ -353,6 +371,9 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::Present(UINT SyncInterval, UINT Flags)
     }
 
     auto result = _fgSwapChain->Present(SyncInterval, Flags);
+
+    if (dx11HudfixPresent)
+        Hudfix_Dx11::PresentEnd();
 
     if (SUCCEEDED(result))
         _AdvanceFakeBackBufferIndex();
@@ -458,7 +479,7 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::ResizeBuffers(UINT BufferCount, UINT Widt
     {
         _RefreshCachedSwapchainDesc();
 
-        if (Config::Instance()->FGEnabled.value_or_default())
+        if (Config::Instance()->IsFGEnabled())
         {
             State::Instance().fgResetCapturedResources = true;
             State::Instance().fgOnlyUseCapturedResources = false;
@@ -714,7 +735,7 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::ResizeBuffers1(UINT BufferCount, UINT Wid
     {
         _RefreshCachedSwapchainDesc();
 
-        if (Config::Instance()->FGEnabled.value_or_default())
+        if (Config::Instance()->IsFGEnabled())
         {
             State::Instance().fgResetCapturedResources = true;
             State::Instance().fgOnlyUseCapturedResources = false;
@@ -1168,13 +1189,18 @@ bool Dx11wDx12SC::_CopyDx11SharedToDx12FGBackBuffer(UINT dx11Index)
 
 bool Dx11wDx12SC::_WaitForInteropCopyOnPresentQueue()
 {
-    if (_fg == nullptr || _copyFence == nullptr)
+    if (_copyFence == nullptr)
         return false;
 
     if (_lastInteropCopyFenceValue == 0)
         return true;
 
-    auto result = _fg->GetCommandQueue()->Wait(_copyFence, _lastInteropCopyFenceValue);
+    auto presentQueue = _fg != nullptr ? _fg->GetCommandQueue() : nullptr;
+
+    if (presentQueue == nullptr || presentQueue == _dx12CommandQueue)
+        return true;
+
+    auto result = presentQueue->Wait(_copyFence, _lastInteropCopyFenceValue);
     if (FAILED(result))
     {
         LOG_ERROR("present queue Wait on interop copy fence failed: {:X}", (UINT) result);

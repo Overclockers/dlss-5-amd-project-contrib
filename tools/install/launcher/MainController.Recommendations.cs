@@ -35,7 +35,11 @@ namespace OptScalerNR.Launcher
             if(_recommendations==null)return;
             if(_refreshProfilesButton!=null)_refreshProfilesButton.Content=L("更新推荐资料","Refresh recommendations");
             if(_useRecommendationButton!=null){_useRecommendationButton.Content=L("使用推荐","Use suggestion");_useRecommendationButton.IsEnabled=_selectedGame!=null&&!_writeBusy;}
-            if(_profileStatus!=null){_profileStatus.Text=_recommendations.UsingCache?L("缓存资料","Cached data"):L("随包资料","Bundled data");_profileStatus.ToolTip=L("推荐规则来源：","Recommendation source: ")+_profileStatus.Text+" · "+_recommendations.Reviewed;}
+            if(_profileStatus!=null){
+                var origin=_recommendations.UsingCache?L("缓存资料","Cached data"):L("随包资料","Bundled data");
+                _profileStatus.Text=string.Format(L("{0}（{1} 款游戏）","{0} ({1} games)"),origin,_recommendations.Count);
+                _profileStatus.ToolTip=string.Format(L("推荐规则来源：{0} · 共 {1} 款游戏 · 复核于 {2}","Recommendation source: {0} · {1} games · reviewed {2}"),origin,_recommendations.Count,_recommendations.Reviewed??"");
+            }
             if(_selectedGame==null)return;
             var profile=_recommendations.Match(_selectedGame);
             string manual;
@@ -57,13 +61,48 @@ namespace OptScalerNR.Launcher
         {
             if(_recommendations==null)return;
             if(_refreshProfilesButton!=null)_refreshProfilesButton.IsEnabled=false;
+            if(_statusText!=null)_statusText.Text=L("正在从 OptiScaler 官方 Wiki 同步推荐资料…","Syncing recommendations from the official OptiScaler Wiki…");
+            if(_statusLed!=null)_statusLed.Fill=WarningBrush;
             try{
                 var outcome=await _recommendations.RefreshAsync();
                 if(_window.Dispatcher.HasShutdownStarted)return;
                 // Do not revise a choice while an installation or confirmation is in progress.
                 if(!_writeBusy && _targetMutex==null && _window.OwnedWindows.Count==0)UpdateProxyRecommendation();
                 AppendLog("recommendations: "+outcome);
+                ShowRecommendationOutcome(outcome);
             }finally{if(_refreshProfilesButton!=null)_refreshProfilesButton.IsEnabled=true;}
+        }
+        void ShowRecommendationOutcome(string outcome)
+        {
+            var colon=outcome.IndexOf(':');
+            int count;
+            int.TryParse(colon<0?"":outcome.Substring(colon+1),out count);
+            var kind=colon<0?outcome:outcome.Substring(0,colon);
+            switch(kind){
+                case "updated":
+                    if(_statusText!=null)_statusText.Text=string.Format(L("已从 OptiScaler 官方 Wiki 同步 {0} 条游戏推荐规则。","Synced {0} game recommendation rules from the official OptiScaler Wiki."),count);
+                    if(_statusLed!=null)_statusLed.Fill=ReadyBrush;
+                    break;
+                case "not-modified":
+                    if(_statusText!=null)_statusText.Text=string.Format(L("推荐资料已是最新（{0} 条规则）。","Recommendations are already up to date ({0} rules)."),count);
+                    if(_statusLed!=null)_statusLed.Fill=ReadyBrush;
+                    break;
+                case "offline":
+                    if(_statusText!=null)_statusText.Text=L("无法连接 OptiScaler Wiki，继续使用本地推荐资料。","Could not reach the OptiScaler Wiki; keeping local recommendations.");
+                    if(_statusLed!=null)_statusLed.Fill=WarningBrush;
+                    break;
+                case "timeout":
+                    if(_statusText!=null)_statusText.Text=L("连接 OptiScaler Wiki 超时，继续使用本地推荐资料。","Timed out contacting the OptiScaler Wiki; keeping local recommendations.");
+                    if(_statusLed!=null)_statusLed.Fill=WarningBrush;
+                    break;
+                case "invalid":
+                    if(_statusText!=null)_statusText.Text=L("OptiScaler Wiki 返回无法解析的内容，继续使用本地推荐资料。","The OptiScaler Wiki returned unusable content; keeping local recommendations.");
+                    if(_statusLed!=null)_statusLed.Fill=WarningBrush;
+                    break;
+                case "busy":
+                    if(_statusText!=null)_statusText.Text=L("正在同步推荐资料，请稍候。","Recommendation sync is already running.");
+                    break;
+            }
         }
     }
 }

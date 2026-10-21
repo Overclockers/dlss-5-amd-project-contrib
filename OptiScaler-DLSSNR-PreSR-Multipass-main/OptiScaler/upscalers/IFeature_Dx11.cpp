@@ -1,6 +1,7 @@
 #include <pch.h>
 #include "IFeature_Dx11.h"
 #include <State.h>
+#include <misc/DeferredRelease.h>
 
 bool IFeature_Dx11::Init(ID3D11Device* InDevice, ID3D11DeviceContext* InContext, NVSDK_NGX_Parameter* InParameters)
 {
@@ -28,7 +29,9 @@ bool IFeature_Dx11::Init(ID3D11Device* InDevice, ID3D11DeviceContext* InContext,
 
         OutputScaler = std::make_unique<OS_Dx11>("Output Scaling", InDevice, (TargetWidth() < DisplayWidth()));
         RCAS = std::make_unique<RCAS_Dx11>("RCAS", InDevice);
-        Bias = std::make_unique<Bias_Dx11>("Bias", InDevice); // TODO: not needed on DLSS/DLSSD
+        // DLSS/DLSSD take the bias mask as is
+        if (GetUpscalerType() != Upscaler::DLSS && GetUpscalerType() != Upscaler::DLSSD)
+            Bias = std::make_unique<Bias_Dx11>("Bias", InDevice);
         Magnifier = std::make_unique<Magnifier_Dx11>("Magnifier", InDevice);
 
         UpscalerTime = std::make_unique<GpuTime_Dx11>(InDevice);
@@ -39,6 +42,8 @@ bool IFeature_Dx11::Init(ID3D11Device* InDevice, ID3D11DeviceContext* InContext,
 
 bool IFeature_Dx11::Evaluate(ID3D11DeviceContext* DeviceContext, NVSDK_NGX_Parameter* InParameters)
 {
+    DeferredRelease::Collect();
+
     ID3D11ShaderResourceView* restoreSRVs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
     ID3D11SamplerState* restoreSamplerStates[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT] = {};
     ID3D11Buffer* restoreCBVs[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};

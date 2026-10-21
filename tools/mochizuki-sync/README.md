@@ -104,4 +104,6 @@ identity, authorship, licenses and executable source remain unchanged.
 
 Patch 27 preserves official standalone defaults while letting this adapter require grade assets, own the depth policy, disable cross-runtime pipeline reuse and skip unused Facts GPU readback. Its fields are internal core construction options, not new public INI/menu controls. The product keeps model/INT4/ACO configuration and whole-graph native fallback in the adapter. The new raw core source does not mean the official PE residency manager or image-heap DRS scheduler has been adopted.
 
+Patch 28 preserves each private Kernel's strong pipeline ownership while avoiding extra permanent arena pins when `share_pipelines=false`. Registry/deferred users keep their original pinning. This supports the adapter's bounded same-model `share_for` background rebuild without enabling global pipeline registry reuse or changing the upstream pin. Replay it after patch 27; it changes only `windows/src/core/nrvk.hpp`.
+
 The current closure includes both Linux and Windows grade includes: Linux recipes generate the product's Windows ACO SPIR-V. Update the exact ownership generator/pin together with recipes and records; copying only Windows shader sources is insufficient. The original now covers HDR patch 24 and the allocation part of patch 07; the local pack_img release in patch 11 remains necessary.

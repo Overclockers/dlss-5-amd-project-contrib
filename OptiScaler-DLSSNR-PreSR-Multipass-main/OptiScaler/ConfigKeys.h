@@ -25,6 +25,17 @@ inline constexpr const char *FpsOverlayColorR = "FpsOverlayColorR";
 inline constexpr const char *FpsOverlayColorG = "FpsOverlayColorG";
 inline constexpr const char *FpsOverlayColorB = "FpsOverlayColorB";
 inline constexpr const char *kSection = "DlssNr";
+inline constexpr const char *Fsr4GpuSupport = "Fsr4GpuSupport";
+inline constexpr const char *Fsr4Model = "Fsr4Model";
+inline constexpr const char *DynamicResolution = "DynamicResolution";
+inline constexpr const char *ReprojectionDepthCutoff = "DepthCutoff";
+inline constexpr const char *ReprojectionFillMode = "FillMode";
+inline constexpr const char *ReprojectionCutoffExpand = "CutoffExpand";
+inline constexpr const char *ReprojectionLateLatch = "LateLatch";
+inline constexpr const char *ReprojectionDirectionCache = "DirectionCache";
+inline constexpr const char *ReprojectionParallaxAuto = "ParallaxAuto";
+inline constexpr const char *ReprojectionParallaxScale = "ParallaxScale";
+inline constexpr const char *ReprojectionThirdPersonDetection = "ThirdPersonDetection";
 inline constexpr const char *kDanielSection = "DlssNrOnAmd";
 
 // Cross-layer product keys use the upstream DLSS5_* names so ini == env == txt.
@@ -258,6 +269,13 @@ inline constexpr const char *XeFGDynamicMFG = "DynamicMFG";
 inline constexpr const char *XeFGFramerateTargetDMFG = "FramerateTargetDMFG";
 inline constexpr const char *XeFGRoundingDMFG = "RoundingDMFG";
 inline constexpr const char *XeFGDynamicAllow1X = "DynamicAllow1X";
+inline constexpr const char *XeFGTargetAsCapDMFG = "TargetAsCapDMFG";
+inline constexpr const char *XeFGOverrideInterpolationCount = "OverrideInterpolationCount";
+inline constexpr const char *LowLatencyInput = "LowLatencyInput";
+inline constexpr const char *LowLatencyOutput = "LowLatencyOutput";
+inline constexpr const char *HudfixUITexture = "HUDFixUITexture";
+inline constexpr const char *HudfixUIUnblend = "HUDFixUIUnblend";
+inline constexpr const char *HudfixPersistentBindings = "HUDFixPersistentBindings";
 inline constexpr const char *QueuePriority = "QueuePriority";
 inline constexpr const char *QueuePriorityLegacy = "AmdQueuePriority";
 // AmdInline=1 means daniel Async=0 (same-frame). Write Async on Save.
@@ -267,11 +285,19 @@ inline constexpr const char *Async = "Async";
 // Known product ini keys; [Menu] keys are explicitly identified below. Adding a control
 // requires registering its key here first; display labels remain UI-only.
 inline constexpr const char *const kKnown[] = {
+    Fsr4GpuSupport,
+    Fsr4Model,
+    DynamicResolution,
+    ReprojectionDepthCutoff,
+    ReprojectionFillMode, ReprojectionCutoffExpand, ReprojectionLateLatch, ReprojectionDirectionCache,
+    ReprojectionParallaxAuto, ReprojectionParallaxScale, ReprojectionThirdPersonDetection,
     MenuLanguage, MenuWindowWidth, MenuWindowHeight, MenuWindowAnchor, MenuBlur, MenuBlurStrength,
     FpsOverlayColorR, FpsOverlayColorG, FpsOverlayColorB, // [Menu], no runtime env aliases
     "Enabled",
     XeFGInterpolationCount,
     XeFGDynamicMFG, XeFGFramerateTargetDMFG, XeFGRoundingDMFG, XeFGDynamicAllow1X,
+    XeFGTargetAsCapDMFG, XeFGOverrideInterpolationCount,
+    LowLatencyInput, LowLatencyOutput, HudfixUITexture, HudfixUIUnblend, HudfixPersistentBindings,
     "RunBeforeSR",
     "ApplyAfterRR",
     "RRPasses",

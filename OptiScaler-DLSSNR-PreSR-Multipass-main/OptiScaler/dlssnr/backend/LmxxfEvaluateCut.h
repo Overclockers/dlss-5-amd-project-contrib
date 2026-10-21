@@ -45,8 +45,11 @@ inline PendingHip &Pending()
 {
     // Boundary: process-wide singleton. First product version is one NR session;
     // multi-feature / multi-context must not share this without a map keyed by session.
-    static PendingHip p;
-    return p;
+    // The last diagnostic queue intentionally survives process teardown. CRT
+    // static destruction runs after D3D12 shutdown and cannot safely Release it.
+    // Normal replacement still releases the previous queue while the runtime is live.
+    static auto* p = new PendingHip;
+    return *p;
 }
 
 inline void ClearPendingEnqueue()

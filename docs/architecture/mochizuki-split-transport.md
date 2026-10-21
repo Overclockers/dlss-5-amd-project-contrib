@@ -66,7 +66,7 @@ D3D12 debug 错误为零。与原版三路复测各模式输出 hash 一致，�
 仅为历史版本结果。仅改变输出消费方式也会改变下一帧捕获计时；尚无硬件计数器证明
 缓存/压缩/具体驱动原因。下一优先级是精确输入转换/编码/合成归因，而非盲目重复
 已无稳定收益的 barrier 批处理、增加 shared→private 中间复制或改变录制时机。
-GraphCore 保留/复用仍是重建与 DRS 转换的独立候选，未以本轮稳态结果宣称接入。
+GraphCore 的受限同 Session/device split `share_for` 已于2026-10-21接入兼容几何后台重建，见[范围与构造证据](mochizuki-007-remaining-assessment.md)。这不是本轮稳态提速，不扩大输入/输出格式准入。
 用户不要求游戏同场景 A/B；本轮未执行。Vulkan validation、其他驱动/GPU及长期游戏
 稳定性仍未覆盖；下文“输出不变”等描述为对应历史阶段，不覆盖上述当前输出契约。
 
@@ -98,8 +98,7 @@ GraphCore 保留/复用仍是重建与 DRS 转换的独立候选，未以本轮�
    canonical/DRS/缩放/多遍等准入外路线继续 buffer，不把扩大准入当成已证明收益。
 
 0.0.7 新能力另见 [剩余能力统一评估](mochizuki-007-remaining-assessment.md)：
-GraphCore/权重复用及受限 activation arena 共享目前是已评估、未接入方案，主要针对
-重建/切换等待与峰值显存，不是已证明的稳态每帧提速。Inline 仍搁置，lmxxf 不随本方案重构。
+受限同模型 GraphCore/权重后台复用已接入；不同plan/跨模型activation共享仍关闭。它针对兼容重建等待与峰值显存，不是固定尺寸每帧提速。Inline 仍搁置，lmxxf 不随本方案重构。
 
 ## 状态（2026-10-19）
 

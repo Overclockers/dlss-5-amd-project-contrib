@@ -37,7 +37,7 @@ OptiScaler 负责每帧选择倍率。菜单按 `xefgSwapChainSetNumInterpolated
 
 `OptiScaler.ini` 中的 `[XeFG] HighResMV` 默认是 `auto`（`false`），但宿主会在进入游戏场景后根据当前选用的输入源自动检测并调用 `Config::SaveXeFG()` 写回 INI：
 
-- **`FGInput = dlssg`（Streamline 输入）**：在 [Streamline_Inputs_Dx12.cpp](../OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/inputs/FG/Streamline_Inputs_Dx12.cpp) 中，若游戏向 Streamline 提交的 `data.motionVectorsDilated == sl::Boolean::eTrue`（即引擎已将运动矢量膨胀到显示分辨率），宿主会自动将 `FGXeFGHighResMV` 设为 `true` 并保存到 `OptiScaler.ini`。
+- **`FGInput = dlssg`（Streamline 输入）**：在 [Streamline_Inputs.cpp](../OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/inputs/FG/Streamline_Inputs.cpp) 中，若游戏向 Streamline 提交的 `data.motionVectorsDilated == sl::Boolean::eTrue`（即引擎已将运动矢量膨胀到显示分辨率），宿主会自动将 `FGXeFGHighResMV` 设为 `true` 并保存到 `OptiScaler.ini`。
 - **`FGInput = fsrfg` / `upscaler`**：分别在 [FSR3_Dx12_FG.cpp](../OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/inputs/FG/FSR3_Dx12_FG.cpp)、[FfxApi_Dx12_FG.cpp](../OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/inputs/FG/FfxApi_Dx12_FG.cpp) 或 [IFeature.cpp](../OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/upscalers/IFeature.cpp) 中根据 `FG_Flags::DisplayResolutionMVs` / `!_initFlags.LowResMV` 自动同步并调用 `SaveXeFG()`。
 - **为什么落盘到 INI 且首次开启后必须重启游戏**：
   - `XeFG_Dx12::CreateSwapchain` 在游戏启动早期创建交换链时就必须确定 `XEFG_SWAPCHAIN_INIT_FLAG_HIGH_RES_MV`（见 [XeFG_Dx12.cpp](../OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/framegen/xefg/XeFG_Dx12.cpp) 第 399–400 行），早于进入场景首次初始化超分/帧生成常量的时机。
@@ -84,3 +84,17 @@ OptiScaler 负责每帧选择倍率。菜单按 `xefgSwapChainSetNumInterpolated
 - 倍率上下限改变或当前实际倍率越界时取消旧试验；所有控制器返回值都受当前边界约束。关闭 Allow 1X 后，旧试升失败不能把倍率回退到 1X。
 
 回归包含真实 PowerShell 安装/卸载夹具（默认、相对自定义、游戏目录外绝对路径，重复安装、用户配置和 README 保留），以及动态倍率失败锁定/恢复和试验中修改上下限的 CPU 测试。它们不代替 XeFG 插件游戏实测。
+
+## XeLL 低延迟输入与 MFG 解锁插件的互斥（R4 Choice B）
+
+开启 `LOW_LATENCY_INPUTS`（宿主接管 XeLL 输入）后，`XeLLProxy::RedirectToInput`
+会将真实 `libxell.dll` 的导出重定向到宿主的 XeLL 输入导出。MFG Unlocker
+（`MFGUnlocker-3.asi` / `XeFGUnlock.asi`）扫描到导出跳入宿主模块时会按其设计策略
+跳过帧数解锁（`host_xell_redirected` 熔断）。因此 **XeLL 输入与高于 2X 的解锁倍率不可兼得**，
+需按游戏二选一：要么关闭 XeLL 输入以保留解锁插件的全倍率，要么保留 XeLL 输入并接受
+2X 上限。宿主不会静默牺牲任何一方：检测到重定向时 `RedirectToInput` 会明确记录
+"MFG Unlocker 检测到宿主管理的低延迟，将保持帧数锁定"；`[FrameGen] External=true`
+（外部帧生成）时所有 LL 输入拦截整体跳过，解锁插件按原生方式工作。
+NR 倍率上限与就绪判定（`_nrMultiplier` / `ResolveInterpolation`）不依赖 XeLL 输入路径，
+不受此互斥影响。分析记录见
+`wt-opti-low-latency/work/notes/2026-10-21-xefg-mfg-unlocker-xell-input-blocker.md`。

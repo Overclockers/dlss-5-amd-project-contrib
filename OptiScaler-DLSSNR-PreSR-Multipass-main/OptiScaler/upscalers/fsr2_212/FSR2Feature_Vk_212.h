@@ -27,5 +27,11 @@ class FSR2FeatureVk212 : public FSR2Feature212, public IFeature_Vk
     Upscaler GetUpscalerType() const final { return Upscaler::FSR21; }
     API Api() const override { return IFeature_Vk::Api(); }
 
+    std::optional<double> ReadUpscalerTime(void* queue) override { return IFeature_Vk::ReadUpscalerTime(queue); }
+    void ReadDetailedGpuTimes(void* queue, std::vector<DetailedGpuTime>& times) override
+    {
+        IFeature_Vk::ReadDetailedGpuTimes(queue, times);
+    }
+
     bool IsWithDx12() override { return false; }
 };

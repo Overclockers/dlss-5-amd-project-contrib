@@ -35,7 +35,9 @@ Scaler OS_Vk::ActiveScaler() const
 
 OS_Vk::OS_Vk(std::string InName, VkDevice InDevice, VkPhysicalDevice InPhysicalDevice, bool InUpsample,
              Scaler InScalerOverride)
-    : Shader_Vk(InName, InDevice, InPhysicalDevice), _upsample(InUpsample), _scalerOverride(InScalerOverride)
+    : Shader_Vk(InName, InDevice, InPhysicalDevice,
+                InScalerOverride == Scaler::Count ? Retirement::Deferred : Retirement::Immediate),
+      _upsample(InUpsample), _scalerOverride(InScalerOverride)
 {
     if (InDevice == VK_NULL_HANDLE)
     {
@@ -126,6 +128,8 @@ bool OS_Vk::Dispatch(VkCommandBuffer InCmdList, const VkImageInfo& InResourceVie
 {
     if (!_init || InCmdList == VK_NULL_HANDLE)
         return false;
+
+    ScopedGpuTime_Vk timer(GpuTime.get(), InCmdList);
 
     // The resample sizes. Output Scaling and the Magnifier keep reading them from the current feature
     // (unchanged). A Neural Rendering instance (_scalerOverride set) sizes from the passed images

@@ -8,7 +8,7 @@
 #include <cstring>
 
 DlssNr_Vk::DlssNr_Vk(std::string InName, VkDevice InDevice, VkPhysicalDevice InPhysicalDevice)
-    : Shader_Vk(InName, InDevice, InPhysicalDevice)
+    : Shader_Vk(InName, InDevice, InPhysicalDevice, Retirement::Immediate)
 {
     if (InDevice == VK_NULL_HANDLE || InPhysicalDevice == VK_NULL_HANDLE)
     {

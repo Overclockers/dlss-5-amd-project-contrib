@@ -830,6 +830,13 @@
         "windows/src/core/nr_runtime.hpp",
         "windows/src/core/nrvk.hpp"
       ]
+    },
+    {
+      "feature": "private-pipeline-pin-lifetime",
+      "path": "patches/28-private-pipeline-pin-lifetime.patch",
+      "files": [
+        "windows/src/core/nrvk.hpp"
+      ]
     }
   ],
   "added_files": [

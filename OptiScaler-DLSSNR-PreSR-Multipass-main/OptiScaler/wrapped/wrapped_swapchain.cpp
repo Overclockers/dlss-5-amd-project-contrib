@@ -17,6 +17,7 @@
 #include <menu/menu_overlay_dx.h>
 
 #include <misc/FrameLimit.h>
+#include <misc/DeferredRelease.h>
 
 #include <d3d11.h>
 #include <d3d12.h>
@@ -25,6 +26,8 @@
 
 #ifdef LOW_LATENCY_INPUTS
 #include <low_latency/input/input_antilag2.h>
+#include <low_latency/input/input_common.h>
+#include <inputs/FG/XeFG_Inputs_Dx12.h>
 #endif
 
 #ifdef DXGI_DEBUG_ENABLED
@@ -252,6 +255,9 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
         ReflexHooks::update(false, false);
 
     XellHooks::update();
+#ifdef LOW_LATENCY_INPUTS
+    InputCommon::update();
+#endif
 
     // Upscaler GPU time computation
     if (willPresent && (fg == nullptr || !fg->IsActive() || fg->IsPaused()))
@@ -335,12 +341,14 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
     }
 
     // DXVK check, it's here because of upscaler time calculations
-    if (IdentifyGpu::getPrimaryGpu().usesDxvk)
+    if (IdentifyGpu::getPrimaryGpu().dxgiIsDxvk)
     {
         if (pPresentParameters == nullptr)
             presentResult = pSwapChain->Present(SyncInterval, Flags);
         else
             presentResult = ((IDXGISwapChain1*) pSwapChain)->Present1(SyncInterval, Flags, pPresentParameters);
+
+        DeferredRelease::Process();
 
         if (presentResult == S_OK)
         {
@@ -366,6 +374,10 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
 
         return presentResult;
     }
+#ifdef LOW_LATENCY_INPUTS
+    ID3D12CommandQueue* fgPresentQueue = nullptr;
+    uint32_t fgFrameMultiplier = 1;
+#endif
 
     if (willPresent)
     {
@@ -377,10 +389,23 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
         MenuOverlayDx::Present(pSwapChain, SyncInterval, Flags, pPresentParameters, pDevice, hWnd, isUWP);
 
 #ifdef LOW_LATENCY_INPUTS
-        if (State::Instance().activeFgOutput == FGOutput::FSRFG)
+        if (State::Instance().activeFgOutput == FGOutput::FSRFG || State::Instance().activeFgOutput == FGOutput::XeFG)
         {
             auto fgIsActive = fg != nullptr && fg->IsActive() && !fg->IsPaused();
             InputAntiLag2::injectAl2Context(pSwapChain, fgIsActive);
+
+            // For the Reflex output (and AntiLag 2 with XeFG), the generated and real frames' presents as DLSSG
+            // reports them
+            if (fgIsActive && pDevice != nullptr && pDevice->QueryInterface(IID_PPV_ARGS(&fgPresentQueue)) == S_OK)
+            {
+                fgFrameMultiplier = fg->GetInterpolatedFrameCount() + 1;
+                InputCommon::fg_output_present(fgPresentQueue, false, fgFrameMultiplier);
+            }
+        }
+        else
+        {
+            // The game's DLSSG presents through here
+            InputCommon::dlssg_present();
         }
 #else
         if (State::Instance().activeFgOutput == FGOutput::FSRFG || State::Instance().activeFgOutput == FGOutput::XeFG)
@@ -413,6 +438,15 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
         presentResult = pSwapChain->Present(SyncInterval, Flags);
     else
         presentResult = ((IDXGISwapChain1*) pSwapChain)->Present1(SyncInterval, Flags, pPresentParameters);
+
+    DeferredRelease::Process();
+#ifdef LOW_LATENCY_INPUTS
+    if (fgPresentQueue != nullptr)
+    {
+        InputCommon::fg_output_present(fgPresentQueue, true, fgFrameMultiplier);
+        fgPresentQueue->Release();
+    }
+#endif
 
     if (presentResult == S_OK)
     {
@@ -569,6 +603,15 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::QueryInterface(REFIID riid, vo
         *ppvObject = (IDXGIDeviceSubObject*) this;
         return S_OK;
     }
+#ifdef LOW_LATENCY_INPUTS
+    else if (XeFGInputs::IsXeFGSwapChainIID(riid))
+    {
+        // Only checked for, never called
+        AddRef();
+        *ppvObject = this;
+        return S_OK;
+    }
+#endif
 
     *ppvObject = nullptr;
     return E_NOINTERFACE;
@@ -693,10 +736,17 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::Present(UINT SyncInterval, UIN
     {
         result = LocalPresent(_real, SyncInterval, Flags, nullptr, _device, _handle, _uwp);
 
-        // When Reflex can't be used to limit, sleep in present
+        // When Reflex can't be used to limit, sleep in present. DXVK's DXGI presents through Vulkan
+        // where the limiter already sleeps, the low latency output limits through its own sleep call
+#ifdef LOW_LATENCY_INPUTS
         if (!State::Instance().reflexLimitsFps && State::Instance().activeFgOutput == FGOutput::NoFG &&
-            !IdentifyGpu::getPrimaryGpu().usesDxvk && !XellHooks::canLimit())
+            !IdentifyGpu::getPrimaryGpu().dxgiIsDxvk && !XellHooks::canLimit() && !InputCommon::can_limit_fps())
             FrameLimit::sleep(false);
+#else
+        if (!State::Instance().reflexLimitsFps && State::Instance().activeFgOutput == FGOutput::NoFG &&
+            !IdentifyGpu::getPrimaryGpu().dxgiIsDxvk && !XellHooks::canLimit())
+            FrameLimit::sleep(false);
+#endif
     }
     else
     {
@@ -798,7 +848,7 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::ResizeBuffers(UINT BufferCount
     DXGI_SWAP_CHAIN_DESC desc {};
     _real->GetDesc(&desc);
 
-    if (Config::Instance()->FGEnabled.value_or_default())
+    if (Config::Instance()->IsFGEnabled())
     {
         State::Instance().fgResetCapturedResources = true;
         State::Instance().fgOnlyUseCapturedResources = false;
@@ -897,6 +947,9 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::ResizeBuffers(UINT BufferCount
         _lastFlags = SwapChainFlags;
         result = _real->ResizeBuffers(BufferCount, Width, Height, NewFormat, SwapChainFlags);
     }
+
+    if (result == S_OK && _real->GetDesc(&State::Instance().currentSwapchainDesc) != S_OK)
+        LOG_WARN("Can't get swapchain desc!");
 
     if (result == DXGI_ERROR_DEVICE_REMOVED && State::Instance().currentD3D12Device != nullptr)
         Util::GetDeviceRemovedReason(State::Instance().currentD3D12Device);
@@ -1058,10 +1111,17 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::Present1(UINT SyncInterval, UI
     {
         result = LocalPresent(_real1, SyncInterval, Flags, pPresentParameters, _device, _handle, _uwp);
 
-        // When Reflex can't be used to limit, sleep in present
+        // When Reflex can't be used to limit, sleep in present. DXVK's DXGI presents through Vulkan
+        // where the limiter already sleeps, the low latency output limits through its own sleep call
+#ifdef LOW_LATENCY_INPUTS
         if (!State::Instance().reflexLimitsFps && State::Instance().activeFgOutput == FGOutput::NoFG &&
-            !IdentifyGpu::getPrimaryGpu().usesDxvk && !XellHooks::canLimit())
+            !IdentifyGpu::getPrimaryGpu().dxgiIsDxvk && !XellHooks::canLimit() && !InputCommon::can_limit_fps())
             FrameLimit::sleep(false);
+#else
+        if (!State::Instance().reflexLimitsFps && State::Instance().activeFgOutput == FGOutput::NoFG &&
+            !IdentifyGpu::getPrimaryGpu().dxgiIsDxvk && !XellHooks::canLimit())
+            FrameLimit::sleep(false);
+#endif
     }
     else
     {
@@ -1232,7 +1292,7 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::ResizeBuffers1(UINT BufferCoun
     DXGI_SWAP_CHAIN_DESC desc {};
     _real->GetDesc(&desc);
 
-    if (Config::Instance()->FGEnabled.value_or_default())
+    if (Config::Instance()->IsFGEnabled())
     {
         State::Instance().fgResetCapturedResources = true;
         State::Instance().fgOnlyUseCapturedResources = false;
@@ -1354,6 +1414,9 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::ResizeBuffers1(UINT BufferCoun
         result = _real3->ResizeBuffers1(BufferCount, Width, Height, Format, SwapChainFlags, pCreationNodeMask,
                                         ppPresentQueue);
     }
+
+    if (result == S_OK && _real->GetDesc(&State::Instance().currentSwapchainDesc) != S_OK)
+        LOG_WARN("Can't get swapchain desc!");
 
     if (result == DXGI_ERROR_DEVICE_REMOVED && State::Instance().currentD3D12Device != nullptr)
         Util::GetDeviceRemovedReason(State::Instance().currentD3D12Device);

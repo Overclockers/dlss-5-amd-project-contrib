@@ -69,6 +69,8 @@ bool Magnifier_Vk::Dispatch(VkCommandBuffer InCmdList, const VkImageInfo& InReso
     if (!InitializeViews(InResourceInfo.ImageView, OutResourceInfo.ImageView))
         return false;
 
+    ScopedGpuTime_Vk timer(GpuTime.get(), InCmdList);
+
     _currentSetIndex = (_currentSetIndex + 1) % _maxFramesInFlight;
 
     InternalMagnifierParams constants {};

@@ -5,7 +5,8 @@
 #include "misc/SkipSpoof.h"
 #include "misc/VulkanCallScope.h"
 #include "framegen/IFGFeature_Dx12.h"
-#include <inputs/FG/Streamline_Inputs_Dx12.h>
+#include "framegen/IFGFeature_Vk.h"
+#include <inputs/FG/Streamline_Inputs.h>
 #include <inputs/FG/Streamline_Inputs_Sl1_Dx12.h>
 
 #include <set>
@@ -48,6 +49,7 @@ enum class FGOutput : uint32_t
     FSRFG,
     DLSSG,
     XeFG,
+    Reprojection,
 };
 
 enum class FGNvngxReplacement : uint32_t
@@ -141,7 +143,7 @@ class State
     FGNvngxReplacement activeFgNvngx = FGNvngxReplacement::None;
 
     // Streamline FG inputs
-    Sl_Inputs_Dx12 slFGInputs = {};
+    Sl_Inputs slFGInputs = {};
     Sl1_Inputs_Dx12 s_sl1FGInputs {};
 
     // OptiFG
@@ -149,8 +151,11 @@ class State
     bool fgOnlyGenerated = false;
     bool fgHudlessCompare = false;
     bool fgChanged = false;
+    bool dlssgInputGameEnabled = false;
+    int dlssgInputGameInterpolationCount = 1;
+    float xefgDynamicCapFps = 0.0f;
     bool scChanged = false;
-    bool skipHeapCapture = false;
+    inline static thread_local bool skipHeapCapture = false;
 
     bool fgCaptureResources = false;
     size_t fgCapturedResourceCount = 0;
@@ -184,6 +189,13 @@ class State
     HMODULE optiSlReflex = nullptr;
     HMODULE optiSlPCL = nullptr;
     HMODULE optiDLSSG = nullptr;
+
+    bool IsOptiStreamlineModule(HMODULE module) const
+    {
+        return module != nullptr && optiSlInterposer != nullptr &&
+               (module == optiSlInterposer || module == optiSlCommon || module == optiSlDLSSG ||
+                module == optiSlReflex || module == optiSlPCL || module == optiDLSSG);
+    }
 
     // NGX OTA
     std::string NGX_OTA_Dlss;
@@ -253,16 +265,29 @@ class State
 
     // quirks
     std::vector<std::string> detectedQuirks {};
+    struct LoadedAsiPlugin
+    {
+        std::string name;
+        bool isOptiPatcher;
+    };
+    std::vector<LoadedAsiPlugin> loadedAsiPlugins;
+    std::mutex loadedAsiPluginsMutex;
 
     // FFX
-    std::vector<const char*> ffxUpscalerVersionNames {};
-    std::vector<uint64_t> ffxUpscalerVersionIds {};
+    struct FfxVersionList
+    {
+        std::vector<const char*> names;
+        std::vector<uint64_t> ids;
+    };
+    FfxVersionList ffxUpscalerVersionsDx12;
+    FfxVersionList ffxUpscalerVersionsVk;
     std::vector<const char*> ffxFGVersionNames {};
     std::vector<uint64_t> ffxFGVersionIds {};
     std::optional<uint32_t> currentFsr4Preset {};
 
     // Linux checks
     bool isRunningOnLinux = false;
+    bool isWindows10 = false;
 
     // Other checks
     WorkingMode workingMode = WorkingMode::Other;
@@ -323,6 +348,7 @@ class State
 
     IFeature* currentFeature = nullptr;
     IFGFeature_Dx12* currentFG = nullptr;
+    IFGFeature_Vk* currentVkFG = nullptr;
     IDXGISwapChain* currentSwapchain = nullptr;
     IDXGISwapChain* currentWrappedSwapchain = nullptr;
     IDXGISwapChain* currentRealSwapchain = nullptr;
@@ -335,6 +361,20 @@ class State
 
     std::vector<ID3D12Device*> d3d12Devices;
     std::vector<ID3D11Device*> d3d11Devices;
+
+    // The FG output of whichever API the game uses
+    IFGFeature* CurrentFG() const
+    {
+        if (currentFG != nullptr)
+            return currentFG;
+
+        return currentVkFG;
+    }
+
+    bool FGSwapchainExists() const
+    {
+        return currentFGSwapchain != nullptr || (currentVkFG != nullptr && currentVkFG->HasSwapchain());
+    }
 
     static UINT GetOwner()
     {

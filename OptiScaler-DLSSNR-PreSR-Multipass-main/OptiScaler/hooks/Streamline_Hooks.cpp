@@ -2,11 +2,13 @@
 
 #include "Streamline_Hooks.h"
 
+#include <shaders/reproject/mouseInputs/InputCollection.h>
 #include <Util.h>
 #include <Config.h>
 
 #include <nvapi/fakenvapi.h>
 #include <misc/IdentifyGpu.h>
+#include <framegen/xefg/XeFG_Dx12.h>
 #include <hooks/Reflex_Hooks.h>
 #include <menu/menu_overlay_base.h>
 #include <framegen/nvngx/Nvngx_FG.h>
@@ -18,22 +20,27 @@
 #include <magic_enum.hpp>
 #include "detours/detours.h"
 
-static bool IsSL1AndDLSSGActive()
-{
-    return State::Instance().streamlineVersion.major == 1 && State::Instance().activeFgInput == FGInput::DLSSG &&
-           (State::Instance().activeFgOutput == FGOutput::FSRFG || State::Instance().activeFgOutput == FGOutput::XeFG);
-}
-
 static bool IsSL1AndFGActive()
 {
     const auto& state = State::Instance();
 
-    return state.streamlineVersion.major == 1 && state.activeFgInput == FGInput::DLSSG;
+    return state.streamlineVersion.major == 1 && state.activeFgInput == FGInput::DLSSG &&
+           state.activeFgOutput != FGOutput::NoFG;
+}
+
+// Game's SL1 DLSSG has to stay inert when we use its inputs or provide DLSSG ourselves,
+// otherwise its swapchain hooks end up stacked on top of our FG swapchain
+static bool IsSL1AndDLSSGManaged()
+{
+    const auto& state = State::Instance();
+
+    return state.streamlineVersion.major == 1 &&
+           (state.activeFgInput == FGInput::DLSSG || state.activeFgOutput == FGOutput::DLSSG);
 }
 
 static void PatchSL1PluginJson(nlohmann::json& configJson)
 {
-    if (!IsSL1AndFGActive())
+    if (!IsSL1AndDLSSGManaged())
         return;
 
     LOG_DEBUG("Patching SL1 plugin JSON for external FG management");
@@ -52,6 +59,35 @@ static void PatchSL1PluginJson(nlohmann::json& configJson)
 
     if (configJson.contains("/external/hws/required"_json_pointer))
         configJson["external"]["hws"]["required"] = false;
+}
+
+// Plugin may fail (denylist etc.) and leave pluginJSON empty
+static bool HasPluginJson(bool result, const char** pluginJSON)
+{
+    return result && pluginJSON != nullptr && *pluginJSON != nullptr && **pluginJSON != '\0';
+}
+
+// SystemCaps lives inside sl.common's image. When Streamline drops one sl.common copy and keeps another,
+// a pointer we got earlier can point into an unmapped (or reused) range, so check before every access.
+static bool IsWritableMemory(const void* address, size_t size)
+{
+    if (address == nullptr)
+        return false;
+
+    MEMORY_BASIC_INFORMATION mbi {};
+    if (VirtualQuery(address, &mbi, sizeof(mbi)) != sizeof(mbi))
+        return false;
+
+    if (mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0)
+        return false;
+
+    constexpr DWORD writable = PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+    if ((mbi.Protect & writable) == 0)
+        return false;
+
+    const auto end = reinterpret_cast<uintptr_t>(address) + size;
+    const auto regionEnd = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
+    return end <= regionEnd;
 }
 
 char* StreamlineHooks::trimStreamlineLog(const char* msg)
@@ -308,21 +344,79 @@ sl::Result StreamlineHooks::hkslGetFeatureVersion(sl::Feature feature, sl::Featu
     return o_slGetFeatureVersion(feature, version);
 }
 
+// Games usually ask for the max before our FG swapchain exists, so the output can't tell us yet
+static int OutputMaxInterpolationCount()
+{
+    auto& state = State::Instance();
+
+    if (auto fg = state.CurrentFG(); fg != nullptr && fg->GetMaxInterpolationCount() > 1)
+        return fg->GetMaxInterpolationCount();
+
+    if (state.activeFgOutput == FGOutput::XeFG)
+    {
+        static int xefgMax = 0;
+        static bool xefgQueried = false;
+
+        // GetState can be called every frame, only try once
+        if (!xefgQueried && state.currentD3D12Device != nullptr)
+        {
+            xefgQueried = true;
+            xefgMax = XeFG_Dx12::QueryMaxInterpolationCount(state.currentD3D12Device);
+        }
+
+        if (xefgMax > 0)
+            return xefgMax;
+    }
+
+    return 1;
+}
+
+// Reports Opti's FG output capabilities to the game when DLSSG is used as FG Input
+static void FillDlssgInputState(sl::DLSSGState& state)
+{
+    auto fg = State::Instance().CurrentFG();
+
+    if (fg != nullptr && fg->IsActive() && !fg->IsPaused())
+        state.numFramesActuallyPresented = fg->GetInterpolatedFrameCount() + 1;
+    else
+        state.numFramesActuallyPresented = 1;
+
+    if (state.structVersion >= sl::kStructVersion2)
+        state.numFramesToGenerateMax = OutputMaxInterpolationCount();
+}
+
 static sl::Result dummy_slDLSSGGetState(const sl::ViewportHandle& viewport, sl::DLSSGState& state,
                                         const sl::DLSSGOptions* options)
 {
-    state.numFramesActuallyPresented = 1; // TODO: can do better
-    if(state.structVersion >= 2) {
-        state.numFramesToGenerateMax = 1;
-        state.bIsVsyncSupportAvailable = sl::Boolean::eTrue;
-    }
+    FillDlssgInputState(state);
     state.estimatedVRAMUsageInBytes = 300 * 1024 * 1024;
+
+    if (state.structVersion >= sl::kStructVersion2)
+        state.bIsVsyncSupportAvailable = sl::Boolean::eTrue;
 
     return sl::Result::eOk;
 }
 
 static sl::Result dummy_slDLSSGSetOptions(const sl::ViewportHandle& viewport, const sl::DLSSGOptions& options)
 {
+    auto& state = State::Instance();
+
+    // Only reading v1 fields, safe for any struct version
+    const bool enabled = options.mode != sl::DLSSGMode::eOff;
+    const int count = std::max(static_cast<int>(options.numFramesToGenerate), 1);
+
+    if (enabled != state.dlssgInputGameEnabled || count != state.dlssgInputGameInterpolationCount)
+    {
+        LOG_INFO("Game requested DLSSG mode: {}, numFramesToGenerate: {}", magic_enum::enum_name(options.mode),
+                 options.numFramesToGenerate);
+
+        if (enabled && !state.dlssgInputGameEnabled && Config::Instance()->FGFollowsGame())
+            state.fgChanged = true;
+
+        state.dlssgInputGameEnabled = enabled;
+        state.dlssgInputGameInterpolationCount = count;
+    }
+
     return sl::Result::eOk;
 }
 
@@ -351,9 +445,9 @@ sl::Result StreamlineHooks::hkslGetFeatureFunction(sl::Feature feature, const ch
 sl::Result StreamlineHooks::hkslSetTag(const sl::ViewportHandle& viewport, const sl::ResourceTag* tags,
                                        uint32_t numTags, sl::CommandBuffer* cmdBuffer)
 {
-    if (renderApi == sl::RenderAPI::eD3D11 || renderApi == sl::RenderAPI::eVulkan)
+    if (renderApi == sl::RenderAPI::eD3D11)
     {
-        LOG_ERROR("hkslSetTag only supports DX12");
+        LOG_ERROR("hkslSetTag doesn't support DX11");
         return o_slSetTag(viewport, tags, numTags, cmdBuffer);
     }
 
@@ -407,7 +501,7 @@ sl::Result StreamlineHooks::hkslSetTag(const sl::ViewportHandle& viewport, const
         }
 
         // Cyberpunk hudless state fix for RDNA 2
-        if (State::Instance().gameQuirks & GameQuirk::CyberpunkHudlessState &&
+        if (State::Instance().gameQuirks & GameQuirk::CyberpunkHudlessState && renderApi != sl::RenderAPI::eVulkan &&
             tags[i].resource->state ==
                 (D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE) &&
             tags[i].type == sl::kBufferTypeHUDLessColor)
@@ -422,7 +516,7 @@ sl::Result StreamlineHooks::hkslSetTag(const sl::ViewportHandle& viewport, const
              tags[i].type == sl::kBufferTypeMotionVectors || tags[i].type == sl::kBufferTypeUIColorAndAlpha ||
              tags[i].type == sl::kBufferTypeBidirectionalDistortionField))
         {
-            State::Instance().slFGInputs.reportResource(tags[i], (ID3D12GraphicsCommandList*) cmdBuffer, 0);
+            State::Instance().slFGInputs.reportResource(tags[i], cmdBuffer, 0);
         }
         else if (State::Instance().activeFgInput == FGInput::NvngxFG)
         {
@@ -438,9 +532,9 @@ sl::Result StreamlineHooks::hkslSetTagForFrame(const sl::FrameToken& frame, cons
                                                const sl::ResourceTag* resources, uint32_t numResources,
                                                sl::CommandBuffer* cmdBuffer)
 {
-    if (renderApi == sl::RenderAPI::eD3D11 || renderApi == sl::RenderAPI::eVulkan)
+    if (renderApi == sl::RenderAPI::eD3D11)
     {
-        LOG_ERROR("hkslSetTagForFrame only supports DX12");
+        LOG_ERROR("hkslSetTagForFrame doesn't support DX11");
         return o_slSetTagForFrame(frame, viewport, resources, numResources, cmdBuffer);
     }
 
@@ -501,7 +595,7 @@ sl::Result StreamlineHooks::hkslSetTagForFrame(const sl::FrameToken& frame, cons
              resources[i].type == sl::kBufferTypeMotionVectors || resources[i].type == sl::kBufferTypeUIColorAndAlpha ||
              resources[i].type == sl::kBufferTypeBidirectionalDistortionField))
         {
-            State::Instance().slFGInputs.reportResource(resources[i], (ID3D12GraphicsCommandList*) cmdBuffer,
+            State::Instance().slFGInputs.reportResource(resources[i], cmdBuffer,
                                                         (uint32_t) frame);
         }
         else if (State::Instance().activeFgInput == FGInput::NvngxFG)
@@ -660,22 +754,41 @@ bool StreamlineHooks::hkslEvaluateFeature_sl1(sl1::CommandBuffer* cmdBuffer, sl1
     return o_slEvaluateFeature_sl1(cmdBuffer, feature, frameIndex, id);
 }
 
+// Always re-read from params: the caps struct belongs to the sl.common copy Streamline currently uses,
+// which can change (game plugins vs OTA plugins), so a cached pointer can go stale.
 void StreamlineHooks::hookSystemCaps(sl::param::IParameters* params)
 {
+    if (params == nullptr)
+        return;
+
     if (State::Instance().streamlineVersion.major > 1)
     {
-        if (!systemCaps)
-            sl::param::getPointerParam(params, sl::param::common::kSystemCaps, &systemCaps);
+        SystemCaps* caps = nullptr;
+        sl::param::getPointerParam(params, sl::param::common::kSystemCaps, &caps);
+
+        if (caps != nullptr && !IsWritableMemory(caps, sizeof(SystemCaps)))
+        {
+            LOG_WARN("SystemCaps pointer {:X} is not valid memory, skipping arch spoofing", (size_t) caps);
+            caps = nullptr;
+        }
+
+        systemCaps = caps;
     }
     else if (State::Instance().streamlineVersion.major == 1)
     {
         // This should be Streamline 1.5 as previous versions don't even have slOnPluginLoad
-        if (!systemCapsSl15)
+        LOG_TRACE("Attempting to get system caps for Streamline v1, this could fail depending on the exact version");
+
+        SystemCapsSl15* caps = nullptr;
+        sl::param::getPointerParam(params, sl::param::common::kSystemCaps, &caps);
+
+        if (caps != nullptr && !IsWritableMemory(caps, sizeof(SystemCapsSl15)))
         {
-            LOG_TRACE(
-                "Attempting to get system caps for Streamline v1, this could fail depending on the exact version");
-            sl::param::getPointerParam(params, sl::param::common::kSystemCaps, &systemCapsSl15);
+            LOG_WARN("SystemCaps (SL1) pointer {:X} is not valid memory, skipping arch spoofing", (size_t) caps);
+            caps = nullptr;
         }
+
+        systemCapsSl15 = caps;
     }
 }
 
@@ -689,7 +802,7 @@ uint32_t StreamlineHooks::getSystemCapsArch(SystemCaps* altSystemCaps)
         if (State::Instance().streamlineVersion.major > 1)
         {
             auto caps = altSystemCaps != nullptr ? altSystemCaps : systemCaps;
-            if (caps)
+            if (caps && IsWritableMemory(caps, sizeof(SystemCaps)))
             {
                 for (auto& adapter : caps->adapters)
                 {
@@ -700,9 +813,10 @@ uint32_t StreamlineHooks::getSystemCapsArch(SystemCaps* altSystemCaps)
         }
         else if (State::Instance().streamlineVersion.major == 1)
         {
-            if (systemCapsSl15)
+            if (systemCapsSl15 && IsWritableMemory(systemCapsSl15, sizeof(SystemCapsSl15)))
             {
-                for (uint32_t i = 0; i < systemCapsSl15->gpuCount; i++)
+                const auto count = (std::min) (systemCapsSl15->gpuCount, kMaxNumSupportedGPUs);
+                for (uint32_t i = 0; i < count; i++)
                 {
                     if (systemCapsSl15->architecture[i] > highestArch)
                         highestArch = systemCapsSl15->architecture[i];
@@ -728,9 +842,20 @@ void StreamlineHooks::setArch(uint32_t arch, SystemCaps* altSystemCaps)
     {
         // Assumes that altCaps are always for SL2+
         auto caps = altSystemCaps != nullptr ? altSystemCaps : systemCaps;
+        if (caps && !IsWritableMemory(caps, sizeof(SystemCaps)))
+        {
+            LOG_WARN("SystemCaps at {:X} is no longer valid, not writing arch", (size_t) caps);
+
+            if (caps == systemCaps)
+                systemCaps = nullptr;
+
+            caps = nullptr;
+        }
+
         if (caps)
         {
-            for (uint32_t i = 0; i < caps->gpuCount; i++)
+            const auto count = (std::min) (caps->gpuCount, kMaxNumSupportedGPUs);
+            for (uint32_t i = 0; i < count; i++)
             {
                 caps->adapters[i].architecture = arch;
                 caps->adapters[i].vendor = VendorId::Nvidia;
@@ -744,9 +869,16 @@ void StreamlineHooks::setArch(uint32_t arch, SystemCaps* altSystemCaps)
     }
     else if (State::Instance().streamlineVersion.major == 1)
     {
+        if (systemCapsSl15 && !IsWritableMemory(systemCapsSl15, sizeof(SystemCapsSl15)))
+        {
+            LOG_WARN("SystemCaps (SL1) at {:X} is no longer valid, not writing arch", (size_t) systemCapsSl15);
+            systemCapsSl15 = nullptr;
+        }
+
         if (systemCapsSl15)
         {
-            for (uint32_t i = 0; i < systemCapsSl15->gpuCount; i++)
+            const auto count = (std::min) (systemCapsSl15->gpuCount, kMaxNumSupportedGPUs);
+            for (uint32_t i = 0; i < count; i++)
                 systemCapsSl15->architecture[i] = arch;
 
             if (fakenvapi::isUsingAsMainNvapi() || primaryGpu.vendorId != VendorId::Nvidia)
@@ -823,7 +955,12 @@ bool StreamlineHooks::hkdlss_slOnPluginLoad(sl::param::IParameters* params, cons
 
     if (!result || !pluginJSON || !*pluginJSON) return result;
 
-    nlohmann::json configJson = nlohmann::json::parse(*pluginJSON);
+    nlohmann::json configJson = nlohmann::json::parse(*pluginJSON, nullptr, false);
+    if (configJson.is_discarded())
+    {
+        LOG_ERROR("Failed to parse plugin JSON");
+        return result;
+    }
 
     auto primaryGpu = IdentifyGpu::getPrimaryGpu();
     if (primaryGpu.vendorId != VendorId::Nvidia || !primaryGpu.dlssCapable)
@@ -909,7 +1046,12 @@ bool StreamlineHooks::hkdlssg_slOnPluginLoad(sl::param::IParameters* params, con
 
     if (!result || !pluginJSON || !*pluginJSON) return result;
 
-    nlohmann::json configJson = nlohmann::json::parse(*pluginJSON);
+    nlohmann::json configJson = nlohmann::json::parse(*pluginJSON, nullptr, false);
+    if (configJson.is_discarded())
+    {
+        LOG_ERROR("Failed to parse plugin JSON");
+        return result;
+    }
 
     // Kill the DLSSG streamline swapchain hooks
     if (State::Instance().activeFgInput == FGInput::DLSSG || State::Instance().activeFgOutput == FGOutput::DLSSG)
@@ -1032,12 +1174,21 @@ bool StreamlineHooks::hklocal_dlssg_slOnPluginLoad(sl::param::IParameters* param
         }
     }
 
-    auto result = o_local_dlssg_slOnPluginLoad(params, loaderJSON, pluginJSON);
+    PinnedCall localDlssgOnLoad(localDlssgModules, localDlssgOnLoadFn);
+    auto result = localDlssgOnLoad ? localDlssgOnLoad.fn(params, loaderJSON, pluginJSON) : false;
 
     if (shouldSpoofArch && localSystemCaps)
         setArch(currentArch, localSystemCaps);
 
-    nlohmann::json configJson = nlohmann::json::parse(*pluginJSON);
+    if (!HasPluginJson(result, pluginJSON))
+        return result;
+
+    nlohmann::json configJson = nlohmann::json::parse(*pluginJSON, nullptr, false);
+    if (configJson.is_discarded())
+    {
+        LOG_ERROR("Failed to parse plugin JSON");
+        return result;
+    }
 
     if (configJson.contains("/external/hws/required"_json_pointer))
         configJson["external"]["hws"]["required"] = false; // disable eHardwareSchedulingRequired
@@ -1084,10 +1235,17 @@ bool StreamlineHooks::hkcommon_slOnPluginLoad(sl::param::IParameters* params, co
     // TODO: do it better than "static" and hoping for the best
     static std::string config;
 
-    auto result = o_common_slOnPluginLoad(params, loaderJSON, pluginJSON);
+    PinnedCall commonOnLoad(commonModules, commonOnLoadFn);
+    auto result = commonOnLoad ? commonOnLoad.fn(params, loaderJSON, pluginJSON) : false;
+    if (!HasPluginJson(result, pluginJSON))
+        return result;
 
-    nlohmann::json configJson = nlohmann::json::parse(*pluginJSON);
-
+    nlohmann::json configJson = nlohmann::json::parse(*pluginJSON, nullptr, false);
+    if (configJson.is_discarded())
+    {
+        LOG_ERROR("Failed to parse plugin JSON");
+        return result;
+    }
     auto& slVersion = State::Instance().streamlineVersion;
 
     // Grab a version of the potentially updated sl.common
@@ -1113,6 +1271,9 @@ bool StreamlineHooks::hkcommon_slOnPluginLoad(sl::param::IParameters* params, co
 
 sl::Result StreamlineHooks::hkslDLSSGSetOptions(const sl::ViewportHandle& viewport, const sl::DLSSGOptions& options)
 {
+    if (Calls().o_slDLSSGSetOptions.load() == nullptr)
+        return sl::Result::eErrorFeatureMissing;
+
     activeDlssg.store(currentPlugin);
     {
         std::lock_guard lock(Calls().optionsMutex);
@@ -1234,6 +1395,9 @@ sl::Result StreamlineHooks::hkslDLSSGSetOptions(const sl::ViewportHandle& viewpo
 sl::Result StreamlineHooks::hkslDLSSGGetState(const sl::ViewportHandle& viewport, sl::DLSSGState& state,
                                               const sl::DLSSGOptions* options)
 {
+    if (Calls().o_slDLSSGGetState.load() == nullptr)
+        return sl::Result::eErrorFeatureMissing;
+
     sl::Result result {};
 
     const auto originalStructVersion = state.structVersion;
@@ -1303,28 +1467,11 @@ sl::Result StreamlineHooks::hkslDLSSGGetState(const sl::ViewportHandle& viewport
 
     if (optiState.activeFgInput == FGInput::DLSSG)
     {
-        auto fg = optiState.currentFG;
+        if (optiState.currentFG != nullptr && options != nullptr &&
+            options->flags & sl::DLSSGFlags::eRequestVRAMEstimate)
+            state.estimatedVRAMUsageInBytes = static_cast<uint64_t>(256 * 1024) * 1024;
 
-        if (fg != nullptr)
-        {
-            if (options != nullptr && options->flags & sl::DLSSGFlags::eRequestVRAMEstimate)
-                state.estimatedVRAMUsageInBytes = static_cast<uint64_t>(256 * 1024) * 1024;
-
-            if (fg->IsActive() && !fg->IsPaused())
-            {
-                state.numFramesActuallyPresented = fg->GetInterpolatedFrameCount() + 1;
-            }
-            else
-            {
-                state.numFramesActuallyPresented = 1;
-            }
-        }
-        else
-        {
-            state.numFramesActuallyPresented = 1;
-        }
-
-        if(originalStructVersion >= 2) state.numFramesToGenerateMax = 1;
+        FillDlssgInputState(state);
 
         LOG_DEBUG("Status: {}, numFramesActuallyPresented: {}", magic_enum::enum_name(state.status),
                   state.numFramesActuallyPresented);
@@ -1349,12 +1496,21 @@ bool StreamlineHooks::hkreflex_slOnPluginLoad(sl::param::IParameters* params, co
         spoofArch(currentArch, sl::kFeatureReflex);
     }
 
-    auto result = o_reflex_slOnPluginLoad(params, loaderJSON, pluginJSON);
+    PinnedCall reflexOnLoad(reflexModules, reflexOnLoadFn);
+    auto result = reflexOnLoad ? reflexOnLoad.fn(params, loaderJSON, pluginJSON) : false;
 
     if (Config::Instance()->StreamlineSpoofing.value_or_default())
         setArch(currentArch);
 
-    nlohmann::json configJson = nlohmann::json::parse(*pluginJSON);
+    if (!HasPluginJson(result, pluginJSON))
+        return result;
+
+    nlohmann::json configJson = nlohmann::json::parse(*pluginJSON, nullptr, false);
+    if (configJson.is_discarded())
+    {
+        LOG_ERROR("Failed to parse plugin JSON");
+        return result;
+    }
 
     auto primaryGpu = IdentifyGpu::getPrimaryGpu();
     if (primaryGpu.vendorId != VendorId::Nvidia || !primaryGpu.dlssCapable)
@@ -1383,6 +1539,10 @@ bool StreamlineHooks::hkreflex_slOnPluginLoad(sl::param::IParameters* params, co
 
 sl::Result StreamlineHooks::hkslReflexSetOptions(const sl::ReflexOptions& options)
 {
+    PinnedCall setOptions(reflexModules, reflexSetOptionsFn);
+    if (!setOptions)
+        return sl::Result::eErrorFeatureMissing;
+
     reflexGamesLastMode = options.mode;
 
     sl::ReflexOptions newOptions = options;
@@ -1394,18 +1554,22 @@ sl::Result StreamlineHooks::hkslReflexSetOptions(const sl::ReflexOptions& option
     // if (Config::Instance()->FN_ForceReflex == 1)
     //     newOptions.mode = sl::ReflexMode::eOff;
 
-    return o_slReflexSetOptions(newOptions);
+    return setOptions.fn(newOptions);
 }
 
 sl::Result StreamlineHooks::hkslReflexSleep(const sl::FrameToken& frame)
 {
+    PinnedCall sleep(reflexModules, reflexSleepFn);
+    if (!sleep)
+        return sl::Result::eErrorFeatureMissing;
+
     // if (State::Instance().activeFgOutput == FGOutput::DLSSG && StreamlineProxy::IsD3D12Inited() &&
     //     Config::Instance()->FGDLSSGUseGamesReflexMarkers.value_or_default())
     //{
     //     return StreamlineProxy::ReflexSleep()(frame);
     // }
 
-    return o_slReflexSleep(frame);
+    return sleep.fn(frame);
 }
 
 void* StreamlineHooks::hkdlss_slGetPluginFunction(const char* functionName)
@@ -1478,7 +1642,7 @@ void* StreamlineHooks::hkdlssg_slGetPluginFunction(const char* functionName)
         return Callback<&hkslDLSSGGetState>(currentPlugin);
     }
 
-    if (strcmp(functionName, "slGetPluginJSONConfig") == 0 && IsSL1AndDLSSGActive())
+    if (strcmp(functionName, "slGetPluginJSONConfig") == 0 && IsSL1AndDLSSGManaged())
     {
         Calls().o_dlssg_slGetPluginJSONConfig_sl1.store(
             reinterpret_cast<PFN_slGetPluginJSONConfig_sl1>(Calls().o_dlssg_slGetPluginFunction.load()(functionName)));
@@ -1504,17 +1668,27 @@ void* StreamlineHooks::hklocal_dlssg_slGetPluginFunction(const char* functionNam
 {
     // LOG_DEBUG("{}", functionName);
 
+    // The thunk pins this slot's module for the resolution
+    auto getFn = localDlssgGetFn[currentLocalDlssgSlot].load();
+
+    if (getFn == nullptr)
+        return nullptr;
+
     if (strcmp(functionName, "slOnPluginLoad") == 0 && State::Instance().activeFgNvngx != FGNvngxReplacement::None)
     {
-        o_local_dlssg_slOnPluginLoad = (PFN_slOnPluginLoad) o_local_dlssg_slGetPluginFunction(functionName);
+        localDlssgOnLoadFn[currentLocalDlssgSlot] = (PFN_slOnPluginLoad) getFn(functionName);
         return &hklocal_dlssg_slOnPluginLoad;
     }
 
-    return o_local_dlssg_slGetPluginFunction(functionName);
+    return getFn(functionName);
 }
 
 bool StreamlineHooks::hkreflex_slSetConstants_sl1(const void* data, uint32_t frameIndex, uint32_t id)
 {
+    PinnedCall setConstants(reflexModules, reflexSetConstantsSl1Fn);
+    if (!setConstants)
+        return false;
+
     // Streamline v1's version of slReflexSetOptions + slPCLSetMarker
     static sl1::ReflexConstants constants {};
     constants = *(const sl1::ReflexConstants*) data;
@@ -1530,34 +1704,40 @@ bool StreamlineHooks::hkreflex_slSetConstants_sl1(const void* data, uint32_t fra
     // else if (Config::Instance()->FN_ForceReflex == 1)
     //     constants.mode = sl1::ReflexMode::eReflexModeOff;
 
-    return o_reflex_slSetConstants_sl1(&constants, frameIndex, id);
+    return setConstants.fn(&constants, frameIndex, id);
 }
 
 void* StreamlineHooks::hkreflex_slGetPluginFunction(const char* functionName)
 {
     // LOG_DEBUG("{}", functionName);
 
+    // The thunk pins this slot's module for the resolution
+    auto getFn = reflexGetFn[currentReflexSlot].load();
+
+    if (getFn == nullptr)
+        return nullptr;
+
     if (strcmp(functionName, "slSetConstants") == 0 && State::Instance().streamlineVersion.major == 1)
     {
-        o_reflex_slSetConstants_sl1 = (PFN_slSetConstants_sl1) o_reflex_slGetPluginFunction(functionName);
+        reflexSetConstantsSl1Fn[currentReflexSlot] = (PFN_slSetConstants_sl1) getFn(functionName);
         return &hkreflex_slSetConstants_sl1;
     }
 
     if (strcmp(functionName, "slOnPluginLoad") == 0)
     {
-        o_reflex_slOnPluginLoad = (PFN_slOnPluginLoad) o_reflex_slGetPluginFunction(functionName);
+        reflexOnLoadFn[currentReflexSlot] = (PFN_slOnPluginLoad) getFn(functionName);
         return &hkreflex_slOnPluginLoad;
     }
 
     if (strcmp(functionName, "slReflexSetOptions") == 0)
     {
-        o_slReflexSetOptions = (decltype(&slReflexSetOptions)) o_reflex_slGetPluginFunction(functionName);
+        reflexSetOptionsFn[currentReflexSlot] = (decltype(&slReflexSetOptions)) getFn(functionName);
         return &hkslReflexSetOptions;
     }
 
     if (strcmp(functionName, "slReflexSleep") == 0)
     {
-        o_slReflexSleep = (decltype(&slReflexSleep)) o_reflex_slGetPluginFunction(functionName);
+        reflexSleepFn[currentReflexSlot] = (decltype(&slReflexSleep)) getFn(functionName);
         return &hkslReflexSleep;
     }
 
@@ -1566,15 +1746,32 @@ void* StreamlineHooks::hkreflex_slGetPluginFunction(const char* functionName)
         (State::Instance().gameQuirks & GameQuirk::FixSlSimulationMarkers ||
          State::Instance().activeFgInput == FGInput::DLSSG))
     {
-        o_slPCLSetMarker = (decltype(&slPCLSetMarker)) o_reflex_slGetPluginFunction(functionName);
+        reflexSetMarkerFn[currentReflexSlot] = (decltype(&slPCLSetMarker)) getFn(functionName);
         return &hkslPCLSetMarker;
     }
 
-    return o_reflex_slGetPluginFunction(functionName);
+    return getFn(functionName);
 }
 
 sl::Result StreamlineHooks::hkslPCLSetMarker(sl::PCLMarker marker, const sl::FrameToken& frame)
 {
+    // Resolved from sl.pcl, or with the FixSlSimulationMarkers quirk / DLSSG input from sl.reflex
+    PinnedCall pclMarker(pclModules, pclSetMarkerFn);
+    PinnedCall reflexMarker(reflexModules, reflexSetMarkerFn);
+    auto original = pclMarker ? pclMarker.fn : reflexMarker.fn;
+
+    if (original == nullptr)
+        return sl::Result::eErrorFeatureMissing;
+
+
+    // Indiana Jones sends a nullptr on startup :)
+    const void* volatile framePtr = &frame;
+    if (framePtr == nullptr)
+    {
+        LOG_WARN("Null frame token for marker {}", (uint32_t) marker);
+        return original(marker, frame);
+    }
+
     // if (State::Instance().activeFgOutput == FGOutput::DLSSG && StreamlineProxy::IsD3D12Inited() &&
     //     Config::Instance()->FGDLSSGUseGamesReflexMarkers.value_or_default())
     //{
@@ -1599,11 +1796,15 @@ sl::Result StreamlineHooks::hkslPCLSetMarker(sl::PCLMarker marker, const sl::Fra
             auto result = o_slGetNewFrameToken(newFramePointer, &newFrameId);
 
             LOG_WARN("Simulation start marker sent after end marker, offset: {}", correction_offset);
+            InputCollection::getInstance().startCollectingForFrame(newFrameId);
 
-            result = o_slPCLSetMarker(marker, *newFramePointer);
+            result = original(marker, *newFramePointer);
             return result;
         }
     }
+
+    if (marker == sl::PCLMarker::eSimulationStart)
+        InputCollection::getInstance().startCollectingForFrame(frame);
 
     if (State::Instance().activeFgInput == FGInput::DLSSG)
     {
@@ -1631,7 +1832,7 @@ sl::Result StreamlineHooks::hkslPCLSetMarker(sl::PCLMarker marker, const sl::Fra
         }
     }
 
-    return o_slPCLSetMarker(marker, frame);
+    return original(marker, frame);
 }
 
 bool StreamlineHooks::hkpcl_slOnPluginLoad(sl::param::IParameters* params, const char* loaderJSON,
@@ -1647,7 +1848,8 @@ bool StreamlineHooks::hkpcl_slOnPluginLoad(sl::param::IParameters* params, const
         spoofArch(currentArch, sl::kFeaturePCL);
     }
 
-    auto result = o_pcl_slOnPluginLoad(params, loaderJSON, pluginJSON);
+    PinnedCall pclOnLoad(pclModules, pclOnLoadFn);
+    auto result = pclOnLoad ? pclOnLoad.fn(params, loaderJSON, pluginJSON) : false;
 
     if (Config::Instance()->StreamlineSpoofing.value_or_default())
         setArch(currentArch);
@@ -1659,21 +1861,27 @@ void* StreamlineHooks::hkpcl_slGetPluginFunction(const char* functionName)
 {
     // LOG_DEBUG("{}", functionName);
 
+    // The thunk pins this slot's module for the resolution
+    auto getFn = pclGetFn[currentPclSlot].load();
+
+    if (getFn == nullptr)
+        return nullptr;
+
     if (strcmp(functionName, "slPCLSetMarker") == 0 &&
         (State::Instance().gameQuirks & GameQuirk::FixSlSimulationMarkers ||
          State::Instance().activeFgInput == FGInput::DLSSG))
     {
-        o_slPCLSetMarker = (decltype(&slPCLSetMarker)) o_pcl_slGetPluginFunction(functionName);
+        pclSetMarkerFn[currentPclSlot] = (decltype(&slPCLSetMarker)) getFn(functionName);
         return &hkslPCLSetMarker;
     }
 
     if (strcmp(functionName, "slOnPluginLoad") == 0)
     {
-        o_pcl_slOnPluginLoad = (PFN_slOnPluginLoad) o_pcl_slGetPluginFunction(functionName);
+        pclOnLoadFn[currentPclSlot] = (PFN_slOnPluginLoad) getFn(functionName);
         return &hkpcl_slOnPluginLoad;
     }
 
-    return o_pcl_slGetPluginFunction(functionName);
+    return getFn(functionName);
 }
 
 bool StreamlineHooks::hk_setVoid(void* self, const char* key, void** value)
@@ -1699,61 +1907,80 @@ bool StreamlineHooks::hk_setVoid(void* self, const char* key, void** value)
         }
     }
 
-    return o_setVoid(self, key, value);
+    PinnedCall setVoid(commonModules, commonSetVoidFn);
+    if (!setVoid)
+        return false;
+
+    return setVoid.fn(self, key, value);
 }
 
 void StreamlineHooks::hkcommon_slSetParameters_sl1(void* params)
 {
     LOG_FUNC();
 
-    if (o_setVoid == nullptr && params)
+    PinnedCall setParameters(commonModules, commonSetParametersSl1Fn);
+
+    if (setParameters && commonSetVoidFn[setParameters.slot] == nullptr && params)
     {
         void** vtable = *(void***) params;
 
         // It's flipped, 0 -> set void*, 7 -> get void*
-        o_setVoid = (PFN_setVoid) vtable[0];
+        auto original = (PFN_setVoid) vtable[0];
 
         DetourTransactionBegin();
         DetourUpdateThread(GetCurrentThread());
 
-        if (o_setVoid != nullptr)
-            DetourAttach(&(PVOID&) o_setVoid, hk_setVoid);
+        if (original != nullptr)
+            DetourAttach(&(PVOID&) original, hk_setVoid);
 
         auto detourResult = DetourTransactionCommit();
         if (detourResult != NO_ERROR)
         {
             LOG_ERROR("Failed to hook setVoid: {:X}", detourResult);
-            o_setVoid = nullptr;
+            original = nullptr;
         }
+
+        commonSetVoidFn[setParameters.slot] = original;
     }
 
-    o_common_slSetParameters_sl1(params);
+    if (!setParameters)
+        return;
+
+    setParameters.fn(params);
 }
 
 void* StreamlineHooks::hkcommon_slGetPluginFunction(const char* functionName)
 {
     // LOG_DEBUG("{}", functionName);
 
+    // The thunk pins this slot's module for the resolution
+    auto getFn = commonGetFn[currentCommonSlot].load();
+
+    if (getFn == nullptr)
+        return nullptr;
+
     if (strcmp(functionName, "slOnPluginLoad") == 0)
     {
-        o_common_slOnPluginLoad = (PFN_slOnPluginLoad) o_common_slGetPluginFunction(functionName);
+        commonOnLoadFn[currentCommonSlot] = (PFN_slOnPluginLoad) getFn(functionName);
         return &hkcommon_slOnPluginLoad;
     }
 
     // Used around Streamline v1.3, as 1.5 doesn't seem to have it anymore
     if (strcmp(functionName, "slSetParameters") == 0)
     {
-        o_common_slSetParameters_sl1 = (PFN_slSetParameters_sl1) o_common_slGetPluginFunction(functionName);
+        commonSetParametersSl1Fn[currentCommonSlot] = (PFN_slSetParameters_sl1) getFn(functionName);
         return &hkcommon_slSetParameters_sl1;
     }
 
-    return o_common_slGetPluginFunction(functionName);
+    return getFn(functionName);
 }
 
 void StreamlineHooks::updateForceReflex()
 {
     // Not needed for Streamline v1 as slSetConstants is sent every frame
-    if (o_slReflexSetOptions)
+    PinnedCall setOptions(reflexModules, reflexSetOptionsFn);
+
+    if (setOptions)
     {
         sl::ReflexOptions options;
 
@@ -1766,7 +1993,7 @@ void StreamlineHooks::updateForceReflex()
         else if (forceReflex == ForceReflex::InGame)
             options.mode = reflexGamesLastMode;
 
-        auto result = o_slReflexSetOptions(options);
+        auto result = setOptions.fn(options);
         if (result != sl::Result::eOk)
         {
             LOG_WARN("Failed to update Reflex mode with error code: {} ({:X})", magic_enum::enum_name(result),
@@ -2086,228 +2313,194 @@ void StreamlineHooks::hookPlugin(unsigned kind, HMODULE module)
 void StreamlineHooks::hookDlss(HMODULE module) { hookPlugin(0, module); }
 void StreamlineHooks::hookDlssg(HMODULE module) { hookPlugin(1, module); }
 
-// Local SL DLSSG
+// Reflex / PCL / common / local DLSSG (D6): one hook per domain over bounded module slots. Every
+// detour stays attached for the process lifetime (the interposer caches the addresses we hand out,
+// a dead trampoline cannot be detached), the per-slot thunks keep a stable callback identity and
+// pin their module while it runs.
 
-void StreamlineHooks::unhookLocalDlssg()
+template <size_t I> void* StreamlineHooks::localDlssgThunk(const char* functionName)
 {
-    LOG_FUNC();
+    if (!localDlssgModules.slots[I].live.load(std::memory_order_acquire))
+        return nullptr;
 
-    DetourTransactionBegin();
-    DetourUpdateThread(GetCurrentThread());
+    PluginModuleSlots<2>::Lease lease(localDlssgModules.slots[I]);
 
-    if (o_local_dlssg_slGetPluginFunction)
+    if (!lease)
+        return nullptr;
+
+    currentLocalDlssgSlot = I;
+    struct Restore
     {
-        DetourDetach(&(PVOID&) o_local_dlssg_slGetPluginFunction, hklocal_dlssg_slGetPluginFunction);
-        o_local_dlssg_slGetPluginFunction = nullptr;
+        ~Restore() { currentLocalDlssgSlot = 2; }
+    } restore;
+
+    return hklocal_dlssg_slGetPluginFunction(functionName);
+}
+
+template <size_t I> void* StreamlineHooks::reflexThunk(const char* functionName)
+{
+    if (!reflexModules.slots[I].live.load(std::memory_order_acquire))
+        return nullptr;
+
+    PluginModuleSlots<2>::Lease lease(reflexModules.slots[I]);
+
+    if (!lease)
+        return nullptr;
+
+    currentReflexSlot = I;
+    struct Restore
+    {
+        ~Restore() { currentReflexSlot = 2; }
+    } restore;
+
+    return hkreflex_slGetPluginFunction(functionName);
+}
+
+template <size_t I> void* StreamlineHooks::pclThunk(const char* functionName)
+{
+    if (!pclModules.slots[I].live.load(std::memory_order_acquire))
+        return nullptr;
+
+    PluginModuleSlots<2>::Lease lease(pclModules.slots[I]);
+
+    if (!lease)
+        return nullptr;
+
+    currentPclSlot = I;
+    struct Restore
+    {
+        ~Restore() { currentPclSlot = 2; }
+    } restore;
+
+    return hkpcl_slGetPluginFunction(functionName);
+}
+
+template <size_t I> void* StreamlineHooks::commonThunk(const char* functionName)
+{
+    if (!commonModules.slots[I].live.load(std::memory_order_acquire))
+        return nullptr;
+
+    PluginModuleSlots<2>::Lease lease(commonModules.slots[I]);
+
+    if (!lease)
+        return nullptr;
+
+    currentCommonSlot = I;
+    struct Restore
+    {
+        ~Restore() { currentCommonSlot = 2; }
+    } restore;
+
+    return hkcommon_slGetPluginFunction(functionName);
+}
+
+template void* StreamlineHooks::localDlssgThunk<0>(const char*);
+template void* StreamlineHooks::localDlssgThunk<1>(const char*);
+template void* StreamlineHooks::reflexThunk<0>(const char*);
+template void* StreamlineHooks::reflexThunk<1>(const char*);
+template void* StreamlineHooks::pclThunk<0>(const char*);
+template void* StreamlineHooks::pclThunk<1>(const char*);
+template void* StreamlineHooks::commonThunk<0>(const char*);
+template void* StreamlineHooks::commonThunk<1>(const char*);
+
+namespace
+{
+
+// The slot registry shared by the four single-entry domains (D6)
+template <size_t Capacity, typename HookOf, typename StoreOf>
+void HookSingleModule(PluginModuleSlots<Capacity>& modules, HMODULE module, const char* logName, HookOf hookOf,
+                      StoreOf storeOf)
+{
+    if (!module)
+    {
+        LOG_WARN("{} module is NULL", logName);
+        return;
     }
 
-    DetourTransactionCommit();
+    // Exact loader notifications distinguish a reference decrement from real unload,
+    // even when the next DLL is mapped at the very same address (see hookPlugin).
+    if (!modules.StartNotifications())
+        return;
+
+    const auto target = reinterpret_cast<PluginModuleSlots<Capacity>::Resolver>(
+        KernelBaseProxy::GetProcAddress_()(module, "slGetPluginFunction"));
+
+    const auto index = modules.Hook(0, module, target, [&](size_t i, auto& original) {
+        if (DetourTransactionBegin() != NO_ERROR)
+            return false;
+
+        if (DetourUpdateThread(GetCurrentThread()) != NO_ERROR ||
+            DetourAttach(reinterpret_cast<PVOID*>(&original), reinterpret_cast<PVOID>(hookOf(i))) != NO_ERROR)
+        {
+            DetourTransactionAbort();
+            return false;
+        }
+
+        if (DetourTransactionCommit() != NO_ERROR)
+            return false;
+
+        // DetourAttach left the trampoline in original
+        storeOf(i, original);
+        return true;
+    });
+
+    if (index < 0)
+        LOG_WARN("{} hook unavailable; keeping existing instances and original module", logName);
+    else
+        LOG_TRACE("Hooking slGetPluginFunction in {}", logName);
 }
+} // namespace
 
 void StreamlineHooks::hookLocalDlssg(HMODULE slDlssg)
 {
     if (State::Instance().externalFrameGeneration)
         return;
-    LOG_FUNC();
 
-    if (!slDlssg)
-    {
-        LOG_WARN("Dlssg module in NULL");
-        return;
-    }
+    static constexpr void* (*thunks[2])(const char*) = { &localDlssgThunk<0>, &localDlssgThunk<1> };
 
-    if (o_local_dlssg_slGetPluginFunction)
-        unhookLocalDlssg();
-
-    o_local_dlssg_slGetPluginFunction =
-        reinterpret_cast<PFN_slGetPluginFunction>(KernelBaseProxy::GetProcAddress_()(slDlssg, "slGetPluginFunction"));
-
-    if (o_local_dlssg_slGetPluginFunction != nullptr)
-    {
-        LOG_TRACE("Hooking slGetPluginFunction in local sl.dlssg");
-        DetourTransactionBegin();
-        DetourUpdateThread(GetCurrentThread());
-
-        DetourAttach(&(PVOID&) o_local_dlssg_slGetPluginFunction, hklocal_dlssg_slGetPluginFunction);
-
-        DetourTransactionCommit();
-    }
-}
-
-// SL REFLEX
-
-void StreamlineHooks::unhookReflex()
-{
-    LOG_FUNC();
-
-    DetourTransactionBegin();
-    DetourUpdateThread(GetCurrentThread());
-
-    if (o_reflex_slGetPluginFunction)
-        DetourDetach(&(PVOID&) o_reflex_slGetPluginFunction, hkreflex_slGetPluginFunction);
-
-    auto detourResult = DetourTransactionCommit();
-    if (detourResult != NO_ERROR)
-    {
-        LOG_ERROR("Failed to unhook Reflex: {:X}", detourResult);
-    }
-    else
-    {
-        o_reflex_slGetPluginFunction = nullptr;
-    }
+    HookSingleModule(localDlssgModules, slDlssg, "local sl.dlssg", [](size_t i) { return thunks[i]; },
+                     [](size_t i, auto& original) {
+                         localDlssgGetFn[i] = reinterpret_cast<PFN_slGetPluginFunction>(original);
+                     });
 }
 
 void StreamlineHooks::hookReflex(HMODULE slReflex)
 {
     if (State::Instance().externalFrameGeneration)
         return;
-    LOG_FUNC();
 
-    if (!slReflex)
-    {
-        LOG_WARN("Reflex module in NULL");
-        return;
-    }
+    static constexpr void* (*thunks[2])(const char*) = { &reflexThunk<0>, &reflexThunk<1> };
 
-    if (o_reflex_slGetPluginFunction)
-        unhookReflex();
-
-    o_reflex_slGetPluginFunction =
-        reinterpret_cast<PFN_slGetPluginFunction>(KernelBaseProxy::GetProcAddress_()(slReflex, "slGetPluginFunction"));
-
-    if (o_reflex_slGetPluginFunction != nullptr)
-    {
-        LOG_TRACE("Hooking slGetPluginFunction in sl.reflex");
-        DetourTransactionBegin();
-        DetourUpdateThread(GetCurrentThread());
-
-        DetourAttach(&(PVOID&) o_reflex_slGetPluginFunction, hkreflex_slGetPluginFunction);
-
-        auto detourResult = DetourTransactionCommit();
-        if (detourResult != NO_ERROR)
-        {
-            LOG_ERROR("Failed to hook Reflex: {:X}", detourResult);
-            o_reflex_slGetPluginFunction = nullptr;
-        }
-    }
-}
-
-// SL PCL
-
-void StreamlineHooks::unhookPcl()
-{
-    LOG_FUNC();
-
-    DetourTransactionBegin();
-    DetourUpdateThread(GetCurrentThread());
-
-    if (o_pcl_slGetPluginFunction)
-        DetourDetach(&(PVOID&) o_pcl_slGetPluginFunction, hkpcl_slGetPluginFunction);
-
-    auto detourResult = DetourTransactionCommit();
-    if (detourResult != NO_ERROR)
-    {
-        LOG_ERROR("Failed to unhook PCL: {:X}", detourResult);
-    }
-    else
-    {
-        o_pcl_slGetPluginFunction = nullptr;
-    }
+    HookSingleModule(reflexModules, slReflex, "sl.reflex", [](size_t i) { return thunks[i]; },
+                     [](size_t i, auto& original) {
+                         reflexGetFn[i] = reinterpret_cast<PFN_slGetPluginFunction>(original);
+                     });
 }
 
 void StreamlineHooks::hookPcl(HMODULE slPcl)
 {
     if (State::Instance().externalFrameGeneration)
         return;
-    LOG_FUNC();
 
-    if (!slPcl)
-    {
-        LOG_WARN("Pcl module in NULL");
-        return;
-    }
+    static constexpr void* (*thunks[2])(const char*) = { &pclThunk<0>, &pclThunk<1> };
 
-    if (o_pcl_slGetPluginFunction)
-        unhookPcl();
-
-    o_pcl_slGetPluginFunction =
-        reinterpret_cast<PFN_slGetPluginFunction>(KernelBaseProxy::GetProcAddress_()(slPcl, "slGetPluginFunction"));
-
-    if (o_pcl_slGetPluginFunction != nullptr)
-    {
-        LOG_TRACE("Hooking slGetPluginFunction in sl.pcl");
-        DetourTransactionBegin();
-        DetourUpdateThread(GetCurrentThread());
-
-        DetourAttach(&(PVOID&) o_pcl_slGetPluginFunction, hkpcl_slGetPluginFunction);
-
-        auto detourResult = DetourTransactionCommit();
-        if (detourResult != NO_ERROR)
-        {
-            LOG_ERROR("Failed to hook PCL: {:X}", detourResult);
-            o_pcl_slGetPluginFunction = nullptr;
-        }
-    }
-}
-
-// SL COMMON
-
-void StreamlineHooks::unhookCommon()
-{
-    LOG_FUNC();
-
-    DetourTransactionBegin();
-    DetourUpdateThread(GetCurrentThread());
-
-    if (o_common_slGetPluginFunction)
-        DetourDetach(&(PVOID&) o_common_slGetPluginFunction, hkcommon_slGetPluginFunction);
-
-    auto detourResult = DetourTransactionCommit();
-    if (detourResult != NO_ERROR)
-    {
-        LOG_ERROR("Failed to unhook Common: {:X}", detourResult);
-    }
-    else
-    {
-        systemCaps = nullptr;
-        systemCapsSl15 = nullptr;
-        o_common_slGetPluginFunction = nullptr;
-    }
+    HookSingleModule(pclModules, slPcl, "sl.pcl", [](size_t i) { return thunks[i]; },
+                     [](size_t i, auto& original) {
+                         pclGetFn[i] = reinterpret_cast<PFN_slGetPluginFunction>(original);
+                     });
 }
 
 void StreamlineHooks::hookCommon(HMODULE slCommon)
 {
     if (State::Instance().externalFrameGeneration)
         return;
-    LOG_FUNC();
 
-    if (!slCommon)
-    {
-        LOG_WARN("Common module in NULL");
-        return;
-    }
+    static constexpr void* (*thunks[2])(const char*) = { &commonThunk<0>, &commonThunk<1> };
 
-    if (o_common_slGetPluginFunction)
-        unhookCommon();
-
-    o_common_slGetPluginFunction =
-        reinterpret_cast<PFN_slGetPluginFunction>(KernelBaseProxy::GetProcAddress_()(slCommon, "slGetPluginFunction"));
-
-    if (o_common_slGetPluginFunction != nullptr)
-    {
-        LOG_TRACE("Hooking slGetPluginFunction in sl.common");
-        DetourTransactionBegin();
-        DetourUpdateThread(GetCurrentThread());
-
-        DetourAttach(&(PVOID&) o_common_slGetPluginFunction, hkcommon_slGetPluginFunction);
-
-        auto detourResult = DetourTransactionCommit();
-        if (detourResult != NO_ERROR)
-        {
-            LOG_ERROR("Failed to hook Common: {:X}", detourResult);
-            o_common_slGetPluginFunction = nullptr;
-        }
-    }
+    HookSingleModule(commonModules, slCommon, "sl.common", [](size_t i) { return thunks[i]; },
+                     [](size_t i, auto& original) {
+                         commonGetFn[i] = reinterpret_cast<PFN_slGetPluginFunction>(original);
+                     });
 }
 
 bool StreamlineHooks::isInterposerHooked() { return o_slInit != nullptr || o_slInit_sl1 != nullptr; }
@@ -2316,10 +2509,10 @@ bool StreamlineHooks::isDlssHooked() { return pluginModules.Any(0); }
 
 bool StreamlineHooks::isDlssgHooked() { return pluginModules.Any(1); }
 
-bool StreamlineHooks::isLocalDlssgHooked() { return o_local_dlssg_slGetPluginFunction != nullptr; }
+bool StreamlineHooks::isLocalDlssgHooked() { return localDlssgModules.Any(0); }
 
-bool StreamlineHooks::isCommonHooked() { return o_common_slGetPluginFunction != nullptr; }
+bool StreamlineHooks::isCommonHooked() { return commonModules.Any(0); }
 
-bool StreamlineHooks::isPclHooked() { return o_pcl_slGetPluginFunction != nullptr; }
+bool StreamlineHooks::isPclHooked() { return pclModules.Any(0); }
 
-bool StreamlineHooks::isReflexHooked() { return o_reflex_slGetPluginFunction != nullptr; }
+bool StreamlineHooks::isReflexHooked() { return reflexModules.Any(0); }

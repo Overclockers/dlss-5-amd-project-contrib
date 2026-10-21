@@ -50,7 +50,7 @@ inline void Begin(Counters& c, const char* backend, uint64_t frameId, unsigned w
     c.presentSerial = PresentSerialAtom().load(std::memory_order_relaxed);
     try { c.swapchain = State::Instance().currentSwapchain; } catch (...) { c.swapchain = nullptr; }
     if (auto* cfg = Config::Instance()) {
-        c.fg = cfg->FGEnabled.value_or_default() ? 1 : 0;
+        c.fg = cfg->IsFGEnabled() ? 1 : 0;
         c.aco = cfg->MochizukiAcoMode.value_or_default() ? 1u : 0u;
     }
     if (version) std::snprintf(c.version, sizeof c.version, "%s", version);

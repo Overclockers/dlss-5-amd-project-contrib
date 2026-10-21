@@ -5,6 +5,9 @@
 
 class Shader_Dx12
 {
+  public:
+    enum class Retirement { Deferred, Immediate };
+
   private:
     uint32_t _srcCount = 0;
     uint32_t _uavCount = 0;
@@ -16,6 +19,7 @@ class Shader_Dx12
     std::string _name = "";
     bool _init = false;
     int _counter = 0;
+    Retirement _retirement;
 
     std::unique_ptr<GpuTime_Dx12> GpuTime = nullptr;
 
@@ -61,7 +65,7 @@ class Shader_Dx12
     std::string Name() const { return _name; }
     std::optional<double> ReadGpuTime(ID3D12CommandQueue* commandQueue) { return GpuTime->ReadGpuTime(commandQueue); }
 
-    Shader_Dx12(std::string InName, ID3D12Device* InDevice);
+    Shader_Dx12(std::string InName, ID3D12Device* InDevice, Retirement retirement = Retirement::Deferred);
 
     ~Shader_Dx12();
 };

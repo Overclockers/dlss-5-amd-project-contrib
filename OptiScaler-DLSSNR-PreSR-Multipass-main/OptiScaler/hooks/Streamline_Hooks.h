@@ -151,16 +151,12 @@ class StreamlineHooks
 
     static void hookDlssg(HMODULE slDlssg);
 
-    static void unhookLocalDlssg();
     static void hookLocalDlssg(HMODULE slDlssg);
 
-    static void unhookReflex();
     static void hookReflex(HMODULE slReflex);
 
-    static void unhookPcl();
     static void hookPcl(HMODULE slPcl);
 
-    static void unhookCommon();
     static void hookCommon(HMODULE slCommon);
 
     static bool isInterposerHooked();
@@ -308,21 +304,59 @@ class StreamlineHooks
     static void* hkdlssg_slGetPluginFunction(const char* functionName);
     static const char* hkdlssg_slGetPluginJSONConfig_sl1();
 
-    // Local DLSSG
-    inline static PFN_slGetPluginFunction o_local_dlssg_slGetPluginFunction = nullptr;
-    inline static PFN_slOnPluginLoad o_local_dlssg_slOnPluginLoad = nullptr;
+    // Reflex / PCL / common / local DLSSG (D6): bounded module-stable hooks. A detour trampoline is
+    // never detached (the interposer caches the addresses we hand out and a dead trampoline cannot
+    // be detached): a replacement copy takes the next slot, Ldr notifications tombstone unloaded
+    // modules and every call into a module pins it for the call (PluginModuleSlots::Lease). The
+    // DLSS/DLSSG 16-slot lease stays the reference implementation, these domains never see that
+    // many copies.
+    inline static PluginModuleSlots<2> reflexModules;
+    inline static PluginModuleSlots<2> pclModules;
+    inline static PluginModuleSlots<2> commonModules;
+    inline static PluginModuleSlots<2> localDlssgModules;
 
-    static bool hklocal_dlssg_slOnPluginLoad(sl::param::IParameters* params, const char* loaderJSON,
-                                             const char** pluginJSON);
-    static void* hklocal_dlssg_slGetPluginFunction(const char* functionName);
+    // The first live slot's function with its module pinned for the call
+    template <size_t Capacity, typename Fn>
+    struct PinnedCall
+    {
+        typename PluginModuleSlots<Capacity>::Lease lease {};
+        Fn fn = nullptr;
+        size_t slot = Capacity;
+
+        PinnedCall(PluginModuleSlots<Capacity>& modules, const std::atomic<Fn> (&fns)[Capacity])
+        {
+            for (size_t i = 0; i < Capacity && fn == nullptr; ++i)
+            {
+                if (!modules.slots[i].live.load(std::memory_order_acquire))
+                    continue;
+
+                Fn candidate = fns[i].load();
+                if (candidate == nullptr)
+                    continue;
+
+                auto pinned = typename PluginModuleSlots<Capacity>::Lease(modules.slots[i]);
+
+                if (pinned)
+                {
+                    lease = std::move(pinned);
+                    fn = candidate;
+                    slot = i;
+                }
+            }
+        }
+
+        explicit operator bool() const { return fn != nullptr; }
+    };
 
     // Reflex
     inline static sl::ReflexMode reflexGamesLastMode = sl::ReflexMode::eOff;
-    inline static PFN_slGetPluginFunction o_reflex_slGetPluginFunction = nullptr;
-    inline static PFN_slSetConstants_sl1 o_reflex_slSetConstants_sl1 = nullptr;
-    inline static PFN_slOnPluginLoad o_reflex_slOnPluginLoad = nullptr;
-    inline static decltype(&slReflexSetOptions) o_slReflexSetOptions = nullptr;
-    inline static decltype(&slReflexSleep) o_slReflexSleep = nullptr;
+    inline static std::atomic<PFN_slGetPluginFunction> reflexGetFn[2] {};
+    inline static std::atomic<PFN_slOnPluginLoad> reflexOnLoadFn[2] {};
+    inline static std::atomic<PFN_slSetConstants_sl1> reflexSetConstantsSl1Fn[2] {};
+    inline static std::atomic<decltype(&slReflexSetOptions)> reflexSetOptionsFn[2] {};
+    inline static std::atomic<decltype(&slReflexSleep)> reflexSleepFn[2] {};
+    inline static std::atomic<decltype(&slPCLSetMarker)> reflexSetMarkerFn[2] {};
+    inline static thread_local size_t currentReflexSlot = 2;
 
     static bool hkreflex_slOnPluginLoad(sl::param::IParameters* params, const char* loaderJSON,
                                         const char** pluginJSON);
@@ -330,27 +364,43 @@ class StreamlineHooks
     static sl::Result hkslReflexSleep(const sl::FrameToken& frame);
     static bool hkreflex_slSetConstants_sl1(const void* data, uint32_t frameIndex, uint32_t id);
     static void* hkreflex_slGetPluginFunction(const char* functionName);
+    template <size_t I> static void* reflexThunk(const char* functionName);
 
     // PCL
-    inline static PFN_slGetPluginFunction o_pcl_slGetPluginFunction = nullptr;
-    inline static PFN_slOnPluginLoad o_pcl_slOnPluginLoad = nullptr;
-    inline static decltype(&slPCLSetMarker) o_slPCLSetMarker = nullptr;
+    inline static std::atomic<PFN_slGetPluginFunction> pclGetFn[2] {};
+    inline static std::atomic<PFN_slOnPluginLoad> pclOnLoadFn[2] {};
+    inline static std::atomic<decltype(&slPCLSetMarker)> pclSetMarkerFn[2] {};
+    inline static thread_local size_t currentPclSlot = 2;
 
-    static bool hkpcl_slOnPluginLoad(sl::param::IParameters* params, const char* loaderJSON, const char** pluginJSON);
+    static bool hkpcl_slOnPluginLoad(sl::param::IParameters* params, const char* loaderJSON,
+                                     const char** pluginJSON);
     static void* hkpcl_slGetPluginFunction(const char* functionName);
     static sl::Result hkslPCLSetMarker(sl::PCLMarker marker, const sl::FrameToken& frame);
+    template <size_t I> static void* pclThunk(const char* functionName);
 
     // Common
-    inline static PFN_slGetPluginFunction o_common_slGetPluginFunction = nullptr;
-    inline static PFN_slOnPluginLoad o_common_slOnPluginLoad = nullptr;
-    inline static PFN_slSetParameters_sl1 o_common_slSetParameters_sl1 = nullptr;
-    inline static PFN_setVoid o_setVoid = nullptr;
+    inline static std::atomic<PFN_slGetPluginFunction> commonGetFn[2] {};
+    inline static std::atomic<PFN_slOnPluginLoad> commonOnLoadFn[2] {};
+    inline static std::atomic<PFN_slSetParameters_sl1> commonSetParametersSl1Fn[2] {};
+    inline static std::atomic<PFN_setVoid> commonSetVoidFn[2] {};
+    inline static thread_local size_t currentCommonSlot = 2;
 
     static bool hkcommon_slOnPluginLoad(sl::param::IParameters* params, const char* loaderJSON,
                                         const char** pluginJSON);
     static void* hkcommon_slGetPluginFunction(const char* functionName);
     static void hkcommon_slSetParameters_sl1(void* params);
     static bool hk_setVoid(void* self, const char* key, void** value);
+    template <size_t I> static void* commonThunk(const char* functionName);
+
+    // Local DLSSG
+    inline static std::atomic<PFN_slGetPluginFunction> localDlssgGetFn[2] {};
+    inline static std::atomic<PFN_slOnPluginLoad> localDlssgOnLoadFn[2] {};
+    inline static thread_local size_t currentLocalDlssgSlot = 2;
+
+    static bool hklocal_dlssg_slOnPluginLoad(sl::param::IParameters* params, const char* loaderJSON,
+                                             const char** pluginJSON);
+    static void* hklocal_dlssg_slGetPluginFunction(const char* functionName);
+    template <size_t I> static void* localDlssgThunk(const char* functionName);
 
     // Logging
     static char* trimStreamlineLog(const char* msg);

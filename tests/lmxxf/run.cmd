@@ -32,7 +32,10 @@ call "%REPO%\tests\_lib\msvc-env.cmd" 2>nul || exit /b 1
 rem Repo-rooted includes (#include "OptiScaler-..." / "third_party/..."). The repo root goes at the END of
 rem INCLUDE, not in /I: /I is searched before the SDK/STL dirs, and on a case-insensitive disk
 rem <version> would then resolve to the repo's VERSION file.
-set "INCLUDE=%INCLUDE%;%REPO%"
+rem Product source and external SDK roots follow for the same reason (product header chains like
+rem <misc/GameConfigs.h> from SubmissionHooks.h); mirrors the vcxproj include set.
+set "EXT=%REPO%\OptiScaler-DLSSNR-PreSR-Multipass-main\external"
+set "INCLUDE=%INCLUDE%;%REPO%;%REPO%\OptiScaler-DLSSNR-PreSR-Multipass-main\OptiScaler;%EXT%\nvngx_dlss_sdk;%EXT%\xess\inc\xess;%EXT%\xess\inc\xell;%EXT%\xess\inc\xess_fg;%EXT%\FidelityFX-SDK\ffx-api\include\ffx_api;%EXT%\simpleini;%EXT%\unordered_dense\include;%EXT%\spdlog\include;%EXT%\freetype;%EXT%\streamline;%EXT%\streamline1;%EXT%\nvapi;%EXT%\nlohmann;%EXT%\fakenvapi;%EXT%\magic_enum\include\magic_enum;%EXT%\AntiLag2-SDK;%EXT%\latencyflex;%EXT%\vulkan\include"
 set "RT_INC=%REPO%\OptiScaler-DLSSNR-PreSR-Multipass-main\OptiScaler\dlssnr\backend\lmxxf_runtime"
 set "INC=%REPO%\OptiScaler-DLSSNR-PreSR-Multipass-main\OptiScaler\include"
 set "DETOURS=%REPO%\OptiScaler-DLSSNR-PreSR-Multipass-main\OptiScaler\library\detours\detours.lib"
@@ -128,7 +131,7 @@ goto warpSmoke
 call :RunSplitState || goto fail
 call :RunInlineFixture warp || goto fail
 call :RunDiagLifetime || goto fail
-%CXX% /I"%INC%" tests\lmxxf\lmxxf_wrapped_command_list.cpp /Fe"%OUT%\lmxxf_wrapped_command_list.exe" /Fo"%OUT%\lmxxf_wrapped_command_list.obj" /link %D3D% "%DETOURS%" || goto fail
+%CXX% /I"%INC%" /I"%REPO%\OptiScaler-DLSSNR-PreSR-Multipass-main\OptiScaler" /I"%REPO%\OptiScaler-DLSSNR-PreSR-Multipass-main\external\nvngx_dlss_sdk" /I"%REPO%\OptiScaler-DLSSNR-PreSR-Multipass-main\external\spdlog\include" tests\lmxxf\lmxxf_wrapped_command_list.cpp /Fe"%OUT%\lmxxf_wrapped_command_list.exe" /Fo"%OUT%\lmxxf_wrapped_command_list.obj" /link %D3D% "%DETOURS%" || goto fail
 "%OUT%\lmxxf_wrapped_command_list.exe" || goto fail
 %CXX% tests\lmxxf\lmxxf_temporal_control.cpp /Fe"%OUT%\lmxxf_temporal_control.exe" /Fo"%OUT%\lmxxf_temporal_control.obj" /link %D3D% d3dcompiler.lib || goto fail
 "%OUT%\lmxxf_temporal_control.exe" || goto fail

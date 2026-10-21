@@ -1570,8 +1570,11 @@ void ReportSkipOnce(const char* reason)
 // ---------------------------------------------------------------------------------------------
 
 DlssNr_Dx12::DlssNr_Dx12(std::string InName, ID3D12Device* InDevice)
-    : Shader_Dx12(InName, InDevice)
+    // Native NR keeps its existing lifetime; never move its objects to the host's time queue.
+    : Shader_Dx12(InName, InDevice, Retirement::Immediate)
 {
+    for (auto& heap : _frameHeaps)
+        heap.SetDeferredRetirement(false);
     if (InDevice == nullptr)
     {
         LOG_ERROR("InDevice is nullptr!");
@@ -2297,10 +2300,10 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     // away first leaves it nothing to give back.
 
     if (g_gpuTime == nullptr)
-        g_gpuTime = std::make_unique<GpuTime_Dx12>(device);
+        g_gpuTime = std::make_unique<GpuTime_Dx12>(device, false);
 
     if (g_ngxTime == nullptr)
-        g_ngxTime = std::make_unique<GpuTime_Dx12>(device);
+        g_ngxTime = std::make_unique<GpuTime_Dx12>(device, false);
 
     if (g_gpuTime != nullptr)
         g_gpuTime->Start(cmdList);

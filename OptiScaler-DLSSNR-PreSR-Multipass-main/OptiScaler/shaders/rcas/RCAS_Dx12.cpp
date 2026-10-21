@@ -211,16 +211,16 @@ RCAS_Dx12::RCAS_Dx12(std::string InName, ID3D12Device* InDevice) : Shader_Dx12(I
 
 RCAS_Dx12::~RCAS_Dx12()
 {
-    if (!_init || State::Instance().isShuttingDown)
+    if (State::Instance().isShuttingDown)
         return;
 
-    SAFE_RELEASE(_pipelineStateDA);
-    SAFE_RELEASE(_pipelineStateDASDA);
+    DeferredRelease::Release(_pipelineStateDA);
+    DeferredRelease::Release(_pipelineStateDASDA);
 
     for (int i = 0; i < RCAS_NUM_OF_HEAPS; i++)
     {
         _frameHeaps[i].ReleaseHeaps();
     }
 
-    SAFE_RELEASE(_buffer);
+    DeferredRelease::Release(_buffer);
 }

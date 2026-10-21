@@ -17,6 +17,12 @@ class DLSSDFeatureVk : public DLSSDFeature, public IFeature_Vk
     Upscaler GetUpscalerType() const final { return DLSSDFeature::GetUpscalerType(); }
     API Api() const override { return IFeature_Vk::Api(); }
 
+    std::optional<double> ReadUpscalerTime(void* queue) override { return IFeature_Vk::ReadUpscalerTime(queue); }
+    void ReadDetailedGpuTimes(void* queue, std::vector<DetailedGpuTime>& times) override
+    {
+        IFeature_Vk::ReadDetailedGpuTimes(queue, times);
+    }
+
     bool IsWithDx12() override { return false; }
 
     DLSSDFeatureVk(unsigned int InHandleId, NVSDK_NGX_Parameter* InParameters);
