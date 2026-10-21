@@ -14,6 +14,7 @@
 #include <with_dx12/with_dx12.h>
 
 #include <misc/IdentifyGpu.h>
+#include <misc/DeferredRelease.h>
 
 #include <magic_enum.hpp>
 #include <detours/detours.h>
@@ -2123,6 +2124,8 @@ bool IFeature_VkwDx12::Init(VkInstance InInstance, VkPhysicalDevice InPD, VkDevi
 
 bool IFeature_VkwDx12::Evaluate(VkCommandBuffer InCmdBuffer, NVSDK_NGX_Parameter* InParameters)
 {
+    DeferredRelease::Collect();
+
     LOG_FUNC();
 
     if (!IsInited())

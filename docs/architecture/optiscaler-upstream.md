@@ -6,6 +6,44 @@ Reviewed snapshot: **97e99b4c5d9e8af38f14e3b00e1b3f7b35ab5aed**, from
 
 ## Selected changes
 
+### v10 foundation (2026-10-21)
+
+Fixed feature source: **9df512d6b77342a2f467040b90cd1658ae2c2f95**.
+The public host adopts upstream `misc/DeferredRelease.*` without changing its
+`Enqueue`, `Release`, `Process`, `Collect` or `DropOwnersExcept` API. Collection
+requires eight counted presents and 500 ms, or the upstream two-second fallback
+without presents. This is a heuristic, not a GPU fence-completion guarantee.
+DXGI/native Vulkan presents drive `Process`; upscaler and Nvngx evaluations also
+drive `Collect`. DXVK's Vulkan present does not count a second time. Only successful
+game-device creation drops old Vulkan owners; `ScopedSkipVulkanHooks` returns before
+that operation, preserving private Mochizuki devices and game-owned entries.
+
+Public DX12 shader objects and resized public intermediate buffers use deferred
+release. Native `DlssNr_Dx12` explicitly retains immediate base-object destruction;
+none of its PSO/root signature/constant objects enters the host time queue.
+This preserves existing behavior, **not** a claim that native NR already has
+generation/fence ownership: its 48-slot descriptor/constants ring and scratch/model
+retirement can still be referenced by retained/replayed game lists. The AMD lmxxf
+and Mochizuki routes bypass that native composition class and retain their existing
+recording-generation and queue-fence leases unchanged. Vulkan native NR must retain
+the same time-queue opt-out when its public shader base migrates.
+
+Vulkan headers are pinned to upstream's `8864cdc896bbc2a9b6eb36b3218fc9ef57908d77`
+dependency; consumers use the C header. The Streamline Vulkan helper is from the
+fixed feature snapshot. `skipHeapCapture` is thread-local while its scoped save/
+restore contract and existing member-style call sites remain compatible.
+Feature and runtime acceptance are recorded separately; this foundation alone does
+not certify NR hot switching, Vulkan frame generation or game behavior.
+
+Foundation verification: source-only independent review found and resolved a missing
+DXVK early-return collection call. A throwaway adapter compiled the actual upstream
+`DeferredRelease.cpp` and passed pointer detachment, minimum age/present counting,
+owner dropping, age-only fallback and shutdown behavior; the existing Vulkan scope
+test passed its nested/200-thread-interleaving checks. The release host plus person
+worker build passed after adding upstream's explicit `vulkan_beta.h` include for the
+existing CUDA launch hook declarations. No GPU smoke or game acceptance ran in this
+foundation window; existing native NR replay limitations above remain unverified.
+
 ### Follow-up snapshot (2026-10-09)
 
 Reviewed through **434b9555d960e6e471a461c2b0d98b8e1fdacfa2**

@@ -1,10 +1,12 @@
 #include "pch.h"
 #include "Shader_Dx12.h"
 #include <d3dx/d3dx12.h>
+#include <misc/DeferredRelease.h>
 
 using Microsoft::WRL::ComPtr;
 
-Shader_Dx12::Shader_Dx12(std::string InName, ID3D12Device* InDevice) : _name(InName), _device(InDevice)
+Shader_Dx12::Shader_Dx12(std::string InName, ID3D12Device* InDevice, Retirement retirement)
+    : _name(InName), _retirement(retirement), _device(InDevice)
 {
     GpuTime = std::make_unique<GpuTime_Dx12>(InDevice);
 }
@@ -14,9 +16,18 @@ Shader_Dx12::~Shader_Dx12()
     if (!_init || State::Instance().isShuttingDown)
         return;
 
-    SAFE_RELEASE(_pipelineState);
-    SAFE_RELEASE(_rootSignature);
-    SAFE_RELEASE(_constantBuffer);
+    if (_retirement == Retirement::Deferred)
+    {
+        DeferredRelease::Release(_pipelineState);
+        DeferredRelease::Release(_rootSignature);
+        DeferredRelease::Release(_constantBuffer);
+    }
+    else
+    {
+        SAFE_RELEASE(_pipelineState);
+        SAFE_RELEASE(_rootSignature);
+        SAFE_RELEASE(_constantBuffer);
+    }
 }
 
 DXGI_FORMAT Shader_Dx12::TranslateTypelessFormats(DXGI_FORMAT format)
@@ -130,8 +141,7 @@ bool Shader_Dx12::CreateBufferResource(ID3D12Device* InDevice, ID3D12Resource* I
 
         if (bufDesc.Width != inDesc.Width || bufDesc.Height != inDesc.Height || bufDesc.Format != inDesc.Format)
         {
-            (*OutResource)->Release();
-            (*OutResource) = nullptr;
+            DeferredRelease::Release(*OutResource);
             LOG_WARN("Release {}x{}, new one: {}x{}", bufDesc.Width, bufDesc.Height, inDesc.Width, inDesc.Height);
         }
         else

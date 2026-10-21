@@ -1570,7 +1570,8 @@ void ReportSkipOnce(const char* reason)
 // ---------------------------------------------------------------------------------------------
 
 DlssNr_Dx12::DlssNr_Dx12(std::string InName, ID3D12Device* InDevice)
-    : Shader_Dx12(InName, InDevice)
+    // Native NR keeps its existing lifetime; never move its objects to the host's time queue.
+    : Shader_Dx12(InName, InDevice, Retirement::Immediate)
 {
     if (InDevice == nullptr)
     {

@@ -11,11 +11,12 @@
 #include <upscaler_time/UpscalerTime_Vk.h>
 
 #include <misc/FrameLimit.h>
+#include <misc/DeferredRelease.h>
 #include "Reflex_Hooks.h"
 
 #include <spoofing/Vulkan_Spoofing.h>
 
-#include <vulkan/vulkan.hpp>
+#include <vulkan/vulkan.h>
 
 #include <dlssnr/DlssNr_VkExtensions.h>
 
@@ -240,6 +241,10 @@ static VkResult hkvkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevice
 
     auto result = o_vkCreateDevice(physicalDevice, &localCreteInfo, pAllocator, pDevice);
 
+    // Private NR devices returned above; only a game device may discard old owners.
+    if (result == VK_SUCCESS)
+        DeferredRelease::DropOwnersExcept((uint64_t) *pDevice);
+
     if (Config::Instance()->DlssNrEnabled.value_or_default())
         LOG_INFO("DLSS-NR Vulkan: vkCreateDevice returned {} with {} extensions requested", (int) result,
                  localCreteInfo.enabledExtensionCount);
@@ -334,6 +339,10 @@ static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPres
     // original call
     ScopedVulkanCreatingSC scopedVulkanCreatingSC {};
     auto result = o_QueuePresentKHR(queue, &localPresentInfo);
+
+    // DXVK's DXGI present already counts this frame.
+    if (!IdentifyGpu::getPrimaryGpu().usesDxvk)
+        DeferredRelease::Process();
 
     // Unsure about Vulkan Reflex fps limit and if that could be causing an issue here
     if (!State::Instance().reflexLimitsFps)

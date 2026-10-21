@@ -150,7 +150,7 @@ class State
     bool fgHudlessCompare = false;
     bool fgChanged = false;
     bool scChanged = false;
-    bool skipHeapCapture = false;
+    inline static thread_local bool skipHeapCapture = false;
 
     bool fgCaptureResources = false;
     size_t fgCapturedResourceCount = 0;

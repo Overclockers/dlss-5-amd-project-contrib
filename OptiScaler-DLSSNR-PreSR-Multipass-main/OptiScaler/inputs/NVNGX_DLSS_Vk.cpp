@@ -13,7 +13,7 @@
 
 #include <upscaler_time/UpscalerTime_Vk.h>
 
-#include <vulkan/vulkan.hpp>
+#include <vulkan/vulkan.h>
 #include <ankerl/unordered_dense.h>
 #include <imgui/ImGuiNotify.hpp>
 #include <misc/IdentifyGpu.h>

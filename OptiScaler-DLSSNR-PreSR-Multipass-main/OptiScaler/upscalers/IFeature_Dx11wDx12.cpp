@@ -11,6 +11,7 @@
 #include <proxies/DXGI_Proxy.h>
 #include <proxies/D3D12_Proxy.h>
 #include <misc/IdentifyGpu.h>
+#include <misc/DeferredRelease.h>
 
 #include <with_dx12/with_dx12.h>
 
@@ -321,6 +322,8 @@ bool IFeature_Dx11wDx12::Init(ID3D11Device* InDevice, ID3D11DeviceContext* InCon
 
 bool IFeature_Dx11wDx12::Evaluate(ID3D11DeviceContext* InDeviceContext, NVSDK_NGX_Parameter* InParameters)
 {
+    DeferredRelease::Collect();
+
     LOG_FUNC();
 
     if (!IsInited())

@@ -3,6 +3,7 @@
 #include "IFeature_Vk.h"
 #include "State.h"
 #include "nvsdk_ngx_vk.h"
+#include <misc/DeferredRelease.h>
 
 bool IFeature_Vk::Init(VkInstance InInstance, VkPhysicalDevice InPD, VkDevice InDevice, VkCommandBuffer InCmdBuffer,
                        PFN_vkGetInstanceProcAddr InGIPA, PFN_vkGetDeviceProcAddr InGDPA,
@@ -31,6 +32,8 @@ bool IFeature_Vk::Init(VkInstance InInstance, VkPhysicalDevice InPD, VkDevice In
 
 bool IFeature_Vk::Evaluate(VkCommandBuffer InCmdBuffer, NVSDK_NGX_Parameter* InParameters)
 {
+    DeferredRelease::Collect();
+
     if (!IsInited())
     {
         LOG_ERROR("Not inited!");
