@@ -188,6 +188,13 @@ class State
     HMODULE optiSlPCL = nullptr;
     HMODULE optiDLSSG = nullptr;
 
+    bool IsOptiStreamlineModule(HMODULE module) const
+    {
+        return module != nullptr && optiSlInterposer != nullptr &&
+               (module == optiSlInterposer || module == optiSlCommon || module == optiSlDLSSG ||
+                module == optiSlReflex || module == optiSlPCL || module == optiDLSSG);
+    }
+
     // NGX OTA
     std::string NGX_OTA_Dlss;
     std::string NGX_OTA_Dlssd;

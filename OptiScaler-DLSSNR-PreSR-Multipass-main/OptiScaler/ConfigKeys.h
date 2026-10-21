@@ -264,6 +264,11 @@ inline constexpr const char *XeFGRoundingDMFG = "RoundingDMFG";
 inline constexpr const char *XeFGDynamicAllow1X = "DynamicAllow1X";
 inline constexpr const char *XeFGTargetAsCapDMFG = "TargetAsCapDMFG";
 inline constexpr const char *XeFGOverrideInterpolationCount = "OverrideInterpolationCount";
+inline constexpr const char *LowLatencyInput = "LowLatencyInput";
+inline constexpr const char *LowLatencyOutput = "LowLatencyOutput";
+inline constexpr const char *HudfixUITexture = "HUDFixUITexture";
+inline constexpr const char *HudfixUIUnblend = "HUDFixUIUnblend";
+inline constexpr const char *HudfixPersistentBindings = "HUDFixPersistentBindings";
 inline constexpr const char *QueuePriority = "QueuePriority";
 inline constexpr const char *QueuePriorityLegacy = "AmdQueuePriority";
 // AmdInline=1 means daniel Async=0 (same-frame). Write Async on Save.
@@ -283,6 +288,7 @@ inline constexpr const char *const kKnown[] = {
     XeFGInterpolationCount,
     XeFGDynamicMFG, XeFGFramerateTargetDMFG, XeFGRoundingDMFG, XeFGDynamicAllow1X,
     XeFGTargetAsCapDMFG, XeFGOverrideInterpolationCount,
+    LowLatencyInput, LowLatencyOutput, HudfixUITexture, HudfixUIUnblend, HudfixPersistentBindings,
     "RunBeforeSR",
     "ApplyAfterRR",
     "RRPasses",

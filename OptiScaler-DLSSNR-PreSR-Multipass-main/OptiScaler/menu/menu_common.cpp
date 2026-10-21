@@ -16,6 +16,8 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <cmath>
+#include <cstddef>
 
 #include <dlssnr/DlssNr.h>
 
@@ -1366,6 +1368,124 @@ void MenuCommon::Present()
         UpdateManualInput(_handle);
 }
 
+namespace
+{
+// Upstream PresentRateMeter, kept private to this translation unit.
+// Measures output-present cadence independently of the render/menu cadence.
+// The timestamp is sampled by the presenting thread, and all state is guarded
+// because Streamline may present real and interpolated frames on different threads.
+class PresentRateMeter final
+{
+    static constexpr std::size_t Capacity = 512;
+    static constexpr double WindowMs = 125.0;
+    static constexpr double MinimumSpanMs = 50.0;
+
+    std::mutex _mutex;
+    std::array<double, Capacity> _timestamps {};
+    std::size_t _head = 0;
+    std::size_t _count = 0;
+    bool _enabled = false;
+
+    double At(std::size_t index) const { return _timestamps[(_head + index) % Capacity]; }
+
+    void Clear()
+    {
+        _head = 0;
+        _count = 0;
+    }
+
+    void DropOldest()
+    {
+        _head = (_head + 1) % Capacity;
+        --_count;
+        if (_count == 0)
+            _head = 0;
+    }
+
+    void Prune(double nowMs)
+    {
+        while (_count > 0 && nowMs - At(0) > WindowMs)
+            DropOldest();
+    }
+
+  public:
+    // Called from the game's Vulkan present thread. Repeated 'true' calls are
+    // harmless; a mode transition clears all data from the previous epoch.
+    void SetEnabled(bool enabled)
+    {
+        std::lock_guard lock(_mutex);
+        if (_enabled != enabled)
+        {
+            _enabled = enabled;
+            Clear();
+        }
+    }
+
+    // Called on each actual FG output present, not on each menu frame.
+    void Present(double nowMs)
+    {
+        if (!std::isfinite(nowMs))
+            return;
+
+        std::lock_guard lock(_mutex);
+        if (!_enabled)
+            return;
+
+        if (_count > 0)
+        {
+            // The timestamp is acquired before the lock. Concurrent callers
+            // can reach the lock in a different order, so keep the ring sorted.
+            nowMs = std::max(nowMs, At(_count - 1));
+        }
+
+        Prune(nowMs);
+
+        // Bounded memory even if a game produces thousands of presents/s.
+        if (_count == Capacity)
+            DropOldest();
+
+        _timestamps[(_head + _count) % Capacity] = nowMs;
+        ++_count;
+    }
+
+    // Called from the menu thread. Zero means there are not enough recent
+    // output presents; the ordinary game-present timing remains the fallback.
+    double FrameTime(double nowMs)
+    {
+        if (!std::isfinite(nowMs))
+            return 0.0;
+
+        std::lock_guard lock(_mutex);
+        if (!_enabled || _count == 0)
+            return 0.0;
+
+        nowMs = std::max(nowMs, At(_count - 1));
+        Prune(nowMs);
+        if (_count < 2)
+            return 0.0;
+
+        const double spanMs = At(_count - 1) - At(0);
+        if (spanMs < MinimumSpanMs)
+            return 0.0;
+
+        // N actual present events contain N-1 measured intervals. This
+        // produces the true event rate, unaffected by menu-frame batching.
+        return spanMs / static_cast<double>(_count - 1);
+    }
+};
+
+PresentRateMeter fgOutputPresentRate;
+}
+
+// Streamline can present real and generated frames from different threads.
+// Measure the actual output-present cadence, not the number of presents
+// observed between two (independently paced) menu frames.
+void MenuCommon::FGOutputPresent() { fgOutputPresentRate.Present(Util::MillisecondsNow()); }
+
+void MenuCommon::FGOutputPresents(bool presents) { fgOutputPresentRate.SetEnabled(presents); }
+
+static double FGOutputFrameTime(double now) { return fgOutputPresentRate.FrameTime(now); }
+
 struct VersionCheckStatus
 {
     bool completed = false;
@@ -1385,6 +1505,8 @@ struct MenuCommon::RenderMenuContext
     double now = 0.0;
     double frameTime = 0.0;
     double frameRate = 0.0;
+    // Current Vulkan FG output rate, kept separate from the long-term history.
+    double fgOutputFrameTimeMs = 0.0;
     float menuResScale = 1.0f;
     float fpsScale = 1.0f;
     float averageFrameTime = 0.0f;
@@ -1513,6 +1635,13 @@ void MenuCommon::UpdateRenderTiming(RenderMenuContext& ctx)
             MenuCommon::Present();
 
         frameTime = lastFrameTime;
+        frameRate = 1000.0 / frameTime;
+    }
+
+    ctx.fgOutputFrameTimeMs = FGOutputFrameTime(now);
+    if (ctx.fgOutputFrameTimeMs > 0.0)
+    {
+        frameTime = ctx.fgOutputFrameTimeMs;
         frameRate = 1000.0 / frameTime;
     }
 
@@ -1961,6 +2090,15 @@ void MenuCommon::UpdateFrameTimeAverages(RenderMenuContext& ctx)
         frameTime /= frameCnt;
         frameRate = 1000.0 / frameTime;
         frameTimesCalculated = true;
+
+        // Vulkan FG output timing is already averaged across the last 125 ms.
+        // Use it directly for the current FPS readout; preserve the shared
+        // history for the separately labelled average and frame-time graph.
+        if (ctx.fgOutputFrameTimeMs > 0.0)
+        {
+            frameTime = ctx.fgOutputFrameTimeMs;
+            frameRate = 1000.0 / frameTime;
+        }
 
         float lastFT = static_cast<float>(state.frameTimes.empty() ? 0.0f : state.frameTimes.back());
         float lastUT = static_cast<float>(state.upscaleTimes.empty() ? 0.0f : state.upscaleTimes.back());
@@ -4811,6 +4949,12 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                         ShowHelpMarker("Always track resources, might cause performance issues\n, but also might "
                                        "fix HUDFix related crashes!");
 
+                        auto persistentBindings = config->FGHudfixPersistentBindings.value_or_default();
+                        if (MenuUi::Checkbox("Persistent Bindings", &persistentBindings))
+                            config->FGHudfixPersistentBindings = persistentBindings;
+                        ShowHelpMarker("Keep tracking descriptor heaps and root signatures bound before the captured "
+                                       "draw\nMight fix HUDless resources missed after binding changes");
+
                         auto disableRTV = config->FGHudfixDisableRTV.value_or_default();
                         if (MenuUi::Checkbox("Disable RTV Tracking", &disableRTV))
                             config->FGHudfixDisableRTV = disableRTV;
@@ -4934,6 +5078,55 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
             MenuUi::TextColored(toneMapColor({ 1.0f, 0.0f, 0.0f, 1.0f }),
                                "libxess_fg.dll is missing!"); // Probably never will be visible
         }
+    }
+
+    // Vulkan OptiFG (upstream V4): HUDless capture from the game's own UI texture.
+    if (state.api == API::Vulkan && state.activeFgInput == FGInput::Upscaler &&
+        state.activeFgOutput != FGOutput::NoFG && !Config::Instance()->FGDisableHUDFix.value_or_default())
+    {
+        bool fgHudfix = config->FGHUDFix.value_or_default();
+        if (MenuUi::Checkbox("HUDFix", &fgHudfix))
+        {
+            config->FGHUDFix = fgHudfix;
+            LOG_DEBUG("Enabled set FGHUDFix: {}", fgHudfix);
+            state.clearCapturedHudlesses = true;
+            state.fgChanged = true;
+        }
+        ShowHelpMarker("Enable HUD stability fix, might cause crashes!");
+
+        ImGui::BeginDisabled(!fgHudfix);
+
+        ImGui::SameLine(0.0f, 16.0f);
+        ImGui::PushItemWidth(95.0f * menuResScale);
+        int hudFixLimit = config->FGHUDLimit.value_or_default();
+        if (MenuUi::InputInt("Limit", &hudFixLimit))
+            config->FGHUDLimit = std::clamp(hudFixLimit, 1, 999);
+        ShowHelpMarker("Delay HUDless capture, high values might cause crash!");
+        ImGui::PopItemWidth();
+
+        ImGui::SameLine(0.0f, 16.0f);
+        auto hudExtended = config->FGHUDFixExtended.value_or_default();
+        if (MenuUi::Checkbox("Extended", &hudExtended))
+            config->FGHUDFixExtended = hudExtended;
+        ShowHelpMarker("Accept HUDless candidates of any format");
+
+        auto uiTexture = config->FGHUDFixUITexture.value_or_default();
+        if (MenuUi::Checkbox("UI Texture", &uiTexture))
+            config->FGHUDFixUITexture = uiTexture;
+        ShowHelpMarker("Use the UI texture the game blends on the frame in its last compute pass");
+
+        ImGui::BeginDisabled(!uiTexture);
+        ImGui::SameLine(0.0f, 16.0f);
+
+        auto uiUnblend = config->FGHUDFixUIUnblend.value_or(state.activeFgOutput != FGOutput::DLSSG);
+        if (MenuUi::Checkbox("Unblend UI", &uiUnblend))
+            config->FGHUDFixUIUnblend = uiUnblend;
+        ShowHelpMarker("Rebuild the HUDless by removing the UI texture from the frame\n"
+                       "FSR-FG gets the UI only this way, DLSSG also takes the UI texture directly");
+
+        ImGui::EndDisabled();
+
+        ImGui::EndDisabled();
     }
 
     const FGNvngxReplacement activeNvngxFg = state.activeFgNvngx;

@@ -189,6 +189,9 @@ bool Config::Reload(std::filesystem::path iniPath)
             FGHUDFix.set_from_config(readBool("OptiFG", "HUDFix"));
             FGHUDLimit.set_from_config(readInt("OptiFG", "HUDLimit"));
             FGHUDFixExtended.set_from_config(readBool("OptiFG", "HUDFixExtended"));
+            FGHUDFixUITexture.set_from_config(readBool("OptiFG", "HUDFixUITexture"));
+            FGHUDFixUIUnblend.set_from_config(readBool("OptiFG", "HUDFixUIUnblend"));
+            FGHudfixPersistentBindings.set_from_config(readBool("OptiFG", "HUDFixPersistentBindings"));
             FGImmediateCapture.set_from_config(readBool("OptiFG", "HUDFixImmediate"));
             FGUseShards.set_from_config(readBool("OptiFG", "UseShards"));
             FGAlwaysTrackHeaps.set_from_config(readBool("OptiFG", "AlwaysTrackHeaps"));
@@ -1352,6 +1355,17 @@ bool Config::Reload(std::filesystem::path iniPath)
             else
                 FN_ForceReflex.reset();
 
+            if (auto value = readUInt("fakenvapi", "LowLatencyInput"); value.has_value() &&
+                *value > static_cast<uint32_t>(::LowLatencyInput::Auto) && *value < static_cast<uint32_t>(::LowLatencyInput::_))
+                LowLatencyInput.set_from_config(static_cast<::LowLatencyInput>(*value));
+            else
+                LowLatencyInput.reset();
+            if (auto value = readUInt("fakenvapi", "LowLatencyOutput"); value.has_value() &&
+                *value > static_cast<uint32_t>(LowLatencyMode::Auto) && *value < static_cast<uint32_t>(LowLatencyMode::_))
+                LowLatencyOutput.set_from_config(static_cast<LowLatencyMode>(*value));
+            else
+                LowLatencyOutput.reset();
+
             // DMFG is a mess with our reflex implementations, disable by default
             if (FGDLSSGOverrideForceDMFG.value_or_default() && !FN_ForceReflex.has_value())
                 FN_ForceReflex.set_volatile_value(ForceReflex::ForceDisable);
@@ -1702,6 +1716,9 @@ bool Config::SaveIni()
         ini.SetValue("OptiFG", "HUDFix", GetBoolValue(Instance()->FGHUDFix.value_for_config()).c_str());
         ini.SetValue("OptiFG", "HUDLimit", GetIntValue(Instance()->FGHUDLimit.value_for_config()).c_str());
         ini.SetValue("OptiFG", "HUDFixExtended", GetBoolValue(Instance()->FGHUDFixExtended.value_for_config()).c_str());
+        ini.SetValue("OptiFG", "HUDFixUITexture", GetBoolValue(Instance()->FGHUDFixUITexture.value_for_config()).c_str());
+        ini.SetValue("OptiFG", "HUDFixUIUnblend", GetBoolValue(Instance()->FGHUDFixUIUnblend.value_for_config()).c_str());
+        ini.SetValue("OptiFG", "HUDFixPersistentBindings", GetBoolValue(Instance()->FGHudfixPersistentBindings.value_for_config()).c_str());
         ini.SetValue("OptiFG", "HUDFixImmediate",
                      GetBoolValue(Instance()->FGImmediateCapture.value_for_config()).c_str());
         ini.SetValue("OptiFG", "UseShards", GetBoolValue(Instance()->FGUseShards.value_for_config()).c_str());
@@ -2585,6 +2602,8 @@ bool Config::SaveIni()
         ini.SetValue("fakenvapi", "LatencyFlexMode",
                      GetIntValue(Instance()->FN_LatencyFlexMode.value_for_config()).c_str());
         ini.SetValue("fakenvapi", "ForceReflex", GetIntValue(Instance()->FN_ForceReflex.value_for_config()).c_str());
+        ini.SetValue("fakenvapi", "LowLatencyInput", GetIntValue(Instance()->LowLatencyInput.value_for_config()).c_str());
+        ini.SetValue("fakenvapi", "LowLatencyOutput", GetIntValue(Instance()->LowLatencyOutput.value_for_config()).c_str());
     }
 
     // inputs

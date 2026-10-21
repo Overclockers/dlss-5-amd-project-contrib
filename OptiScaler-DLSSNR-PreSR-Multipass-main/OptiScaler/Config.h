@@ -217,6 +217,7 @@ enum class LowLatencyInput : uint32_t
     Reflex,
     XeLL,
     UeLowLatency,
+    OptiScaler,
     _
 };
 
@@ -228,7 +229,9 @@ enum class LowLatencyMode : uint32_t
     AntiLag2,
     XeLL,
     AntiLagVk,
-    Reflex
+    Reflex,
+    FpsLimiter,
+    _
 };
 
 class Config
@@ -1218,6 +1221,9 @@ class Config
     CustomOptional<bool> FGHUDFix { false };
     CustomOptional<int> FGHUDLimit { 1 };
     CustomOptional<bool> FGHUDFixExtended { false };
+    CustomOptional<bool> FGHUDFixUITexture { true };
+    CustomOptional<bool, NoDefault> FGHUDFixUIUnblend;
+    CustomOptional<bool> FGHudfixPersistentBindings { true };
     CustomOptional<bool> FGImmediateCapture { false };
     CustomOptional<bool> FGDontUseSwapchainBuffers { false };
     CustomOptional<bool> FGRelaxedResolutionCheck { false };
@@ -1295,7 +1301,8 @@ class Config
     CustomOptional<bool> FN_ForceLatencyFlex { false };
     CustomOptional<LFXMode> FN_LatencyFlexMode { LFXMode::Conservative };
     CustomOptional<ForceReflex> FN_ForceReflex { ForceReflex::InGame };
-    CustomOptional<LowLatencyInput> LowLatencyInput { LowLatencyInput::Auto }; // TODO: no reading/saving to config
+    CustomOptional<bool> ImASillyGooseThatIsAboutToMisuseReflex { false };
+    CustomOptional<LowLatencyInput> LowLatencyInput { LowLatencyInput::Auto };
     CustomOptional<LowLatencyMode> LowLatencyOutput { LowLatencyMode::Auto };
 
     // Inputs
