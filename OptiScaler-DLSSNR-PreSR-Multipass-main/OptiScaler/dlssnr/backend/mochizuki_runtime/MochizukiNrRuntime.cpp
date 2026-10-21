@@ -2167,6 +2167,16 @@ struct NetworkKey
     bool computeExport = false; // NrInlineComputeExport on a first-pass key (RuntimeConfig::compute_export)
     bool motionPasses = false; // NrInlineComputeMotion on a multi-pass key (RuntimeConfig::motion_in_place_passes)
     bool operator==(const NetworkKey&) const = default;
+    // Geometry alone may change; every other build semantic stays exact.
+    bool SameGraphSemantics(const NetworkKey& other) const
+    {
+        auto geometryOnly = other;
+        geometryOnly.width = width;
+        geometryOnly.height = height;
+        geometryOnly.renoWidth = renoWidth;
+        geometryOnly.renoHeight = renoHeight;
+        return *this == geometryOnly;
+    }
     bool SameModel(const NetworkKey& other) const
     {
         return width == other.width && height == other.height && format == other.format &&
@@ -2193,6 +2203,7 @@ struct ProductRuntime : nr::Runtime
     MochizukiStageTiming stageTiming;
     uint32_t renoPasses = 0;
     uint64_t id = 0;
+    bool graphAco = false; // Actual compiler provenance, not requested ACO mode.
     NetworkKey key {};
 
     ProductRuntime(const nr::HostDevice& host, const nr::RuntimeConfig& config,
@@ -4683,15 +4694,22 @@ struct Session
             gpuUsed = true;
             // The builder takes `old` over only once its thread exists: a failed start must not free it here.
             const bool buildAco = key.aco;
+            // No native-plan work or GPU wait on this caller. The builder probes the immutable core.
+            // This one-shot reference is not a model cache and is never searched across Sessions.
+            auto donor = old ? old : runtime;
+            if (inlineQueue || !donor || !donor->key.SameGraphSemantics(key) ||
+                donor->network() != (key.networkModel ? nr::NetworkModel::Small : nr::NetworkModel::Original) ||
+                donor->int4_mixed() != key.int4 || !donor->network_note().empty())
+                donor.reset();
             // Keep the caller's reference until thread creation succeeds, then transfer the
             // lambda's only reference into Build so old.reset there actually releases the net.
             auto handed = old;
             std::lock_guard handoff(buildMutex);
             builder = std::thread(
-                [this, host, config, temporal, handed = std::move(handed), oldFinished, buildAco, key, buffers = std::move(buffers)]() mutable
+                [this, host, config, temporal, handed = std::move(handed), donor = std::move(donor), oldFinished, buildAco, key, buffers = std::move(buffers)]() mutable
                 {
                     { std::lock_guard ownership(buildMutex); } // caller drops its copy before Build starts
-                    Build(host, config, temporal, std::move(handed), oldFinished, std::move(buffers), buildAco, key);
+                    Build(host, config, temporal, std::move(handed), oldFinished, std::move(buffers), buildAco, key, std::move(donor));
                 });
             old.reset();
         }
@@ -4720,7 +4738,7 @@ struct Session
     // the session up to this thread (Abandon), it ends it.
     void Build(const nr::HostDevice& host, const nr::RuntimeConfig& config, const nr::TemporalConfig& temporal,
                std::shared_ptr<ProductRuntime> old, UINT64 oldFinished, std::unique_ptr<FrameBuffers> buffers,
-               bool buildAco, const NetworkKey& key)
+               bool buildAco, const NetworkKey& key, std::shared_ptr<ProductRuntime> donor)
     {
         const auto t0 = std::chrono::steady_clock::now();
         nr::g_build_stage.store(0, std::memory_order_relaxed);
@@ -4747,7 +4765,10 @@ struct Session
                     buildBaseUsage = usage; // the growth is measured from after the release
             }
             else
+            {
                 RetireNetwork(std::move(old), oldFinished);
+                donor.reset(); // No sharing after an unresolved previous completion.
+            }
         }
         std::shared_ptr<ProductRuntime> made;
         char error[sizeof buildError] {};
@@ -4801,6 +4822,16 @@ struct Session
                     useNative(e.what());
                 }
             }
+            auto construct = [&]()
+            {
+                nr::RuntimeConfig local = config;
+                const bool importing = !nr::binary::directory().empty();
+                if (donor && donor->graphAco == importing)
+                    local.share = donor->share_for(config.width, config.height);
+                // share_for can reject geometries; the core can reject arguments. Both use its real full build.
+                // No with_slot_of: its per-plan mutable tail/noise protocol needs transactional enqueue proof.
+                return std::make_shared<ProductRuntime>(host, local, temporal, key, vk);
+            };
             if (!nr::binary::directory().empty())
             {
                 try
@@ -4808,7 +4839,7 @@ struct Session
                     const nr::BuildCancelScope cancel(&abandon);
                     nr::g_build_stage.store(1, std::memory_order_relaxed);
                     ReportProgress(this, "Building ACO network", 0, 0);
-                    made = std::make_shared<ProductRuntime>(host, config, temporal, key, vk);
+                    made = construct();
                     nr::g_build_stage.store(0, std::memory_order_relaxed);
                     const uint32_t imported = nr::binary::mode().imported;
                     if (!imported)
@@ -4838,7 +4869,7 @@ struct Session
                 const nr::BuildCancelScope cancel(&abandon);
                 nr::g_build_stage.store(1, std::memory_order_relaxed);
                 ReportProgress(this, "Preparing network graph", 0, 0);
-                made = std::make_shared<ProductRuntime>(host, config, temporal, key, vk);
+                made = construct();
                 nr::g_build_stage.store(0, std::memory_order_relaxed);
                 ReportProgress(this, "Saving shader cache", 0, 0);
                 pipelines.Finish();
@@ -4857,6 +4888,10 @@ struct Session
             std::snprintf(error, sizeof error, "network build failed at %ux%u: an unknown exception", config.width,
                           config.height);
         }
+        // Releasing a donor never changes a retained recipe: it owns its original runtime/images.
+        // Shared arenas/core survive through the candidate's own shared ownership.
+        donor.reset();
+        if (made) made->graphAco = acoOn;
         if (error[0] && abandon)
             nr::logf("[mochizuki] the network build at %ux%u stopped after %.1f s: the session is being destroyed",
                      config.width, config.height,
