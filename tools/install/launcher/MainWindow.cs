@@ -960,6 +960,8 @@ namespace OptScalerNR.Launcher
                 case "正在应用更改…": case "Applying changes…": _statusText.Text = StageText("install"); break;
                 case "目标文件夹已被另一个安装进程锁定。": case "Target folder is locked by another launcher.":
                     _statusText.Text = L("目标文件夹已被另一个安装进程锁定。", "Target folder is locked by another launcher."); break;
+                case "正在从 OptiScaler 官方 Wiki 同步推荐资料…": case "Syncing recommendations from the official OptiScaler Wiki…":
+                    _statusText.Text = L("正在从 OptiScaler 官方 Wiki 同步推荐资料…", "Syncing recommendations from the official OptiScaler Wiki…"); break;
             }
         }
 
