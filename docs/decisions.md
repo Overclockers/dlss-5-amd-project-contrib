@@ -1,3 +1,34 @@
+## 2026-10-22 — HSR(D3D11 + ffx_12)被内核反作弊击杀:FSR4 驱动 DLL 补丁改为显式覆盖才挂
+
+崩坏:星穹铁道(kernel AC HoYoKProtect)上 1.13.2 起开 FSR4 超分,超分初始化与首帧
+交接全部成功后约 85ms 进程被外部终止(异常码 0x00000000、模块 unknown、无栈无 dump)。
+对照实验:1.13.1-alpha 同游戏同配置(ffx_12)存活 9.5 分钟;差异是 1.13.2 的
+`fsr4/FSR4DriverProvider.cpp` 在加载驱动签名 amdxcffx64.dll 时无条件执行
+`FSR4Presets::Hook`(.text 页 Detours)与 `FSR4Models::Hook`(provider 虚表改写)。
+对内核反作弊进程修改驱动签名模块 = 击杀;与 DX11/DX12 无关(D3D12 游戏同样被钩但无
+内核 AC 故存活)。
+
+修复:两处 Hook 仅在用户显式选择(`Fsr4Preset` / `Fsr4Model` 均为 NoDefault optional)
+时执行;`FSR4Models::SelectableModels` 增加只读 RTTI 枚举分支(未挂钩模块照常列出可
+选模型,不写任何字节)并新增锁保护的 `IsModuleHooked`;菜单在首次显式选择预设/模型时
+对已加载模块延迟补挂,`(Failed to hook)` 文案区分"未请求挂钩(驱动默认)"。默认配置
+下不再触碰 amdxcffx64.dll 的代码页与虚表,恢复 1.13.1 的 AC 安全线;显式选择覆盖属
+用户自担。构建 BUILD_OK(build-release-local --fast)。实机复现待上报者验证。
+
+## 2026-10-22 — 启动器恢复 OptiPatcher 推荐安装（下载限时 + 包内回退 + CI 刷新）
+
+启动器（e15c2981 引入 worker 时）把 OptiPatcher 降级为 `optiPatcher='skip'` 且安装器对
+GUI 决策硬性拒绝（"GUI installs do not download it in this version"），控制台交互流程
+保留。现恢复为推荐注入式：`Decisions` 增加 `optiPatcher`（GUI 默认 `install`，worker
+缺省仍 `skip`），安装器抽出共享内核 `Install-OptiPatcherPlugin -TimeoutSec`——拉取
+optiscaler/OptiPatcher rolling 版并做 PE 校验，成功装最新并更新包缓存，失败回退包内
+离线副本，装后开启 `LoadAsiPlugins=true`；控制台 60s、GUI 决策 30s 时限。
+CI（release.yml 打包前）best-effort 拉取最新版并做 PE 校验（MZ/PE 签名/AMD64/尺寸
+4KB-20MB），通过才覆盖 `assets/plugins/OptiPatcher.asi` 参与打包，失败保留已提交副本；
+本地打包（BUILD_LOCAL_PACKAGE/PACKAGE_RELEASE）固定使用仓库内副本、永不联网，副本
+更新只经 CI 或手动。验证：安装脚本解析通过、release.yml YAML 解析通过、PE 校验四例
+（真文件/坏 MZ/i386/超小）行为正确、launcher 构建 LAUNCHER_OK。
+
 ## 2026-10-22 — 1.13.2 帧生成崩溃回归修复（菜单下转 / XeFG-XeLL 配对）
 
 用户日志（TW3 fsrfg 输出、TW3 xefg 输出、鸣潮 xefg 输出）确认 1.13.2 一开帧生成就崩溃：
@@ -1064,3 +1095,11 @@ lmxxf 额外多槽吞吐回落；更少的 16/8 段没有进一步收益，因�
 - Product construction policy (patch 27) keeps independent pipeline import/fallback accounting, fixes the no-depth contract, skips unconsumed Facts readback and requires usable grade variants. Official standalone defaults and the public host/runtime ABI remain unchanged.
 - Keep current split transport and size scheduling. New cross-model arenas, image heaps and RAM-offload scheduling are deferred until their lifetime/order and net benefit are demonstrated against this host; they do not replace the local destruction fix. Motion point sampling is also deferred until the preceding LINEAR rescale contract is reconciled.
 - Evidence and limits: the source ownership record and extension decisions describe focused offline/GPU checks; this is not game-FPS, 4K stress or full Inline certification. No packaging or publishing is part of this change.
+
+## 2026-10-22: Launcher-only Mochizuki visual share codes (MZ1)
+
+- Share only Mochizuki visual-style settings from an existing game's `[DlssNr]`, plus the shared overall/residual/person/stabilizer controls and Mochizuki white-point source. Exclude `MochizukiNetworkModel`, `MochizukiInt4Mixed`, `MochizukiAcoMode`, `MochizukiModelScale`, `MochizukiDynamicResolution`, `MochizukiMaxPasses`, `MochizukiCompactTransfer`, and `MochizukiUnlockPasses`; all other sections and non-table keys are outside the contract.
+- Format is `MZ1:idx=value,idx=value;CCCC`, ascending numeric indices and uppercase four-digit CRC16/CCITT-FALSE (polynomial 0x1021, initial 0xFFFF) over the exact payload between colon and semicolon. Floats use integer hundredths; integers and booleans use raw integer / 0 or 1. Empty payload is valid. Encoding is sparse: absent means default, and default values are omitted.
+- The initial 136 table indices are frozen compatibility identifiers: append new keys only; never reorder or renumber. Reject unknown indices, duplicate indices, checksum errors and out-of-range values; float boundary rounding tolerates one hundredth before clamping.
+- Import previews the visual summary and changed-setting count. Apply neutralizes every existing table assignment only inside `[DlssNr]`, retaining original lines/comments, and writes the supplied non-default values. Encoding/BOM, existing line endings, unrelated keys, comments, blank lines and bytes outside that section are preserved.
+- Launcher apply uses target locking and a flushed temporary file followed by atomic `File.Replace` with a `.bak-<timestamp>` backup. Export never writes files. Share-code lifecycle is independent of NR installation: it operates on the selected game's already-existing `OptiScaler.ini`.

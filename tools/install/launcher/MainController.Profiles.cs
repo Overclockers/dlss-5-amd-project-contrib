@@ -43,6 +43,7 @@ namespace OptScalerNR.Launcher
             _iniDeleteButton = _window.FindName("IniDeleteButton") as Button;
             _iniApplyButton = _window.FindName("IniApplyButton") as Button;
             _iniFolderButton = _window.FindName("IniFolderButton") as Button;
+            InitShareCode();
             try { _iniProfiles = new IniProfiles(_settingsDir); }
             catch (Exception ex) { IniFailure(ex); }
             if (_iniProfileCombo != null) _iniProfileCombo.SelectionChanged += delegate { IniSelectionChanged(); };
@@ -137,6 +138,7 @@ namespace OptScalerNR.Launcher
             var game = CaptureIniGame();
             var hasGame = available && game != null;
             var hasIni = hasGame && File.Exists(Path.Combine(game.Directory, "OptiScaler.ini"));
+            RefreshShareCode(game != null && !IniBusy() && File.Exists(Path.Combine(game.Directory, "OptiScaler.ini")));
             var selected = hasGame && !string.IsNullOrEmpty(_iniSelectedProfile);
             if (_iniProfileCombo != null) _iniProfileCombo.IsEnabled = hasGame;
             if (_iniSearchBox != null) _iniSearchBox.IsEnabled = available;
@@ -413,6 +415,7 @@ namespace OptScalerNR.Launcher
                 case "renamed": text = L("已重命名：", "Renamed: ") + _iniStatusDetail; break;
                 case "deleted": text = L("已删除共享配置：", "Shared profile deleted: ") + _iniStatusDetail; break;
                 case "applied": text = L("已应用，请重启游戏。原 INI 备份：", "Applied; restart the game. Original INI backup: ") + _iniStatusDetail; break;
+                case "share-error": text = _iniStatusDetail; break;
                 case "io": text = L("配置操作失败，请检查文件权限与可用空间。", "Profile operation failed. Check file permissions and free space."); break;
                 default: text = _iniProfiles == null ? L("配置库不可用。", "Profile library unavailable.")
                     : _selectedGame == null ? L("选择游戏以使用共享配置。", "Select a game to use shared profiles.")
