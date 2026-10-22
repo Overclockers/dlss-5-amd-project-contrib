@@ -69,6 +69,10 @@ struct ImageInput
             if (selected == VK_FORMAT_R16G16B16A16_SFLOAT) typed = DXGI_FORMAT_R16G16B16A16_FLOAT;
             else if (selected == VK_FORMAT_R16G16_SFLOAT) typed = DXGI_FORMAT_R16G16_FLOAT;
         }
+        // Proton direct path: the buffers are already the game's own memory (no import, no copy across devices),
+        // and a D3D12_RESOURCE handle is what winevulkan cannot import. The buffer route stays.
+        if (vk.adoptedVkd3d)
+            throw NrError(NrError::Unsupported, "shared input textures are off on the Proton direct path");
         const auto colour = ColourFormat(typed);
         const auto motion = MotionFormat(typed);
         if (typed == DXGI_FORMAT_UNKNOWN ||

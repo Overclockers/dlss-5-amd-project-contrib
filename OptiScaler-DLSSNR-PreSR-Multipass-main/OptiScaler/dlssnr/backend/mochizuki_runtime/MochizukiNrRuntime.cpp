@@ -49,6 +49,7 @@
 #define VK_USE_PLATFORM_WIN32_KHR
 #include <vulkan/vulkan.h>
 #include "MochizukiStageTiming.h"
+#include "MochizukiVkd3dInterop.h"
 
 #include "mz_interpose.h"
 #include "nr_log.hpp"
@@ -778,90 +779,190 @@ struct Vulkan
     PFN_vkGetMemoryWin32HandlePropertiesKHR memoryHandleProperties {};
     PFN_vkImportSemaphoreWin32HandleKHR importSemaphore {};
     std::string name;
-    bool adoptedVkd3d = false; // the device was adopted from vkd3d-proton (Proton): no cross-API import
+    // Proton direct path: the instance, physical device and device are vkd3d-proton's own (borrowed: never
+    // destroyed here), the frames' buffers are the D3D12 buffers' own VkBuffers, and every submit holds the vkd3d
+    // queue it goes to (LockCommandQueue). False on Windows and whenever Wine's D3D12 is not vkd3d-proton.
+    bool adoptedVkd3d = false;
+    ID3D12DXVKInteropDevice* interop {};  // AddRef'd, with adoptedVkd3d
+    ID3D12CommandQueue* interopQueue {};  // ours, DIRECT: the network builds' vkd3d queue (vk.queue)
 
-    // Under Wine/Proton, d3d12.dll is vkd3d-proton and exports vkd3d_get_vk_* accessors.
-    // Adopting its device means the frame buffers are on the same VkDevice the game runs on,
-    // so the Win32 shared-handle path (which winevulkan cannot import) is never reached.
-    bool AdoptVkd3dDevice(LUID luid)
+    // Under Wine, when the game's D3D12 device is vkd3d-proton's, take its Vulkan objects instead of creating a
+    // device: winevulkan cannot import a D3D12 resource handle, so the own-device route never gets its buffers
+    // there. Following the interop of the Linux route (linux/src/pe/nr_pe_interop.cpp): ID3D12DXVKInteropDevice's
+    // GetVulkanHandles, a D3D12 DIRECT queue of our own for the builds, whose vkd3d queue LockCommandQueue
+    // serialises with the game's, and the physical device's support checked rather than requested, as the
+    // Linux route's adopt() does. MZ_PROTON_DIRECT=0 keeps the own-device route. False: nothing was taken.
+    bool AdoptVkd3d(ID3D12Device* d3d)
     {
-        HMODULE d3d12 = GetModuleHandleA("d3d12.dll");
-        if (!d3d12)
+        if (!d3d || !mochizuki_vkd3d::UnderWine())
             return false;
-        // wine_get_version is the Wine-only marker; native D3D12 never exports it.
-        HMODULE ntdll = GetModuleHandleA("ntdll.dll");
-        if (!ntdll || !GetProcAddress(ntdll, "wine_get_version"))
-            return false;
-        using PFN_vkd3d_get_vk_instance = VkInstance(STDMETHODCALLTYPE*)(IUnknown*);
-        using PFN_vkd3d_get_vk_physical_device = VkPhysicalDevice(STDMETHODCALLTYPE*)(IUnknown*);
-        using PFN_vkd3d_get_vk_device = VkDevice(STDMETHODCALLTYPE*)(IUnknown*);
-        auto get_instance = reinterpret_cast<PFN_vkd3d_get_vk_instance>(GetProcAddress(d3d12, "vkd3d_get_vk_instance"));
-        auto get_physical = reinterpret_cast<PFN_vkd3d_get_vk_physical_device>(GetProcAddress(d3d12, "vkd3d_get_vk_physical_device"));
-        auto get_device = reinterpret_cast<PFN_vkd3d_get_vk_device>(GetProcAddress(d3d12, "vkd3d_get_vk_device"));
-        if (!get_instance || !get_physical || !get_device)
-            return false;
-        // The caller's device (Session::device) is not reachable from here; the host passes it in Start.
-        // This helper is called with the D3D12 device once available; until then it is a no-op probe.
-        return false; // populated by AdoptVkd3dDevice(IUnknown*, LUID) below
-    }
-
-    bool AdoptVkd3dDevice(IUnknown* d3d12Device, LUID luid)
-    {
-        // DISABLED: vkd3d-proton's d3d12.dll does not export vkd3d_get_vk_* from its .def file;
-        // the adoption also lacks semaphore import, VkBuffer extraction from D3D12 resources,
-        // and borrowed-device lifecycle (destroy would kill the game's objects). Until a working
-        // interop path exists (ID3D12Device extension interface or winevulkan native handles),
-        // Proton falls through to the own-device path; the host-side circuit breaker (50
-        // consecutive failures) stops the resource leak from the resulting import errors.
-        return false;
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wunused-variable"
-        HMODULE d3d12 = GetModuleHandleA("d3d12.dll");
-        if (!d3d12)
-            return false;
-        HMODULE ntdll = GetModuleHandleA("ntdll.dll");
-        if (!ntdll || !GetProcAddress(ntdll, "wine_get_version"))
-            return false;
-        using PFN_vkd3d_get_vk_instance = VkInstance(STDMETHODCALLTYPE*)(IUnknown*);
-        using PFN_vkd3d_get_vk_physical_device = VkPhysicalDevice(STDMETHODCALLTYPE*)(IUnknown*);
-        using PFN_vkd3d_get_vk_device = VkDevice(STDMETHODCALLTYPE*)(IUnknown*);
-        auto get_instance = reinterpret_cast<PFN_vkd3d_get_vk_instance>(GetProcAddress(d3d12, "vkd3d_get_vk_instance"));
-        auto get_physical = reinterpret_cast<PFN_vkd3d_get_vk_physical_device>(GetProcAddress(d3d12, "vkd3d_get_vk_physical_device"));
-        auto get_device = reinterpret_cast<PFN_vkd3d_get_vk_device>(GetProcAddress(d3d12, "vkd3d_get_vk_device"));
-        if (!get_instance || !get_physical || !get_device)
+        if (const char* off = std::getenv("MZ_PROTON_DIRECT"); off && !std::strcmp(off, "0"))
         {
-            nr::logf("[mochizuki] Wine detected but vkd3d-proton vk accessors unavailable; falling back to own device");
+            nr::logf("[mochizuki] Proton direct path: off (MZ_PROTON_DIRECT=0); the own device is used");
             return false;
         }
-        instance = get_instance(d3d12Device);
-        physical = get_physical(d3d12Device);
-        device = get_device(d3d12Device);
-        if (!instance || !physical || !device)
+        ID3D12DXVKInteropDevice* found = nullptr;
+        if (FAILED(d3d->QueryInterface(__uuidof(ID3D12DXVKInteropDevice), reinterpret_cast<void**>(&found))) ||
+            !found)
         {
-            nr::logf("[mochizuki] vkd3d vk object extraction returned null (instance=%p physical=%p device=%p)",
-                     static_cast<void*>(instance), static_cast<void*>(physical), static_cast<void*>(device));
-            instance = VkInstance{};
-            physical = VkPhysicalDevice{};
-            device = VkDevice{};
+            nr::logf("[mochizuki] Proton direct path: the D3D12 device has no ID3D12DXVKInteropDevice (not "
+                     "vkd3d-proton); the own device is used");
             return false;
         }
-        // Adopt the graphics queue: the host passes the game's command queue as the execution queue.
-        // For now use family 0 (vkd3d uses one queue family for DIRECT lists); the host adapter
-        // overrides queue/family via its own path when it calls MochizukiNrPrepareFrame.
-        family = 0;
-        vkGetDeviceQueue(device, family, 0, &queue);
+        auto decline = [&](const char* why)
+        {
+            nr::logf("[mochizuki] Proton direct path declined: %s; the own device is used", why);
+            if (interopQueue)
+                interopQueue->Release();
+            interopQueue = nullptr;
+            found->Release();
+            instance = VkInstance {};
+            physical = VkPhysicalDevice {};
+            device = VkDevice {};
+            queue = buildQueue = VkQueue {};
+            return false;
+        };
+        if (const char* mismatch = mochizuki_vkd3d::EntryPointMismatch(); *mismatch)
+            return decline(mismatch);
+        if (FAILED(found->GetVulkanHandles(&instance, &physical, &device)) || !instance || !physical || !device)
+            return decline("GetVulkanHandles returned no handles");
+        D3D12_COMMAND_QUEUE_DESC qd {};
+        qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+        if (FAILED(d3d->CreateCommandQueue(&qd, IID_PPV_ARGS(&interopQueue))) || !interopQueue)
+            return decline("no D3D12 queue for the network builds");
+        UINT32 queueFamily = 0;
+        if (FAILED(found->GetVulkanQueueInfo(interopQueue, &queue, &queueFamily)) || !queue)
+            return decline("GetVulkanQueueInfo returned no queue");
+        family = queueFamily;
         buildQueue = queue;
-        vkGetPhysicalDeviceMemoryProperties(physical, &memory);
+        computeFamily = VK_QUEUE_FAMILY_IGNORED;
+        computeQueue = VkQueue {};
+
         VkPhysicalDeviceProperties2 props { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
         vkGetPhysicalDeviceProperties2(physical, &props);
+        if (props.properties.apiVersion < VK_API_VERSION_1_3)
+            return decline("the device offers less than Vulkan 1.3");
+        VkPhysicalDeviceCooperativeMatrixFeaturesKHR coop {
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR
+        };
+        VkPhysicalDeviceShaderFloat8FeaturesEXT fp8 { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT8_FEATURES_EXT };
+        VkPhysicalDeviceVulkan11Features v11 { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES };
+        VkPhysicalDeviceVulkan12Features v12 { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };
+        VkPhysicalDeviceVulkan13Features v13 { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES };
+        VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR wml {
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WORKGROUP_MEMORY_EXPLICIT_LAYOUT_FEATURES_KHR
+        };
+        VkPhysicalDeviceFeatures2 f2 { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &coop };
+        coop.pNext = &fp8;
+        fp8.pNext = &v11;
+        v11.pNext = &v12;
+        v12.pNext = &v13;
+        v13.pNext = &wml;
+        vkGetPhysicalDeviceFeatures2(physical, &f2);
+        const struct { VkBool32 has; const char* name; } needed[] = {
+            { coop.cooperativeMatrix, "cooperativeMatrix" },
+            { fp8.shaderFloat8, "shaderFloat8" },
+            { fp8.shaderFloat8CooperativeMatrix, "shaderFloat8CooperativeMatrix" },
+            { v11.storageBuffer16BitAccess, "storageBuffer16BitAccess" },
+            { v12.storageBuffer8BitAccess, "storageBuffer8BitAccess" },
+            { v12.shaderFloat16, "shaderFloat16" },
+            { v12.shaderInt8, "shaderInt8" },
+            { v12.vulkanMemoryModel, "vulkanMemoryModel" },
+            { v12.timelineSemaphore, "timelineSemaphore" },
+            { v13.subgroupSizeControl, "subgroupSizeControl" },
+            { v13.synchronization2, "synchronization2" },
+            { wml.workgroupMemoryExplicitLayout, "workgroupMemoryExplicitLayout" },
+            { wml.workgroupMemoryExplicitLayout8BitAccess, "workgroupMemoryExplicitLayout8BitAccess" },
+            { wml.workgroupMemoryExplicitLayout16BitAccess, "workgroupMemoryExplicitLayout16BitAccess" },
+        };
+        for (const auto& n : needed)
+            if (!n.has)
+            {
+                char text[128];
+                std::snprintf(text, sizeof text, "the GPU lacks the Vulkan feature %s", n.name);
+                return decline(text);
+            }
+        // What vkd3d-proton enabled at its vkCreateDevice: the network's own extensions are not among what it asks
+        // for (VK_KHR_workgroup_memory_explicit_layout in particular). The Linux route runs on such a device all the
+        // same; the log names them so a failure on the real device can be told apart.
+        {
+            UINT count = 0;
+            std::vector<const char*> enabled;
+            if (SUCCEEDED(found->GetDeviceExtensions(&count, nullptr)) && count)
+            {
+                enabled.resize(count);
+                if (FAILED(found->GetDeviceExtensions(&count, enabled.data())))
+                    enabled.clear();
+                enabled.resize(std::min<size_t>(count, enabled.size()));
+            }
+            std::string missing;
+            for (const char* e : { VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME, VK_EXT_SHADER_FLOAT8_EXTENSION_NAME,
+                                   VK_KHR_WORKGROUP_MEMORY_EXPLICIT_LAYOUT_EXTENSION_NAME,
+                                   VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME })
+                if (std::none_of(enabled.begin(), enabled.end(),
+                                 [e](const char* x) { return x && !std::strcmp(x, e); }))
+                    missing += missing.empty() ? e : std::string(", ") + e;
+            if (!missing.empty())
+                nr::logf("[mochizuki] Proton direct path: vkd3d-proton did not enable %s on its device (%u "
+                         "extensions listed)", missing.c_str(), count);
+        }
+        // bufferDeviceAddress: vkd3d-proton requires and enables it; read it from what it enabled all the same.
+        bufferDeviceAddress = false;
+        if (const VkPhysicalDeviceFeatures2* on = nullptr; SUCCEEDED(found->GetDeviceFeatures(&on)) && on)
+            for (auto* p = static_cast<const VkBaseInStructure*>(on->pNext); p; p = p->pNext)
+                if (p->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES)
+                    bufferDeviceAddress |=
+                        reinterpret_cast<const VkPhysicalDeviceVulkan12Features*>(p)->bufferDeviceAddress == VK_TRUE;
+                else if (p->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES)
+                    bufferDeviceAddress |=
+                        reinterpret_cast<const VkPhysicalDeviceBufferDeviceAddressFeatures*>(p)->bufferDeviceAddress ==
+                        VK_TRUE;
+        // The fences stay shared D3D12 fences imported as timeline semaphores, as on the own device under Proton
+        // (vkd3d-proton exports them as D3D12_FENCE handles). No memory is imported on this path.
+        importSemaphore = reinterpret_cast<PFN_vkImportSemaphoreWin32HandleKHR>(
+            vkGetDeviceProcAddr(device, "vkImportSemaphoreWin32HandleKHR"));
+        if (!importSemaphore)
+            return decline("vkImportSemaphoreWin32HandleKHR is not enabled on vkd3d-proton's device");
+        memoryHandleProperties = nullptr;
+        vkGetPhysicalDeviceMemoryProperties(physical, &memory);
         name = props.properties.deviceName;
-        // bufferDeviceAddress was checked by vkd3d at its own device creation; trust it.
-        bufferDeviceAddress = true;
+        interop = found;
         adoptedVkd3d = true;
-        nr::logf("[mochizuki] adopted vkd3d-proton device: %s (same VkDevice as the game; no cross-API sharing needed)",
-                 name.c_str());
+        nr::logf("[mochizuki] Proton direct path: vkd3d-proton's device %s, queue family %u, bufferDeviceAddress %d; "
+                 "the frames' buffers are the game's own memory, every submit holds the vkd3d queue",
+                 name.c_str(), family, bufferDeviceAddress ? 1 : 0);
         return true;
-#pragma clang diagnostic pop
+    }
+
+    // Direct path, a frame's submit: drains `producer` (the game queue the frame came from: its signal of the
+    // produced value is then on the GPU queue ahead of the wait) and holds its vkd3d queue in `hold`; `out` is that
+    // queue's VkQueue. The command buffers are of `family`, so a producer of another family is refused.
+    VkResult HoldProducer(ID3D12CommandQueue* producer, mochizuki_vkd3d::QueueHold& hold, VkQueue& out) const
+    {
+        if (!adoptedVkd3d || !producer)
+            return VK_ERROR_INITIALIZATION_FAILED;
+        VkQueue q {};
+        UINT32 f = 0;
+        if (FAILED(interop->GetVulkanQueueInfo(producer, &q, &f)) || !q)
+        {
+            nr::logf("[mochizuki] Proton direct path: GetVulkanQueueInfo failed for the game queue");
+            return VK_ERROR_INITIALIZATION_FAILED;
+        }
+        if (f != family)
+        {
+            nr::logf("[mochizuki] Proton direct path: the game queue is of family %u, the frames' of %u",
+                     unsigned(f), family);
+            return VK_ERROR_FEATURE_NOT_PRESENT;
+        }
+        if (FAILED(interop->LockCommandQueue(producer)))
+        {
+            nr::logf("[mochizuki] Proton direct path: LockCommandQueue failed for the game queue");
+            return VK_ERROR_INITIALIZATION_FAILED;
+        }
+        hold.interop = interop;
+        hold.queue = producer;
+        out = q;
+        return VK_SUCCESS;
     }
 
     // Throws "[unsupported] ..." for what cannot change while the process lives (no Vulkan 1.3 driver, no device
@@ -869,11 +970,6 @@ struct Vulkan
     // decided only from lists that were read in full (VkEnumerate); a failed enumeration throws a plain error.
     void Create(LUID luid, const TestHooks& hooks)
     {
-        // On Wine/Proton, the D3D12 adapter is vkd3d-proton on the same GPU: try to adopt its
-        // Vulkan instance/device so the SharedBuffer path needs no cross-API import at all.
-        if (AdoptVkd3dDevice(luid))
-            return;
-
         VkApplicationInfo app { VK_STRUCTURE_TYPE_APPLICATION_INFO };
         app.pApplicationName = "OptiScaler NR";
         app.apiVersion = VK_API_VERSION_1_3;
@@ -1203,10 +1299,24 @@ struct Vulkan
 
     void Destroy()
     {
-        if (device)
-            vkDestroyDevice(device, nullptr);
-        if (instance)
-            vkDestroyInstance(instance, nullptr);
+        if (adoptedVkd3d)
+        {
+            // vkd3d-proton's: the game's device, never destroyed here.
+            if (interopQueue)
+                interopQueue->Release();
+            if (interop)
+                interop->Release();
+            interopQueue = nullptr;
+            interop = nullptr;
+            adoptedVkd3d = false;
+        }
+        else
+        {
+            if (device)
+                vkDestroyDevice(device, nullptr);
+            if (instance)
+                vkDestroyInstance(instance, nullptr);
+        }
         device = {};
         instance = {};
     }
@@ -1219,6 +1329,10 @@ struct SharedBuffer
     HANDLE handle {};
     VkBuffer buffer {};
     VkDeviceMemory memory {};
+    // Proton direct path: `buffer` is vkd3d-proton's own (not destroyed here) and the resource starts `offset` bytes
+    // into it. Zero, and the buffer ours, everywhere else.
+    VkDeviceSize offset = 0;
+    bool borrowed = false;
 
     void Create(ID3D12Device* d, Vulkan& vk, UINT64 bytes)
     {
@@ -1232,16 +1346,24 @@ struct SharedBuffer
         rd.Height = rd.DepthOrArraySize = rd.MipLevels = 1;
         rd.SampleDesc.Count = 1;
         rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        // On the adopted vkd3d device (Proton) there is no cross-API sharing to do: the D3D12
-        // committed heap is already backed by the same VkDevice. A plain committed resource is enough.
+        // Proton direct path: no cross-API sharing to do. The D3D12 buffer is already memory of the device the
+        // network runs on; its VkBuffer and offset come from vkd3d-proton.
         if (vk.adoptedVkd3d)
         {
             Check(d->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COMMON, nullptr,
                                              IID_PPV_ARGS(&resource)),
-                  "buffer (vkd3d adopted device)");
-            ++alive;
-            nr::logf("[mochizuki] shared buffer skipped VK import (vkd3d adopted device): %llu bytes",
-                     static_cast<unsigned long long>(rd.Width));
+                  "buffer (Proton direct path)");
+            UINT64 handleValue = 0, at = 0;
+            if (const HRESULT hr = vk.interop->GetVulkanResourceInfo(resource, &handleValue, &at);
+                FAILED(hr) || !handleValue)
+            {
+                resource->Release();
+                resource = nullptr;
+                Check(FAILED(hr) ? hr : E_FAIL, "GetVulkanResourceInfo (Proton direct path)");
+            }
+            buffer = reinterpret_cast<VkBuffer>(handleValue);
+            offset = at;
+            borrowed = true;
             return;
         }
         Check(d->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_SHARED, &rd, D3D12_RESOURCE_STATE_COMMON, nullptr,
@@ -1298,7 +1420,7 @@ struct SharedBuffer
 
     void Release(VkDevice device)
     {
-        if (buffer)
+        if (buffer && !borrowed)
             vkDestroyBuffer(device, buffer, nullptr);
         if (memory)
             vkFreeMemory(device, memory, nullptr);
@@ -2791,6 +2913,7 @@ struct Session
     bool fallbackInFlight[kFallbacks] {};
     uint64_t fallbackColourGeneration[kFallbacks] {};
     VkBuffer fallbackOutput[kFallbacks] {};
+    VkDeviceSize fallbackOutputOffset[kFallbacks] {}; // the Proton direct path's buffers can share a VkBuffer
     UINT fallbackWidth[kFallbacks] {}, fallbackHeight[kFallbacks] {};
     bool fallbackCurrent[kFallbacks] {}; // recorded for the current geometry's buffers
     uint32_t nextFallback = 0;
@@ -3513,8 +3636,9 @@ struct Session
     }
 
     // A frame's Vulkan submit: c after the frame's produced value in toVk, then its finished value into fromVk; then
-    // Submitted. None once the session is lost (Lose), whose release a later signal would undo.
-    VkResult Submit(VkCommandBuffer c, UINT64 produced, UINT64 finished, VkFence signal)
+    // Submitted. None once the session is lost (Lose), whose release a later signal would undo. `producer`: the game
+    // queue the frame came from, which the Proton direct path drains and holds around the submit.
+    VkResult Submit(VkCommandBuffer c, UINT64 produced, UINT64 finished, VkFence signal, ID3D12CommandQueue* producer)
     {
         if (deviceLost)
             return VK_ERROR_DEVICE_LOST;
@@ -3533,7 +3657,12 @@ struct Session
         si.signalSemaphoreCount = 1;
         si.pSignalSemaphores = &fromVk.semaphore;
         gpuUsed.store(true, std::memory_order_relaxed);
-        const VkResult r = vkQueueSubmit(vk.queue, 1, &si, signal);
+        VkQueue target = vk.queue;
+        mochizuki_vkd3d::QueueHold hold;
+        if (vk.adoptedVkd3d)
+            if (const VkResult held = vk.HoldProducer(producer, hold, target); held != VK_SUCCESS)
+                return held;
+        const VkResult r = vkQueueSubmit(target, 1, &si, signal);
         if (r == VK_SUCCESS)
             Submitted(produced, finished);
         return r;
@@ -3919,12 +4048,23 @@ struct Session
             colourInput->Ownership(c, true, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
             colourInput->Ownership(c, false, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
         } else {
-            vkCmdCopyBuffer(c, input.buffer, output.buffer, 1, &region);
-            if (firstOutput.buffer) vkCmdCopyBuffer(c, input.buffer, firstOutput.buffer, 1, &region);
+            // Offsets are zero but on the Proton direct path (vkd3d-proton's buffers).
+            VkBufferCopy toOutput = region;
+            toOutput.srcOffset += input.offset;
+            toOutput.dstOffset += output.offset;
+            vkCmdCopyBuffer(c, input.buffer, output.buffer, 1, &toOutput);
+            if (firstOutput.buffer)
+            {
+                VkBufferCopy toFirst = region;
+                toFirst.srcOffset += input.offset;
+                toFirst.dstOffset += firstOutput.offset;
+                vkCmdCopyBuffer(c, input.buffer, firstOutput.buffer, 1, &toFirst);
+            }
         }
         VkCheck(vkEndCommandBuffer(c), "vkEndCommandBuffer (passthrough)");
         fallbackColourGeneration[k] = colourInput ? colourInput->generation : 0;
         fallbackOutput[k] = output.buffer;
+        fallbackOutputOffset[k] = output.offset;
         fallbackWidth[k] = job.width; fallbackHeight[k] = job.height;
         fallbackCurrent[k] = true;
     }
@@ -4321,9 +4461,14 @@ struct Session
         }
         std::string acoWhy;
         const bool configured = ConfigureAco(requested, acoWhy);
-        // Proton first: adopt vkd3d-proton's own Vulkan device so buffers never need cross-API import.
-        if (!vk.AdoptVkd3dDevice(device, device->GetAdapterLuid()))
+        // Proton first: vkd3d-proton's own Vulkan device, so the frames' buffers need no cross-API import (Windows:
+        // AdoptVkd3d returns false at once and the device is created as before).
+        if (!vk.AdoptVkd3d(device))
             vk.Create(device->GetAdapterLuid(), hooks);
+        else
+            // The shared textures are D3D12_RESOURCE imports, which winevulkan cannot make; the direct path's
+            // buffers are the game's own memory already. PlanShared refuses as well.
+            sharedInputRequest = sharedMotionRequest = 0;
         deviceStarted = true;
         // Bundle selection is this thread's. The extension is on only when this creation saw a bundle.
         // effective stays false until Install publishes the network that actually runs.
@@ -4781,6 +4926,14 @@ struct Session
             host.device = vk.device;
             host.queue = vk.buildQueue;
             host.queue_family = vk.family;
+            if (vk.adoptedVkd3d)
+            {
+                // Proton direct path: the builds' queue is vkd3d-proton's, shared with the game's queues.
+                ID3D12DXVKInteropDevice* interop = vk.interop;
+                ID3D12CommandQueue* queue = vk.interopQueue;
+                host.queue_lock = [interop, queue] { interop->LockCommandQueue(queue); };
+                host.queue_unlock = [interop, queue] { interop->UnlockCommandQueue(queue); };
+            }
             host.secondary_family = vk.computeFamily;
             host.buffer_device_address = vk.bufferDeviceAddress;
             char options[64] = {};
@@ -5518,7 +5671,7 @@ struct Session
             fallbackInFlight[k] = false;
         }
         if (!fallbackCurrent[k] || fallbackColourGeneration[k] != (colourInput ? colourInput->generation : 0) ||
-            fallbackOutput[k] != output.buffer || fallbackWidth[k] != job.width || fallbackHeight[k] != job.height)
+            fallbackOutput[k] != output.buffer || fallbackOutputOffset[k] != output.offset || fallbackWidth[k] != job.width || fallbackHeight[k] != job.height)
             RecordFallback(k);
         nextFallback = (k + 1) % kFallbacks;
         if (!sub.produced)
@@ -5539,7 +5692,7 @@ struct Session
             sub.signalled = true;
             lastSignalled = sub.produced;
         }
-        if (const VkResult r = Submit(fallbackCommands[k], sub.produced, sub.finished, fallbackDone[k]);
+        if (const VkResult r = Submit(fallbackCommands[k], sub.produced, sub.finished, fallbackDone[k], producer);
             r != VK_SUCCESS)
             throw lost("vkQueueSubmit", r, S_OK);
         fallbackInFlight[k] = true;
@@ -5560,8 +5713,15 @@ struct Session
         VkCommandBufferBeginInfo bi {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO}; bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         VkCheck(vkBeginCommandBuffer(result, &bi), "phase begin"); return result;
     }
-    void SubmitPhases(const std::vector<PhaseCommand>& phases, UINT64 produced, UINT64 finished, VkFence fence) {
+    void SubmitPhases(const std::vector<PhaseCommand>& phases, UINT64 produced, UINT64 finished, VkFence fence,
+                      ID3D12CommandQueue* producer) {
         if (deviceLost) throw NrError(NrError::DeviceLost, "phase submit after device loss");
+        // Proton direct path: the game queue drained and held for all the segments (no compute queue there).
+        VkQueue graphics = vk.queue;
+        mochizuki_vkd3d::QueueHold hold;
+        if (vk.adoptedVkd3d)
+            if (const VkResult held = vk.HoldProducer(producer, hold, graphics); held != VK_SUCCESS)
+                throw NrError(NrError::DeviceLost, "Proton direct path: the game queue could not be held", held);
         if (phaseValue > UINT64_MAX - (phases.size() - 1))
             throw NrError(NrError::DeviceLost, "network phase timeline exhausted");
         const auto base = phaseValue; phaseValue += phases.size() - 1;
@@ -5581,7 +5741,7 @@ struct Session
             si.pWaitSemaphores = &waiting; si.pWaitDstStageMask = &stage; si.pCommandBuffers = &phases[i].command; si.pSignalSemaphores = &signalling;
             const auto r = deviceLost ? VK_ERROR_DEVICE_LOST :
                 (hooks.phaseSubmitFailAt == i + 1 ? VK_ERROR_OUT_OF_HOST_MEMORY :
-                 vkQueueSubmit(phases[i].compute ? vk.computeQueue : vk.queue, 1, &si,
+                 vkQueueSubmit(phases[i].compute ? vk.computeQueue : graphics, 1, &si,
                                i + 1 == phases.size() ? fence : VK_NULL_HANDLE));
             if (r != VK_SUCCESS) {
                 uncertainExecution = true;
@@ -5730,6 +5890,7 @@ struct Session
         {
             VkBufferImageCopy region = fp.vk;
             region.imageExtent = { vw, vh, 1 };
+            region.bufferOffset += from.offset;
             ImageBarrier(c, to.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                          VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_ACCESS_TRANSFER_WRITE_BIT);
@@ -6043,6 +6204,7 @@ struct Session
             runtime->record_first_pack(c, w, h);
             VkBufferImageCopy copy = colourFootprint.vk;
             copy.imageExtent = { w, h, 1 };
+            copy.bufferOffset += firstOutput.offset;
             vkCmdCopyImageToBuffer(c, runtime->first_pass_packed(), VK_IMAGE_LAYOUT_GENERAL, firstOutput.buffer, 1, &copy);
         }
         else if (job.firstPass)
@@ -6067,6 +6229,7 @@ struct Session
                          VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
             VkBufferImageCopy copy = colourFootprint.vk;
             copy.imageExtent = { w, h, 1 };
+            copy.bufferOffset += firstOutput.offset;
             vkCmdCopyImageToBuffer(c, firstColour.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                    firstOutput.buffer, 1, &copy);
             ImageBarrier(c, first, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
@@ -6131,6 +6294,7 @@ struct Session
         if (!sharedColour) {
             VkBufferImageCopy out = colourFootprint.vk;
             out.imageExtent = { w, h, 1 };
+            out.bufferOffset += output.offset;
             vkCmdCopyImageToBuffer(c, net->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, output.buffer, 1, &out);
         }
         if (sharedColour)
@@ -6170,16 +6334,16 @@ struct Session
         else
         {
             if (traceOn) tracePhases = uint32_t(phases.size());
-            if (fullCompute) SubmitPhases(phases, sub.produced, sub.finished, done[slot]);
+            if (fullCompute) SubmitPhases(phases, sub.produced, sub.finished, done[slot], producer);
             else if (phases.size() > 1) {
                 if (loggedPhaseCount != phases.size()) {
                     loggedPhaseCount = phases.size();
                     nr::logf("[mochizuki] inline network: compute family %u, conversion family %u, %zu segments for %d passes",
                              vk.computeFamily, vk.family, phases.size(), job.controls.passes);
                 }
-                SubmitPhases(phases, sub.produced, sub.finished, done[slot]);
+                SubmitPhases(phases, sub.produced, sub.finished, done[slot], producer);
             }
-            else VkCheck(Submit(c, sub.produced, sub.finished, done[slot]), "vkQueueSubmit");
+            else VkCheck(Submit(c, sub.produced, sub.finished, done[slot], producer), "vkQueueSubmit");
             inFlight[slot] = true;
         }
         sub.submitted = true;
@@ -6249,7 +6413,18 @@ struct Session
             ReleaseGameQueues();
             return;
         }
-        if (vk.device)
+        if (vk.device && vk.adoptedVkd3d)
+        {
+            // The game's device: idling it would wait for the game too, unlocked. This session's last submit
+            // signals fromVk's last value; that is all there is to wait for (at once, as below).
+            VkSemaphoreWaitInfo wi { VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO };
+            wi.semaphoreCount = 1;
+            wi.pSemaphores = &fromVk.semaphore;
+            wi.pValues = &finishedValue;
+            if (fromVk.semaphore && finishedValue)
+                vkWaitSemaphores(vk.device, &wi, kSlotWaitNs);
+        }
+        else if (vk.device)
             vkDeviceWaitIdle(vk.device); // returns at once: all of this session's work has finished
         if (runtime)
             LogNetworkTime("session end");

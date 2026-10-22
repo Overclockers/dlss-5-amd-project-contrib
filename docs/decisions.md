@@ -1,3 +1,14 @@
+## 2026-10-22 — Proton 直连重做:ID3D12DXVKInteropDevice(源码完成、待实机)
+
+取代 bd6d388a 的 gate off。不再找 d3d12.dll 不导出的 vkd3d_get_vk_*,改走 vkd3d-proton 的
+ID3D12DXVKInteropDevice(与 mochizuki Linux 路线 nr_pe_interop.cpp 同一接口):GetVulkanHandles 借用设备
+(Destroy 不销毁)、GetVulkanResourceInfo 取帧 buffer 的 VkBuffer+offset(不再做内存导入)、每帧提交前
+LockCommandQueue(producer)(排空游戏队列,保证 toVk 的 Signal 先上 VkQueue,且持 vkd3d 队列锁),构建走自建
+DIRECT 队列 + HostDevice queue_lock。fence 仍是共享 fence 导入(Proton 已证明可行)。入口点:按 c71b0f4 的
+结论检查 vulkan-1.dll 是否转发到 winevulkan.dll,nativevulkanloader 时拒绝直连。直连下关闭共享纹理。任何一步
+失败都回落自建设备路径,熔断器(85df65da/08293dff)保留。Windows 行为不变(全部以 adoptedVkd3d 门控,仅
+Wine 下可能为真)。验收缺口见 PLAN.md"实现(源码完成、待实机)"。
+
 ## 2026-10-23 — Proton vkd3d 直连审查修复(方案回退 + 熔断真正生效)
 
 六条审查意见全部属实并修复:P1×4(vkd3d 采用)——d3d12.dll 的 .def 不导出
