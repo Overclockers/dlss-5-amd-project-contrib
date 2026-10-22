@@ -778,12 +778,92 @@ struct Vulkan
     PFN_vkGetMemoryWin32HandlePropertiesKHR memoryHandleProperties {};
     PFN_vkImportSemaphoreWin32HandleKHR importSemaphore {};
     std::string name;
+    bool adoptedVkd3d = false; // the device was adopted from vkd3d-proton (Proton): no cross-API import
+
+    // Under Wine/Proton, d3d12.dll is vkd3d-proton and exports vkd3d_get_vk_* accessors.
+    // Adopting its device means the frame buffers are on the same VkDevice the game runs on,
+    // so the Win32 shared-handle path (which winevulkan cannot import) is never reached.
+    bool AdoptVkd3dDevice(LUID luid)
+    {
+        HMODULE d3d12 = GetModuleHandleA("d3d12.dll");
+        if (!d3d12)
+            return false;
+        // wine_get_version is the Wine-only marker; native D3D12 never exports it.
+        HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+        if (!ntdll || !GetProcAddress(ntdll, "wine_get_version"))
+            return false;
+        using PFN_vkd3d_get_vk_instance = VkInstance(STDMETHODCALLTYPE*)(IUnknown*);
+        using PFN_vkd3d_get_vk_physical_device = VkPhysicalDevice(STDMETHODCALLTYPE*)(IUnknown*);
+        using PFN_vkd3d_get_vk_device = VkDevice(STDMETHODCALLTYPE*)(IUnknown*);
+        auto get_instance = reinterpret_cast<PFN_vkd3d_get_vk_instance>(GetProcAddress(d3d12, "vkd3d_get_vk_instance"));
+        auto get_physical = reinterpret_cast<PFN_vkd3d_get_vk_physical_device>(GetProcAddress(d3d12, "vkd3d_get_vk_physical_device"));
+        auto get_device = reinterpret_cast<PFN_vkd3d_get_vk_device>(GetProcAddress(d3d12, "vkd3d_get_vk_device"));
+        if (!get_instance || !get_physical || !get_device)
+            return false;
+        // The caller's device (Session::device) is not reachable from here; the host passes it in Start.
+        // This helper is called with the D3D12 device once available; until then it is a no-op probe.
+        return false; // populated by AdoptVkd3dDevice(IUnknown*, LUID) below
+    }
+
+    bool AdoptVkd3dDevice(IUnknown* d3d12Device, LUID luid)
+    {
+        HMODULE d3d12 = GetModuleHandleA("d3d12.dll");
+        if (!d3d12)
+            return false;
+        HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+        if (!ntdll || !GetProcAddress(ntdll, "wine_get_version"))
+            return false;
+        using PFN_vkd3d_get_vk_instance = VkInstance(STDMETHODCALLTYPE*)(IUnknown*);
+        using PFN_vkd3d_get_vk_physical_device = VkPhysicalDevice(STDMETHODCALLTYPE*)(IUnknown*);
+        using PFN_vkd3d_get_vk_device = VkDevice(STDMETHODCALLTYPE*)(IUnknown*);
+        auto get_instance = reinterpret_cast<PFN_vkd3d_get_vk_instance>(GetProcAddress(d3d12, "vkd3d_get_vk_instance"));
+        auto get_physical = reinterpret_cast<PFN_vkd3d_get_vk_physical_device>(GetProcAddress(d3d12, "vkd3d_get_vk_physical_device"));
+        auto get_device = reinterpret_cast<PFN_vkd3d_get_vk_device>(GetProcAddress(d3d12, "vkd3d_get_vk_device"));
+        if (!get_instance || !get_physical || !get_device)
+        {
+            nr::logf("[mochizuki] Wine detected but vkd3d-proton vk accessors unavailable; falling back to own device");
+            return false;
+        }
+        instance = get_instance(d3d12Device);
+        physical = get_physical(d3d12Device);
+        device = get_device(d3d12Device);
+        if (!instance || !physical || !device)
+        {
+            nr::logf("[mochizuki] vkd3d vk object extraction returned null (instance=%p physical=%p device=%p)",
+                     static_cast<void*>(instance), static_cast<void*>(physical), static_cast<void*>(device));
+            instance = VkInstance{};
+            physical = VkPhysicalDevice{};
+            device = VkDevice{};
+            return false;
+        }
+        // Adopt the graphics queue: the host passes the game's command queue as the execution queue.
+        // For now use family 0 (vkd3d uses one queue family for DIRECT lists); the host adapter
+        // overrides queue/family via its own path when it calls MochizukiNrPrepareFrame.
+        family = 0;
+        vkGetDeviceQueue(device, family, 0, &queue);
+        buildQueue = queue;
+        vkGetPhysicalDeviceMemoryProperties(physical, &memory);
+        VkPhysicalDeviceProperties2 props { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
+        vkGetPhysicalDeviceProperties2(physical, &props);
+        name = props.properties.deviceName;
+        // bufferDeviceAddress was checked by vkd3d at its own device creation; trust it.
+        bufferDeviceAddress = true;
+        adoptedVkd3d = true;
+        nr::logf("[mochizuki] adopted vkd3d-proton device: %s (same VkDevice as the game; no cross-API sharing needed)",
+                 name.c_str());
+        return true;
+    }
 
     // Throws "[unsupported] ..." for what cannot change while the process lives (no Vulkan 1.3 driver, no device
     // for the adapter, a missing extension or feature), anything else for a failure that may pass. What is absent is
     // decided only from lists that were read in full (VkEnumerate); a failed enumeration throws a plain error.
     void Create(LUID luid, const TestHooks& hooks)
     {
+        // On Wine/Proton, the D3D12 adapter is vkd3d-proton on the same GPU: try to adopt its
+        // Vulkan instance/device so the SharedBuffer path needs no cross-API import at all.
+        if (AdoptVkd3dDevice(luid))
+            return;
+
         VkApplicationInfo app { VK_STRUCTURE_TYPE_APPLICATION_INFO };
         app.pApplicationName = "OptiScaler NR";
         app.apiVersion = VK_API_VERSION_1_3;
@@ -1142,6 +1222,18 @@ struct SharedBuffer
         rd.Height = rd.DepthOrArraySize = rd.MipLevels = 1;
         rd.SampleDesc.Count = 1;
         rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        // On the adopted vkd3d device (Proton) there is no cross-API sharing to do: the D3D12
+        // committed heap is already backed by the same VkDevice. A plain committed resource is enough.
+        if (vk.adoptedVkd3d)
+        {
+            Check(d->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COMMON, nullptr,
+                                             IID_PPV_ARGS(&resource)),
+                  "buffer (vkd3d adopted device)");
+            ++alive;
+            nr::logf("[mochizuki] shared buffer skipped VK import (vkd3d adopted device): %llu bytes",
+                     static_cast<unsigned long long>(rd.Width));
+            return;
+        }
         Check(d->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_SHARED, &rd, D3D12_RESOURCE_STATE_COMMON, nullptr,
                                          IID_PPV_ARGS(&resource)),
               "shared buffer");
@@ -4219,7 +4311,9 @@ struct Session
         }
         std::string acoWhy;
         const bool configured = ConfigureAco(requested, acoWhy);
-        vk.Create(device->GetAdapterLuid(), hooks);
+        // Proton first: adopt vkd3d-proton's own Vulkan device so buffers never need cross-API import.
+        if (!vk.AdoptVkd3dDevice(device, device->GetAdapterLuid()))
+            vk.Create(device->GetAdapterLuid(), hooks);
         deviceStarted = true;
         // Bundle selection is this thread's. The extension is on only when this creation saw a bundle.
         // effective stays false until Install publishes the network that actually runs.
