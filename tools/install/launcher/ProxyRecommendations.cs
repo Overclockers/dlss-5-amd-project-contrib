@@ -35,6 +35,13 @@ namespace OptScalerNR.Launcher
         [DataMember(Name="source")] public string Source;
         [DataMember(Name="sourceFormat")] public string SourceFormat;
         [DataMember(Name="upstreamVersion")] public string UpstreamVersion;
+        [DataMember(Name="optiPatcher")] bool? _optiPatcher;
+        public bool OptiPatcher
+        {
+            // Older bundled/cache documents preserve the Wiki column in generated notes.
+            get { return _optiPatcher ?? ((NotesEn ?? "").IndexOf(" · OptiPatcher supported · ", StringComparison.Ordinal) >= 0); }
+            set { _optiPatcher = value; }
+        }
     }
 
     public sealed class ProxyRecommendations : IDisposable
@@ -506,6 +513,7 @@ namespace OptScalerNR.Launcher
         static void ApplyRowGuidance(ProxyProfile profile, WikiRow row, WikiProxyAnalysis analysis)
         {
             profile.Preferred = analysis.Recommended.Count > 0 ? analysis.Recommended[0] : DefaultProxy;
+            profile.OptiPatcher = row.OptiPatcher;
             var alternatives = new List<string>(analysis.Recommended.Count);
             for (var i = 1; i < analysis.Recommended.Count && alternatives.Count < 4; i++) alternatives.Add(analysis.Recommended[i]);
             profile.Alternatives = alternatives.ToArray();
@@ -524,6 +532,7 @@ namespace OptScalerNR.Launcher
                 var segments = new List<string>(target.PathSegments);
                 if (AddUnique(segments, segment, 32)) target.PathSegments = segments.ToArray();
             }
+            target.OptiPatcher = row.OptiPatcher;
             if (string.Equals(target.SourceFormat, "wiki", StringComparison.OrdinalIgnoreCase)) {
                 ApplyRowGuidance(target, row, analysis); // Machine-generated entries are fully regenerated.
             } else if (row.HasLink && string.Equals(target.Source, WikiCompatibilityListPageUrl, StringComparison.OrdinalIgnoreCase)) {
@@ -602,6 +611,7 @@ namespace OptScalerNR.Launcher
             copy.Source = source.Source;
             copy.SourceFormat = source.SourceFormat;
             copy.UpstreamVersion = source.UpstreamVersion;
+            copy.OptiPatcher = source.OptiPatcher;
             return copy;
         }
         static bool AddUnique(List<string> list, string value, int cap)

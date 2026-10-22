@@ -36,6 +36,14 @@ Exit codes match `status`: 0 success, 1 failed, 2 needsInput, 3 cancelled.
 - `modelSourceDll`: optional absolute path selected by the user for offline extraction.
   Inspect checks it without writing game files. Installation resolves it alongside
   package/game sources and validates the model's supported hashes before conversion.
+- `optiPatcher`: `install` | `skip`; optional. The launcher checkbox sends `install`
+  when on and `skip` when off. Its per-game default follows the matched Wiki
+  recommendation row; manual overrides persist per game in `settings.json/optiPatcherByGame`.
+  Installation fetches the latest OptiPatcher rolling release with a
+  30 s deadline and falls back to the bundled offline copy when the download fails or
+  fails PE validation, then enables `LoadAsiPlugins=true` in the game ini.
+  `skip` (the worker default when absent) leaves OptiPatcher untouched. Inspect never
+  downloads or installs it.
 
 Inspect never writes the game folder, never extracts weights, never downloads.
 The worker passes backend arrays through the decision JSON file so Windows

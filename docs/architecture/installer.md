@@ -165,7 +165,10 @@ GUI 的 worker 进程标准输出和错误分别保存为 `worker.stdout.log` / 
 安装后检查解析出的插件目录，包括本次复制和原有保留的用户 ASI。
 存在自定义 ASI 且 `[Plugins] LoadAsiPlugins` 缺失或为 `auto` 时启用加载，
 避免替换 INI 后插件文件仍在但不再加载。显式 `true` / `false` 保持原值；
-插件自己的配置文件也保留。OptiPatcher 仍由其独立安装选择处理。
+插件自己的配置文件也保留。OptiPatcher 由其独立安装选择处理：控制台交互保留原提示流程（60 秒时限）；
+启动器通过独立复选框发送决策 `optiPatcher=install` 或 `skip`，默认按所选游戏的 Wiki 推荐预选，手动选择按游戏持久化；勾选后走同一安装内核，30 秒时限，下载失败回退包内离线副本并
+自动开启 `LoadAsiPlugins=true`。CI 打包前 best-effort 拉取最新 rolling 版并做 PE（MZ/签名/AMD64/尺寸）
+校验，通过才替换 `assets/plugins/OptiPatcher.asi`；本地打包永不联网。
 
 daniel runtime 白名单覆盖 0.3.0 / 0.3.1 / 0.3.2 / 0.3.3 / 0.4.0 / 0.4.1 / 0.4.2 / 0.4.3 / 0.5.0 的完整 SHA256（`$expectedAuthor`），与 `AmdLayout.h` 的 `kAmd*` 行对应；未知 SHA 一律拒绝（fail closed）。加新版本时两处一起改，并验证「同尺寸改 1 字节」的文件会被拒。
 

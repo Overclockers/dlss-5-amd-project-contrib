@@ -10,6 +10,8 @@ namespace OptScalerNR.Launcher
     {
         ProxyRecommendations _recommendations;
         readonly Dictionary<string,string> _proxyChoices=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+        readonly Dictionary<string,bool> _optiPatcherByGame=new Dictionary<string,bool>(StringComparer.OrdinalIgnoreCase);
+        bool _selectingOptiPatcher;
         bool _selectingProxy;
         Button _refreshProfilesButton,_useRecommendationButton;
         TextBlock _profileStatus;
@@ -23,6 +25,13 @@ namespace OptScalerNR.Launcher
             if(_useRecommendationButton!=null)_useRecommendationButton.Click+=delegate{
                 if(_selectedGame==null)return;_proxyChoices.Remove(_selectedGame.Id);SaveSettings();UpdateProxyRecommendation();
             };
+        }
+        void RememberOptiPatcherChoice()
+        {
+            _decisions.OptiPatcher=_optiPatcherToggle!=null&&_optiPatcherToggle.IsChecked==true?"install":"skip";
+            if(_selectingOptiPatcher||_loadingSettings||_applyingLanguage||_selectedGame==null||string.IsNullOrEmpty(_selectedGame.Id))return;
+            _optiPatcherByGame[_selectedGame.Id]=_optiPatcherToggle.IsChecked==true;
+            SaveSettings();
         }
         void RememberProxyChoice()
         {
@@ -40,8 +49,14 @@ namespace OptScalerNR.Launcher
                 _profileStatus.Text=string.Format(L("{0}（{1} 款游戏）","{0} ({1} games)"),origin,_recommendations.Count);
                 _profileStatus.ToolTip=string.Format(L("推荐规则来源：{0} · 共 {1} 款游戏 · 复核于 {2}","Recommendation source: {0} · {1} games · reviewed {2}"),origin,_recommendations.Count,_recommendations.Reviewed??"");
             }
+            var profile=_selectedGame==null?null:_recommendations.Match(_selectedGame);
+            bool optiPatcher;
+            if(_selectedGame==null||!_optiPatcherByGame.TryGetValue(_selectedGame.Id,out optiPatcher))optiPatcher=profile!=null&&profile.OptiPatcher;
+            _selectingOptiPatcher=true;
+            try{if(_optiPatcherToggle!=null)_optiPatcherToggle.IsChecked=optiPatcher;}
+            finally{_selectingOptiPatcher=false;}
+            _decisions.OptiPatcher=optiPatcher?"install":"skip";
             if(_selectedGame==null)return;
-            var profile=_recommendations.Match(_selectedGame);
             string manual;
             var hasManual=_proxyChoices.TryGetValue(_selectedGame.Id,out manual)&&ProxyRecommendations.Supports(manual);
             var guess=_lastInspectResult!=null?_lastInspectResult.Recommend:quickCandidate;

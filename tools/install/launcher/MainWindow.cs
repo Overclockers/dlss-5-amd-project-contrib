@@ -96,7 +96,7 @@ namespace OptScalerNR.Launcher
         MenuItem _removeGameMenuItem;
         TextBlock _compatSummary;
         TextBlock _lmxxfActiveLabel, _danielActiveLabel, _mochiActiveLabel;
-        CheckBox _lmxxfCheck, _danielCheck, _mochiCheck, _replaceIni, _scanOnStartup;
+        CheckBox _lmxxfCheck, _danielCheck, _mochiCheck, _replaceIni, _optiPatcherToggle, _scanOnStartup;
         ProgressBar _progress;
         Image _heroPosterImage, _heroBgImage;
         Ellipse _statusLed;
@@ -229,6 +229,12 @@ namespace OptScalerNR.Launcher
 
             _activeCombo = (ComboBox)window.FindName("ActiveCombo");
             _replaceIni = (CheckBox)window.FindName("ReplaceIni");
+            _optiPatcherToggle = (CheckBox)window.FindName("OptiPatcherToggle");
+            if (_optiPatcherToggle != null)
+            {
+                _optiPatcherToggle.Checked += (s, e) => RememberOptiPatcherChoice();
+                _optiPatcherToggle.Unchecked += (s, e) => RememberOptiPatcherChoice();
+            }
             _openLogButton = (Button)window.FindName("OpenLogButton");
             _logView = (TextBox)window.FindName("LogView");
             _statusText = (TextBlock)window.FindName("StatusText");
@@ -722,6 +728,8 @@ namespace OptScalerNR.Launcher
                 if (_packageBrowse != null) _packageBrowse.Content = isZh ? "浏览…" : "Browse…";
                 if (_heroKicker != null) _heroKicker.Text = isZh ? "已选游戏" : "Selected Game";
                 if (_replaceIni != null) _replaceIni.Content = isZh ? "覆盖现有 OptiScaler.ini 配置文件 (推荐)" : "Replace existing OptiScaler.ini (recommended)";
+                SetLabel("OptiPatcherToggle", "安装 OptiPatcher（DLSS 伪装增强，按 Wiki 推荐预选）", "Install OptiPatcher (DLSS spoofing enhancement, preselected by Wiki recommendation)");
+                if (_optiPatcherToggle != null) _optiPatcherToggle.ToolTip = L("优先下载最新版本（30 秒时限），失败时回退包内离线副本，并启用 LoadAsiPlugins。", "Downloads the latest version with a 30-second limit, falls back to the bundled offline copy, and enables LoadAsiPlugins.");
                 if (_scanOnStartup != null) _scanOnStartup.Content = isZh ? "启动时自动扫描游戏库" : "Scan game library on startup";
 
                 SetLabel("LocalGamesHeading", "游戏库", "Library");
@@ -1000,6 +1008,8 @@ namespace OptScalerNR.Launcher
                 _recentGameId = rec.RecentGameId;
                 if (rec.ProxyChoices != null)
                     foreach (var pair in rec.ProxyChoices) if (ProxyRecommendations.Supports(pair.Value)) _proxyChoices[pair.Key] = pair.Value;
+                if (rec.OptiPatcherByGame != null)
+                    foreach (var pair in rec.OptiPatcherByGame) _optiPatcherByGame[pair.Key] = pair.Value;
                 if (rec.HiddenGames != null)
                     foreach (var pair in rec.HiddenGames) _hiddenGames[pair.Key] = pair.Value;
                 if (rec.BackendChoices != null)
@@ -1031,7 +1041,8 @@ namespace OptScalerNR.Launcher
                     RecentGameId = _selectedGame != null ? _selectedGame.Id : _recentGameId,
                     BackendChoices = _backendChoices,
                     HiddenGames = _hiddenGames,
-                    ProxyChoices = _proxyChoices
+                    ProxyChoices = _proxyChoices,
+                    OptiPatcherByGame = _optiPatcherByGame
                 };
                 JsonUtil.WriteFile(_settingsPath, set);
             }
@@ -1085,6 +1096,7 @@ namespace OptScalerNR.Launcher
         sealed class GuiSettings
         {
             [System.Runtime.Serialization.DataMember] public Dictionary<string, string> ProxyChoices;
+            [System.Runtime.Serialization.DataMember(Name = "optiPatcherByGame")] public Dictionary<string, bool> OptiPatcherByGame;
             [System.Runtime.Serialization.DataMember] public Dictionary<string, string> HiddenGames;
             [System.Runtime.Serialization.DataMember] public string Language;
             [System.Runtime.Serialization.DataMember] public string Theme;
@@ -1747,6 +1759,7 @@ namespace OptScalerNR.Launcher
             if (_statusLed != null) _statusLed.Fill = WarningBrush;
             if (_progress != null) _progress.IsIndeterminate = true;
             UpdatePrimaryButtonState();
+            _decisions.OptiPatcher = (_optiPatcherToggle != null && _optiPatcherToggle.IsChecked == true) ? "install" : "skip";
 
             var req = new LauncherRequest
             {
@@ -2222,6 +2235,7 @@ namespace OptScalerNR.Launcher
             _pendingAction = action;
 
             _decisions.ExistingIni = (_replaceIni != null && _replaceIni.IsChecked == true) ? "overwrite" : "keep";
+            _decisions.OptiPatcher = (_optiPatcherToggle != null && _optiPatcherToggle.IsChecked == true) ? "install" : "skip";
 
             var req = new LauncherRequest
             {

@@ -335,6 +335,41 @@ jobs:
           ./tools/release/prepare-person-assets.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      # Best-effort refresh of the bundled OptiPatcher.asi: fetch the latest rolling release,
+      # validate the PE image, and only then replace the committed copy that feeds packaging.
+      # On any failure the committed offline copy is kept. Local packaging never runs this step;
+      # the committed asset changes only through CI or a manual update.
+      - name: Refresh bundled OptiPatcher (best effort)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $url = 'https://github.com/optiscaler/OptiPatcher/releases/download/rolling/OptiPatcher.asi'
+          $dst = 'assets/plugins/OptiPatcher.asi'
+          $tmp = Join-Path $env:RUNNER_TEMP 'OptiPatcher.asi'
+          $ok = $false
+          try {
+            & curl.exe -f -s -S -L --connect-timeout 10 --max-time 60 -o $tmp $url
+            if ($LASTEXITCODE -ne 0) { throw "download exit $LASTEXITCODE" }
+            # PE validation: MZ header, PE signature, AMD64 machine, plausible plugin size.
+            $bytes = [IO.File]::ReadAllBytes($tmp)
+            if ($bytes.Length -lt 4096 -or $bytes.Length -gt 20MB) { throw "implausible size $($bytes.Length)" }
+            if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { throw 'missing MZ header' }
+            $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
+            if ($peOffset -le 0 -or ($peOffset + 6) -gt $bytes.Length) { throw "bad e_lfanew $peOffset" }
+            if ($bytes[$peOffset] -ne 0x50 -or $bytes[$peOffset + 1] -ne 0x45 -or $bytes[$peOffset + 2] -ne 0 -or $bytes[$peOffset + 3] -ne 0) { throw 'missing PE signature' }
+            $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+            if ($machine -ne 0x8664) { throw ('not AMD64 (machine 0x{0:X4})' -f $machine) }
+            $ok = $true
+          } catch {
+            Write-Warning "OptiPatcher refresh skipped, keeping committed copy: $_"
+          }
+          if ($ok) {
+            New-Item -ItemType Directory -Path (Split-Path $dst) -Force | Out-Null
+            Copy-Item -LiteralPath $tmp -Destination $dst -Force
+            $committed = git hash-object $dst
+            Write-Host "Bundled OptiPatcher.asi refreshed for packaging (blob $committed)."
+          }
+
       - name: Package user zip
         shell: pwsh
         run: |
