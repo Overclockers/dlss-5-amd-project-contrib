@@ -165,6 +165,21 @@ namespace OptScalerNR.Launcher
             public readonly string Reason;
             public CodeException(string reason) : base(reason) { Reason = reason; }
         }
+        public sealed class DecodedCode
+        {
+            public readonly SortedDictionary<int, decimal> Values;
+            public readonly string GameTag;
+            internal DecodedCode(SortedDictionary<int, decimal> values, string gameTag)
+            { Values = values; GameTag = gameTag; }
+        }
+        public static string NormalizeGameTag(string game)
+        {
+            if (string.IsNullOrEmpty(game)) return "";
+            var name = Path.GetFileName(game);
+            return name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? name.Substring(0, name.Length - 4) : name;
+        }
+        public static bool GameTagMatches(string tag, string executable)
+        { return string.Equals(NormalizeGameTag(tag), NormalizeGameTag(executable), StringComparison.OrdinalIgnoreCase); }
         static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
         static readonly Regex Header = new Regex(@"^\s*\[([^\]]+)\]\s*(?:[;#].*)?$");
         static readonly Regex Assignment = new Regex(@"^(\s*)([^=;#]+?)(\s*=\s*)([^;#]*)(.*)$");
@@ -211,8 +226,8 @@ namespace OptScalerNR.Launcher
             }
             return values;
         }
-        public static string Encode(byte[] ini) { return EncodeValues(ReadValues(ini)); }
-        static string EncodeValues(IDictionary<int, decimal> values)
+        public static string Encode(byte[] ini, string game = null) { return EncodeValues(ReadValues(ini), NormalizeGameTag(game)); }
+        static string EncodeValues(IDictionary<int, decimal> values, string game)
         {
             var pairs = new List<string>();
             foreach (var key in Keys) {
@@ -224,18 +239,28 @@ namespace OptScalerNR.Launcher
                 pairs.Add(key.Index.ToString(Invariant) + "=" + raw.ToString("0", Invariant));
             }
             string payload = string.Join(",", pairs.ToArray());
-            return "MZ1:" + payload + ";" + Crc16(payload).ToString("X4", Invariant);
+            if (game.Length == 0) return "MZ1:" + payload + ";" + Crc16(payload).ToString("X4", Invariant);
+            string tagged = payload + "|" + game;
+            return "MZ2:" + tagged + ";" + Crc16(tagged).ToString("X4", Invariant);
         }
-        public static SortedDictionary<int, decimal> Decode(string code)
+        public static DecodedCode Decode(string code)
         {
-            if (code == null || !code.StartsWith("MZ1:", StringComparison.Ordinal)) throw new CodeException("prefix");
-            int end = code.IndexOf(';', 4);
+            if (code == null || (!code.StartsWith("MZ1:", StringComparison.Ordinal) && !code.StartsWith("MZ2:", StringComparison.Ordinal))) throw new CodeException("prefix");
+            bool tagged = code.StartsWith("MZ2:", StringComparison.Ordinal);
+            int end = code.LastIndexOf(';');
             ushort crc;
-            if (end < 0 || code.Length != end + 5 || !ushort.TryParse(code.Substring(end + 1), NumberStyles.AllowHexSpecifier, Invariant, out crc)) throw new CodeException("format");
+            if (end < 4 || code.Length != end + 5 || !ushort.TryParse(code.Substring(end + 1), NumberStyles.AllowHexSpecifier, Invariant, out crc)) throw new CodeException("format");
             string payload = code.Substring(4, end - 4);
             if (Crc16(payload) != crc) throw new CodeException("crc");
+            string game = "";
+            if (tagged) {
+                int separator = payload.IndexOf('|');
+                if (separator < 0 || separator == payload.Length - 1 || payload.IndexOf('|', separator + 1) >= 0) throw new CodeException("format");
+                game = payload.Substring(separator + 1);
+                payload = payload.Substring(0, separator);
+            }
             var result = new SortedDictionary<int, decimal>();
-            if (payload.Length == 0) return result;
+            if (payload.Length == 0) return new DecodedCode(result, game);
             foreach (string pair in payload.Split(',')) {
                 var match = Regex.Match(pair, @"^(\d+)=(-?\d+)$");
                 int index; decimal raw;
@@ -250,10 +275,11 @@ namespace OptScalerNR.Launcher
                 value = Math.Max(key.Min, Math.Min(key.Max, value));
                 result.Add(index, value);
             }
-            return result;
+            return new DecodedCode(result, game);
         }
-        public static string Summary(IDictionary<int, decimal> values, bool chinese)
+        public static string Summary(DecodedCode code, bool chinese)
         {
+            var values = code.Values;
             decimal style = 0, reno = 0; int count = 0;
             foreach (var key in Keys) {
                 decimal value; if (!values.TryGetValue(key.Index, out value)) value = key.Default;
@@ -264,11 +290,12 @@ namespace OptScalerNR.Launcher
             string[] styles = chinese ? new[] { "标准", "自然", "电影感" } : new[] { "Standard", "Natural", "Cinematic" };
             return "Mochizuki · " + (chinese ? "风格 " : "Style ") + styles[(int)style] + " · RenoDX " +
                 (chinese ? (reno == 1 ? "开" : "关") : (reno == 1 ? "On" : "Off")) + " · " +
-                (chinese ? "修改 " + count + " 项" : count + " non-default settings");
+                (chinese ? "修改 " + count + " 项" : count + " non-default settings") +
+                (code.GameTag.Length == 0 ? "" : (chinese ? " · 来自 " : " · from ") + code.GameTag);
         }
         public static int DifferenceCount(byte[] ini, string code)
         {
-            var before = ReadValues(ini); var after = Decode(code); int count = 0;
+            var before = ReadValues(ini); var after = Decode(code).Values; int count = 0;
             foreach (var key in Keys) {
                 decimal a, b;
                 if (!before.TryGetValue(key.Index, out a)) a = key.Default;
@@ -281,7 +308,7 @@ namespace OptScalerNR.Launcher
         { return key.Kind == Kind.Bool ? (value == 1 ? "true" : "false") : value.ToString(key.Kind == Kind.Float ? "0.######" : "0", Invariant); }
         public static byte[] Apply(byte[] ini, string code)
         {
-            var values = Decode(code);
+            var values = Decode(code).Values;
             var document = Document.Read(ini);
             string newline = document.Text.Contains("\r\n") ? "\r\n" : document.Text.Contains("\n") ? "\n" : document.Text.Contains("\r") ? "\r" : Environment.NewLine;
             var output = new StringBuilder(); bool active = false, inserted = false;

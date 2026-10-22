@@ -418,8 +418,10 @@ namespace OptScalerNR.Launcher
                 case "renamed": text = L("已重命名：", "Renamed: ") + _iniStatusDetail; break;
                 case "deleted": text = L("已删除共享配置：", "Shared profile deleted: ") + _iniStatusDetail; break;
                 case "applied": text = L("已应用，请重启游戏。原 INI 备份：", "Applied; restart the game. Original INI backup: ") + _iniStatusDetail; break;
+                case "share-imported": text = L("已导入通用分享码，效果请以实际画面为准", "Generic share code imported; judge the result by eye."); break;
                 case "share-error": text = _iniStatusDetail; break;
                 case "unlocker": text = _iniStatusDetail; break;
+                case "plugins-missing": text = L("未检测到插件目录，请先安装本工具", "Plugins folder not found; install this tool first."); break;
                 case "io": text = L("配置操作失败，请检查文件权限与可用空间。", "Profile operation failed. Check file permissions and free space."); break;
                 default: text = _iniProfiles == null ? L("配置库不可用。", "Profile library unavailable.")
                     : _selectedGame == null ? L("选择游戏以使用共享配置。", "Select a game to use shared profiles.")

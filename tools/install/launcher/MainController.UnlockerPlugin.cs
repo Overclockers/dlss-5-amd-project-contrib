@@ -9,12 +9,14 @@ namespace OptScalerNR.Launcher
 {
     public sealed partial class MainController
     {
-        Button _unlockerImportButton;
+        Button _unlockerImportButton, _openPluginsFolderButton;
 
         void InitUnlockerPlugin()
         {
             _unlockerImportButton = _window.FindName("UnlockerImportButton") as Button;
             if (_unlockerImportButton != null) _unlockerImportButton.Click += delegate { ImportUnlockerPlugin(); };
+            _openPluginsFolderButton = _window.FindName("OpenPluginsFolderButton") as Button;
+            if (_openPluginsFolderButton != null) _openPluginsFolderButton.Click += delegate { OpenPluginsFolder(); };
             if (_iniPluginToggle != null)
             {
                 _iniPluginToggle.Checked += delegate { RefreshUnlockerPlugin(); };
@@ -29,9 +31,12 @@ namespace OptScalerNR.Launcher
 
         void RefreshUnlockerLanguage()
         {
-            if (_unlockerImportButton == null) return;
-            _unlockerImportButton.Content = L("导入 XeFG 解锁插件…", "Import XeFG unlocker…");
-            _unlockerImportButton.ToolTip = L("可选 MFGUnlocker.asi、XeFGUnlock.asi 或对应 .dll（.dll 会改名为 .asi 复制）", "Pick MFGUnlocker.asi, XeFGUnlock.asi or their .dll (a .dll is copied renamed to .asi).");
+            if (_unlockerImportButton != null)
+            {
+                _unlockerImportButton.Content = L("导入 XeFG 解锁插件…", "Import XeFG unlocker…");
+                _unlockerImportButton.ToolTip = L("可选 MFGUnlocker.asi、XeFGUnlock.asi 或对应 .dll（.dll 会改名为 .asi 复制）", "Pick MFGUnlocker.asi, XeFGUnlock.asi or their .dll (a .dll is copied renamed to .asi).");
+            }
+            if (_openPluginsFolderButton != null) _openPluginsFolderButton.Content = L("打开插件文件夹", "Open plugins folder");
         }
 
         bool CanShowUnlockerPlugin(IniGameIdentity game)
@@ -45,9 +50,36 @@ namespace OptScalerNR.Launcher
 
         void RefreshUnlockerPlugin()
         {
-            if (_unlockerImportButton == null) return;
-            _unlockerImportButton.Visibility = CanShowUnlockerPlugin(CaptureIniGame()) ? Visibility.Visible : Visibility.Collapsed;
-            _unlockerImportButton.IsEnabled = !IniBusy();
+            var game = CaptureIniGame();
+            if (_unlockerImportButton != null)
+            {
+                _unlockerImportButton.Visibility = CanShowUnlockerPlugin(game) ? Visibility.Visible : Visibility.Collapsed;
+                _unlockerImportButton.IsEnabled = !IniBusy();
+            }
+            if (_openPluginsFolderButton != null)
+            {
+                bool installed = game != null && Directory.Exists(Path.Combine(game.Directory, "OptiScaler"));
+                _openPluginsFolderButton.Visibility = installed ? Visibility.Visible : Visibility.Collapsed;
+                _openPluginsFolderButton.IsEnabled = installed && !IniBusy();
+            }
+        }
+
+        void OpenPluginsFolder()
+        {
+            if (IniBusy()) return;
+            var game = CaptureIniGame();
+            if (game == null) return;
+            try
+            {
+                var directory = UnlockerPlugin.DestinationDirectory(game.Directory, UnlockerPlugin.ReadIni(Path.Combine(game.Directory, "OptiScaler.ini")));
+                if (!Directory.Exists(Path.Combine(game.Directory, "OptiScaler")) || !Directory.Exists(directory))
+                {
+                    SetIniStatus("plugins-missing", "");
+                    return;
+                }
+                Process.Start(new ProcessStartInfo("explorer.exe", "\"" + directory + "\"") { UseShellExecute = true });
+            }
+            catch (Exception ex) { UnlockerStatus(L("无法打开插件文件夹：", "Could not open plugins folder: ") + ex.Message); }
         }
 
         void UnlockerStatus(string text)
