@@ -1,3 +1,11 @@
+## 2026-10-22 — 风格码入口移入 mochi 卡片 + 单弹窗双模式
+
+分享码入口从诊断区底段(可发现性差)移至 mochizuki 卡片右上角"✨ 风格码"胶囊按钮
+(与"主后端"同款样式);lmxxf/daniel 卡无此按钮,天然传达"仅 mochi 支持"。弹窗合并为
+单窗口 + 顶部(导出/导入)胶囊切换,切换原位换内容(只读/可写、含游戏标识勾选显隐、
+按钮文案 复制/预览+应用),两模式逻辑完整复用原 ShowShareCode 两分支。诊断区删分享码
+整段,插件行与 INI 面板之间加一条浅分割线(与兼容修复|安装选项之间同款)。LAUNCHER_OK。
+
 ## 2026-10-22 — Linux/Proton 双层代理崩溃(command list 二次包装)
 
 Dying Light: The Beast(GE-Proton,vkd3d-proton)开 NR 后游戏提交 command list 即崩

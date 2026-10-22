@@ -555,7 +555,10 @@
                 <UniformGrid Columns="3">
                   <Border Background="{DynamicResource ThemeSubtle}" BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1" CornerRadius="12" Padding="10,9" Margin="0,0,5,0" MinHeight="90">
                     <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                      <CheckBox x:Name="MochiCheck" Content="mochizuki" FontWeight="SemiBold" FontSize="13" VerticalAlignment="Top"/>
+                      <DockPanel>
+                        <Button x:Name="MochiShareCodeButton" DockPanel.Dock="Right" Style="{StaticResource GhostButton}" Height="22" FontSize="10" Padding="8,0" Margin="6,0,0,0" VerticalAlignment="Top" ToolTip="导出/导入 Mochizuki 画面风格参数"/>
+                        <CheckBox x:Name="MochiCheck" Content="mochizuki" FontWeight="SemiBold" FontSize="13" VerticalAlignment="Top"/>
+                      </DockPanel>
                       <Grid Grid.Row="2" Margin="0,5,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                         <Border x:Name="MochiBadge" Background="{DynamicResource ThemeSubtle}" BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1" CornerRadius="10" Padding="7,2" HorizontalAlignment="Left" VerticalAlignment="Center"><TextBlock x:Name="MochiReason" FontSize="10" Foreground="{DynamicResource ThemeMuted}"/></Border>
                         <Button x:Name="MochiActiveBtn" Grid.Column="1" Style="{StaticResource GhostButton}" Height="23" FontSize="10" Padding="7,0" Margin="5,0,0,0"/>
@@ -646,8 +649,7 @@
                 <CheckBox x:Name="ReplaceIni" IsChecked="True" FontSize="11" Margin="0,0,0,8"/>
                 <CheckBox x:Name="OptiPatcherToggle" FontSize="11" Margin="0,0,0,12"/>
                 <DockPanel Margin="0,0,0,12"><WrapPanel VerticalAlignment="Center"><TextBlock x:Name="PluginHeading" Foreground="{DynamicResource ThemeMuted}" FontSize="11" VerticalAlignment="Center"/><CheckBox x:Name="PluginToggle" FontSize="11" Margin="12,0,0,0" VerticalAlignment="Center"/><Button x:Name="UnlockerImportButton" Style="{StaticResource GhostButton}" Height="27" Padding="8,0" FontSize="11" Margin="12,0,8,0" Visibility="Collapsed"/><Button x:Name="OpenPluginsFolderButton" Style="{StaticResource GhostButton}" Height="27" Padding="8,0" FontSize="11" Margin="4,0,8,0" Visibility="Collapsed" IsEnabled="False"/></WrapPanel></DockPanel>
-                <TextBlock x:Name="ShareCodeHeading" Foreground="{DynamicResource ThemeMuted}" FontSize="11" Margin="0,0,0,6"/>
-                <WrapPanel Margin="0,0,0,12"><Button x:Name="ShareExportButton" Style="{StaticResource GhostButton}" Height="27" FontSize="11" Padding="8,0"/><Button x:Name="ShareImportButton" Style="{StaticResource GhostButton}" Height="27" FontSize="11" Padding="8,0" Margin="5,0,0,0"/><TextBlock x:Name="ShareCodeNote" Foreground="{DynamicResource ThemeMuted}" FontSize="10" VerticalAlignment="Center" Margin="10,0,0,0" TextWrapping="Wrap"/></WrapPanel>
+                <Border Height="1" Background="{DynamicResource ThemeBorder}" Margin="0,0,0,12"/>
                 <Border Background="{DynamicResource ThemeSubtle}" BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1" CornerRadius="12" Padding="10">
                   <StackPanel>
                     <DockPanel Margin="0,0,0,8"><StackPanel DockPanel.Dock="Right" Orientation="Horizontal"><Button x:Name="IniFolderButton" Style="{StaticResource GhostButton}" Height="25" FontSize="10.5" Padding="8,0"/><Button x:Name="IniSaveButton" Style="{StaticResource GhostButton}" Height="25" FontSize="10.5" Padding="8,0" Margin="5,0,0,0"/><Button x:Name="IniImportButton" Style="{StaticResource GhostButton}" Height="25" FontSize="10.5" Padding="8,0" Margin="5,0,0,0"/><Button x:Name="IniApplyButton" Style="{StaticResource GhostButton}" Height="25" FontSize="10.5" Padding="12,0" Margin="5,0,0,0"/></StackPanel><TextBlock x:Name="IniHeading" Foreground="{DynamicResource ThemeMuted}" FontSize="11" VerticalAlignment="Center"/></DockPanel>

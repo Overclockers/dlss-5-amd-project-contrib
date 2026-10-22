@@ -7,18 +7,19 @@ namespace OptScalerNR.Launcher
 {
     public sealed partial class MainController
     {
-        Button _shareExportButton, _shareImportButton;
+        Button _mochiShareCodeButton;
         void InitShareCode()
         {
-            _shareExportButton = _window.FindName("ShareExportButton") as Button;
-            _shareImportButton = _window.FindName("ShareImportButton") as Button;
-            if (_shareExportButton != null) _shareExportButton.Click += delegate { ShowShareCode(false); };
-            if (_shareImportButton != null) _shareImportButton.Click += delegate { ShowShareCode(true); };
+            _mochiShareCodeButton = _window.FindName("MochiShareCodeButton") as Button;
+            if (_mochiShareCodeButton != null) _mochiShareCodeButton.Click += delegate { ShowShareCode(false); };
         }
         void RefreshShareCode(bool enabled)
         {
-            if (_shareExportButton != null) { _shareExportButton.Content = L("导出分享码", "Export share code"); _shareExportButton.IsEnabled = enabled; }
-            if (_shareImportButton != null) { _shareImportButton.Content = L("导入分享码", "Import share code"); _shareImportButton.IsEnabled = enabled; }
+            if (_mochiShareCodeButton != null)
+            {
+                _mochiShareCodeButton.Content = L("✨ 风格码", "✨ Style code");
+                _mochiShareCodeButton.IsEnabled = enabled;
+            }
         }
         string ShareError(Exception error)
         {
@@ -43,37 +44,64 @@ namespace OptScalerNR.Launcher
             string executable = _selectedGame.Exe;
             if (!File.Exists(path)) { SetIniStatus("noini", ""); return; }
             try {
-                var dialog = DialogTheme.Create(_window, import ? L("导入 Mochizuki 风格分享码", "Import Mochizuki visual style") : L("导出 Mochizuki 风格分享码", "Export Mochizuki visual style"), 620);
+                var dialog = DialogTheme.Create(_window, L("Mochizuki 风格码", "Mochizuki style code"), 620);
                 var panel = new StackPanel { Margin = new Thickness(22) };
-                panel.Children.Add(new TextBlock { Text = L("仅共享 Mochizuki 视觉风格，不更改安装、后端或其他 INI 设置。", "Shares only Mochizuki visual style; installation, backend and other INI settings are unchanged."), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10) });
-                var input = new TextBox { IsReadOnly = !import, AcceptsReturn = import, TextWrapping = TextWrapping.Wrap, Height = 130, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+                var modeRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 10) };
+                var exportRadio = new RadioButton { Content = L("导出", "Export"), GroupName = "ShareCodeMode", Margin = new Thickness(0, 0, 14, 0) };
+                var importRadio = new RadioButton { Content = L("导入", "Import"), GroupName = "ShareCodeMode" };
+                modeRow.Children.Add(exportRadio); modeRow.Children.Add(importRadio);
+                panel.Children.Add(modeRow);
+                var hint = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
+                panel.Children.Add(hint);
+                var input = new TextBox { TextWrapping = TextWrapping.Wrap, Height = 130, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+                panel.Children.Add(input);
                 var includeGame = new CheckBox { Content = L("包含游戏标识（推荐）", "Include game tag (recommended)"), IsChecked = true, Margin = new Thickness(0, 10, 0, 0) };
+                panel.Children.Add(includeGame);
                 var summary = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 10) };
+                panel.Children.Add(summary);
                 var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
                 var close = new Button { Content = L("关闭", "Close"), MinWidth = 75, Margin = new Thickness(6) };
                 close.Click += delegate { dialog.Close(); };
-                var action = new Button { Content = import ? L("预览", "Preview") : L("复制", "Copy"), MinWidth = 90, Margin = new Thickness(6) };
-                var apply = new Button { Content = L("应用", "Apply"), MinWidth = 75, Margin = new Thickness(6), IsEnabled = false };
+                var action = new Button { MinWidth = 90, Margin = new Thickness(6) };
+                var apply = new Button { Content = L("应用", "Apply"), MinWidth = 75, Margin = new Thickness(6), IsEnabled = false, Visibility = Visibility.Collapsed };
                 string validated = null, validatedGame = "";
-                input.TextChanged += delegate { validated = null; validatedGame = ""; apply.IsEnabled = false; summary.Text = ""; };
-                if (!import) {
-                    byte[] exportedIni = File.ReadAllBytes(path);
-                    Action updateExport = delegate {
+                bool isExport = !import;
+                byte[] exportedIni = null;
+                Action renderMode = null;
+                RoutedEventHandler switchMode = delegate {
+                    var nowExport = exportRadio.IsChecked == true;
+                    if (nowExport == isExport) return;
+                    isExport = nowExport;
+                    if (renderMode != null) renderMode();
+                };
+                exportRadio.Checked += switchMode; importRadio.Checked += switchMode;
+                renderMode = delegate {
+                    action.Content = isExport ? L("复制", "Copy") : L("预览", "Preview");
+                    apply.Visibility = isExport ? Visibility.Collapsed : Visibility.Visible;
+                    apply.IsEnabled = false; validated = null; validatedGame = "";
+                    includeGame.Visibility = isExport ? Visibility.Visible : Visibility.Collapsed;
+                    hint.Text = isExport
+                        ? L("仅共享 Mochizuki 视觉风格，不更改安装、后端或其他 INI 设置。", "Shares only Mochizuki visual style; installation, backend and other INI settings are unchanged.")
+                        : L("粘贴风格码，预览后将仅写入画面风格参数。", "Paste a style code; after preview only visual style parameters are written.");
+                    input.IsReadOnly = isExport;
+                    summary.Text = "";
+                    if (isExport) {
+                        if (exportedIni == null) exportedIni = File.ReadAllBytes(path);
                         input.Text = MochizukiShareCode.Encode(exportedIni, includeGame.IsChecked == true ? executable : null);
                         summary.Text = MochizukiShareCode.Summary(MochizukiShareCode.Decode(input.Text), L("zh", "en") == "zh");
-                        // An all-defaults export is a sparse code whose CRC is the empty-payload value;
-                        // without this note it reads like a broken code full of placeholder Fs.
                         if (MochizukiShareCode.DifferenceCount(exportedIni, input.Text) == 0)
                             summary.Text += L("\n当前全部为默认值：分享码有效，导入方应用后将恢复同样的默认画面。",
                                                "\nEverything is at defaults: the code is valid; importing it restores the same defaults.");
-                    };
-                    includeGame.Checked += delegate { updateExport(); };
-                    includeGame.Unchecked += delegate { updateExport(); };
-                    updateExport();
-                }
+                    } else {
+                        input.Text = "";
+                    }
+                };
+                input.TextChanged += delegate { if (!isExport) { validated = null; validatedGame = ""; apply.IsEnabled = false; summary.Text = ""; } };
+                includeGame.Checked += delegate { if (isExport && renderMode != null) renderMode(); };
+                includeGame.Unchecked += delegate { if (isExport && renderMode != null) renderMode(); };
                 action.Click += delegate {
                     try {
-                        if (!import) { Clipboard.SetText(input.Text); return; }
+                        if (isExport) { Clipboard.SetText(input.Text); return; }
                         if (!CanUseIniGame(game)) return;
                         var code = input.Text.Trim();
                         var values = MochizukiShareCode.Decode(code);
@@ -91,10 +119,12 @@ namespace OptScalerNR.Launcher
                             L("游戏标识不匹配", "Game tag mismatch"), MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
                     if (ApplyShareCode(game, validated)) dialog.Close();
                 };
-                buttons.Children.Add(close); buttons.Children.Add(action); if (import) buttons.Children.Add(apply);
-                panel.Children.Add(input); if (!import) panel.Children.Add(includeGame); panel.Children.Add(summary); panel.Children.Add(buttons);
+                buttons.Children.Add(close); buttons.Children.Add(action); buttons.Children.Add(apply);
+                panel.Children.Add(buttons);
                 DialogTheme.Primary(dialog, action); DialogTheme.SetContent(dialog, panel);
-                dialog.Loaded += delegate { input.Focus(); input.SelectAll(); };
+                exportRadio.IsChecked = !import; importRadio.IsChecked = import;
+                renderMode();
+                dialog.Loaded += delegate { if (!isExport) input.Focus(); };
                 dialog.ShowDialog();
             } catch (Exception ex) { SetIniStatus("share-error", ShareError(ex)); }
         }
