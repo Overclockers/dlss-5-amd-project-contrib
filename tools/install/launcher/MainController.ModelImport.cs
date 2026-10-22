@@ -56,7 +56,7 @@ namespace OptScalerNR.Launcher
             if (_danielCheck != null && _danielCheck.IsChecked == true && BackendHintsContain(daniel, "daniel-weights", "daniel-source"))
                 wanted += (wanted.Length == 0 ? "" : " / ") + "nvngx_dlssnr.dll 或 dlssnr_on_amd_weights.bin（Daniel 权重源）";
             else if (_danielCheck != null && _danielCheck.IsChecked == true && BackendHintsContain(daniel, "daniel-runtime"))
-                wanted += (wanted.Length == 0 ? "" : " / ") + "dlssnr_on_amd_setup.exe（Daniel 运行库）";
+                wanted += (wanted.Length == 0 ? "" : " / ") + "dlssnr_on_amd_setup.exe 或 version.dll（Daniel 运行库）";
             if (wanted.Length == 0) return false;
             message = L("所选后端缺少：", "Selected backends are missing: ") + wanted +
                       L("。点击右侧按钮导入，文件会复制到启动器目录，对所有游戏生效。", ". Import it with the button on the right; the file is copied into the launcher folder and applies to every game.");
