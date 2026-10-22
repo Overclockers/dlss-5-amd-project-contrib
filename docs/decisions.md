@@ -1,3 +1,18 @@
+## 2026-10-22 — Linux/Proton 双层代理崩溃(command list 二次包装)
+
+Dying Light: The Beast(GE-Proton,vkd3d-proton)开 NR 后游戏提交 command list 即崩
+(空指针+0x2A80)。逆向定位(截图分析)+代码核实:链路为游戏调 CreateCommandList → 我们
+hkCreateCommandList → o_CreateCommandList → vkd3d 内部调 CreateCommandList1(也被我们
+挂钩)→ hkCreateCommandList1 把原生 list 包成代理 A 返回给 vkd3d → vkd3d 把 A 当"真
+list"返回 → hkCreateCommandList 再把 A 包成代理 B 给游戏 → 提交时 ExecuteExpanded 展开
+B 得到 A(是代理不是原生 list)→ 交给 vkd3d 的 ExecuteCommandLists → 按原生结构读 A 的
+内存 → 崩。日志铁证:每条 CreateCommandList 后跟 CreateCommandList1
+callerModule=d3d12core.dll。Windows D3D12 的 CreateCommandList 不走公开 CreateCommandList1
+入口,故仅 Proton 触发。修复两处:①hkCreateCommandList 调 o_CreateCommandList 时加
+SuppressProxyWrap(与 CreateProxiedCommandList:187 同款模式),内层 hkCreateCommandList1
+走透传分支;②CommandListProxy::Create/CreateClosed 增加 QI ILogicalCommandList 守卫,
+传入对象已是代理时拒绝再包(纵深防御)。BUILD_OK;待 Proton 用户实测。
+
 ## 2026-10-22 — 模型源红色导入条(所选后端缺源文件时)
 
 所选后端(mochi/lmxxf/daniel)在能力检测中报"缺源文件"类 hint(mochi-source/lmxxf-weights/

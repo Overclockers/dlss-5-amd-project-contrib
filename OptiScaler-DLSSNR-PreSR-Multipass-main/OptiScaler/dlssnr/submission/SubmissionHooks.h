@@ -211,7 +211,14 @@ inline HRESULT WINAPI hkCreateCommandList(ID3D12Device *device, UINT nodeMask, D
         return o_CreateCommandList(device, nodeMask, type, alloc, initial, riid, out);
     }
     ID3D12GraphicsCommandList *real = nullptr;
-    const HRESULT hr = o_CreateCommandList(device, nodeMask, type, alloc, initial, IID_PPV_ARGS(&real));
+    // vkd3d-proton's CreateCommandList internally calls CreateCommandList1, which is also hooked;
+    // without suppression the same native list gets wrapped twice and the inner proxy is returned
+    // as the "real" list, then handed back to vkd3d's ExecuteCommandLists as if it were native.
+    HRESULT hr;
+    {
+        SuppressProxyWrap suppress;
+        hr = o_CreateCommandList(device, nodeMask, type, alloc, initial, IID_PPV_ARGS(&real));
+    }
     if (FAILED(hr))
         return hr;
     const HRESULT wrap = WrapNewList(device, alloc, real, riid, out, initial);

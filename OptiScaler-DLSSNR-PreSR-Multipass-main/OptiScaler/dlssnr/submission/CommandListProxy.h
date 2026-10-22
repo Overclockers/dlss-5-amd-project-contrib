@@ -336,6 +336,18 @@ public:
     {
         if (!device || !alloc || !real || !out)
             return E_INVALIDARG;
+        // Never wrap our own proxy: on Proton, vkd3d's CreateCommandList can internally reach the
+        // hooked CreateCommandList1, so a "real" list may already be a proxy from the inner hook.
+        // Double-wrapping hands the inner proxy back to vkd3d as if it were native (crash).
+        {
+            ILogicalCommandList *already = nullptr;
+            if (SUCCEEDED(real->QueryInterface(__uuidof(ILogicalCommandList), reinterpret_cast<void **>(&already))) &&
+                already != nullptr)
+            {
+                already->Release();
+                return E_NOINTERFACE;
+            }
+        }
         auto *p = new CommandListProxy();
         const HRESULT hr = p->logical.BindProducer(device, alloc, real);
         if (FAILED(hr))
@@ -354,6 +366,16 @@ public:
     {
         if (!device || !real || !out)
             return E_INVALIDARG;
+        // Same guard as Create: refuse to wrap an object that is already one of our proxies.
+        {
+            ILogicalCommandList *already = nullptr;
+            if (SUCCEEDED(real->QueryInterface(__uuidof(ILogicalCommandList), reinterpret_cast<void **>(&already))) &&
+                already != nullptr)
+            {
+                already->Release();
+                return E_NOINTERFACE;
+            }
+        }
         auto *p = new CommandListProxy();
         const HRESULT hr = p->logical.BindClosedProducer(device, real);
         if (FAILED(hr))
