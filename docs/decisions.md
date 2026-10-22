@@ -1,3 +1,17 @@
+## 2026-10-23 — Proton vkd3d 直连审查修复(方案回退 + 熔断真正生效)
+
+六条审查意见全部属实并修复:P1×4(vkd3d 采用)——d3d12.dll 的 .def 不导出
+vkd3d_get_vk_*(函数在 libvkd3d 里,d3d12.def 只有标准 D3D12 接口),采用路径永远
+false;即使可达也缺 semaphore 导入初始化、SharedBuffer.buffer 始终为空(D3D12
+resource 不自动填充 VkBuffer)、Destroy 会销毁游戏的 instance/device(借用型生命周期
+未做)。AdoptVkd3dDevice 整体 gate off(return false + 注释说明四个未解问题),Proton
+回退到自建设备路径,熔断器兜底。正确做法需研究 ID3D12Device 扩展接口或 winevulkan
+原生句柄,另行立项。P1×5(熔断)——原实现在 >=50 后只 return,下一帧仍会调用
+prepare;改为在 prepare 调用前检查 consecutivePrepareFailures>=50 即拦截,
+失败计数达到 50 时打一次 ERROR 日志。P2×6(SDK 延迟挂钩)——菜单选择预设/模型时
+只补挂了 DriverProvider 模块,漏了 SDK DLL 模块;现在同时补挂两者
+(UpscalerModule(0) + LoadedModule()),按各自 IsModuleHooked/幂等保护。BUILD_OK。
+
 ## 2026-10-22 — 风格码入口移入 mochi 卡片 + 单弹窗双模式
 
 分享码入口从诊断区底段(可发现性差)移至 mochizuki 卡片右上角"✨ 风格码"胶囊按钮

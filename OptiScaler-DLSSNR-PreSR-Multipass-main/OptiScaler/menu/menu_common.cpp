@@ -3241,11 +3241,18 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                         else
                             config->Fsr4Preset = currentPresetIdx - 1;
 
-                        // Defer driver patching until an explicit override to avoid kernel anti-cheat termination.
-                        // Hook is idempotent per module; never gate on IsAnyModuleHooked(), the SDK dll
-                        // (amd_fidelityfx_upscaler_dx12.dll) is already hooked at startup.
-                        if (config->Fsr4Preset.has_value() && FSR4DriverProviderDx12::LoadedModule() != nullptr)
-                            FSR4Presets::Hook(FSR4DriverProviderDx12::LoadedModule());
+                        // Defer patching until an explicit override to avoid kernel anti-cheat termination.
+                        // Hook whichever module is actually serving FSR4 for this session: the driver DLL
+                        // (amdxcffx64.dll) or the SDK copy (amd_fidelityfx_upscaler_dx12.dll). Hook is
+                        // idempotent per module; hooking both is safe and covers provider switches.
+                        if (config->Fsr4Preset.has_value())
+                        {
+                            if (FSR4DriverProviderDx12::LoadedModule() != nullptr)
+                                FSR4Presets::Hook(FSR4DriverProviderDx12::LoadedModule());
+                            HMODULE upscalingModule = FfxApiProxy::UpscalerModule(0);
+                            if (upscalingModule != nullptr)
+                                FSR4Presets::Hook(upscalingModule);
+                        }
 
                         state.newBackend = currentBackend;
                         MARK_ALL_BACKENDS_CHANGED();
@@ -3304,9 +3311,14 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                         if (modelChanged)
                         {
                             // Keep provider vtables untouched until the user explicitly selects a model.
-                            if (selectedModel.has_value() && upscalerModule != nullptr &&
-                                !FSR4Models::IsModuleHooked(upscalerModule))
-                                FSR4Models::Hook(upscalerModule);
+                            if (selectedModel.has_value())
+                            {
+                                if (upscalerModule != nullptr && !FSR4Models::IsModuleHooked(upscalerModule))
+                                    FSR4Models::Hook(upscalerModule);
+                                HMODULE driverModule = FSR4DriverProviderDx12::LoadedModule();
+                                if (driverModule != nullptr && !FSR4Models::IsModuleHooked(driverModule))
+                                    FSR4Models::Hook(driverModule);
+                            }
 
                             state.newBackend = currentBackend;
                             MARK_ALL_BACKENDS_CHANGED();

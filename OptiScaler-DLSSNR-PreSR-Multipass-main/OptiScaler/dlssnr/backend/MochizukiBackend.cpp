@@ -396,6 +396,15 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
         if (p->setAutoExposure)
             p->setAutoExposure(p->owner->context, useMeter ? 1u : 0u);
     }
+    // Circuit breaker tripped: stop calling prepare entirely (each failed attempt can leak;
+    // seen on Proton at ~128/s until OOM). Reset by the coverage coverage Reset()/activity path
+    // on a settings change or NR toggle.
+    if (p->consecutivePrepareFailures >= 50)
+    {
+        p->owner->activity.Reset();
+        coverage.Set(Coverage::Outcome::PrepareFailed, "circuit breaker open (50+ consecutive failures)");
+        return nullptr;
+    }
     LmxxfNrJob job {sizeof job};
     if (p->prepare(p->owner->context, &frame, &job) != LMXXF_NR_OK)
     {
@@ -413,17 +422,10 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
         {
             p->Status(std::string("mochizuki: ") + reason);
             if (++p->errors <= 3 || p->errors % 6000 == 0) LOG_WARN("mochizuki PrepareFrame: {}", reason);
-            // Circuit breaker: repeated per-frame failures (seen on Proton: ~128/s buffer-import
-            // errors) leak resources until the process is OOM-killed. After enough consecutive
-            // failures, stop calling prepare entirely; the user changes a setting or restarts.
-            if (++p->consecutivePrepareFailures >= 50)
-            {
-                if (p->consecutivePrepareFailures == 50)
-                    LOG_ERROR("mochizuki: {} consecutive prepare failures ({}), circuit breaker open; NR disabled until settings change",
-                              p->consecutivePrepareFailures, reason);
-                p->owner->activity.Reset();
-                return nullptr;
-            }
+            ++p->consecutivePrepareFailures;
+            if (p->consecutivePrepareFailures == 50)
+                LOG_ERROR("mochizuki: {} consecutive prepare failures ({}); circuit breaker opens on the next frame",
+                          p->consecutivePrepareFailures, reason);
         }
         return nullptr;
     }

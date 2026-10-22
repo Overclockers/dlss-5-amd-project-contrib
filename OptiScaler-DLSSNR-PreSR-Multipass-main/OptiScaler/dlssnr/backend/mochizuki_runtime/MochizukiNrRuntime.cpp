@@ -807,6 +807,15 @@ struct Vulkan
 
     bool AdoptVkd3dDevice(IUnknown* d3d12Device, LUID luid)
     {
+        // DISABLED: vkd3d-proton's d3d12.dll does not export vkd3d_get_vk_* from its .def file;
+        // the adoption also lacks semaphore import, VkBuffer extraction from D3D12 resources,
+        // and borrowed-device lifecycle (destroy would kill the game's objects). Until a working
+        // interop path exists (ID3D12Device extension interface or winevulkan native handles),
+        // Proton falls through to the own-device path; the host-side circuit breaker (50
+        // consecutive failures) stops the resource leak from the resulting import errors.
+        return false;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-variable"
         HMODULE d3d12 = GetModuleHandleA("d3d12.dll");
         if (!d3d12)
             return false;
@@ -852,6 +861,7 @@ struct Vulkan
         nr::logf("[mochizuki] adopted vkd3d-proton device: %s (same VkDevice as the game; no cross-API sharing needed)",
                  name.c_str());
         return true;
+#pragma clang diagnostic pop
     }
 
     // Throws "[unsupported] ..." for what cannot change while the process lives (no Vulkan 1.3 driver, no device
