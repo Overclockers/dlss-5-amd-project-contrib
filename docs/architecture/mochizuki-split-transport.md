@@ -1,5 +1,28 @@
 # Mochizuki split 共享颜色、motion 输入与纹理输出
 
+## 准入外分支改共享纹理（2026-10-22，feat/nr-bridge-opt，源码完成、待实机）
+
+逐分支结论。证据为本分支源码位置；**未编译、未跑离线 split 夹具、未进游戏**（本轮 NUC
+离线，box 无 C++ 编译器），下列"已接入"均只是源码完成，没有任何性能或正确性数字。
+
+| 分支 | 结论 | 依据 |
+|---|---|---|
+| DRS/bucket 颜色 | 已接入（源码） | 载体按网络尺寸 `geometry.width×height`（bucket）申请；`ImageInput::Capture` 对子矩形/更大的游戏分配改用 `CopyTextureRegion` 盒拷贝到左上角，整尺寸仍用 `CopyResource`；Vulkan 侧在 EXTERNAL acquire 后对导入 image 做与 buffer 路线相同的 `Pad`；`RecordOutputs`/旁路本来就按 `w×h` 盒拷回 |
+| DRS/bucket motion | 不接入，保留 buffer | Padded/Rescaled 路线把向量铺进 bucket 尺寸的 `motionScaled`（上传、blit 或 compute 缩放后 Pad），不是"整张原样消费"；共享 motion 仍只收整尺寸、`Uploaded`、非 bucket（`SharedMotionEligible` 显式加了这三条，保持原准入） |
+| 模型缩放 `net.scale≠1` | 已接入（源码） | 缩放在核心内完成；核心从两种载体得到的都是同一 `kImageUsage`、GENERAL 进/TRANSFER_SRC 出，读写同一 `frame.colour`；D3D12 捕获/回写与缩放无关 |
+| 多遍 `passes>1` | 已接入（源码），**首遍导出除外** | 同上，多遍循环在核心内对同一图像；`firstPass` 导出仍走 buffer：导出从 `firstOutput` buffer 下载，旁路 `RecordFallback` 也是 input buffer→firstOutput buffer 复制，共享载体没有这份数据 |
+| RenoDX | 已接入（源码） | `sf.colour = sf.output = frame.colour`；`kImageUsage` 不含 STORAGE，RenoDX 阶段走"复制进/复制出"（`nr_renodx.cpp` 的 borrow 条件不成立），与载体无关；RenoDX 本来就在图形队列，与共享载体同族 |
+| canonical 转换（Plan A） | 不接入，保留 buffer | `MakeBuffers` 中 `convert.Create(..., b.colourImage.image, ...)` 把转换描述符绑定在 buffer 载体的 image 上，换成共享载体后描述符仍指向旧 image；输出端 `DispatchUnconvert` 以 storage 写回 `colour`，共享载体只在 RGBA16F 且设备支持时才带 STORAGE。要接入须按载体重建转换描述符并要求所有翻转格式的 storage 导入，且 Plan A 只在格式翻转（如过场）期间出现，换载体需重新初始化，翻转帧大多仍会落在 buffer 上 |
+| Inline | 不动 | 冻结 |
+
+内部回滚：`MZ_TEST_SHARED_EXTENDED=0`（进程启动前设置）恢复 2026-10-19 的窄准入；
+`MZ_TEST_SHARED_INPUT=0` 仍整体回到 buffer。默认开启扩展准入，失败/预算/退避机制不变。
+
+待实机验收（NUC 恢复后）：Release 编译到 TEMP；离线 split 夹具覆盖 bucket 子矩形
+（w<W、h<H，含 Pad 边缘逐字节对 buffer 路线）、exact DRS 大分配子矩形、scale<1、
+passes=2/3（无首遍导出）、RenoDX 各一组，核对实际路线日志 `split colour input: shared texture`
+与输出 hash；再按 PLAN.md 的游戏内 A/B 流程测净收益。没有这些之前不声称更快或正确。
+
 ## 最新进度核对（2026-10-21）
 
 符合现有共享颜色准入的 split 录制，输出直接从该录制持有的共享颜色纹理复制到原

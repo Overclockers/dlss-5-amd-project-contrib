@@ -214,6 +214,9 @@ struct TestHooks
     uint64_t computeRefuseAt = 0; // MZ_TEST_COMPUTE_REFUSE_AT=N: Enqueue N's whole-chain compute recording is refused
     int sharedInput = 1; // MZ_TEST_SHARED_INPUT=0 keeps the complete buffer route; 1 requests safe admission.
     int sharedMotion = 1; // MZ_TEST_SHARED_MOTION=0 retains buffer motion independently of colour.
+    // MZ_TEST_SHARED_EXTENDED=0 keeps shared input to the 2026-10-19 admission (full extent, single pass, full model
+    // scale, no RenoDX); 1 also admits DRS/bucket subrects, model scaling, multipass without first-pass export, RenoDX.
+    int sharedExtended = 1;
     bool rejectSharedMotion = false; // MZ_TEST_REJECT_SHARED_MOTION=1: recoverable handle rejection.
     uint64_t sharedMotionDelay = 0; // MZ_TEST_SHARED_MOTION_DELAY=N: defer ready admission.
     bool rejectSharedInput = false; // MZ_TEST_REJECT_SHARED_INPUT=1: recoverable handle rejection.
@@ -259,6 +262,7 @@ const TestHooks& Hooks()
         h.computeRefuseAt = number("MZ_TEST_COMPUTE_REFUSE_AT");
         if (const char* value = std::getenv("MZ_TEST_SHARED_INPUT")) h.sharedInput = std::strcmp(value, "0") != 0;
         if (const char* value = std::getenv("MZ_TEST_SHARED_MOTION")) h.sharedMotion = std::strcmp(value, "0") != 0;
+        if (const char* value = std::getenv("MZ_TEST_SHARED_EXTENDED")) h.sharedExtended = std::strcmp(value, "0") != 0;
         h.rejectSharedMotion = on("MZ_TEST_REJECT_SHARED_MOTION");
         h.rejectSharedStorage = on("MZ_TEST_REJECT_SHARED_STORAGE");
         h.sharedMotionDelay = number("MZ_TEST_SHARED_MOTION_DELAY");
@@ -2745,6 +2749,7 @@ struct Session
     bool sharedColourStorageRefused = false; // session-local: no repeated optional allocation failures
     Hold<Geometry> bufferColourHold;
     int sharedInputRequest = Hooks().sharedInput;
+    int sharedExtendedRequest = Hooks().sharedExtended;
     uint64_t sharedInputDelay = Hooks().sharedInputDelay;
     uint64_t loggedColourGeneration = 0;
     std::shared_ptr<ImageInput> pendingMotion;
@@ -5918,8 +5923,12 @@ struct Session
         const Image& colour = colourImage;
         const bool sharedColour = colourInput && colourInput->Shared();
         if (sharedColour) {
-            if (job.inlineExecution || padded || job.canonicalise || runtime->reno || job.firstPass ||
-                job.controls.passes != 1 || !motion || job.motionPath != Job::Uploaded)
+            // The core gets the same image usage/layouts from either carrier, so scaling, passes and RenoDX consume
+            // it alike; a DRS subrect was captured into the top-left and is padded below like an uploaded one.
+            // Plan A conversion binds the buffer carrier's image and first-pass export downloads from a buffer.
+            if (job.inlineExecution || job.canonicalise || job.firstPass || !motion ||
+                (!sharedExtendedRequest && (padded || runtime->reno || job.controls.passes != 1 ||
+                                            job.motionPath != Job::Uploaded)))
                 throw std::logic_error("shared colour recording has incompatible geometry or controls");
             colourInput->Ownership(c, true, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
         } else
@@ -6963,7 +6972,7 @@ int32_t CoreRecordInputs(void* context, void* job, void* command_list)
                      if (!c || job != JobHandle(s->jobGen) || j.state != LMXXF_NR_JOB_PREPARED)
                          return Fail(LMXXF_NR_INVALID_ARGUMENT, "RecordInputs: job not prepared");
                      if (s->colourInput && s->colourInput->Shared())
-                         s->colourInput->Capture(c, j.colour, j.colourState);
+                         s->colourInput->Capture(c, j.colour, j.colourState, j.width, j.height);
                      else
                          CopyToBuffer(c, j.colour, j.colourState, s->input.resource, s->colourFootprint, j.width, j.height);
                      if (j.motion) {

@@ -2,8 +2,10 @@
     // optional allocation: failure leaves shared-colour + buffer-motion NR live.
     bool SharedMotionEligible(const Job& j) const
     {
+        // Colour's wider admission (DRS subrects) does not extend to motion: only whole uploaded vectors.
         if (!sharedMotionRequest || !colourInput || !colourInput->Shared() ||
-            !SharedColourEligible(j) || geometry.computeMotion ||
+            !SharedColourEligible(j) || geometry.computeMotion || geometry.bucketed || j.motionPath != Job::Uploaded ||
+            j.width != geometry.width || j.height != geometry.height ||
             j.motionWidth != j.width || j.motionHeight != j.height ||
             j.motionWidth != geometry.motionWidth || j.motionHeight != geometry.motionHeight ||
             (motionVk != VK_FORMAT_R16G16_SFLOAT && motionVk != VK_FORMAT_R16G16B16A16_SFLOAT))

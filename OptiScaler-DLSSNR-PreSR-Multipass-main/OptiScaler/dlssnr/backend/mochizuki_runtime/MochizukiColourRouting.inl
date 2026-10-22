@@ -19,19 +19,27 @@
         return true;
     }
 
+    // The carrier is the network's extent (geometry.width x height, the bucket with DRS). Still on buffer: Plan A
+    // (its convert/unconvert pass binds the buffer carrier's image at MakeBuffers and stores into it), first-pass
+    // export (downloaded from a buffer, including passthrough), Inline and frames without motion.
     bool SharedColourEligible(const Job& j) const
     {
-        if (!sharedInputRequest || j.inlineExecution || !j.motion || !runtime || runtime->reno ||
-            j.canonicalise || geometry.canonicalise || geometry.bucketed || geometry.firstPass || j.firstPass ||
-            j.controls.passes != 1 || net.scale != 1.f || j.motionPath != Job::Uploaded ||
-            j.width != geometry.width || j.height != geometry.height ||
-            j.width != geometry.colourWidth || j.height != geometry.colourHeight)
+        if (!sharedInputRequest || j.inlineExecution || !j.motion || !runtime ||
+            j.canonicalise || geometry.canonicalise || geometry.firstPass || j.firstPass)
+            return false;
+        if (!sharedExtendedRequest &&
+            (runtime->reno || geometry.bucketed || j.controls.passes != 1 || net.scale != 1.f ||
+             j.motionPath != Job::Uploaded || j.width != geometry.width || j.height != geometry.height ||
+             j.width != geometry.colourWidth || j.height != geometry.colourHeight))
+            return false;
+        if (!j.width || !j.height || j.width > geometry.width || j.height > geometry.height)
             return false;
         const auto desc = j.colour->GetDesc();
         return desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D &&
                ColourFormat(desc.Format).shared != DXGI_FORMAT_UNKNOWN &&
                ColourFormat(desc.Format).vk == colourVk && desc.MipLevels == 1 &&
-               desc.DepthOrArraySize == 1 && desc.SampleDesc.Count == 1;
+               desc.DepthOrArraySize == 1 && desc.SampleDesc.Count == 1 &&
+               desc.Width >= j.width && desc.Height >= j.height;
     }
 
     void InstallColourInput(std::shared_ptr<ImageInput> next)
@@ -128,11 +136,11 @@
         if (colourInput && colourInput->Shared()) return;
         if (!pendingColour) {
             if (auto cached = sharedColourCache.lock(); cached &&
-                cached->Matches(j.width, j.height, colourVk, expectedUsage()) && cached->sharedFormat == typed && cached->family == vk.family) {
+                cached->Matches(geometry.width, geometry.height, colourVk, expectedUsage()) && cached->sharedFormat == typed && cached->family == vk.family) {
                 pendingColour = std::move(cached);
             }
         }
-        if (pendingColour && (!pendingColour->Matches(j.width, j.height, colourVk, expectedUsage()) ||
+        if (pendingColour && (!pendingColour->Matches(geometry.width, geometry.height, colourVk, expectedUsage()) ||
                               pendingColour->sharedFormat != typed || pendingColour->family != vk.family))
             pendingColour.reset();
         if (pendingColour) {
@@ -151,10 +159,11 @@
         try {
             auto create = [&](bool storage) {
                 auto made = std::make_shared<ImageInput>(vk.device);
-                const auto desc = made->PlanShared(device, vk, j.width, j.height, colourVk, typed, storage);
+                const auto desc = made->PlanShared(device, vk, geometry.width, geometry.height, colourVk, typed, storage);
                 std::string why;
                 // Include actual allocation size and all still-retained carriers.
-                budgetRefused = !VramAdmits(made->bytes + kVramMarginBytes, j.width, j.height, "shared colour candidate", why);
+                budgetRefused = !VramAdmits(made->bytes + kVramMarginBytes, geometry.width, geometry.height,
+                                            "shared colour candidate", why);
                 if (budgetRefused) throw NrError(NrError::OutOfMemory, why.c_str());
                 if (hooks.rejectSharedInput || (storage && hooks.rejectSharedStorage))
                     throw NrError(NrError::Invalid, "shared colour handle rejected (test hook)", VK_SUCCESS, E_INVALIDARG);

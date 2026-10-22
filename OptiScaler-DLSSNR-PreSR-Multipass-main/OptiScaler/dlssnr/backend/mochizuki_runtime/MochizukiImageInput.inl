@@ -199,11 +199,22 @@ struct ImageInput
         return true;
     }
 
-    void Capture(ID3D12GraphicsCommandList* c, ID3D12Resource* source, D3D12_RESOURCE_STATES state) const
+    // The source's top-left w x h into the carrier's top-left. Whole same-size resources (w == 0, or w x h the
+    // extent of both) keep CopyResource; a DRS subrect or larger game allocation copies just that box.
+    void Capture(ID3D12GraphicsCommandList* c, ID3D12Resource* source, D3D12_RESOURCE_STATES state,
+                 UINT w = 0, UINT h = 0) const
     {
         Transition(c, source, state, D3D12_RESOURCE_STATE_COPY_SOURCE);
         Transition(c, texture, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
-        c->CopyResource(texture, source);
+        const auto from = source->GetDesc(), to = texture->GetDesc();
+        if (!w || (w == from.Width && h == from.Height && from.Width == to.Width && from.Height == to.Height))
+            c->CopyResource(texture, source);
+        else {
+            D3D12_TEXTURE_COPY_LOCATION dst { texture, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX, {} };
+            D3D12_TEXTURE_COPY_LOCATION src { source, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX, {} };
+            const D3D12_BOX box { 0, 0, 0, w, h, 1 };
+            c->CopyTextureRegion(&dst, 0, 0, 0, &src, &box);
+        }
         Transition(c, texture, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COMMON);
         Transition(c, source, D3D12_RESOURCE_STATE_COPY_SOURCE, state);
     }
