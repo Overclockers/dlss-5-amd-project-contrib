@@ -27,8 +27,14 @@
 - 上游:`Config.h` `value_for_config()`(WithDefault 分支)在"当前值==默认值"时返回 nullopt,SaveIni 把 nullopt 写成 `auto`;`FsrAgilitySDKUpgrade { false }`(上游 Config.h:484)。
 - 危害:与 U3 组合成死循环——用户显式 `false` 保存后被回写 `auto`,下次启动 Win10 又强制 volatile true(volatile 值同样坍缩 nullopt,连 true 都存不下来),崩溃循环无法自救。
 - 下游修复:本提交——`FsrAgilitySDKUpgrade` 改 NoDefault。
-- **同类未修键**(均为 `CustomOptional<bool> { false }` + 运行时 `set_volatile_value(true)` 自动开启,同样存在"显式 false 被 auto 回写后又被自动开启"陷阱,暂无现场报告,先记录):`FsrNonLinearColorSpace`(Config.cpp:334)、`DontUseNTShared`(dllmain:1352/1381)、`CreateD3D12DeviceForLuma`(dllmain:1361/1390)、`DxgiSpoofing`(dllmain:1506)。
-- 建议:上游在 SaveIni 层为"被运行时自动开启过"的键持久化显式值,或这些键改 NoDefault。
+- 同类键审计结论(2026-10-22 复核,初版判断有误):自动调整类键均已使用 `SoftDefault`
+  ("Change always gets saved",Config.h:15),显式值可持久化、quirk 翻转带 `!has_value()` 门且
+  `set_volatile_value` 保留用户旧显式值——**无坑**:`DontUseNTShared { true }`、`DxgiSpoofing { true }`
+  (FSR4-Int8 分支无视显式值是上游故意的运行时覆盖)、`CreateD3D12DeviceForLuma { false }`。
+  `FsrNonLinearColorSpace` 是除 Agility 外唯一 WithDefault,但其自动置 true 是"PQ/SRGB 显式设置→推导",
+  运行时本就覆盖显式值(设计如此),无用户可感知陷阱。
+- 建议:上游为会被运行时自动调整的键一律使用 SoftDefault/NoDefault;`FsrAgilitySDKUpgrade` 是唯一的
+  WithDefault 漏网(下游已改 NoDefault)。
 
 ## U5 XeFG passthrough 输入的 XeLL 配对(未修,待上游讨论)
 
