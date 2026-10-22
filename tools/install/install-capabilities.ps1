@@ -266,11 +266,23 @@ function Get-OptScalerBackendCapabilities([string]$pkgRoot, [string]$gameDir, [s
         if (Test-MochizukiModelHeaderFile (Join-Path $root 'dlssnr-amd/dlssnr.bin') 599) { $mochiOriginalReady = $true }
         if (Test-MochizukiModelHeaderFile (Join-Path $root 'dlssnr-amd/dlssnr-small.bin') 255) { $mochiSmallReady = $true }
     }
-    # Only the 310.9.16 source can prepare dlssnr-small.bin (Setup's $mochizukiNewNvSha);
-    # 310.8.0 prepares the original model only. Any accepted source prepares the original.
+    # Per-model source capability must scan every candidate, like Setup does: the single $mochiNv
+    # pick stops at the first accepted source (pkg 310.8.0 shadows a game 310.9.16 that Setup would
+    # prefer for small), and when a model is already installed the earlier hash filter is skipped
+    # entirely, so $mochiNv alone must not authorize preparation. Only the 310.9.16 build
+    # ($mochizukiNewNvSha) can prepare dlssnr-small.bin; both accepted builds prepare the original.
+    $mochiSourceProvidesOriginal = $false
     $mochiSourceProvidesSmall = $false
-    if ($mochiNv -and -not $mochiSmallReady) {
-        try { $mochiSourceProvidesSmall = ((Get-OptScalerFileSha256 $mochiNv) -eq '2bc19bc09a7b89dd44f73e2ac0108fcc586e2154bdd0830f242f4f040e28789f') } catch { }
+    foreach ($candidate in $sourceDlls) {
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+        try { $hash = Get-OptScalerFileSha256 $candidate } catch { continue }
+        if ($hash -in @('2bc19bc09a7b89dd44f73e2ac0108fcc586e2154bdd0830f242f4f040e28789f',
+                        'e16bcf15e16e13f527491cdf7845b2fe6521a738d8f7c9c721866a8496e1fc8e')) {
+            $mochiSourceProvidesOriginal = $true
+        }
+        if ($hash -eq '2bc19bc09a7b89dd44f73e2ac0108fcc586e2154bdd0830f242f4f040e28789f') {
+            $mochiSourceProvidesSmall = $true
+        }
     }
     $mochiPreparation = if ($canMochiRuntime) { 'ready' } else { 'missing-runtime' }
     if ($canMochiRuntime -and -not ($mochiOriginalReady -and $mochiSmallReady)) {
@@ -288,7 +300,7 @@ function Get-OptScalerBackendCapabilities([string]$pkgRoot, [string]$gameDir, [s
     $mochiReason = if (-not $canMochiRuntime) { 'Runtime missing' } elseif ($hasMochiModel) { 'Ready' } elseif ($mochiPreparable) { 'Model preparation required' } else { 'Model missing' }
     $backends += @{
         id = 'mochizuki'
-        originalState = if ($mochiOriginalReady) { 'ready' } elseif ($mochiNv) { 'preparable' } else { 'missing' }
+        originalState = if ($mochiOriginalReady) { 'ready' } elseif ($mochiSourceProvidesOriginal) { 'preparable' } else { 'missing' }
         smallState = if ($mochiSmallReady) { 'ready' } elseif ($mochiSourceProvidesSmall) { 'preparable' } else { 'missing' }
         preparationState = $mochiPreparation
         runtimeState = if ($canMochiRuntime) { 'ready' } else { 'missing' }

@@ -1,3 +1,14 @@
+## 2026-10-22 — 能力检测逐模型来源判定二审修复
+
+01c36d2b 的两条审查意见均属实:①单一 $mochiNv 取第一个受信源即停(包目录 310.8.0 遮蔽
+游戏目录 310.9.16),smallState 误判 missing,而安装器实际会继续扫描并优先 310.9.16;
+②某模型已就绪时早前哈希过滤被整体跳过,originalState 仅凭 mochiNv 非空即 preparable,
+不受信源也能启用 Original,安装器必然后置拒绝。修复:providesOriginal/providesSmall
+改为独立遍历全部候选源($sourceDlls:ModelSourceDll+包+游戏)逐个验哈希,与安装器
+"任一受信源即可、新版本源才能提供 small"的语义对齐,不再依赖单选 mochiNv、也不因
+模型已装跳过验证。新增两个回归测试(双源 310.8.0+310.9.16→small preparable;small
+已装+不受信源→original missing),worker 全套 25 过,能力脚本解析通过。
+
 ## 2026-10-22 — 代码审查四问题修复(P1 能力状态 / P2×3)
 
 审查范围 a2b45d02^..main,四条全部核实属实并修复:P1(我此前 D5 修复不完整的回归)——
