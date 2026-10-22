@@ -25,6 +25,14 @@ Exit codes match `status`: 0 success, 1 failed, 2 needsInput, 3 cancelled.
 
 - `existingInstall`: `uninstall` | `overwrite`
 - `foreignProxy`: map of file name to `backup` | `keep` | `cancel`
+- `mochizukiInstall`: `remove` | `keep` | `cancel`; required when inspect found a
+  Mochizuki (DLSSNR-AMD) installation of its own (see `mochizukiInstall` below).
+  `remove` moves the listed files into `OptiScaler-mochizuki-backup/<yyyyMMdd-HHmmss>/`
+  in the game folder before setup runs (nothing is deleted; folders such as `dlssnr-amd/`
+  stay in place). `keep` leaves them, and the installer then also leaves
+  `dlssnr_core.dll` instead of retiring it as a legacy file; it is refused when the
+  Mochizuki record names the resolved proxy DLL (installing would replace its OptiScaler).
+  The GUI asks with a warning and a second confirmation before sending `remove`.
 - `existingIni`: `overwrite` | `keep`
 - `mochizukiModels`: `both` | `small` | `original`; required when installing Mochizuki.
   The explicit `original` selection authorizes the older model. Missing or invalid
@@ -53,6 +61,14 @@ JSON for localized installer notices; omitted/unknown values use English. Raw sy
 and third-party diagnostics retain their original text.
 The GUI also captures the worker's own stdout/stderr so startup/parse failures remain
 available when no result JSON was produced. Script stderr is included in the event log.
+
+`inspect` (and install/update) also return `mochizukiInstall` when the game folder holds
+a Mochizuki installation: `detected`, `recorded` (its `dlssnr-amd-install.txt` record
+names `dlssnr_core.dll`, `dlssnr_amd.addon64` or `OptiScaler.asi`), `files` (recorded
+files still present plus that record, and any of those three marker files), `folders`
+(recorded folders, never moved) and `proxy` (the recorded proxy DLL, e.g. `dxgi.dll`
+with its OptiScaler, which the proxy probe alone would treat as this project's).
+Detection is read-only; the GUI shows a warning after inspect.
 
 `inspect` also returns `compatibility`: `groups` (`sr`, `dx11`, `fg`), each with
 `ready`, `different`, and `files` (`name`, `gameVersion`, `packageVersion`,

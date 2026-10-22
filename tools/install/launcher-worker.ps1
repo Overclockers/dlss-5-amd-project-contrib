@@ -42,6 +42,7 @@ function New-Result([string]$status, [string]$error) {
         backends = $script:backends
         packageRoot = $script:packageRoot
         compatibility = $script:compatibility
+        mochizukiInstall = $script:mochizukiInstall
     }
 }
 function Fail-Result([string]$status, [string]$error, [int]$code) {
@@ -78,6 +79,7 @@ $script:needed = @()
 $script:notes = @()
 $script:fingerprint = $null
 $script:partial = $false
+$script:mochizukiInstall = $null
 $allowedProxy = @($CandidateNames)
 $allowedAction = @('inspect','install','update','uninstall','scan','repairXess','restoreXess','keepXess')
 $allowedBackend = @('auto','daniel','lmxxf','mochizuki','all')
@@ -188,6 +190,76 @@ $script:candidates = @($probe.candidates)
 $script:conflicts = @($probe.conflicts)
 $script:fingerprint = $probe.fingerprint
 $script:partial = [bool]$probe.partial
+
+# A Mochizuki (DLSSNR-AMD) installation of its own in the game folder: its install.ps1 records every file it put
+# there in dlssnr-amd-install.txt ("F name" / "D folder" / "B name" lines); its OptiScaler route puts OptiScaler in
+# as dxgi.dll beside dlssnr_core.dll, and an ASI route ships OptiScaler.asi. Read-only here: the launcher warns, and
+# only an explicit "remove" decision moves the files aside (never deletes them).
+function Get-MochizukiInstall([string]$dir) {
+    $files = New-Object System.Collections.Generic.List[string]
+    $folders = New-Object System.Collections.Generic.List[string]
+    $proxy = ''
+    $record = Join-Path $dir 'dlssnr-amd-install.txt'
+    $recorded = $false
+    if (Test-Path -LiteralPath $record -PathType Leaf) {
+        $lines = @()
+        try { $lines = [IO.File]::ReadAllLines($record) } catch { }
+        $entries = @()
+        foreach ($raw in $lines) {
+            $line = $raw.TrimStart([char]0xFEFF)
+            if ($line.Length -lt 3 -or $line[1] -ne ' ') { continue }
+            $rel = $line.Substring(2).Trim()
+            if (-not $rel -or [IO.Path]::IsPathRooted($rel) -or $rel -match '(^|[\\/])\.\.([\\/]|$)') { continue }
+            $entries += ,@($line[0], $rel)
+        }
+        # His record, not this project's: it names his core, his add-on or his ASI.
+        $recorded = @($entries | Where-Object { $_[0] -eq 'F' -and $_[1] -in @('dlssnr_core.dll','dlssnr_amd.addon64','OptiScaler.asi') }).Count -gt 0
+        if ($recorded) {
+            foreach ($e in $entries) {
+                $path = Join-Path $dir $e[1]
+                if ($e[0] -eq 'F' -and (Test-Path -LiteralPath $path -PathType Leaf)) {
+                    if (-not $files.Contains($e[1])) { $files.Add($e[1]) }
+                    if ($CandidateNames -contains $e[1].ToLowerInvariant()) { $proxy = $e[1] }
+                } elseif ($e[0] -eq 'D' -and (Test-Path -LiteralPath $path -PathType Container)) {
+                    if (-not $folders.Contains($e[1])) { $folders.Add($e[1]) }
+                }
+            }
+            $files.Add('dlssnr-amd-install.txt')
+        }
+    }
+    foreach ($name in @('dlssnr_core.dll','OptiScaler.asi','dlssnr_amd.addon64')) {
+        if ((Test-Path -LiteralPath (Join-Path $dir $name) -PathType Leaf) -and -not $files.Contains($name)) { $files.Add($name) }
+    }
+    if ($files.Count -eq 0) { return $null }
+    return @{
+        detected = $true
+        recorded = $recorded
+        files = @($files)
+        folders = @($folders)
+        proxy = $proxy
+    }
+}
+# Moves the files (not the folders: dlssnr-amd\ is shared with this project's own) into a new backup folder. Returns
+# that folder. Nothing is deleted; a file that cannot be moved stops the operation before setup runs.
+function Move-MochizukiInstall([string]$dir, $found) {
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $dest = Join-Path (Join-Path $dir 'OptiScaler-mochizuki-backup') $stamp
+    New-Item -ItemType Directory -Force -Path $dest | Out-Null
+    foreach ($rel in @($found.files)) {
+        $src = Join-Path $dir $rel
+        if (-not (Test-Path -LiteralPath $src -PathType Leaf)) { continue }
+        $to = Join-Path $dest $rel
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $to) | Out-Null
+        Move-Item -LiteralPath $src -Destination $to -ErrorAction Stop
+        Write-Event 'backup' "moved Mochizuki file aside: $rel -> $to"
+    }
+    return $dest
+}
+try { $script:mochizukiInstall = Get-MochizukiInstall $script:gameDir }
+catch { $script:notes += "Mochizuki installation check failed: $($_.Exception.Message)" }
+if ($script:mochizukiInstall) {
+    $script:notes += ('A Mochizuki (DLSSNR-AMD) installation is in the game folder: {0}. Two NR installations conflict; remove one (the launcher asks before installing).' -f (@($script:mochizukiInstall.files) -join ', '))
+}
 $choice = [string]$req.proxyChoice
 if (-not $choice -or $choice -eq 'auto') {
     if ($probe.recommend) { $script:resolved = [string]$probe.recommend }
@@ -367,6 +439,26 @@ if ($req.action -ne 'uninstall') {
             Fail-Result 'failed' 'Invalid Mochizuki models choice.' 1
         }
     }
+    if ($script:mochizukiInstall -and $req.action -in @('install','update')) {
+        $mochiDecision = if ($dec) { [string]$dec.mochizukiInstall } else { '' }
+        if (-not $mochiDecision) {
+            $script:needed += @{
+                id = 'mochizukiInstall'
+                file = (@($script:mochizukiInstall.files) -join ', ')
+                prompt = 'A Mochizuki (DLSSNR-AMD) installation is in the game folder. Move its files aside (remove), keep them, or cancel?'
+                options = @('remove','keep','cancel')
+            }
+        } elseif ($mochiDecision -eq 'cancel') {
+            Fail-Result 'cancelled' 'Cancelled: a Mochizuki installation is in the game folder.' 3
+        } elseif ($mochiDecision -eq 'keep') {
+            $theirs = [string]$script:mochizukiInstall.proxy
+            if ($theirs -and $script:resolved -and $theirs -ieq $script:resolved) {
+                Fail-Result 'failed' ("{0} belongs to the Mochizuki installation; installing would replace it. Choose another proxy DLL, or remove the Mochizuki installation." -f $theirs) 1
+            }
+        } elseif ($mochiDecision -ne 'remove') {
+            Fail-Result 'failed' 'Invalid mochizukiInstall decision.' 1
+        }
+    }
     if ($probe.conflicts.Count -gt 0) {
         $map = @{}
         if ($dec -and $dec.foreignProxy) { $map = ConvertTo-ForeignProxyMap $dec.foreignProxy }
@@ -390,6 +482,17 @@ if ($req.action -ne 'uninstall') {
 }
 
 Write-Event 'validate' 're-checking paths and locks'
+if ($req.action -in @('install','update') -and $script:mochizukiInstall -and $dec -and [string]$dec.mochizukiInstall -eq 'remove') {
+    try {
+        $moved = Move-MochizukiInstall $script:gameDir $script:mochizukiInstall
+        $script:notes += "Mochizuki files moved to $moved (put them back by hand to restore)."
+        if (@($script:mochizukiInstall.folders).Count -gt 0) {
+            $script:notes += ('Folders the Mochizuki record lists were left in place: {0}' -f (@($script:mochizukiInstall.folders) -join ', '))
+        }
+    } catch {
+        Fail-Result 'failed' ("Moving the Mochizuki files aside failed (is the game running?): " + $_.Exception.Message) 1
+    }
+}
 $ps51 = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $stdoutLog = Join-Path ([IO.Path]::GetDirectoryName($ResultJson)) 'setup.stdout.log'
 $stderrLog = Join-Path ([IO.Path]::GetDirectoryName($ResultJson)) 'setup.stderr.log'
@@ -406,7 +509,7 @@ if ($req.action -eq 'uninstall') {
         language = if ($req.language -eq 'zh') { 'zh' } else { 'en' }
     }
     if ($dec) {
-        foreach ($name in @('existingInstall','existingIni','mochizukiModels','lmxxfModels','shortFileContinue','optiPatcher','foreignProxy','modelSourceDll')) {
+        foreach ($name in @('existingInstall','existingIni','mochizukiModels','lmxxfModels','shortFileContinue','optiPatcher','foreignProxy','modelSourceDll','mochizukiInstall')) {
             if ($dec.PSObject.Properties[$name] -and $null -ne $dec.$name) {
                 if ($name -eq 'foreignProxy') { $payload[$name] = ConvertTo-ForeignProxyMap $dec.$name }
                 else { $payload[$name] = $dec.$name }

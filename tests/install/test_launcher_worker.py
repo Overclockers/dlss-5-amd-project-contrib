@@ -534,6 +534,48 @@ class LauncherWorkerTests(unittest.TestCase):
         ids = [x["id"] for x in result.get("requiredDecisions") or []]
         self.assertIn("foreignProxy", ids)
 
+    def test_mochizuki_install_is_reported_and_moved_only_on_explicit_remove(self):
+        d = Path(tempfile.mkdtemp(prefix="launcher-mochi-"))
+        pkg = Path(tempfile.mkdtemp(prefix="launcher-pkg-"))
+        self.addCleanup(shutil.rmtree, d, True)
+        self.addCleanup(shutil.rmtree, pkg, True)
+        (pkg / "OptiScaler.dll").write_bytes(b"fixture")
+        (pkg / "Setup.ps1").write_text("# dummy", encoding="utf-8")
+        exe = d / "game.exe"
+        shutil.copy2(Path(os.environ["SystemRoot"]) / "System32/whoami.exe", exe)
+        theirs = ("dxgi.dll", "dlssnr_core.dll", "nvngx_dlssnr.dll")
+        for name in theirs:
+            (d / name).write_bytes(b"mochizuki")
+        (d / "dlssnr-amd").mkdir()
+        (d / "dlssnr-amd-install.txt").write_text(
+            "F dxgi.dll\nF dlssnr_core.dll\nF nvngx_dlssnr.dll\nD dlssnr-amd\nF ..\\outside.dll\n", encoding="utf-8")
+
+        code, result, events = self.invoke(WORKER, "inspect", exe, package_root=pkg)
+        self.assertEqual(code, 0, events)
+        found = result["mochizukiInstall"]
+        self.assertTrue(found["recorded"])
+        self.assertEqual(found["proxy"], "dxgi.dll")
+        self.assertEqual(sorted(found["files"]), sorted(theirs + ("dlssnr-amd-install.txt",)))
+
+        code, result, events = self.invoke(WORKER, "install", exe, proxy="dxgi.dll", package_root=pkg)
+        self.assertEqual(code, 2, events)
+        self.assertIn("mochizukiInstall", [x["id"] for x in result["requiredDecisions"]])
+        code, result, events = self.invoke(WORKER, "install", exe, {"mochizukiInstall": "keep"},
+                                           proxy="dxgi.dll", package_root=pkg)
+        self.assertEqual(result["status"], "failed", events)
+        self.assertIn("dxgi.dll", result["error"])
+        self.assertTrue(all((d / name).exists() for name in theirs))
+
+        code, result, events = self.invoke(WORKER, "install", exe, {"mochizukiInstall": "remove"},
+                                           proxy="dxgi.dll", package_root=pkg)
+        self.assertNotIn(result["status"], ("needsInput",), events)
+        self.assertFalse(any((d / name).exists() for name in theirs))
+        backups = list((d / "OptiScaler-mochizuki-backup").iterdir())
+        self.assertEqual(len(backups), 1)
+        for name in theirs + ("dlssnr-amd-install.txt",):
+            self.assertEqual((backups[0] / name).exists(), True, name)
+        self.assertTrue((d / "dlssnr-amd").is_dir())
+
     def test_install_update_uninstall_isolated(self):
         pkg = Path(tempfile.mkdtemp(prefix="launcher-pkg-"))
         game = Path(tempfile.mkdtemp(prefix="launcher-game-"))
