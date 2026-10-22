@@ -1,3 +1,52 @@
+## 2026-10-22 — 1.13.2 帧生成崩溃回归修复（菜单下转 / XeFG-XeLL 配对）
+
+用户日志（TW3 fsrfg 输出、TW3 xefg 输出、鸣潮 xefg 输出）确认 1.13.2 一开帧生成就崩溃：
+切"帧生成"标签页即崩、或 XeFG 从启动就进不去游戏；1.13.1-alpha8 及更早同游戏正常。
+
+根因一：`bdd11179`（M10 迁移）把菜单四处
+`reinterpret_cast<IFGFeature_Dx12*>(state.currentFG)`（同类型恒等）改成了对
+`state.CurrentFG()` 的下转。`IFGFeature_Dx12` 虚继承 `IFGFeature`，`CurrentFG()`
+返回的是经虚基偏移调整后的基类子对象地址，reinterpret_cast 不还原偏移；
+`IsUsingUIAny()` 等基类成员调用在错误地址上做运行期虚基调整（MSVC 把 vfptr 当
+vbptr 读）→ 野指针。修复与上游 9df512d 逐处对齐（上游无此 bug，是集成时把上游的
+访问器和我们旧 cast 拼接出来的）：4034/4089 处用上游的不带 cast 的
+`state.CurrentFG()`，5571/5611 处用上游的恒等
+`reinterpret_cast<IFGFeature_Dx12*>(state.currentFG)`；这些卡片是 DX12 专属，
+Vulkan FG 不经过 menu_common 的这些分支。
+`work/scratch/fgtab_downcast_repro.cpp` 实测：基类地址与派生地址相差 0x68 字节，
+错误下转的 `IsUsingUIAny()` 读到错误结果（MSVC 上即崩溃）。
+
+根因二：LOW_LATENCY_INPUTS 把全进程 XeLL 调用引流到最先加载的 libxell。带旧
+XeSS2 栈的游戏/解锁器（TW3+MFG unlocker：libxell 1.2.1）会把自己的旧 XeLL 上下文
+交给 OptiScaler 的 libxess_fg 1.3.1（日志佐证：TW3 "XeFG Log: libxell.dll version
+1.2.1" 崩溃，鸣潮 1.3.2 正常），违反 "XeFG and XeLL contexts must come from the
+same pair of libraries"。`XeFG_Dx12::CreateSwapchainContext` 现在在
+`SetLatencyReduction` 前做配对校验：不配对则不挂 XeLL（XeFG 无延迟加速运行）并
+`release_xefg_xell()`，不再把跨版本上下文喂给 XeFG。初版规则是 "XeLL 与 libxess_fg
+同 major 且 minor 不小于 XeFG"；【10-22 修订】Intel 按 SDK 整套配对 fg/xell、两者
+版本号独立演化（官方 XeSS SDK 3.0.2 即 fg 1.3.4 + xell 1.3.2），该规则会误拦官方
+组合。现规则：真实加载的 libxell（`XeLLProxy::Version()`）不得低于捆绑副本
+（`XeLLProxy::BundledVersion()`，读 Opti 目录或 XeLLLibrary 覆盖的文件版本资源）；
+TW3 的 1.2.1 仍拦、官方跨 minor 组合放行、捆绑文件缺失时放行（回到无门限行为），
+六组合在 `work/scratch/xefg_pair_gate_test.cpp` 验证。上游 9df512d 同样缺该校验
+（随低延迟切片引入的上游潜在 bug）；alpha8 二进制无 "XeFG paces" 字符串，走的是
+fakenvapi 可选路径（失败即跳过、不强配对），故 alpha8 不崩。此门限是本地加固，
+值得上报上游。
+
+追加审查（4dbaea06..e3c0c35a 全量、同类缺陷专项）：菜单 `_ffxFGIndex` 两处
+（4247/5475）集成时丢了上游的上界保护（上游 4294/5639 有
+`|| _ffxFGIndex >= (int) ffxFGVersionNames.size()`），FG 上下文重建使版本表变短时
+静态索引越界读 `const char*` → 同一 FG 标签页崩溃面；已按上游原句还原并重编通过。
+其余核查干净：所有 `CurrentFG()` 消费点（菜单/Streamline/FrameLimit/input_common）
+均无 cast、只调基类接口；`IFeature` 升采样器层级同构但零下转（Vulkan_Hooks 用
+dynamic_cast）；FSRFG 回调 `pUserCtx` 恒等往返；`currentVkFG` 类型化直用；
+LowLatencyTech 非虚继承，static_cast 合法；XeFGInputs 原生钩子 target 空指针不可达
+（挂钩即已解析）；xefg_marker 未知 marker 先拒绝后索引。遗留待观察：XeFG
+passthrough 输入（FGInput=XeFG+FGOutput=XeFG）在 LL 构建下把游戏旧 libxess_fg 的
+导出重定向到 Opti 的 1.3.1 副本、而其 XeLL 上下文仍落在最先加载的旧 libxell 上
+（非 LL 构建是整对交换、正确；LL 构建不是）——同族版本混搭，无现场报告，正确修法
+需 XeLL 输入在 passthrough 重定向时改用 Opti 配对，留待上游讨论。
+
 ## 2026-10-20 — Narrow Storm input, shortcuts and menu closure
 
 Preserve the existing input implementation and the low-level hook

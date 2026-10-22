@@ -4031,7 +4031,7 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
             ImGui::EndDisabled();
         }
 
-        auto fgOutput = reinterpret_cast<IFGFeature_Dx12*>(state.CurrentFG());
+        auto fgOutput = state.CurrentFG();
         if (((state.activeFgOutput == FGOutput::FSRFG || state.activeFgOutput == FGOutput::XeFG ||
               state.activeFgOutput == FGOutput::DLSSG) &&
              state.activeFgInput != FGInput::NoFG && state.activeFgInput != FGInput::NvngxFG) &&
@@ -4086,7 +4086,7 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
 
                 if (showOutputSpecificFGSettings)
                 {
-                    auto fgOutput = reinterpret_cast<IFGFeature_Dx12*>(state.CurrentFG());
+                    auto fgOutput = state.CurrentFG();
                     if (fgOutput)
                     {
                         ImGui::BeginDisabled(!fgOutput->IsActive());
@@ -4244,7 +4244,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
         {
             MenuSectionTitle("Frame Generation (FSR FG)");
 
-            if (_ffxFGIndex < 0)
+            if (_ffxFGIndex < 0 || _ffxFGIndex >= (int) state.ffxFGVersionNames.size())
                 _ffxFGIndex = config->FfxFGIndex.value_or_default();
 
             if (state.ffxFGVersionNames.size() > 0)
@@ -5472,7 +5472,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
 
             if (activeNvngxFg == FGNvngxReplacement::FFX || activeNvngxFg == FGNvngxReplacement::Combo)
             {
-                if (_ffxFGIndex < 0)
+                if (_ffxFGIndex < 0 || _ffxFGIndex >= (int) state.ffxFGVersionNames.size())
                     _ffxFGIndex = config->FfxFGIndex.value_or_default();
 
                 if (state.ffxFGVersionNames.size() > 0)
@@ -5568,7 +5568,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
     {
         SeparatorWithHelpMarker("Frame Generation (FSR-FG Inputs)", "Select FSR-FG in-game");
 
-        auto fgOutput = reinterpret_cast<IFGFeature_Dx12*>(state.CurrentFG());
+        auto fgOutput = reinterpret_cast<IFGFeature_Dx12*>(state.currentFG);
         if (fgOutput != nullptr)
         {
             MenuUi::Text("Current FSR-FG state:");
@@ -5608,7 +5608,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
     {
         SeparatorWithHelpMarker("Frame Generation (Streamline FG Inputs)", "Select DLSS-FG in-game");
 
-        auto fgOutput = reinterpret_cast<IFGFeature_Dx12*>(state.CurrentFG());
+        auto fgOutput = reinterpret_cast<IFGFeature_Dx12*>(state.currentFG);
 
         if (!ReflexHooks::isReflexHooked())
         {

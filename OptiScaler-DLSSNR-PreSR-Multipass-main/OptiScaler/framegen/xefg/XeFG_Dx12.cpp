@@ -136,12 +136,34 @@ bool XeFG_Dx12::CreateSwapchainContext(ID3D12Device* device)
         // (InputCommon) guards repeat creation and follows the game's markers with it.
         if (auto xellContext = InputCommon::acquire_xefg_xell(device); xellContext != nullptr)
         {
-            result = XeFGProxy::SetLatencyReduction()(_swapChainContext, xellContext);
+            // XeSS FG and XeLL contexts must come from the same release pair. The low latency input
+            // funnels every XeLL call to the first libxell the process loaded, which the game or an
+            // unlocker may supply older than the bundled one. Intel pairs libxess_fg and libxell per
+            // SDK release and their version numbers evolve independently, so the loaded real XeLL is
+            // checked against the bundled libxell, not against libxess_fg's version. An older real
+            // XeLL crashes XeFG at its first present, XeFG runs without latency reduction instead.
+            auto xellVersion = XeLLProxy::Version();
+            auto bundledVersion = XeLLProxy::BundledVersion();
 
-            if (result != XEFG_SWAPCHAIN_RESULT_SUCCESS)
+            if (xellVersion.major < bundledVersion.major ||
+                (xellVersion.major == bundledVersion.major && xellVersion.minor < bundledVersion.minor))
             {
-                LOG_ERROR("SetLatencyReduction error: {} ({})", magic_enum::enum_name(result), (UINT) result);
-                return false;
+                LOG_ERROR("libxell {}.{}.{} is older than the bundled {}.{}.{}, XeFG runs without latency "
+                          "reduction: the contexts must come from the same release pair",
+                          xellVersion.major, xellVersion.minor, xellVersion.patch, bundledVersion.major,
+                          bundledVersion.minor, bundledVersion.patch);
+
+                InputCommon::release_xefg_xell();
+            }
+            else
+            {
+                result = XeFGProxy::SetLatencyReduction()(_swapChainContext, xellContext);
+
+                if (result != XEFG_SWAPCHAIN_RESULT_SUCCESS)
+                {
+                    LOG_ERROR("SetLatencyReduction error: {} ({})", magic_enum::enum_name(result), (UINT) result);
+                    return false;
+                }
             }
         }
 #endif

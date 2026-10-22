@@ -403,6 +403,24 @@ class XeLLProxy
         return _xellVersion;
     }
 
+    // The version of the libxell OptiScaler bundles: the XeLLLibrary override when set, otherwise the copy in
+    // the OptiScaler folder, read from the file's version resource without loading it. Intel pairs libxess_fg
+    // and libxell per SDK release and their version numbers evolve independently, so XeFG pairing checks
+    // compare the loaded real XeLL against this one, not against libxess_fg's version.
+    static xell_version_t BundledVersion()
+    {
+        static xell_version_t bundled = [] {
+            auto overridePath = Config::Instance()->XeLLLibrary.value_or(L"");
+
+            if (!overridePath.empty())
+                return GetDLLVersion(overridePath);
+
+            return GetDLLVersion((std::filesystem::path(Config::Instance()->MainDllPath.value()) / L"libxell.dll").wstring());
+        }();
+
+        return bundled;
+    }
+
 #ifdef LOW_LATENCY_INPUTS
     // We export / implement those functions
     static PFN_xellDestroyContext DestroyContext() { return xellDestroyContext; }
