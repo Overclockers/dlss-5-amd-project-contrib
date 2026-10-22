@@ -143,6 +143,7 @@ namespace OptScalerNR.Launcher
             var hasGame = available && game != null;
             var hasIni = hasGame && File.Exists(Path.Combine(game.Directory, "OptiScaler.ini"));
             RefreshShareCode(game != null && !IniBusy() && File.Exists(Path.Combine(game.Directory, "OptiScaler.ini")));
+            RefreshModelImportBar();
             var selected = hasGame && !string.IsNullOrEmpty(_iniSelectedProfile);
             if (_iniProfileCombo != null) _iniProfileCombo.IsEnabled = hasGame;
             if (_iniSearchBox != null) _iniSearchBox.IsEnabled = available;
