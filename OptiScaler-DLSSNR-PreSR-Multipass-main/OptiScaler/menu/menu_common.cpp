@@ -3266,7 +3266,7 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                     else if (FSR4Presets::IsAnyModuleHooked())
                         MenuUi::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)), "(Potential FSR3 fallback)");
                     else if (!config->Fsr4Preset.has_value())
-                        MenuUi::TextDisabled("(Driver auto · follows the game's scaling preset; a manual pick pins it)");
+                        MenuUi::TextDisabled("(Auto · follows game preset)");
                     else
                         MenuUi::TextDisabled("(Failed to hook)");
 
@@ -3316,7 +3316,7 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                         if (auto activeModel = FSR4Models::ActiveModel(upscalerModule))
                             MenuUi::TextDisabled("(Active: %s)", FSR4Models::Name(*activeModel));
                         else
-                            MenuUi::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)), "(Auto · FFX picks by GPU; FSR3 fallback possible)");
+                            MenuUi::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)), "(Auto · FFX picks)");
                     }
                 }
 
