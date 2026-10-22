@@ -580,6 +580,9 @@ void MochizukiBackend::ReleaseSession()
     p->coverage.counters->prepared.store(false, std::memory_order_relaxed);
     p->owner.reset(); p->failed = false; p->retryAt = p->infoAt = 0;
     p->tracedRecordings = 0;
+    // Reopening NR or switching back to this backend must get a fresh start, not a stale
+    // circuit-breaker trip from a previous session.
+    p->consecutivePrepareFailures = 0;
     LmxxfRecording::Collect();
     p->coverage.Flush(true);
     { std::lock_guard lock(p->mutex); p->timing = {}; p->progress = {}; p->details = {}; AdvanceTimingRuntimeId(); p->status = "mochizuki: NR off"; }
