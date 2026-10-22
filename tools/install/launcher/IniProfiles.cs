@@ -263,7 +263,7 @@ namespace OptScalerNR.Launcher
             finally { if (File.Exists(temporary)) File.Delete(temporary); }
         }
 
-        sealed class Document
+        internal sealed class Document
         {
             public string Text;
             Encoding _encoding;

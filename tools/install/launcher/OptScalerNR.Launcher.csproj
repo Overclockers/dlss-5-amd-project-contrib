@@ -23,6 +23,8 @@
     <Compile Include="LauncherTheme.cs"/>
     <Compile Include="MainController.Presentation.cs"/>
     <Compile Include="MainController.Profiles.cs"/>
+    <Compile Include="MainController.UnlockerPlugin.cs"/>
+    <Compile Include="UnlockerPlugin.cs"/>
     <Compile Include="MainController.ShareCode.cs"/>
     <Compile Include="MochizukiShareCode.cs"/>
     <Compile Include="MainController.Diagnostics.cs"/>

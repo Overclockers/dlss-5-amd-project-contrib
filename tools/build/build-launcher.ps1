@@ -38,6 +38,7 @@ $cs = @(
     'DialogTheme.cs', 'FolderGameScanner.cs', 'ProxyRecommendations.cs',
     'MainController.Library.cs', 'MainController.Recommendations.cs', 'LauncherTheme.cs', 'MainController.Presentation.cs',
     'MainController.Profiles.cs', 'MainController.ShareCode.cs', 'MochizukiShareCode.cs', 'MainController.Diagnostics.cs', 'IniProfiles.cs', 'LocalArtwork.cs'
+    'MainController.UnlockerPlugin.cs', 'UnlockerPlugin.cs'
 ) | ForEach-Object { Join-Path $src $_ }
 $refs = @(
     (Join-Path $fw 'mscorlib.dll'),

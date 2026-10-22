@@ -44,6 +44,7 @@ namespace OptScalerNR.Launcher
             _iniApplyButton = _window.FindName("IniApplyButton") as Button;
             _iniFolderButton = _window.FindName("IniFolderButton") as Button;
             InitShareCode();
+            InitUnlockerPlugin();
             try { _iniProfiles = new IniProfiles(_settingsDir); }
             catch (Exception ex) { IniFailure(ex); }
             if (_iniProfileCombo != null) _iniProfileCombo.SelectionChanged += delegate { IniSelectionChanged(); };
@@ -91,6 +92,7 @@ namespace OptScalerNR.Launcher
                 _iniPluginToggle.Content = L("加载 ASI 插件", "Load ASI plugins");
                 _iniPluginToggle.ToolTip = L("仅点击“应用”时修改 [Plugins] LoadAsiPlugins。", "Changes [Plugins] LoadAsiPlugins only when Apply is clicked.");
             }
+            RefreshUnlockerLanguage();
             PopulateIniProfiles();
             RenderIniStatus();
             RefreshProfileActions();
@@ -150,6 +152,7 @@ namespace OptScalerNR.Launcher
             if (_iniApplyButton != null) _iniApplyButton.IsEnabled = hasIni;
             if (_iniFolderButton != null) _iniFolderButton.IsEnabled = available;
             if (_iniPluginToggle != null) _iniPluginToggle.IsEnabled = hasGame;
+            RefreshUnlockerPlugin();
         }
 
         bool IniBusy() { return _writeBusy || _session != null || _folderScan != null; }
@@ -416,6 +419,7 @@ namespace OptScalerNR.Launcher
                 case "deleted": text = L("已删除共享配置：", "Shared profile deleted: ") + _iniStatusDetail; break;
                 case "applied": text = L("已应用，请重启游戏。原 INI 备份：", "Applied; restart the game. Original INI backup: ") + _iniStatusDetail; break;
                 case "share-error": text = _iniStatusDetail; break;
+                case "unlocker": text = _iniStatusDetail; break;
                 case "io": text = L("配置操作失败，请检查文件权限与可用空间。", "Profile operation failed. Check file permissions and free space."); break;
                 default: text = _iniProfiles == null ? L("配置库不可用。", "Profile library unavailable.")
                     : _selectedGame == null ? L("选择游戏以使用共享配置。", "Select a game to use shared profiles.")
