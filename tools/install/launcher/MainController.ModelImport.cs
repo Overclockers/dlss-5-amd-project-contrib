@@ -95,7 +95,9 @@ namespace OptScalerNR.Launcher
             if (picker.ShowDialog(_window) != true) return;
             try {
                 var source = picker.FileName;
-                ValidateModelSourcePe(source);
+                // PE validation for DLL/EXE; weight BINs are plain data the installer hash-checks.
+                if (!source.EndsWith(".bin", StringComparison.OrdinalIgnoreCase))
+                    ValidateModelSourcePe(source);
                 var root = ResolveImportRoot();
                 var destination = Path.Combine(root, Path.GetFileName(source));
                 if (string.Equals(Path.GetFullPath(source), Path.GetFullPath(destination), StringComparison.OrdinalIgnoreCase)) {

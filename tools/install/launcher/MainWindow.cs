@@ -2407,6 +2407,7 @@ namespace OptScalerNR.Launcher
             if (!string.IsNullOrEmpty(result.Status) && result.Status != "success") {
                 RefreshInspectionText();
                 UpdatePrimaryButtonState();
+                RefreshModelImportBar();
                 return;
             }
             var isZh = _language == "zh";

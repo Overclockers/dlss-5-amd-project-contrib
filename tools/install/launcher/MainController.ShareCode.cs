@@ -88,8 +88,12 @@ namespace OptScalerNR.Launcher
                     if (isExport) {
                         if (exportedIni == null) exportedIni = File.ReadAllBytes(path);
                         input.Text = MochizukiShareCode.Encode(exportedIni, includeGame.IsChecked == true ? executable : null);
-                        summary.Text = MochizukiShareCode.Summary(MochizukiShareCode.Decode(input.Text), L("zh", "en") == "zh");
-                        if (MochizukiShareCode.DifferenceCount(exportedIni, input.Text) == 0)
+                        var decoded = MochizukiShareCode.Decode(input.Text);
+                        summary.Text = MochizukiShareCode.Summary(decoded, L("zh", "en") == "zh");
+                        // All-defaults means every encoded parameter equals its own default (a non-default
+                        // setting is sparse-coded, so an empty value map or all-default values); never compare
+                        // the code against the same INI it was just encoded from.
+                        if (MochizukiShareCode.NonDefaultCount(decoded) == 0)
                             summary.Text += L("\n当前全部为默认值：分享码有效，导入方应用后将恢复同样的默认画面。",
                                                "\nEverything is at defaults: the code is valid; importing it restores the same defaults.");
                     } else {

@@ -293,6 +293,15 @@ namespace OptScalerNR.Launcher
                 (chinese ? "修改 " + count + " 项" : count + " non-default settings") +
                 (code.GameTag.Length == 0 ? "" : (chinese ? " · 来自 " : " · from ") + code.GameTag);
         }
+        public static int NonDefaultCount(DecodedCode code)
+        {
+            int count = 0;
+            foreach (var key in Keys) {
+                decimal value;
+                if (code.Values.TryGetValue(key.Index, out value) && value != key.Default) count++;
+            }
+            return count;
+        }
         public static int DifferenceCount(byte[] ini, string code)
         {
             var before = ReadValues(ini); var after = Decode(code).Values; int count = 0;
