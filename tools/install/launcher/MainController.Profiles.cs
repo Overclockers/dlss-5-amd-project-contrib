@@ -77,20 +77,23 @@ namespace OptScalerNR.Launcher
 
         void RefreshProfilesLanguage()
         {
-            SetLabel("IniHeading", "OptiScaler.ini 共享配置", "Shared OptiScaler.ini profiles");
-            SetLabel("IniSelectHint", "选择配置后点击“应用”。仅更改插件时请选择“当前游戏 INI”。", "Select a profile, then Apply. Choose Current game INI to apply only the plugin setting.");
+            SetLabel("InstallOptionsHeading", "安装选项（下次安装或更新时生效）", "Install options (applied on the next install or update)");
+            SetLabel("ShareCodeHeading", "画面风格分享码（Mochizuki）", "Visual style share codes (Mochizuki)");
+            SetLabel("ShareCodeNote", "仅读写画面风格参数，不替换整个 INI。", "Reads and writes visual style parameters only; never replaces the whole INI.");
+            SetLabel("IniHeading", "OptiScaler.ini 共享配置（整文件）", "Shared OptiScaler.ini profiles (whole file)");
+            SetLabel("IniSelectHint", "选择配置后点击“应用所选配置”。仅更改插件时请选择“当前游戏 INI”。", "Select a profile, then Apply selection. Choose Current game INI to apply only the plugin setting.");
             SetLabel("PluginHeading", "第三方插件", "Third-party plugins");
             if (_iniSaveButton != null) _iniSaveButton.Content = L("保存…", "Save…");
             if (_iniQuickSaveButton != null) _iniQuickSaveButton.Content = L("快速保存", "Quick save");
             if (_iniImportButton != null) _iniImportButton.Content = L("导入…", "Import…");
             if (_iniRenameButton != null) _iniRenameButton.Content = L("重命名…", "Rename…");
             if (_iniDeleteButton != null) _iniDeleteButton.Content = L("删除", "Delete");
-            if (_iniApplyButton != null) _iniApplyButton.Content = L("应用", "Apply");
+            if (_iniApplyButton != null) _iniApplyButton.Content = L("应用所选配置", "Apply selection");
             if (_iniFolderButton != null) _iniFolderButton.Content = L("配置文件夹", "Profiles folder");
             if (_iniSearchBox != null) _iniSearchBox.ToolTip = L("搜索共享配置", "Search shared profiles");
             if (_iniPluginToggle != null) {
                 _iniPluginToggle.Content = L("加载 ASI 插件", "Load ASI plugins");
-                _iniPluginToggle.ToolTip = L("仅点击“应用”时修改 [Plugins] LoadAsiPlugins。", "Changes [Plugins] LoadAsiPlugins only when Apply is clicked.");
+                _iniPluginToggle.ToolTip = L("随“应用所选配置”写入 [Plugins] LoadAsiPlugins。", "Written to [Plugins] LoadAsiPlugins by Apply selection.");
             }
             RefreshUnlockerLanguage();
             PopulateIniProfiles();
