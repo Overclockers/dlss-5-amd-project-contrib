@@ -155,7 +155,10 @@ namespace OptScalerNR.Launcher
             if (_iniDeleteButton != null) _iniDeleteButton.IsEnabled = selected;
             if (_iniApplyButton != null) _iniApplyButton.IsEnabled = hasIni;
             if (_iniFolderButton != null) _iniFolderButton.IsEnabled = available;
-            if (_iniPluginToggle != null) _iniPluginToggle.IsEnabled = hasGame;
+            // Single source of truth: the game-available gate AND the OptiPatcher pin are decided
+            // together, so a profile-actions refresh can never re-enable a toggle the installer
+            // would force back on.
+            if (_iniPluginToggle != null) _iniPluginToggle.IsEnabled = hasGame && !OptiPatcherPinsPlugins();
             RefreshUnlockerPlugin();
         }
 

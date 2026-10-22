@@ -29,12 +29,15 @@ namespace OptScalerNR.Launcher
         // Installing OptiPatcher forces LoadAsiPlugins=true, so the plugin toggle must not offer a
         // contradicting state: while the OptiPatcher choice is checked the toggle is pinned on and
         // disabled, exactly like the installer will configure it.
+        bool OptiPatcherPinsPlugins()
+        {
+            return _optiPatcherToggle!=null&&_optiPatcherToggle.IsChecked==true;
+        }
         void ApplyOptiPatcherPluginLock()
         {
             if(_optiPatcherToggle==null||_iniPluginToggle==null)return;
-            var locked=_optiPatcherToggle.IsChecked==true;
-            _iniPluginToggle.IsEnabled=!locked;
-            if(locked)_iniPluginToggle.IsChecked=true;
+            if(OptiPatcherPinsPlugins())_iniPluginToggle.IsChecked=true;
+            _iniPluginToggle.IsEnabled=!OptiPatcherPinsPlugins();
         }
         void RememberOptiPatcherChoice()
         {
