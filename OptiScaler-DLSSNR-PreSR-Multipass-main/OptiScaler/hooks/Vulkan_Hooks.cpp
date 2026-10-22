@@ -410,6 +410,10 @@ static void UntrackInstance(VkInstance instance)
     std::scoped_lock lock(_vkApiVersionMutex);
     _instanceApiVersions.erase(instance);
 
+    // The tracked global must never outlive the instance it points at: under Proton it can hold a
+    // handle from an earlier, already destroyed instance, and any later use crashes winevulkan.
+    if (State::Instance().VulkanInstance == instance)
+        State::Instance().VulkanInstance = VK_NULL_HANDLE;
     for (auto it = _physicalDeviceInstances.begin(); it != _physicalDeviceInstances.end();)
     {
         if (it->second == instance)
@@ -676,8 +680,18 @@ static VkResult hkvkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevice
 
         if (Config::Instance()->DlssNrEnabled.value_or_default())
         {
+            // Query through the instance that owns this physical device (resolved above via
+            // GetPhysicalDeviceApiVersion), never State::VulkanInstance: under Proton, vkd3d-proton's
+            // D3D12 instance does not update that global ( ScopedCreatingD3DDevice guard) and it is
+            // not cleared on destroy, so it is often a stale handle from an earlier, destroyed
+            // instance - enumerating extensions through it crashes inside winevulkan.
+            VkInstance extensionInstance = physicalDeviceInstance;
+
+            if (extensionInstance == VK_NULL_HANDLE)
+                extensionInstance = State::Instance().VulkanInstance;
+
             const auto supported = DlssNr::VkExt::SupportedDeviceExtensions(
-                o_vkGetInstanceProcAddr, State::Instance().VulkanInstance, physicalDevice);
+                o_vkGetInstanceProcAddr, extensionInstance, physicalDevice);
 
             nrExtensions.names.assign(localCreateInfo.ppEnabledExtensionNames,
                                       localCreateInfo.ppEnabledExtensionNames + localCreateInfo.enabledExtensionCount);

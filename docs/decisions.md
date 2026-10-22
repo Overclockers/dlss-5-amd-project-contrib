@@ -1,3 +1,15 @@
+## 2026-10-22 — Linux/Proton 创建 Vulkan 设备崩溃:NR 扩展查询用了悬垂 instance
+
+用户在 Linux(Wine/Proton,vkd3d-proton)开 DlssNr 后每次 vkCreateDevice 崩溃,日志停在
+扩展查询前。根因(截图诊断+代码核实):Vulkan_Hooks.cpp:679 查 NR 扩展用的是全局
+State::VulkanInstance——vkd3d-proton 为 D3D12 建 instance 时不更新它(:537 有
+ScopedCreatingD3DDevice 门),UntrackInstance 销毁时也不清空(:569),它指向的早期 instance
+多半已销毁,拿死句柄过 winevulkan 枚举扩展即崩。修复:①扩展查询改用
+GetPhysicalDeviceApiVersion 按 physicalDevice 反查的所属 instance(:602 同一 hook 内既有
+现成机制),全局变量仅作反查失败(VK_NULL_HANDLE)时的兜底;②UntrackInstance 销毁 instance
+时若全局指向它则同步清空,消除同类悬垂。Windows 原生路径(单 instance 常驻)行为不变;
+Linux 实机回归待用户验证。
+
 ## 2026-10-22 — 能力检测逐模型来源判定二审修复
 
 01c36d2b 的两条审查意见均属实:①单一 $mochiNv 取第一个受信源即停(包目录 310.8.0 遮蔽
@@ -1161,3 +1173,11 @@ lmxxf 额外多槽吞吐回落；更少的 16/8 段没有进一步收益，因�
 - After copying, warn when at least two `.asi` filenames match `(mfg.*unlock|xefg.*unlock).*\.asi`: keep only one frame-generation unlocker because multiple unlockers can conflict.
 - After copying, missing/empty/`auto` `LoadAsiPlugins` becomes `true` automatically; explicit `false` asks first, with a plugin-will-not-load hint if declined. Existing `true` is unchanged. Reuse the INI document editor to preserve encoding/BOM and unrelated content, with a flushed temporary file, atomic replace and timestamped INI backup.
 - This operates on an already-installed game's plugin directory directly. No installer round-trip, package installation, or automatic game launch is involved; cancellation and all resulting copy/INI outcomes use the card status and launcher log.
+
+## 2026-10-22: Optional MZ2 game tags and direct plugin-folder access
+
+- Tagged Mochizuki codes use `MZ2:<payload>|<game>;CCCC`, retaining the frozen MZ1 key table and payload/apply semantics. The game tag is the source executable basename without its optional `.exe` suffix. CRC16/CCITT-FALSE covers the exact UTF-8 `payload|game` string, so edits to either part fail validation. Untagged exports remain byte-identical MZ1, and imports accept both versions; tag matching ignores case and the `.exe` suffix.
+- Export defaults to `包含游戏标识（推荐） / Include game tag (recommended)` checked; changing it regenerates the displayed/copied code and adds/removes ` · 来自 <game> / · from <game>` in the summary. After preview, applying a mismatched tagged code first asks `该分享码来自「<game>」，与当前游戏不符，仍要导入吗？ / This share code was made for '<game>', which does not match the current game. Import anyway?`; No leaves the INI unchanged. MZ1 has no mismatch prompt. Successful imports show `已导入通用分享码，效果请以实际画面为准 / Generic share code imported; judge the result by eye.`; matching tags apply without an extra prompt.
+- `打开插件文件夹 / Open plugins folder` sits beside the XeFG unlocker import action. It is available for a selected game with an existing `OptiScaler` directory and disabled while INI actions are busy; ASI/OptiPatcher toggles are not prerequisites. It reuses the unlocker destination resolver, including `[Plugins] Path` precedence and `[Libraries] OptiDllPath`-based `plugins` resolution with the existing fallback, and opens Explorer on the directory without selecting a file.
+- Opening never creates a directory. A missing resolved directory reports `未检测到插件目录，请先安装本工具 / Plugins folder not found; install this tool first.` The package already ships `plugins/` with its README and installation ensures the resolved directory exists, so a missing directory is treated as a missing/deleted or nonstandard installation rather than repaired by browsing.
+
