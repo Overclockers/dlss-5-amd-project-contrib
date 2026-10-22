@@ -89,3 +89,26 @@ winevulkan 不支持 `VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT` 的 Win
 3. **nativevulkanloader 游戏**:直连被拒绝,回到原状态(自建设备 + 熔断器),不是支持。
 4. **producer 队列族与帧命令缓冲族不同**(例如游戏从 COMPUTE 队列提交 NR):该帧提交失败,走既有丢帧/熔断。
 5. **LockCommandQueue 会排空游戏队列**:每帧一次额外同步点,性能代价未测。
+
+## 游戏内同场景 split A/B 流程(共享纹理 vs buffer)
+
+共享纹理路线的开关是进程启动时读的环境变量,不能在同一会话内原地切换,所以这是**跨会话**比较,
+违反 [docs/measurement.md](docs/measurement.md) "只比同一会话"一条;下面靠交替多次启动和固定站位压低偏差,
+结论只能写"在此流程下的差异",不写绝对收益。
+
+1. 准备:同一 Release 构建(记 `OptiScaler.dll` SHA256)、split 模式、同一画质/渲染分辨率/NR 设置;
+   `OptiScaler.ini` 设 `NrTimingEnabled=true`、`NrTimingLog=true`,其余诊断保持关闭。关帧生成,
+   否则 PresentMon 加 `--track_frame_type`。
+2. 变体(每次都从关闭游戏开始):
+   - A = 默认(不设变量)。
+   - B = `MZ_TEST_SHARED_INPUT=0`(颜色与 motion 都回 buffer)。
+   - 可选 C = `MZ_TEST_SHARED_EXTENDED=0`(只测 2026-10-22 新增准入的影响);`MZ_TEST_SHARED_MOTION=0` 单独看 motion。
+   - 设变量:从 PowerShell `$env:MZ_TEST_SHARED_INPUT='0'; & '<游戏exe>'`;必须经 Steam 启动时,启动选项写
+     `cmd /c "set MZ_TEST_SHARED_INPUT=0&& %command%"`。测 A 前清掉该变量/启动选项。
+3. 场景:同一存档点读档,原地不动、镜头不动(或同一段过场),读档后等 30 s 稳定再采。
+4. 采集:每次 PresentMon 60 s;按 A B A B(至少各 2 次)交替,不要连续跑同一变体。
+5. 每次先核对日志确实走了预期路线:`[mochizuki] split colour input: shared texture` / `buffer`
+   与 `split motion input: ...`;A 若出现 buffer(准入未命中、预算或退避)该次作废并记下原因。
+6. 读数:`MsBetweenPresents` 与 `MsBetweenDisplayChange` 的中位与 P95、NR timing 日志的阶段时间;
+   每次单独列,再看 A/B 是否在各自的启动间波动之外。窗口内有 TDR 的按 measurement.md 对事件日志处理。
+7. 画面:同站位各截一张,确认没有错位、黑边或 bucket 边缘异常(DRS 游戏重点看右/下边缘)。
