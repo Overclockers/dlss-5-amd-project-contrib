@@ -232,8 +232,8 @@ namespace OptScalerNR.Launcher
             _optiPatcherToggle = (CheckBox)window.FindName("OptiPatcherToggle");
             if (_optiPatcherToggle != null)
             {
-                _optiPatcherToggle.Checked += (s, e) => RememberOptiPatcherChoice();
-                _optiPatcherToggle.Unchecked += (s, e) => RememberOptiPatcherChoice();
+                _optiPatcherToggle.Checked += (s, e) => { RememberOptiPatcherChoice(); ApplyOptiPatcherPluginLock(); };
+                _optiPatcherToggle.Unchecked += (s, e) => { RememberOptiPatcherChoice(); ApplyOptiPatcherPluginLock(); };
             }
             _openLogButton = (Button)window.FindName("OpenLogButton");
             _logView = (TextBox)window.FindName("LogView");

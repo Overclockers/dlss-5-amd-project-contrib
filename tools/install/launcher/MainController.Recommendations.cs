@@ -26,6 +26,16 @@ namespace OptScalerNR.Launcher
                 if(_selectedGame==null)return;_proxyChoices.Remove(_selectedGame.Id);SaveSettings();UpdateProxyRecommendation();
             };
         }
+        // Installing OptiPatcher forces LoadAsiPlugins=true, so the plugin toggle must not offer a
+        // contradicting state: while the OptiPatcher choice is checked the toggle is pinned on and
+        // disabled, exactly like the installer will configure it.
+        void ApplyOptiPatcherPluginLock()
+        {
+            if(_optiPatcherToggle==null||_iniPluginToggle==null)return;
+            var locked=_optiPatcherToggle.IsChecked==true;
+            _iniPluginToggle.IsEnabled=!locked;
+            if(locked)_iniPluginToggle.IsChecked=true;
+        }
         void RememberOptiPatcherChoice()
         {
             _decisions.OptiPatcher=_optiPatcherToggle!=null&&_optiPatcherToggle.IsChecked==true?"install":"skip";
@@ -55,6 +65,7 @@ namespace OptScalerNR.Launcher
             _selectingOptiPatcher=true;
             try{if(_optiPatcherToggle!=null)_optiPatcherToggle.IsChecked=optiPatcher;}
             finally{_selectingOptiPatcher=false;}
+            ApplyOptiPatcherPluginLock();
             _decisions.OptiPatcher=optiPatcher?"install":"skip";
             if(_selectedGame==null)return;
             string manual;
