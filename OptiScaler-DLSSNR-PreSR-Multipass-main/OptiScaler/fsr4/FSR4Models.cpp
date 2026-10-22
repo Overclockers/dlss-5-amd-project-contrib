@@ -160,6 +160,12 @@ void FSR4Models::Hook(HMODULE module)
     hookedModules.push_back(std::move(hooked));
 }
 
+bool FSR4Models::IsModuleHooked(HMODULE module)
+{
+    std::scoped_lock lock(hookMutex);
+    return FindHookedModule(module) != nullptr;
+}
+
 bool FSR4Models::ModuleHasModel(HMODULE module, FSR4Model model)
 {
     {
@@ -209,6 +215,15 @@ std::vector<FSR4Model> FSR4Models::SelectableModels(HMODULE module)
         {
             if (CanGpuRun(patched.provider->model))
                 models.push_back(patched.provider->model);
+        }
+    }
+    else
+    {
+        // Discover choices without patching an unhooked module; attach only on an explicit selection.
+        for (auto& provider : modelProviders)
+        {
+            if (CanGpuRun(provider.model) && rtti::FindVtable(module, provider.className) != nullptr)
+                models.push_back(provider.model);
         }
     }
 

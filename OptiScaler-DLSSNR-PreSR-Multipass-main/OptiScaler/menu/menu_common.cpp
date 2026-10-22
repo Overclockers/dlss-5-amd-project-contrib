@@ -33,6 +33,7 @@
 #include <upscalers/ffx/FFXFeature.h>
 #include <fsr4/FSR4Models.h>
 #include <fsr4/FSR4Presets.h>
+#include <fsr4/FSR4DriverProviderDx12.h>
 #include <fsr4/FSR4DriverProviderVk.h>
 #include <proxies/Streamline_Proxy.h>
 
@@ -3240,6 +3241,11 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                         else
                             config->Fsr4Preset = currentPresetIdx - 1;
 
+                        // Defer driver patching until an explicit override to avoid kernel anti-cheat termination.
+                        if (config->Fsr4Preset.has_value() && !FSR4Presets::IsAnyModuleHooked() &&
+                            FSR4DriverProviderDx12::LoadedModule() != nullptr)
+                            FSR4Presets::Hook(FSR4DriverProviderDx12::LoadedModule());
+
                         state.newBackend = currentBackend;
                         MARK_ALL_BACKENDS_CHANGED();
                     }
@@ -3258,6 +3264,8 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                         MenuUi::TextDisabled("(Active: %d)", state.currentFsr4Preset.value());
                     else if (FSR4Presets::IsAnyModuleHooked())
                         MenuUi::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)), "(Potential FSR3 fallback)");
+                    else if (!config->Fsr4Preset.has_value())
+                        MenuUi::TextDisabled("(Driver default; pick a preset to patch)");
                     else
                         MenuUi::TextDisabled("(Failed to hook)");
 
@@ -3294,6 +3302,11 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                         }
                         if (modelChanged)
                         {
+                            // Keep provider vtables untouched until the user explicitly selects a model.
+                            if (selectedModel.has_value() && upscalerModule != nullptr &&
+                                !FSR4Models::IsModuleHooked(upscalerModule))
+                                FSR4Models::Hook(upscalerModule);
+
                             state.newBackend = currentBackend;
                             MARK_ALL_BACKENDS_CHANGED();
                         }

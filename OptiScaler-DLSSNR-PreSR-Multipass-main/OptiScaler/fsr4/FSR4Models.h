@@ -12,6 +12,7 @@ class FSR4Models
   public:
     // Safe to call more than once for the same module
     static void Hook(HMODULE module);
+    static bool IsModuleHooked(HMODULE module);
 
     static bool ModuleHasModel(HMODULE module, FSR4Model model);
     static bool CanGpuRun(FSR4Model model);
