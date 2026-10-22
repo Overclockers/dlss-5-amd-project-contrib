@@ -294,6 +294,43 @@ class LauncherWorkerTests(unittest.TestCase):
         self.assertEqual(mochi["modelState"], "preparable")
         self.assertEqual(mochi["hints"], ["mochi-preparable"])
 
+    def test_mochi_reports_per_model_preparable_states(self):
+        pkg, game, exe = self.standalone_worker()
+        (pkg / "MochizukiNrRuntime.dll").write_bytes(b"runtime fixture")
+        (pkg / "mochizuki-owned.txt").write_text("shaders/example.hlsl\n", encoding="utf-8")
+        original = game / "dlssnr-amd/dlssnr.bin"
+        original.parent.mkdir()
+        original.write_bytes(b"NRMODEL1" + (599).to_bytes(4, "little") + bytes(20))
+
+        def patch_source_hash(content, old_hash):
+            source = pkg / "nvngx_dlssnr.dll"
+            source.write_bytes(content)
+            capability = pkg / "install-capabilities.ps1"
+            text = capability.read_text(encoding="utf-8-sig").replace(
+                old_hash, hashlib.sha256(content).hexdigest())
+            capability.write_text(text, encoding="utf-8-sig")
+            return self.invoke(pkg / WORKER.name, "inspect", exe)
+
+        # Original already extracted; a 310.9.16 source can still prepare small -> the launcher's
+        # Small option must stay enabled (ready + preparable mix).
+        code, result, events = patch_source_hash(
+            b"trusted 310.9.16 source fixture; never loaded",
+            "2bc19bc09a7b89dd44f73e2ac0108fcc586e2154bdd0830f242f4f040e28789f")
+        self.assertEqual(code, 0, events)
+        mochi = next(b for b in result["backends"] if b["id"] == "mochizuki")
+        self.assertEqual(mochi["originalState"], "ready", mochi)
+        self.assertEqual(mochi["smallState"], "preparable", mochi)
+
+        # A 310.8.0 source prepares neither small nor (with original gone) anything beyond original.
+        original.unlink()
+        code, result, events = patch_source_hash(
+            b"trusted 310.8.0 source fixture; never loaded",
+            "e16bcf15e16e13f527491cdf7845b2fe6521a738d8f7c9c721866a8496e1fc8e")
+        self.assertEqual(code, 0, events)
+        mochi = next(b for b in result["backends"] if b["id"] == "mochizuki")
+        self.assertEqual(mochi["originalState"], "preparable", mochi)
+        self.assertEqual(mochi["smallState"], "missing", mochi)
+
     def test_requested_package_selects_its_own_scripts(self):
         pkg, game, exe = self.standalone_worker()
         update = pkg.parent / "requested update"

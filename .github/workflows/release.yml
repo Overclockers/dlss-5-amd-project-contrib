@@ -369,6 +369,11 @@ jobs:
             $committed = git hash-object $dst
             Write-Host "Bundled OptiPatcher.asi refreshed for packaging (blob $committed)."
           }
+          # Best-effort step: a handled download/validation failure keeps the committed copy and
+          # must stay green, or the Actions pwsh wrapper would exit with curl's nonzero code and
+          # skip packaging. Clear the handled exit code explicitly.
+          $global:LASTEXITCODE = 0
+          exit 0
 
       - name: Package user zip
         shell: pwsh

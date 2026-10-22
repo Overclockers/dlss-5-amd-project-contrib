@@ -3242,8 +3242,9 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                             config->Fsr4Preset = currentPresetIdx - 1;
 
                         // Defer driver patching until an explicit override to avoid kernel anti-cheat termination.
-                        if (config->Fsr4Preset.has_value() && !FSR4Presets::IsAnyModuleHooked() &&
-                            FSR4DriverProviderDx12::LoadedModule() != nullptr)
+                        // Hook is idempotent per module; never gate on IsAnyModuleHooked(), the SDK dll
+                        // (amd_fidelityfx_upscaler_dx12.dll) is already hooked at startup.
+                        if (config->Fsr4Preset.has_value() && FSR4DriverProviderDx12::LoadedModule() != nullptr)
                             FSR4Presets::Hook(FSR4DriverProviderDx12::LoadedModule());
 
                         state.newBackend = currentBackend;

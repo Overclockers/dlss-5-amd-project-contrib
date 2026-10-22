@@ -1,4 +1,4 @@
-# Common backend capability and weight checking for OptScaler NR.
+﻿# Common backend capability and weight checking for OptScaler NR.
 # Shared between launcher-worker.ps1 and install-amd-presr.ps1.
 
 function Test-LmxxfWeightsDir([string]$Directory) {
@@ -266,6 +266,12 @@ function Get-OptScalerBackendCapabilities([string]$pkgRoot, [string]$gameDir, [s
         if (Test-MochizukiModelHeaderFile (Join-Path $root 'dlssnr-amd/dlssnr.bin') 599) { $mochiOriginalReady = $true }
         if (Test-MochizukiModelHeaderFile (Join-Path $root 'dlssnr-amd/dlssnr-small.bin') 255) { $mochiSmallReady = $true }
     }
+    # Only the 310.9.16 source can prepare dlssnr-small.bin (Setup's $mochizukiNewNvSha);
+    # 310.8.0 prepares the original model only. Any accepted source prepares the original.
+    $mochiSourceProvidesSmall = $false
+    if ($mochiNv -and -not $mochiSmallReady) {
+        try { $mochiSourceProvidesSmall = ((Get-OptScalerFileSha256 $mochiNv) -eq '2bc19bc09a7b89dd44f73e2ac0108fcc586e2154bdd0830f242f4f040e28789f') } catch { }
+    }
     $mochiPreparation = if ($canMochiRuntime) { 'ready' } else { 'missing-runtime' }
     if ($canMochiRuntime -and -not ($mochiOriginalReady -and $mochiSmallReady)) {
         if (-not (Get-Command Ensure-NativeModelExtractor -ErrorAction SilentlyContinue)) {
@@ -282,8 +288,8 @@ function Get-OptScalerBackendCapabilities([string]$pkgRoot, [string]$gameDir, [s
     $mochiReason = if (-not $canMochiRuntime) { 'Runtime missing' } elseif ($hasMochiModel) { 'Ready' } elseif ($mochiPreparable) { 'Model preparation required' } else { 'Model missing' }
     $backends += @{
         id = 'mochizuki'
-        originalState = if ($mochiOriginalReady) { 'ready' } else { 'missing' }
-        smallState = if ($mochiSmallReady) { 'ready' } else { 'missing' }
+        originalState = if ($mochiOriginalReady) { 'ready' } elseif ($mochiNv) { 'preparable' } else { 'missing' }
+        smallState = if ($mochiSmallReady) { 'ready' } elseif ($mochiSourceProvidesSmall) { 'preparable' } else { 'missing' }
         preparationState = $mochiPreparation
         runtimeState = if ($canMochiRuntime) { 'ready' } else { 'missing' }
         modelState = if ($hasMochiModel) { 'ready' } elseif ($mochiPreparable) { 'preparable' } else { 'missing' }

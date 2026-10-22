@@ -1,3 +1,17 @@
+## 2026-10-22 — 代码审查四问题修复(P1 能力状态 / P2×3)
+
+审查范围 a2b45d02^..main,四条全部核实属实并修复:P1(我此前 D5 修复不完整的回归)——
+mochizuki 能力只发 ready|missing、无 preparable,新 enable 矩阵会把"有受信源但未提取模型"
+场景三个选项全禁用;install-capabilities.ps1 现按源哈希区分:任意受信源→originalState
+preparable,仅 310.9.16(2bc19bc0…)→smallState preparable,并新增就绪+可提取混合组合与
+310.8.0 组合的回归测试(test_launcher_worker 全套 23 过)。P2 三处:release.yml OptiPatcher
+刷新步骤结尾显式 exit 0(Actions 的 pwsh 包装会用残留的非零 LASTEXITCODE 退出,导致
+best-effort 失败跳过后续打包);菜单 FSR4 预设延迟补挂去掉 IsAnyModuleHooked 全局门
+(SDK DLL 启动即被 FfxApi_Proxy 挂钩使恒真,驱动模块补挂被跳过;Hook 本身按模块幂等);
+XeLLProxy::BundledVersion 按 LoadProxyLibrary 规则解析 XeLLLibrary(相对路径锚定游戏
+EXE、目录取其内 libxell.dll、无效回退 Opti 副本),否则目录/相对配置读到 {0,0,0} 使配对
+门限失效。C++ BUILD_OK、YAML 解析通过、能力脚本解析通过。
+
 ## 2026-10-22 — DxgiSpoofing"被自动改掉"反馈核验 + Int8 强制点补提示
 
 7 处运行时改写点全部核验:6 处带 `!has_value()` 门(仅 auto 态调整,SoftDefault 显式值

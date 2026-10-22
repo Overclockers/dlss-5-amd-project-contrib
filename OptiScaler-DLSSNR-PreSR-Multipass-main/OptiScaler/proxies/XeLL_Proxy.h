@@ -410,12 +410,33 @@ class XeLLProxy
     static xell_version_t BundledVersion()
     {
         static xell_version_t bundled = [] {
+            // Mirror Util::LoadProxyLibrary: a relative override anchors to the game EXE, a directory
+            // means the libxell.dll inside it, and a missing/invalid override falls back to the Opti
+            // copy that actually loads. Reading the version any other way lets a directory or
+            // relative override report {0,0,0}, which the pairing gate treats as "no baseline" and
+            // lets an old XeLL context through to SetLatencyReduction.
             auto overridePath = Config::Instance()->XeLLLibrary.value_or(L"");
 
             if (!overridePath.empty())
-                return GetDLLVersion(overridePath);
+            {
+                auto path = std::filesystem::path(overridePath);
 
-            return GetDLLVersion((std::filesystem::path(Config::Instance()->MainDllPath.value()) / L"libxell.dll").wstring());
+                if (path.is_relative())
+                    path = Util::ExePath().parent_path() / path;
+
+                if (std::filesystem::is_directory(path))
+                    path = path / L"libxell.dll";
+
+                if (std::filesystem::exists(path))
+                    return GetDLLVersion(path.wstring());
+            }
+
+            auto optiPath = std::filesystem::path(Config::Instance()->MainDllPath.value());
+
+            if (std::filesystem::is_directory(optiPath))
+                optiPath = optiPath / L"libxell.dll";
+
+            return GetDLLVersion(optiPath.wstring());
         }();
 
         return bundled;
