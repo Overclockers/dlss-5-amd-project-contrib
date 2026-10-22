@@ -18,6 +18,16 @@ Read [docs/workspace.md](docs/workspace.md) before creating any file outside pro
 - Tracked files must not depend on files under `work/`. `analysis/`, `.analysis-tools/` and
   `.handoff/` are retired: do not recreate them.
 
+## Subagent models and tools
+
+- Verify the actual selected model and exposed tools before assigning work. 
+- `scout` is read-only and may have no bash. Do not assign it `git log/show/diff`, builds or execution
+  without confirming tool access; provide fixed-commit artifacts or use an appropriately equipped agent.
+- Ordinary `task` calls currently reject `model` overrides (accepted only for `seance`). Use a supported
+  agent/model configuration or explicit CLI routing; verify identity and tools, not model performance.
+- One owner schedules all GPU jobs; serialize them and avoid heavy CPU builds during formal timing.
+  Check for games before and during runs; stop only owned benchmarks on collision, never the game.
+
 ## Release tests (no GPU)
 
 Before release preparation, read [docs/release.md](docs/release.md), the single release workflow.
