@@ -1125,7 +1125,9 @@ class Config
     CustomOptional<bool> FsrNonLinearColorSpace { false };
     CustomOptional<bool> FsrNonLinearSRGB { false };
     CustomOptional<bool> FsrNonLinearPQ { false };
-    CustomOptional<bool> FsrAgilitySDKUpgrade { false };
+    // NoDefault: an explicit ini false must survive SaveIni (value_for_config maps a value equal to the
+    // default back to auto, which the Win10 auto-upgrade below would then re-enable every launch).
+    CustomOptional<bool, NoDefault> FsrAgilitySDKUpgrade;
 
     // These default values will be overwritten at upscaler init time with optimized values
     CustomOptional<float> FsrVelocity { 1.0f };

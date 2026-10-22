@@ -577,7 +577,11 @@ Close the game completely, then run Setup.bat again.
 "@
 }
 # Also flag a live process whose image lives in the game folder.
-$gameExes = @(Get-ChildItem -LiteralPath $game -Filter '*.exe' -File -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name)
+# Our own running binaries are not the game: users who extract the whole package into the game
+# folder would otherwise self-lock (the launcher itself launched this installer).
+$gameExes = @(Get-ChildItem -LiteralPath $game -Filter '*.exe' -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -notin @('OptScalerNR.Launcher.exe', 'dlssnr_on_amd_setup.exe', 'person-worker.exe') } |
+    Select-Object -ExpandProperty Name)
 if ($gameExes.Count -gt 0) {
     $running = Get-Process -ErrorAction SilentlyContinue | Where-Object {
         $n = "$($_.ProcessName).exe"

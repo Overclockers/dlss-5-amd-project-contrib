@@ -1,3 +1,19 @@
+## 2026-10-22 — Win10 Agility 盲开等五缺陷修复(work/notes 审查报告核验后)
+
+外部审查报告(work/notes/2026-10-22-win10-agility-and-launcher-defects-review.md)五条,
+逐行核验:1-4 认可,5 部分认可(报告称前端仅查 PreparationState 不确——对话框另有
+OriginalState/SmallState 门控与版本感知提示,但 `|| canExtract` 通道确能在"工具就绪+
+源 DLL 仅 310.8.0"时放开 Small,安装后端才报致命错)。修复:D1 Win10 Agility 自动
+升级加 `gameAgilityVersion > 0 &&` 下限(无 Agility 导出的游戏返回 0,原 0<615 恒真,
+kernelbase Detours 会被内核反作弊击杀;仅 Win10,build<22000);D2
+`FsrAgilitySDKUpgrade` 改 `CustomOptional<bool, NoDefault>`(消费点 3 处随之
+`.value_or(false)`)——`value_for_config` 会把"值==默认"映射回
+auto,显式 false 保存即丢,与 D1 组成无法自救的崩溃循环(同类风险键见
+docs/upstream-issues.md U4);D3 INI 注释对齐新语义;D4 安装器进程检测排除自身
+(Launcher/提取器/person-worker,包解压进游戏目录时自锁);D5 模型对话框 enable 矩阵
+纳入 `preparable`(Small 需 `small || (canExtract && smallPreparable)`)。D1/D2 上游
+同款(dllmain.cpp:1160-1168 / Config.h:484),已入上游台账 docs/upstream-issues.md。
+
 ## 2026-10-22 — HSR(D3D11 + ffx_12)被内核反作弊击杀:FSR4 驱动 DLL 补丁改为显式覆盖才挂
 
 崩坏:星穹铁道(kernel AC HoYoKProtect)上 1.13.2 起开 FSR4 超分,超分初始化与首帧

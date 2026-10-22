@@ -177,7 +177,7 @@ static void RunAgilityUpgrade(HMODULE dx12Module)
         return;
     }
 
-    if (Config::Instance()->FsrAgilitySDKUpgrade.value_or_default())
+    if (Config::Instance()->FsrAgilitySDKUpgrade.value_or(false))
     {
         Microsoft::WRL::ComPtr<ID3D12SDKConfiguration> sdkConfig;
         auto hr = D3D12GetInterface(CLSID_D3D12SDKConfiguration, IID_PPV_ARGS(&sdkConfig));
@@ -939,7 +939,7 @@ static void CheckWorkingMode()
         auto path = Util::ExePath().parent_path() / L"D3D12" / L"D3D12Core.dll";
         d3d12AgilityModule = NtdllProxy::LoadLibraryExW_Ldr(path.c_str(), NULL, 0);
 
-        if (d3d12AgilityModule == nullptr && Config::Instance()->FsrAgilitySDKUpgrade.value_or_default())
+        if (d3d12AgilityModule == nullptr && Config::Instance()->FsrAgilitySDKUpgrade.value_or(false))
         {
             path = optiDllPath / L"D3D12_OptiScaler" / L"D3D12Core.dll";
             d3d12AgilityModule = NtdllProxy::LoadLibraryExW_Ldr(path.c_str(), NULL, 0);
@@ -1154,7 +1154,11 @@ static void CheckWorkingMode()
     if (State::Instance().isWindows10 && !State::Instance().isRunningOnLinux &&
         !Config::Instance()->FsrAgilitySDKUpgrade.has_value())
     {
-        if (gameAgilityVersion < customD3D12SDKVersion)
+        // Only a game that already ships an Agility SDK older than ours qualifies. CheckAgilitySDK returns 0
+        // when the exe has no D3D12SDKVersion exports, and 0 < customD3D12SDKVersion would otherwise force the
+        // upgrade (kernelbase detour + SDK switch) onto DX11 / non-Agility games; kernel anti-cheat protected
+        // titles terminate the process for that.
+        if (gameAgilityVersion > 0 && gameAgilityVersion < customD3D12SDKVersion)
         {
             LOG_INFO("Enabling AgilitySDKUpgrade");
             Config::Instance()->FsrAgilitySDKUpgrade.set_volatile_value(true);
@@ -1162,7 +1166,7 @@ static void CheckWorkingMode()
     }
 
     // For Agility SDK Upgrade
-    if (Config::Instance()->FsrAgilitySDKUpgrade.value_or_default())
+    if (Config::Instance()->FsrAgilitySDKUpgrade.value_or(false))
     {
         RunAgilityUpgrade(GetDllNameWModule(&dx12NamesW));
     }

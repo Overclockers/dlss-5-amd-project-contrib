@@ -2046,6 +2046,10 @@ namespace OptScalerNR.Launcher
             var canExtract = capability != null && capability.PreparationState == "ready";
             var original = capability != null && capability.OriginalState == "ready";
             var small = capability != null && capability.SmallState == "ready";
+            // Preparable mirrors the installer's source check: 310.8.0 can only prepare original, so the
+            // Small choice must not ride on extraction tools alone (the installer would fail late).
+            var originalPreparable = capability != null && capability.OriginalState == "preparable";
+            var smallPreparable = capability != null && capability.SmallState == "preparable";
             var dialog = new Window
             {
                 Owner = _window.IsVisible ? _window : null, Title = L("选择 Mochizuki 模型", "Select Mochizuki models"), Width = 500,
@@ -2068,12 +2072,16 @@ namespace OptScalerNR.Launcher
             });
             var proceed = new Button { Content = L("继续", "Continue"), IsEnabled = false, MinWidth = 100, Margin = new Thickness(4) };
             DialogTheme.Primary(dialog, proceed);
-            if (!canExtract && !(original && small))
+            var enabled = new[] {
+                (original && small) || (canExtract && originalPreparable && smallPreparable),
+                small || (canExtract && smallPreparable),
+                original || (canExtract && originalPreparable)
+            };
+            if (!enabled[0] && !enabled[1] && !enabled[2])
                 panel.Children.Add(new TextBlock {
                     Text = L("部分模型暂不可用，请补齐来源或完整安装包后重试。", "Some models are unavailable. Add the source or restore the complete package and retry."),
                     TextWrapping = TextWrapping.Wrap, Foreground = LauncherTheme.Brush("ThemeWarning"), Margin = new Thickness(0,0,0,12)
                 });
-            var enabled = new[] { (original && small) || canExtract, small || canExtract, original || canExtract };
             var values = new[] { "both", "small", "original" };
             var labels = new[] { L("Original + Small", "Original + Small"), "Small", "Original" };
             for (var i = 0; i < values.Length; i++)
