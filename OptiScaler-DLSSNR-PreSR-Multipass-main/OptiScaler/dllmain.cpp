@@ -1507,7 +1507,11 @@ DWORD WINAPI getGpuInfo(LPVOID hModuleVoid)
             Config::Instance()->SpoofedGPUName.set_volatile_value(wname);
         }
 
+        const bool dxgiSpoofingExplicitOff =
+            Config::Instance()->DxgiSpoofing.has_value() && !Config::Instance()->DxgiSpoofing.value();
         Config::Instance()->DxgiSpoofing.set_volatile_value(true);
+        if (dxgiSpoofingExplicitOff)
+            LOG_INFO("FSR4-Int8 forces DxgiSpoofing on for this session; your explicit ini value is kept");
     }
 
     // If DX12 already loaded then grab the full GPU info right away

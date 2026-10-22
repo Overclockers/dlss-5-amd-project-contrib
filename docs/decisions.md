@@ -1,3 +1,11 @@
+## 2026-10-22 — DxgiSpoofing"被自动改掉"反馈核验 + Int8 强制点补提示
+
+7 处运行时改写点全部核验:6 处带 `!has_value()` 门(仅 auto 态调整,SoftDefault 显式值
+持久化并受尊重,含 nvngx 缺失处——初判"无门"有误,外层整块有门且已有日志);唯一无门
+的是 FSR4-Int8 强制开(dllmain:1510,上游故意,Int8 跑 FFX 必须伪装),但零提示覆盖显式
+false,观感即 bug。已在该处加提示日志(显式 ini 值保留说明),行为零变化。全景分析与
+判别口径记入 docs/upstream-issues.md U6,建议上游跟进提示或改门控。
+
 ## 2026-10-22 — Win10 Agility 盲开等五缺陷修复(work/notes 审查报告核验后)
 
 外部审查报告(work/notes/2026-10-22-win10-agility-and-launcher-defects-review.md)五条,

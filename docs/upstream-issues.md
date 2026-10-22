@@ -41,6 +41,27 @@
 - 上游:LL 构建下 `XeFGInputs::Hook` 把游戏旧 libxess_fg 的导出重定向到 Opti 副本,而游戏的 XeLL 上下文仍落在最先加载的旧 libxell;非 LL 构建是整对交换(正确),LL 构建不是。
 - 状态:无现场报告(FGInput=XeFG+FGOutput=XeFG 组合);正确修法需 XeLL 输入在 passthrough 重定向时改用 Opti 配对,涉及引流设计,留待与上游讨论。
 
+
+## U6 DxgiSpoofing 自动改写的观感问题(下游已加提示日志,建议上游跟进)
+
+用户反馈"spoofing 选项被自动改掉"。全部 7 处运行时改写点核验(2026-10-22):
+
+| 触发 | 方向 | 门控 |
+|---|---|---|
+| OptiPatcher 打补丁成功(dllmain:301/361) | 关 | `!has_value()` |
+| 检测到 Luma / Sekiro TSR(1349/1378) | 关 | `!has_value()` |
+| 游戏不用 DLSS、伪装无服务对象(1783) | 关 | `!has_value()` |
+| nvngx 替换缺失且无 nvngx.dll(1858) | 关 | `!has_value()`(外层整块) + 已有日志 |
+| **FSR4-Int8 GPU**(1510) | **强制开** | **无门,覆盖显式值** |
+
+结论:除 Int8 外全部只在用户未显式设置(auto)时调整——设计行为;DxgiSpoofing 为
+SoftDefault,显式值持久化并在此后启动被尊重。唯一无门的是 FSR4-Int8(Int8 跑 FFX
+必须伪装,上游故意),但**零提示**地覆盖显式 false,用户观感即"设置被吞"。下游已在
+该处加日志("forces DxgiSpoofing on ... your explicit ini value is kept")。建议上游:
+无门强制处补同款提示,或评估 Int8 也改为带门+醒目警告。判别口径(供支持):ini 值为
+auto=从未显式设置(门控自动调整,显式设一次即固定);ini 显式值仍在而行为相反=Int8
+强制(看日志);两者皆非=新问题,收日志。
+
 ## 非上游问题的说明
 
 菜单虚基下转崩溃(bdd11179)与 `_ffxFGIndex` 越界是**我们集成时引入**(上游无此代码/上游本有上界保护),不属于上游问题,已在 decisions.md 记录。
