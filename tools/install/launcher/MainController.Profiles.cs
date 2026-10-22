@@ -44,6 +44,7 @@ namespace OptScalerNR.Launcher
             _iniApplyButton = _window.FindName("IniApplyButton") as Button;
             _iniFolderButton = _window.FindName("IniFolderButton") as Button;
             InitShareCode();
+            InitModelImport();
             InitUnlockerPlugin();
             try { _iniProfiles = new IniProfiles(_settingsDir); }
             catch (Exception ex) { IniFailure(ex); }

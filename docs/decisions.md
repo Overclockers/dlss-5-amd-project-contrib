@@ -1,3 +1,15 @@
+## 2026-10-22 — 模型源红色导入条(所选后端缺源文件时)
+
+所选后端(mochi/lmxxf/daniel)在能力检测中报"缺源文件"类 hint(mochi-source/lmxxf-weights/
+daniel-weights/daniel-runtime 等)且游戏目录与包内都没有可用文件时,后端卡片下方亮起红色
+警示条:动态文案指明缺什么(nvngx_dlssnr.dll 对应版本 / Daniel setup exe / 权重 bin),
+"导入模型源文件…"按钮打开文件框 → PE 校验(MZ/PE/AMD64/4KB-300MB)→ 复制到启动器包目录
+(_packageRoot,对所有游戏持久生效)→ 同名差异询问覆盖 → 自动重新 InspectGame 刷新徽章。
+刷新挂点:RefreshInspectionText(检测更新)、后端勾选变化、语言切换。安装时的兜底
+PrepareMissingModelSource 保留(红色条未处理/未导入时仍按次弹选),GPU 不支持类状态不
+显示导入条(导不导都没救)。新增 MainController.ModelImport.cs(csproj+build-launcher
+双清单登记)。LAUNCHER_OK。
+
 ## 2026-10-22 — 诊断卡布局重排 + OptiPatcher 锁定插件开关
 
 布局(方案 A,按"作用时机 × 写入粒度"分四区):①安装选项小节标题(ReplaceIni/OptiPatcher,

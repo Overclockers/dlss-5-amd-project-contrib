@@ -363,7 +363,7 @@ namespace OptScalerNR.Launcher
 
             RoutedEventHandler backendChanged = (s, e) => {
                 if (_updatingBackends) return;
-                UpdateActiveCombo(); SaveBackendChoice(); UpdatePrimaryButtonState();
+                UpdateActiveCombo(); SaveBackendChoice(); UpdatePrimaryButtonState(); RefreshModelImportBar();
             };
             if (_lmxxfCheck != null) { _lmxxfCheck.Checked += backendChanged; _lmxxfCheck.Unchecked += backendChanged; }
             if (_danielCheck != null) { _danielCheck.Checked += backendChanged; _danielCheck.Unchecked += backendChanged; }
@@ -808,6 +808,7 @@ namespace OptScalerNR.Launcher
                 foreach (var label in new[] { _lmxxfReason, _danielReason, _mochiReason }) if (label != null) { label.Text = L("待选择 EXE", "Select EXE first"); label.Foreground = MissingBrush; }
                 foreach (var badge in new[] { _lmxxfBadge, _danielBadge, _mochiBadge }) if (badge != null) { badge.Background = MissingBg; badge.BorderBrush = MissingBorder; }
                 RefreshBackendHints();
+                RefreshModelImportBar();
                 return;
             }
             if (_injectText != null) _injectText.Text = failed
@@ -847,6 +848,7 @@ namespace OptScalerNR.Launcher
                 }
             }
             RefreshBackendHints();
+            RefreshModelImportBar();
             if (!failed) UpdateProxyRecommendation();
         }
 
