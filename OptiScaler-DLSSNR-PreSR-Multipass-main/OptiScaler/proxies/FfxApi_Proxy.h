@@ -282,8 +282,10 @@ class FfxApiProxy
 
             if (!main_dx12.isLoader)
             {
-                FSR4Presets::Hook(main_dx12.dll);
-                FSR4Models::Hook(main_dx12.dll);
+                if (Config::Instance()->Fsr4Preset.has_value())
+                    FSR4Presets::Hook(main_dx12.dll);
+                if (Config::Instance()->Fsr4Model.has_value())
+                    FSR4Models::Hook(main_dx12.dll);
             }
         }
 
@@ -430,8 +432,13 @@ class FfxApiProxy
 
         if (upscaling_dx12.dll != nullptr)
         {
-            FSR4Presets::Hook(upscaling_dx12.dll);
-            FSR4Models::Hook(upscaling_dx12.dll);
+            // Same gate as the driver DLL: patching code pages inside any loaded module can
+            // trigger kernel anti-cheat termination (seen: Honkai Star Rail), so the SDK copy
+            // is also left untouched until the user explicitly chooses an FSR4 override.
+            if (Config::Instance()->Fsr4Preset.has_value())
+                FSR4Presets::Hook(upscaling_dx12.dll);
+            if (Config::Instance()->Fsr4Model.has_value())
+                FSR4Models::Hook(upscaling_dx12.dll);
 
             wchar_t modulePath[MAX_PATH];
             DWORD len = GetModuleFileNameW(upscaling_dx12.dll, modulePath, MAX_PATH);

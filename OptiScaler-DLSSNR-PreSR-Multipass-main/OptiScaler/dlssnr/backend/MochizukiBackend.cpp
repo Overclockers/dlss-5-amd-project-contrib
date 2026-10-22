@@ -69,6 +69,7 @@ struct MochizukiBackend::Impl
     uint64_t frameId = 0, retryAt = 0, infoAt = 0, logAt = 0;
     bool failed = false;
     unsigned errors = 0;
+    unsigned consecutivePrepareFailures = 0;
     unsigned tracedRecordings = 0;
     // Recording-proxy coverage. A large share of the game's command lists is never
     // wrapped by SubmissionHooks, so those frames go through as the original colour
@@ -412,10 +413,22 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
         {
             p->Status(std::string("mochizuki: ") + reason);
             if (++p->errors <= 3 || p->errors % 6000 == 0) LOG_WARN("mochizuki PrepareFrame: {}", reason);
+            // Circuit breaker: repeated per-frame failures (seen on Proton: ~128/s buffer-import
+            // errors) leak resources until the process is OOM-killed. After enough consecutive
+            // failures, stop calling prepare entirely; the user changes a setting or restarts.
+            if (++p->consecutivePrepareFailures >= 50)
+            {
+                if (p->consecutivePrepareFailures == 50)
+                    LOG_ERROR("mochizuki: {} consecutive prepare failures ({}), circuit breaker open; NR disabled until settings change",
+                              p->consecutivePrepareFailures, reason);
+                p->owner->activity.Reset();
+                return nullptr;
+            }
         }
         return nullptr;
     }
     coverage.Prepared();
+    p->consecutivePrepareFailures = 0;
     std::shared_ptr<InlineRecording::Resources> inlineResources;
     if (inlineMode) {
         try {
