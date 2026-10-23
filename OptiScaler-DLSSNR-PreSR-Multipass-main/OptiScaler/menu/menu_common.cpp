@@ -3386,10 +3386,12 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                         {
                             LOG_DEBUG("FSR4 Watermark set to {}", fsr4wm);
                             config->Fsr4EnableWatermark = fsr4wm;
-                        }
+                            Util::SetFlagEnvVar(L"MLSR-WATERMARK", fsr4wm);
 
-                        ShowHelpMarker("After changing this option, please Save Settings.\n"
-                                       "It will be applied on next launch.");
+                            // The driver reads the variable on context creation
+                            state.newBackend = currentBackend;
+                            MARK_ALL_BACKENDS_CHANGED();
+                        }
                     }
                 }
 
@@ -4393,10 +4395,12 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                         {
                             LOG_DEBUG("FSRFGEnableWatermark set FGWatermark: {}", fgwm);
                             config->FSRFGEnableWatermark = fgwm;
-                        }
+                            Util::SetFlagEnvVar(L"MLFI-WATERMARK", fgwm);
 
-                        ShowHelpMarker("After changing this option, please Save Settings\n"
-                                       "It will be applied on next launch.");
+                            // The driver reads the variable on context creation
+                            if (config->IsFGEnabled())
+                                state.fgChanged = true;
+                        }
                     }
 
                     ImGui::TableNextColumn();
@@ -5613,10 +5617,12 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                     {
                         LOG_DEBUG("FSRFGEnableWatermark set FGWatermark: {}", fgwm);
                         config->FSRFGEnableWatermark = fgwm;
-                    }
+                        Util::SetFlagEnvVar(L"MLFI-WATERMARK", fgwm);
 
-                    ShowHelpMarker("After changing this option, please Save Settings\n"
-                                   "It will be applied on next launch.");
+                        // The driver reads the variable on context creation
+                        if (config->IsFGEnabled())
+                            state.fgChanged = true;
+                    }
                 }
             }
 
