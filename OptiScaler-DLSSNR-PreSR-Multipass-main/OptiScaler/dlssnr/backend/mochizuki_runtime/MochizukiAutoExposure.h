@@ -109,7 +109,7 @@ void main(uint3 thread : SV_GroupThreadID)
         const float3 colour = max(Colour.Load(int3(int2(Origin + offset), 0)).rgb, 0.0f);
         const float l = dot(colour, float3(0.2126f, 0.7152f, 0.0722f));
         // A non-finite sample must not poison the level: drop it and divide by what was usable.
-        const bool ok = !isnan(l) && !isinf(l);
+        const bool ok = (asuint(l) & 0x7f800000u) != 0x7f800000u;
         luma[i] = ok ? l : -1.0f;
         logSum += ok ? log(max(l, 1e-5f)) : 0.0f;
         usable += ok ? 1u : 0u;
