@@ -159,7 +159,7 @@ set/call/clear 事务加专用 primingMutex(DX12/VK 两个 provider 首载可并
 共 ~1200 缺失行,语义分类后 97% 为噪音(等价新版/有意 fork/格式),真缺口 16 项(G1-G16)。
 证据:agent://AuditCore|AuditHooks|AuditMenu|AuditFG|AuditUpscale,材料 work/scratch/audit-vs-990ff98/。
 
-**高危(崩溃/功能死/安全守卫失效)**:
+**高危(G1-G7 已全部修复,49791359/c5f2e247/末批)**:
 | # | 位置 | 问题 |
 |---|---|---|
 | G1 | FG_Hooks.cpp:769,1014 | DLSSG 的 ALLOW_TEARING 强制被错放进 FGSkipResizeBuffers 分支(默认关)→ DLSSG 激活时 resize 失败(上游 b48fcb0) |
@@ -170,10 +170,10 @@ set/call/clear 事务加专用 primingMutex(DX12/VK 两个 provider 首载可并
 | G6 | menu_common.cpp:4501 | XeFG 安全守卫用 FGEnabled.reset() 而非 set_volatile_value(false) → follow-game 下守卫被绕过(坏 MV/独占全屏仍启用 XeFG) |
 | G7 | menu_common.cpp:5755-5955 | RenderLowLatency/FramerateSettings 停在 E5/E6 前:Reflex/AL-Vk 输出被误禁、"None"静默变 Auto、缺 OptiScaler 输入显示/forced 锁/incompat 警告/实际限帧器文案 |
 
-**中危**:
+**中危**(G7/G8 已修,G8 见下):
 | # | 位置 | 问题 |
 |---|---|---|
-| G8 | menu_common.cpp:4782-4836 | Reprojection 控制缺启用滑条(菜单里关不掉/开不了)、Parallax Scale 应为 0-10000 对数(现为 0-2 线性,shader 期望世界单位 ~1000)、缺第三人称/视差遥测 |
+| ~~G8~~ | ~~menu_common.cpp:4782-4836~~ | ~~已修(49791359 后续批次)~~:补 RenderFGModeSlider 开关、Parallax Scale 0-10000 对数 + ParallaxScaleEstimate 只读显示、IsBypassed/ThirdPersonScore/OrbitScore 遥测行 |
 | G9 | menu_common.cpp:4413,5225-5275 | Vulkan FSR-FG 帧节奏调整被 DX12 版本检查隐藏;Vulkan OptiFG 缺 Flip(Unity)/FlipOffset 勾选(后端已实现) |
 | G10 | menu_common.cpp:1714 | FG 切换热键写持久值 → 保存后 FGEnabled=auto(跟随游戏)永久丢失(应 set_volatile_value) |
 | G11 | menu_common.cpp:3876 | XeFG→XeFG passthrough 下 fgSettingsChanged 恒真 → 永久显示"保存并重启"红字 |
