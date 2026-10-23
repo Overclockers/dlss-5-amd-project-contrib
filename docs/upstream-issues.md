@@ -105,20 +105,24 @@ d8aebe4 三部分,移植两部分、跳过一部分:
    策略层已完整生效。
 
 卡顿不受影响:门控不变,Auto(未显式选模型)依然零挂钩。
-### C. 上游其余新提交(记录,暂不动)
+### C. 上游其余未移植提交(19 中剩 15,记录备查)
 
+勘误(2026-10-24):初版把 b686ef4/824a7b7/62887bf(Vulkan FSR4 支持、FG 隐藏、VK 管线 workaround)
+误列为待同步——经 `git merge-base --is-ancestor` 核实,它们是 9df512d 的祖先,早已随快照集成。
 
-- b686ef4/824a7b7/62887bf:FSR4 Vulkan 支持、FG 隐藏、VK 管线 workaround——大特性,待下次同步窗口
+- 65ee5d6 GPU 检测 + FSR4 可用性大修——与 P4 跳过的 IdentifyGpu.cpp 部分配套,需 GPU 实测,下次同步窗口
+- 42d6162 "potential fallback" 误报修复(FSR4Models.cpp 3 行)——小,可顺手
 - d1a146a AL2→AL2 FSRFG 转换修复、223cf6b Enshrouded MV 修复、0778a10 FSRFG Vulkan vsync——游戏专项,有用户报告再移
-- c2529ed/c471428 菜单 upscale ratio 显示、a8d0f0a flip meter、03e6ef0 FSR4 水印切换、c220ad9 UI——低风险小改进,可随下次同步顺手带
-- 5dfedd6 fakenvapi 简化、a79c2f3 移除非 LL 路径、42d6162 回退消息修复——结构性改动,同步时需评估与我们 fork 的冲突
+- c2529ed/c471428 菜单 upscale ratio 显示、a8d0f0a flip meter、03e6ef0 FSR4 水印切换、c220ad9/e0a4859 UI、14434bf FFX 版本计数——低风险小改进,可随下次同步顺手带
+- 5dfedd6 fakenvapi 简化、a79c2f3 移除非 LL 路径——结构性改动,与 fork 冲突面大,必须整窗评估
+- 990ff98 merge commit,无内容
 
 ### D. 行动项
 
 1. **提 issue(高优先)**:U1/U1b(AC 击杀,有星铁现场)、U3+U4(Win10 Agility 死循环)——上游修复成本低
 2. **提 issue(中优先)**:U2(XeLL 配对)、U6(DxgiSpoofing 无提示覆盖)
-3. **移植 P1-P3**(小改动,低风险):菜单缓冲区、Vulkan RDR2、FSR4 交换链
-4. **下次同步窗口**:评估 b686ef4(Vulkan FSR4)与 P4(d8aebe4)的合并策略
+3. ~~移植 P1-P3~~ 已完成(a7537612)
+4. **下次同步窗口**:评估 65ee5d6(与 P4 的 IdentifyGpu 部分配套)与 a79c2f3/5dfedd6(结构性)的合并策略
 
 ## 非上游问题的说明
 
