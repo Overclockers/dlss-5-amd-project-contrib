@@ -1,6 +1,6 @@
 # Mochizuki split 共享颜色、motion 输入与纹理输出
 
-## 准入外分支改共享纹理（2026-10-22，feat/nr-bridge-opt，离线夹具通过、游戏内待测）
+## 准入外分支改共享纹理（2026-10-22，feat/nr-bridge-opt，离线夹具通过；2026-10-23 巫师 3 实机功能/画面通过，性能仅目测）
 
 逐分支结论。证据为本分支源码位置；2026-10-23 已在 NUC 编译 runtime 并跑离线夹具（见本节末），
 **未进游戏**。
@@ -38,6 +38,13 @@
   所以只能比 hash0；这与载体无关，夹具对 reno 只报告 `repro=0` 不判失败。
 - 时间：每个变体单次 200 帧，差异约 0.1 ms 内，与运行间波动同量级；256×256 的拷贝量太小，
   **不据此声称更快**。净收益仍按 PLAN.md 的游戏内 A/B 流程测。
+
+- 巫师 3 实机（2026-10-23，Steam 版 1.13.2-alpha6，1080p，split，RenoDX 开）：诊断轮 9101 帧
+  `missing recording proxy`=0、coverage 350/350 全录无拒绝；默认（A/A2 两轮）reno 帧走
+  shared、画面无异常；`MZ_TEST_SHARED_EXTENDED=0`（C 轮）精确只把 reno 帧打回 buffer；
+  `MZ_TEST_SHARED_INPUT=0`（B 轮重跑）全 buffer。网络耗时各轮 3.77–3.83 ms（p95 3.84–4.01）
+  持平。无 PresentMon 数据，性能结论仅为"目测无回退"，精确净收益仍待 PLAN.md 的游戏内
+  A/B（燕云）或补测。
 
 ## 最新进度核对（2026-10-21）
 

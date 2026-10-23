@@ -3,8 +3,7 @@
 用户向兼容说明 + 静态核对记录。代码里不按游戏名判断。
 
 | 项 | 内容 |
-|---|---|
-| 当前状态 | 本仓库未在巫师 3 实机验证;下面是对照 mochizuki 的 ab00d2b 做的静态核对 |
+| 当前状态 | 已实机验证（2026-10-23，巫师 3 Steam 版 1.13.2-alpha6，1080p，split + RenoDX）：vtable 残余风险未发生，NR 全程生效，见下节 |
 | mochizuki 的问题(ab00d2b) | 进程里有东西给每个 command list 一份堆上的 vtable 副本。他的 Windows 桥按 vtable 认"列表类",续接列表(在列表的 device 上新建)拿到的是 runtime 原本的 vtable,被当成包装器,列表内路径关闭:NR 显示开启但每帧透传("the list's device makes lists of another class") |
 | 我们的路线 | split/inline 都走 `CommandListProxy`(COM 代理对象,`dlssnr/submission/CommandListProxy.h`),不改 vtable、不按 vtable 认类 |
 
@@ -38,3 +37,14 @@
   - `NR coverage … reasons=[…] reject_causes=[…]`——各结果的占比。
 
 若日志显示 missing proxy 且 owner 不是 d3d12core.dll,再针对该模块做修复(按日志定,不预先改)。
+
+## 实机验证结果（2026-10-23）
+
+配置：Steam 版，OptScaler-NR 1.13.2-alpha6，1080p，mochizuki 后端 split，RenoDX 开，
+`NrFlickerDiag=true` 诊断运行约 6 分钟（9101 帧）。结果：
+
+- `mochizuki missing recording proxy` 0 条、`recording rejected` 0 条、无任何 vtable/owner 行
+  ——上节残余风险未发生，静态结论成立，本项结案。
+- coverage 最终窗口 350/350 全录、`split_accepted=351 failed=0`，NR 经 split 全程生效。
+- 同机后续 C/A/A2/B 变体验证（共享纹理准入开关）见
+  [mochizuki-split-transport.md](../architecture/mochizuki-split-transport.md)。
