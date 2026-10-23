@@ -1281,6 +1281,7 @@ class Config
     CustomOptional<bool> FSRFGSkipConfigForHudless { false };
     CustomOptional<bool> FSRFGSkipDispatchForHudless { false };
     CustomOptional<bool> FSRFGEnableWatermark { false };
+    CustomOptional<bool> FSRFGDisableFlipMetering { false };
 
     // XeFG
     CustomOptional<bool, SoftDefault> FGXeFGIgnoreInitChecks { false };
