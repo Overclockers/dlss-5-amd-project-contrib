@@ -2887,14 +2887,10 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
         switch (state.api)
         {
         case DX11:
-            MenuUi::Text(primaryGpu.name.c_str());
-
-            MenuUi::Text("D3D11 %s| %s %d.%d.%d%s", IdentifyGpu::gameUsesDxvk() ? "(DXVK) " : "",
+            MenuUi::Text("%s %d.%d.%d%s",
                         currentFeature->ShortName().c_str(), currentFeature->Version().major,
                         currentFeature->Version().minor, currentFeature->Version().patch,
                         usesDx12CompatLayer ? " w/Dx12" : "");
-            ImGui::SameLine(0.0f, 6.0f);
-            MenuUi::Text("| Input: %s", ApiUpscalerInputName(state.currentInputApiName).c_str());
 
             ImGui::SameLine(0.0f, 6.0f);
             spoofingText = config->DxgiSpoofing.value_or_default() ? "On" : "Off";
@@ -2906,13 +2902,9 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
             break;
 
         case DX12:
-            MenuUi::Text(primaryGpu.name.c_str());
-
-            MenuUi::Text("D3D12 %s| %s %d.%d.%d", IdentifyGpu::gameUsesVkd3dProton() ? "(VKD3D) " : "",
+            MenuUi::Text("%s %d.%d.%d",
                         currentFeature->ShortName().c_str(), currentFeature->Version().major,
                         currentFeature->Version().minor, currentFeature->Version().patch);
-            ImGui::SameLine(0.0f, 6.0f);
-            MenuUi::Text("| Input: %s", ApiUpscalerInputName(state.currentInputApiName).c_str());
 
             ImGui::SameLine(0.0f, 6.0f);
             spoofingText = config->DxgiSpoofing.value_or_default() ? "On" : "Off";
@@ -2924,14 +2916,10 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
             break;
 
         default:
-            MenuUi::Text(primaryGpu.name.c_str());
-
-            MenuUi::Text("Vulkan %s| %s %d.%d.%d%s", primaryGpu.dxgiIsDxvk ? "(DXVK) " : "",
+            MenuUi::Text("%s %d.%d.%d%s",
                         currentFeature->ShortName().c_str(), currentFeature->Version().major,
                         currentFeature->Version().minor, currentFeature->Version().patch,
                         usesDx12CompatLayer ? " w/Dx12" : "");
-            ImGui::SameLine(0.0f, 6.0f);
-            MenuUi::Text("| Input: %s", ApiUpscalerInputName(state.currentInputApiName).c_str());
 
             auto vlkSpoof = config->VulkanSpoofing.value_or_default();
             auto vlkExtSpoof = config->VulkanExtensionSpoofing.value_or_default();
@@ -8014,6 +8002,45 @@ void MenuCommon::RenderMainMenuGraphs(RenderMenuContext& ctx)
     MenuNrGpuHistory::Draw(gNrGpuHistory);
 }
 
+// Session timer
+static std::string SessionTimeText(const State& state)
+{
+    const auto elapsed =
+        std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - state.startTime).count();
+    const auto hours = elapsed / 3600;
+    const auto minutes = (elapsed / 60) % 60;
+    const auto secs = elapsed % 60;
+    if (hours > 0)
+        return StrFmt("%02lld:%02lld:%02lld", (long long) hours, (long long) minutes, (long long) secs);
+    return StrFmt("%02lld:%02lld", (long long) minutes, (long long) secs);
+}
+
+// Game name | API | GPU | Input, above the menu body
+static void RenderGameInfoRow(State& state, const GpuInformation& primaryGpu)
+{
+    const char* apiName = "Vulkan";
+    switch (state.api)
+    {
+    case DX11:
+        apiName = "D3D11";
+        break;
+    case DX12:
+        apiName = "D3D12";
+        break;
+    default:
+        break;
+    }
+
+    MenuCard card;
+    std::string line = state.gameName.empty() ? "" : state.gameName + " | ";
+    line += StrFmt("%s%s | %s | Input: %s", apiName,
+                   IdentifyGpu::gameUsesDxvk()          ? " (DXVK)"
+                   : IdentifyGpu::gameUsesVkd3dProton() ? " (VKD3D)"
+                                                        : "",
+                   primaryGpu.name.c_str(), ApiUpscalerInputName(state.currentInputApiName).c_str());
+    MenuUi::TextWrapped("%s", line.c_str());
+}
+
 void MenuCommon::RenderMainMenuBottomBar(RenderMenuContext& ctx)
 {
     auto& state = ctx.state;
@@ -8036,11 +8063,11 @@ void MenuCommon::RenderMainMenuBottomBar(RenderMenuContext& ctx)
     ImGui::BeginGroup();
     ImGui::AlignTextToFramePadding();
     if (currentFeature && !currentFeature->IsFrozen())
-        MenuUi::Text("%ux%u -> %ux%u | frame %llu", currentFeature->RenderWidth(),
+        MenuUi::Text("%ux%u -> %ux%u | frame %llu | up %s", currentFeature->RenderWidth(),
             currentFeature->RenderHeight(), currentFeature->TargetWidth(), currentFeature->TargetHeight(),
-            static_cast<unsigned long long>(currentFeature->FrameCount()));
+            static_cast<unsigned long long>(currentFeature->FrameCount()), SessionTimeText(state).c_str());
     else
-        MenuUi::TextDisabled("No active upscaler");
+        MenuUi::TextDisabled("No active upscaler | up %s", SessionTimeText(state).c_str());
     ImGui::EndGroup();
     const float controlsWidth = 200.0f * menuResScale + MenuUi::CalcTextSize("Window").x +
         MenuUi::CalcTextSize("Menu Scale").x + 2 * ImGui::GetStyle().ItemInnerSpacing.x + spacing;
@@ -8404,8 +8431,7 @@ void MenuCommon::RenderMainMenuWindow(RenderMenuContext& ctx)
         return;
     // Stable identity survives title/language changes; preserve the current brand and game caption.
     if (windowTitle.empty())
-        windowTitle = StrFmt("%s - %s %s %s %s%s", VER_PRODUCT_NAME, state.gameExe.c_str(),
-            state.gameName.empty() ? "" : StrFmt("- %s", state.gameName.c_str()).c_str(),
+        windowTitle = StrFmt("%s - %s %s %s%s", VER_PRODUCT_NAME, state.gameExe.c_str(),
             state.detectedQuirks.empty() ? "" : "(Q)", state.isOptiPatcherSucceed ? "(OP)" : "",
             MenuDocking::WindowIdentity);
     const std::string localizedTitle = MenuLocale::Label(windowTitle.c_str());
@@ -8543,6 +8569,10 @@ void MenuCommon::RenderMainMenuWindow(RenderMenuContext& ctx)
     if (visible)
     {
         RenderMainMenuHeaderMessages(ctx);
+
+        // Game name, API, GPU and input, above the menu body.
+        RenderGameInfoRow(state, *ctx.primaryGpu);
+
         const float availableHeight = ImGui::GetContentRegionAvail().y;
         // Reuse the measured content height, not guessed button rows plus scrollbar padding.
         // Store logical pixels so a UI scale change does not retain the old physical height.
