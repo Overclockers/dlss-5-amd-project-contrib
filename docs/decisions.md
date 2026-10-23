@@ -7,9 +7,12 @@
 一圈内侧白色高光,就是用户看到的"红按钮里一圈白边"。弹窗按钮没白边,因为它的样式和模板
 在同一个文件里、用 StaticResource(加载当场解析,找不到会直接崩,崩了我们反而能发现)。
 
-**本次处置**(三层,全部已进 main):
-1. 分享按钮(mochi 快捷 + 入口条两个)用代码构建的极简模板:一个 Border + 文字,
-   物理上没有能画边的第二元素(用户确认正常)。
+**本次处置**(收口后两层,全部已进 main):
+1. ~~分享按钮用代码构建的极简模板~~(过渡方案,已删):它抹掉了灰按钮的 1px 描边导致
+   "晒出"按钮看起来没框——根因修通后此保底成为回退源,探针验证新链路(元素级
+   DynamicResource 样式 → DialogTheme 内 StaticResource 模板)渲染无白环后移除。
+   dll 药丸(dxgi/d3d12/winmm)一直没这个病的原因:它们的模板内联在 MainWindow.xaml
+   自己样式里,同文件同次解析,从无跨文件引用。
 2. 根治:PrimaryButton/GhostButton/HeroButton 三个样式搬进 DialogTheme.xaml(与模板同
    文件),模板引用改 StaticResource;MainWindow.xaml 里 44 处按钮改用元素级
    DynamicResource 引样式(此模式已被验证可靠)。此前 44 处全部静默套默认皮肤。

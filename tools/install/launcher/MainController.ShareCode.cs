@@ -21,29 +21,6 @@ namespace OptScalerNR.Launcher
             _styleInButton = _window.FindName("StyleInButton") as Button;
             if (_styleInButton != null) _styleInButton.Click += delegate { ShowShareCode(true); };
 
-            // Minimal flat-pill template, built in code: ONE border + content presenter.
-            // After three remote-fix rounds the user still saw a rim; rather than keep fighting
-            // whichever layer drew it, this template physically contains nothing else — no
-            // border thickness, no sheen overlay, no rings. Background/Foreground/Height come
-            // from the button itself, so the original per-button colors and size are kept.
-            var flat = new ControlTemplate(typeof(Button));
-            var border = new System.Windows.FrameworkElementFactory(typeof(System.Windows.Controls.Border));
-            border.SetValue(System.Windows.Controls.Border.CornerRadiusProperty, new System.Windows.CornerRadius(12));
-            border.SetValue(System.Windows.Controls.Border.BackgroundProperty,
-                            new System.Windows.TemplateBindingExtension(System.Windows.Controls.Control.BackgroundProperty));
-            var presenter = new System.Windows.FrameworkElementFactory(typeof(System.Windows.Controls.ContentPresenter));
-            presenter.SetValue(System.Windows.Controls.ContentPresenter.HorizontalAlignmentProperty, System.Windows.HorizontalAlignment.Center);
-            presenter.SetValue(System.Windows.Controls.ContentPresenter.VerticalAlignmentProperty, System.Windows.VerticalAlignment.Center);
-            presenter.SetValue(System.Windows.FrameworkElement.MarginProperty, new System.Windows.Thickness(12, 0, 12, 0));
-            border.AppendChild(presenter);
-            flat.VisualTree = border;
-            foreach (var b in new[] { _mochiShareCodeButton, _styleOutButton, _styleInButton })
-            {
-                if (b == null) continue;
-                b.Template = flat;
-                b.BorderThickness = new System.Windows.Thickness(0);
-                b.FocusVisualStyle = null;
-            }
         }
 
         void RefreshShareCode(bool enabled)
