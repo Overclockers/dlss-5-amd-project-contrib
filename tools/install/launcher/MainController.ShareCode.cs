@@ -8,10 +8,13 @@ namespace OptScalerNR.Launcher
     public sealed partial class MainController
     {
         Button _mochiShareCodeButton;
+        Button _iniStyleCodeButton;
         void InitShareCode()
         {
             _mochiShareCodeButton = _window.FindName("MochiShareCodeButton") as Button;
             if (_mochiShareCodeButton != null) _mochiShareCodeButton.Click += delegate { ShowShareCode(false); };
+            _iniStyleCodeButton = _window.FindName("IniStyleCodeButton") as Button;
+            if (_iniStyleCodeButton != null) _iniStyleCodeButton.Click += delegate { ShowShareCode(false); };
         }
         void RefreshShareCode(bool enabled)
         {
@@ -20,6 +23,12 @@ namespace OptScalerNR.Launcher
                 _mochiShareCodeButton.Content = L("✨ 风格码", "✨ Style code");
                 _mochiShareCodeButton.ToolTip = L("导出/导入 Mochizuki 画面风格参数", "Export/import Mochizuki visual style parameters");
                 _mochiShareCodeButton.IsEnabled = enabled;
+            }
+            if (_iniStyleCodeButton != null)
+            {
+                _iniStyleCodeButton.Content = L("✨ 风格码", "✨ Style code");
+                _iniStyleCodeButton.ToolTip = L("导出/导入 Mochizuki 画面风格参数（分享你的画面风格）", "Export/import Mochizuki visual style parameters (share your look)");
+                _iniStyleCodeButton.IsEnabled = enabled;
             }
         }
         string ShareError(Exception error)
