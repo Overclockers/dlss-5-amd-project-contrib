@@ -886,9 +886,11 @@ struct Vulkan
                 std::snprintf(text, sizeof text, "the GPU lacks the Vulkan feature %s", n.name);
                 return decline(text);
             }
-        // What vkd3d-proton enabled at its vkCreateDevice: the network's own extensions are not among what it asks
-        // for (VK_KHR_workgroup_memory_explicit_layout in particular). The Linux route runs on such a device all the
-        // same; the log names them so a failure on the real device can be told apart.
+        // What vkd3d-proton enabled at its vkCreateDevice, per the DXVK interop interface. The network's
+        // pipelines require these extensions and features to be ENABLED, not merely supported: using them
+        // without enablement is invalid regardless of driver leniency (Vulkan spec, features chapter).
+        // Anything missing refuses the direct path; the self-created device (which enables what it needs)
+        // remains the fallback.
         {
             UINT count = 0;
             std::vector<const char*> enabled;
@@ -907,20 +909,93 @@ struct Vulkan
                                  [e](const char* x) { return x && !std::strcmp(x, e); }))
                     missing += missing.empty() ? e : std::string(", ") + e;
             if (!missing.empty())
-                nr::logf("[mochizuki] Proton direct path: vkd3d-proton did not enable %s on its device (%u "
-                         "extensions listed)", missing.c_str(), count);
+                return decline(("vkd3d-proton's device did not enable " + missing).c_str());
         }
-        // bufferDeviceAddress: vkd3d-proton requires and enables it; read it from what it enabled all the same.
+        // The features it enabled, read from the same interface's VkPhysicalDeviceFeatures2 chain.
         bufferDeviceAddress = false;
-        if (const VkPhysicalDeviceFeatures2* on = nullptr; SUCCEEDED(found->GetDeviceFeatures(&on)) && on)
-            for (auto* p = static_cast<const VkBaseInStructure*>(on->pNext); p; p = p->pNext)
-                if (p->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES)
-                    bufferDeviceAddress |=
-                        reinterpret_cast<const VkPhysicalDeviceVulkan12Features*>(p)->bufferDeviceAddress == VK_TRUE;
-                else if (p->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES)
+        bool coopMatrix = false, float8 = false, float8Coop = false, store16 = false, store8 = false,
+             half = false, int8 = false, memoryModel = false, timeline = false, subgroupSize = false,
+             sync2 = false, wgLayout = false, wgLayout8 = false, wgLayout16 = false;
+        if (const VkPhysicalDeviceFeatures2* feats = nullptr; SUCCEEDED(found->GetDeviceFeatures(&feats)) && feats)
+            for (auto* p = static_cast<const VkBaseInStructure*>(feats->pNext); p; p = p->pNext)
+                switch (p->sType)
+                {
+                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR:
+                    coopMatrix =
+                        reinterpret_cast<const VkPhysicalDeviceCooperativeMatrixFeaturesKHR*>(p)->cooperativeMatrix == VK_TRUE;
+                    break;
+                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT8_FEATURES_EXT:
+                {
+                    const auto* f = reinterpret_cast<const VkPhysicalDeviceShaderFloat8FeaturesEXT*>(p);
+                    float8 = f->shaderFloat8 == VK_TRUE;
+                    float8Coop = f->shaderFloat8CooperativeMatrix == VK_TRUE;
+                    break;
+                }
+                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES:
+                {
+                    const auto* f = reinterpret_cast<const VkPhysicalDeviceVulkan11Features*>(p);
+                    store16 = f->storageBuffer16BitAccess == VK_TRUE;
+                    break;
+                }
+                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES:
+                {
+                    const auto* f = reinterpret_cast<const VkPhysicalDeviceVulkan12Features*>(p);
+                    // 8-bit storage and float16/int8 were promoted into the 1.2 feature struct.
+                    store8 = f->storageBuffer8BitAccess == VK_TRUE;
+                    half = f->shaderFloat16 == VK_TRUE;
+                    int8 = f->shaderInt8 == VK_TRUE;
+                    memoryModel = f->vulkanMemoryModel == VK_TRUE;
+                    timeline = f->timelineSemaphore == VK_TRUE;
+                    bufferDeviceAddress = f->bufferDeviceAddress == VK_TRUE;
+                    break;
+                }
+                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES:
                     bufferDeviceAddress |=
                         reinterpret_cast<const VkPhysicalDeviceBufferDeviceAddressFeatures*>(p)->bufferDeviceAddress ==
                         VK_TRUE;
+                    break;
+                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES:
+                {
+                    const auto* f = reinterpret_cast<const VkPhysicalDeviceVulkan13Features*>(p);
+                    subgroupSize = f->subgroupSizeControl == VK_TRUE;
+                    sync2 = f->synchronization2 == VK_TRUE;
+                    break;
+                }
+                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WORKGROUP_MEMORY_EXPLICIT_LAYOUT_FEATURES_KHR:
+                {
+                    const auto* f = reinterpret_cast<const VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR*>(p);
+                    wgLayout = f->workgroupMemoryExplicitLayout == VK_TRUE;
+                    wgLayout8 = f->workgroupMemoryExplicitLayout8BitAccess == VK_TRUE;
+                    wgLayout16 = f->workgroupMemoryExplicitLayout16BitAccess == VK_TRUE;
+                    break;
+                }
+                default:
+                    break;
+                }
+        const struct { bool has; const char* name; } enabledNeeds[] = {
+            { coopMatrix, "cooperativeMatrix" },
+            { float8, "shaderFloat8" },
+            { float8Coop, "shaderFloat8CooperativeMatrix" },
+            { store16, "storageBuffer16BitAccess" },
+            { store8, "storageBuffer8BitAccess" },
+            { half, "shaderFloat16" },
+            { int8, "shaderInt8" },
+            { memoryModel, "vulkanMemoryModel" },
+            { timeline, "timelineSemaphore" },
+            { bufferDeviceAddress, "bufferDeviceAddress" },
+            { subgroupSize, "subgroupSizeControl" },
+            { sync2, "synchronization2" },
+            { wgLayout, "workgroupMemoryExplicitLayout" },
+            { wgLayout8, "workgroupMemoryExplicitLayout8BitAccess" },
+            { wgLayout16, "workgroupMemoryExplicitLayout16BitAccess" },
+        };
+        for (const auto& n : enabledNeeds)
+            if (!n.has)
+            {
+                char text[160];
+                std::snprintf(text, sizeof text, "vkd3d-proton's device did not enable the Vulkan feature %s", n.name);
+                return decline(text);
+            }
         // The fences stay shared D3D12 fences imported as timeline semaphores, as on the own device under Proton
         // (vkd3d-proton exports them as D3D12_FENCE handles). No memory is imported on this path.
         importSemaphore = reinterpret_cast<PFN_vkImportSemaphoreWin32HandleKHR>(

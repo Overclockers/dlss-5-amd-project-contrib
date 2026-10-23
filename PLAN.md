@@ -87,7 +87,9 @@ winevulkan 不支持 `VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT` 的 Win
    届时抓 OptiScaler.log,看 `Proton direct path: vkd3d-proton's device …` 一行与是否仍出现
    `import of a D3D12 buffer failed`。
 2. **vkd3d-proton 不启用 VK_KHR_workgroup_memory_explicit_layout**(其 vkCreateDevice 扩展表里没有):
-   与 Linux 路线一样只查物理设备支持,依赖 RADV 不校验;日志会列出 vkd3d 未启用的扩展,便于区分失败原因。
+   2026-10-23 审查后改为硬门槛——采用前逐一核对 vkd3d 实际启用的扩展(`GetDeviceExtensions`)与
+   特性(`GetDeviceFeatures` 链),缺任何一项即拒绝直连并回落自建设备路径(自建路径自行启用所需项)。
+   即在现版 vkd3d-proton 上直连预期会被此门槛拒绝,直到 vkd3d 启用这些扩展;不再是"依赖驱动不校验"。
 3. **nativevulkanloader 游戏**:直连被拒绝,回到原状态(自建设备 + 熔断器),不是支持。
 4. **producer 队列族与帧命令缓冲族不同**(例如游戏从 COMPUTE 队列提交 NR):该帧提交失败,走既有丢帧/熔断。
 5. **LockCommandQueue 会排空游戏队列**:每帧一次额外同步点,性能代价未测。
