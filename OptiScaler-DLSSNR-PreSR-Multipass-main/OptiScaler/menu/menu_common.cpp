@@ -5357,6 +5357,8 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                        "FSR-FG gets the UI only this way, DLSSG also takes the UI texture directly");
 
         ImGui::EndDisabled();
+
+        ImGui::EndDisabled();
     }
 
     // Vulkan resource flipping (IFGFeature_Vk / RF_Vk): independent of HUDFix, so it stays
