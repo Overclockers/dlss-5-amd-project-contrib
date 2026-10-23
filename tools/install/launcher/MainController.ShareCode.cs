@@ -188,8 +188,12 @@ namespace OptScalerNR.Launcher
                 panel.Children.Add(buttons);
                 DialogTheme.Primary(dialog, action); DialogTheme.SetContent(dialog, panel);
 
+                exportRadio.IsChecked = !import; importRadio.IsChecked = import;
+                renderMode();
+
                 // Import mode: prefill only when the clipboard already holds a recognizable code —
-                // never dump unrelated clipboard text into the box.
+                // never dump unrelated clipboard text into the box. Runs AFTER renderMode(),
+                // whose import branch clears the input (and would wipe the prefill).
                 if (import) {
                     try {
                         if (Clipboard.ContainsText()) {
@@ -199,8 +203,6 @@ namespace OptScalerNR.Launcher
                     } catch { }
                 }
 
-                exportRadio.IsChecked = !import; importRadio.IsChecked = import;
-                renderMode();
                 dialog.Loaded += delegate { if (!isExport) input.Focus(); };
                 dialog.ShowDialog();
             } catch (Exception ex) { SetIniStatus("share-error", ShareError(ex)); }

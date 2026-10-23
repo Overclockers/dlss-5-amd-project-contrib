@@ -717,27 +717,37 @@ ffxReturnCode_t FSRFG_Dx12::DispatchCallback(ffxDispatchDescFrameGeneration* par
             auto cmdList = (ID3D12GraphicsCommandList*) params->commandList;
 
             // Do not blindly trust the cached _device for callback helper creation (upstream
-            // 1ec11b8): the callback's command list can run on a different device
-            ID3D12Device* callbackDevice = nullptr;
+            // 1ec11b8): the callback's command list can run on a different device. Resolved
+            // lazily and only when a helper actually needs to be built; the ComPtr releases
+            // the reference the Get* calls acquire.
+            Microsoft::WRL::ComPtr<ID3D12Device> callbackDevice;
             HRESULT callbackDeviceResult = E_POINTER;
-
-            if (cmdList != nullptr)
-                callbackDeviceResult = cmdList->GetDevice(IID_PPV_ARGS(&callbackDevice));
-
-            if (callbackDevice == nullptr && presentWithHud != nullptr)
-                callbackDeviceResult = presentWithHud->GetDevice(IID_PPV_ARGS(&callbackDevice));
-
-            if (callbackDevice == nullptr)
+            auto resolveCallbackDevice = [&]() -> ID3D12Device*
             {
-                LOG_ERROR("FSRFG HUD helper failed to resolve callback D3D12 device: {:X}",
-                          (UINT) callbackDeviceResult);
-            }
+                if (callbackDevice != nullptr)
+                    return callbackDevice.Get();
+
+                if (cmdList != nullptr)
+                    callbackDeviceResult = cmdList->GetDevice(IID_PPV_ARGS(&callbackDevice));
+
+                if (callbackDevice == nullptr && presentWithHud != nullptr)
+                    callbackDeviceResult = presentWithHud->GetDevice(IID_PPV_ARGS(&callbackDevice));
+
+                if (callbackDevice == nullptr)
+                {
+                    LOG_ERROR("FSRFG HUD helper failed to resolve callback D3D12 device: {:X}",
+                              (UINT) callbackDeviceResult);
+                }
+
+                return callbackDevice.Get();
+            };
 
             if (applyHudCutoff)
             {
-                if (_hudCopy.get() == nullptr && callbackDevice != nullptr)
+                if (_hudCopy.get() == nullptr)
                 {
-                    _hudCopy = std::make_unique<HudCopy_Dx12>("HudCopy", callbackDevice);
+                    if (auto device = resolveCallbackDevice(); device != nullptr)
+                        _hudCopy = std::make_unique<HudCopy_Dx12>("HudCopy", device);
                 }
 
                 if (auto hudCopy = _hudCopy.get(); hudCopy && hudCopy->IsInit())
@@ -765,8 +775,8 @@ ffxReturnCode_t FSRFG_Dx12::DispatchCallback(ffxDispatchDescFrameGeneration* par
                 {
                     if (_hudlessCompareCompute.get() == nullptr)
                     {
-                    if (_hudlessCompareCompute.get() == nullptr && callbackDevice != nullptr)
-                        _hudlessCompareCompute = std::make_unique<HCC_Dx12>("HudlessCompareCompute", callbackDevice);
+                        if (auto device = resolveCallbackDevice(); device != nullptr)
+                            _hudlessCompareCompute = std::make_unique<HCC_Dx12>("HudlessCompareCompute", device);
                     }
 
                     if (auto hudlessCompareCompute = _hudlessCompareCompute.get();

@@ -5357,10 +5357,13 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                        "FSR-FG gets the UI only this way, DLSSG also takes the UI texture directly");
 
         ImGui::EndDisabled();
+    }
 
-        ImGui::Spacing();
-
-        // The Vulkan FG output implements resource flipping too (IFGFeature_Vk / RF_Vk)
+    // Vulkan resource flipping (IFGFeature_Vk / RF_Vk): independent of HUDFix, so it stays
+    // reachable with HUDFix off or FGDisableHUDFix set
+    if (state.api == API::Vulkan && state.activeFgInput == FGInput::Upscaler &&
+        state.activeFgOutput != FGOutput::NoFG)
+    {
         bool resourceFlip = config->FGResourceFlip.value_or_default();
         if (MenuUi::Checkbox("Flip (Unity)", &resourceFlip))
             config->FGResourceFlip = resourceFlip;
@@ -5372,8 +5375,6 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
         if (MenuUi::Checkbox("Flip Use Offset", &resourceFlipOffset))
             config->FGResourceFlipOffset = resourceFlipOffset;
         ShowHelpMarker("Use height difference as offset");
-
-        ImGui::EndDisabled();
     }
 
     const FGNvngxReplacement activeNvngxFg = state.activeFgNvngx;
