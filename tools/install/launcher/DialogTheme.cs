@@ -4,7 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Markup;
 using System.Windows.Media;
-using System.Windows.Shell;
+using System.Windows.Documents;
 
 namespace OptScalerNR.Launcher
 {
@@ -51,13 +51,9 @@ namespace OptScalerNR.Launcher
             window.ShowInTaskbar = false;
             window.ResizeMode = ResizeMode.NoResize;
             window.WindowStyle = WindowStyle.None;
-            WindowChrome.SetWindowChrome(window, new WindowChrome {
-                CaptionHeight = 0,
-                GlassFrameThickness = new Thickness(0),
-                ResizeBorderThickness = new Thickness(0),
-                CornerRadius = new CornerRadius(0),
-                UseAeroCaptionButtons = false
-            });
+            // Fixed-size dialogs draw their entire frame in WPF and drag via
+            // the header's DragMove handler. WindowChrome is only needed by
+            // the resizable main window; do not add its native frame here.
             // Match the main window: SizeToContent must land on physical pixels too.
             window.UseLayoutRounding = true;
             window.SnapsToDevicePixels = true;
@@ -65,6 +61,25 @@ namespace OptScalerNR.Launcher
             window.SetResourceReference(Window.ForegroundProperty, "ThemeInk");
             window.SetResourceReference(Window.BorderBrushProperty, "ThemeBorder");
             window.BorderThickness = new Thickness(1);
+            // At fractional DPI the default Window Border can leave a transparent
+            // scanline between its background and bottom stroke. Paint an opaque
+            // backing independently of that Border's inner geometry.
+            var template = new ControlTemplate(typeof(Window));
+            var backing = new FrameworkElementFactory(typeof(Grid));
+            backing.SetValue(Panel.BackgroundProperty, new TemplateBindingExtension(Window.BackgroundProperty));
+            var frame = new FrameworkElementFactory(typeof(Border));
+            frame.SetValue(Border.BorderBrushProperty, new TemplateBindingExtension(Window.BorderBrushProperty));
+            frame.SetValue(Border.BorderThicknessProperty, new TemplateBindingExtension(Window.BorderThicknessProperty));
+            var adorners = new FrameworkElementFactory(typeof(AdornerDecorator));
+            var presenter = new FrameworkElementFactory(typeof(ContentPresenter));
+            presenter.SetValue(ContentPresenter.ContentProperty, new TemplateBindingExtension(Window.ContentProperty));
+            presenter.SetValue(ContentPresenter.ContentTemplateProperty, new TemplateBindingExtension(Window.ContentTemplateProperty));
+            presenter.SetValue(ContentPresenter.ContentStringFormatProperty, new TemplateBindingExtension(Window.ContentStringFormatProperty));
+            adorners.AppendChild(presenter);
+            frame.AppendChild(adorners);
+            backing.AppendChild(frame);
+            template.VisualTree = backing;
+            window.Template = template;
             window.FontFamily = owner != null ? owner.FontFamily : new FontFamily("Segoe UI, Microsoft YaHei UI");
             window.FontSize = 13;
             window.Language = owner != null ? owner.Language : XmlLanguage.GetLanguage("en-US");

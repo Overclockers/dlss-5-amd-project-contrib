@@ -27,6 +27,8 @@
     <Setter Property="Template" Value="{StaticResource MaterialButtonTemplate}"/>
   </Style>
   <Style x:Key="DialogPrimary" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+    <!-- A same-colour WPF border leaves an antialiased seam inside the red fill. -->
+    <Setter Property="BorderThickness" Value="0"/>
     <Setter Property="Background" Value="{DynamicResource ThemeAccent}"/><Setter Property="BorderBrush" Value="{DynamicResource ThemeAccent}"/>
     <Setter Property="Foreground" Value="{DynamicResource ThemeOnAccent}"/>
     <Setter Property="FontWeight" Value="SemiBold"/>
