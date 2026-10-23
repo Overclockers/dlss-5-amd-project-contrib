@@ -16,7 +16,8 @@
 #include <shaders/menu_blur/MenuBlur_Dx12.h>
 
 // menu
-static int const NUM_BACK_BUFFERS = 8;
+// Sized for the largest swapchain DXGI allows; the menu can draw on chains created by other layers
+static int const NUM_BACK_BUFFERS = 16; // DXGI_MAX_SWAP_CHAIN_BUFFERS
 static int const SRV_HEAP_SIZE = 64;
 static bool _dx11Device = false;
 static bool _dx12Device = false;

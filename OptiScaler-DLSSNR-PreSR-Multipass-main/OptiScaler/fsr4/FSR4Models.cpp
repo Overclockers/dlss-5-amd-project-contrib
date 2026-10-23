@@ -63,6 +63,22 @@ HookedModule* FindHookedModule(HMODULE module)
     return hooked != hookedModules.end() ? &*hooked : nullptr;
 }
 
+// The INT8 model from GPU detection, FFX's own checks can reject it (unofficial support, other asic family)
+std::optional<FSR4Model> DetectedModel()
+{
+    switch (IdentifyGpu::getActiveGpu().fsr4Support)
+    {
+    case FSR4Support::INT8:
+        return FSR4Model::INT8;
+    case FSR4Support::INT8_2:
+        return FSR4Model::INT8_2;
+    case FSR4Support::INT8Lite:
+        return FSR4Model::INT8Lite;
+    default:
+        return std::nullopt;
+    }
+}
+
 bool hkIsSupported(void* provider, void* device)
 {
     auto vtable = *static_cast<void***>(provider);
@@ -79,7 +95,14 @@ bool hkIsSupported(void* provider, void* device)
 
         auto model = patched->provider->model;
         auto o_IsSupported = patched->o_IsSupported;
-        auto selected = Config::Instance()->Fsr4Model;
+        // Without a selected model use the detected one, as if it was selected
+        // (unreachable under the hook gating: hooks only exist with an explicit selection; kept for parity
+        // so relaxing the gating later behaves like upstream)
+        auto detected = DetectedModel();
+        std::optional<FSR4Model> selected = Config::Instance()->Fsr4Model;
+        if (!selected.has_value())
+            selected = detected;
+
         auto useSelected = selected.has_value() && hooked.HasModel(*selected) && FSR4Models::CanGpuRun(*selected);
         lock.unlock();
 
@@ -87,8 +110,15 @@ bool hkIsSupported(void* provider, void* device)
 
         if (useSelected)
             supported = model == *selected && (supported || Provider(model).ignoreSupportCheck);
+        // FFX picks FP8 wherever the device reports it, emulated FP8 on Linux included
+        // When the module lacks the detected INT8 model don't let it fall to FP8, FP8 has to be selected
+        else if (model == FSR4Model::FP8 && detected.has_value())
+            supported = false;
 
         LOG_DEBUG("{}: {}", Provider(model).name, supported);
+
+        if (device == nullptr)
+            return supported;
 
         lock.lock();
         patched->lastReportedSupport = supported;
