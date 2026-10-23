@@ -236,6 +236,10 @@ void* __stdcall NvApiHooks::hkNvAPI_QueryInterface(unsigned int InterfaceId)
         InterfaceId == GET_ID(NvAPI_Vulkan_NotifyOutOfBandVkQueue)
     )
     {
+        // Install the Reflex hooks before any of these early returns: a game that only queries
+        // latency interfaces would leave ReflexHooks uninitialized otherwise
+        ReflexHooks::hookReflex(o_NvAPI_QueryInterface);
+
         if (InterfaceId == GET_ID(NvAPI_D3D_SetSleepMode))
             return InputReflex::D3D_SetSleepMode;
         if (InterfaceId == GET_ID(NvAPI_D3D_GetSleepStatus))

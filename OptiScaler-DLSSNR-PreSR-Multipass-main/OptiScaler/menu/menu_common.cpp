@@ -4417,9 +4417,11 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                     ImGui::TreePop();
                 }
 
+                // Vulkan FSR-FG reports FFX SDK versions, SDK 1.1.3 is FSR 3.1.3
                 auto fg = state.CurrentFG();
-                if (fg != nullptr && strcmp(fg->Name(), "FSR-FG") == 0 &&
-                    FfxApiProxy::VersionDx12_FG() >= feature_version { 3, 1, 3 })
+                auto fptMinVersion =
+                    state.currentVkFG != nullptr ? feature_version { 1, 1, 3 } : feature_version { 3, 1, 3 };
+                if (fg != nullptr && strcmp(fg->Name(), "FSR-FG") == 0 && fg->Version() >= fptMinVersion)
                 {
                     ImGui::Spacing();
 
@@ -4450,6 +4452,9 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                                        "Opti default value: 0.3");
                         ImGui::PopItemWidth();
 
+                        // FFX's Vulkan swapchain only reads the safety margin and variance factor
+                        ImGui::BeginDisabled(state.currentVkFG != nullptr);
+
                         auto fpHybridSpin = config->FGFPTAllowHybridSpin.value_or_default();
                         if (MenuUi::Checkbox("Enable Hybrid Spin", &fpHybridSpin))
                             config->FGFPTAllowHybridSpin = fpHybridSpin;
@@ -4472,6 +4477,8 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                             config->FGFPTAllowWaitForSingleObjectOnFence = fpWaitForSingleObjectOnFence;
                         }
                         ShowHelpMarker("Allows WaitForSingleObject instead of spinning for fence value");
+
+                        ImGui::EndDisabled();
 
                         if (MenuUi::Button("Apply Timing Changes"))
                             state.fsrfgFramePaceTuningChanged = true;
@@ -5276,6 +5283,21 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                        "FSR-FG gets the UI only this way, DLSSG also takes the UI texture directly");
 
         ImGui::EndDisabled();
+
+        ImGui::Spacing();
+
+        // The Vulkan FG output implements resource flipping too (IFGFeature_Vk / RF_Vk)
+        bool resourceFlip = config->FGResourceFlip.value_or_default();
+        if (MenuUi::Checkbox("Flip (Unity)", &resourceFlip))
+            config->FGResourceFlip = resourceFlip;
+        ShowHelpMarker("Flip Velocity & Depth resources of Unity games");
+
+        ImGui::SameLine(0.0f, 16.0f);
+
+        bool resourceFlipOffset = config->FGResourceFlipOffset.value_or_default();
+        if (MenuUi::Checkbox("Flip Use Offset", &resourceFlipOffset))
+            config->FGResourceFlipOffset = resourceFlipOffset;
+        ShowHelpMarker("Use height difference as offset");
 
         ImGui::EndDisabled();
     }

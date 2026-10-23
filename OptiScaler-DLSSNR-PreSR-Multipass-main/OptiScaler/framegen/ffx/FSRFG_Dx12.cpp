@@ -716,11 +716,28 @@ ffxReturnCode_t FSRFG_Dx12::DispatchCallback(ffxDispatchDescFrameGeneration* par
         {
             auto cmdList = (ID3D12GraphicsCommandList*) params->commandList;
 
+            // Do not blindly trust the cached _device for callback helper creation (upstream
+            // 1ec11b8): the callback's command list can run on a different device
+            ID3D12Device* callbackDevice = nullptr;
+            HRESULT callbackDeviceResult = E_POINTER;
+
+            if (cmdList != nullptr)
+                callbackDeviceResult = cmdList->GetDevice(IID_PPV_ARGS(&callbackDevice));
+
+            if (callbackDevice == nullptr && presentWithHud != nullptr)
+                callbackDeviceResult = presentWithHud->GetDevice(IID_PPV_ARGS(&callbackDevice));
+
+            if (callbackDevice == nullptr)
+            {
+                LOG_ERROR("FSRFG HUD helper failed to resolve callback D3D12 device: {:X}",
+                          (UINT) callbackDeviceResult);
+            }
+
             if (applyHudCutoff)
             {
-                if (_hudCopy.get() == nullptr)
+                if (_hudCopy.get() == nullptr && callbackDevice != nullptr)
                 {
-                    _hudCopy = std::make_unique<HudCopy_Dx12>("HudCopy", _device);
+                    _hudCopy = std::make_unique<HudCopy_Dx12>("HudCopy", callbackDevice);
                 }
 
                 if (auto hudCopy = _hudCopy.get(); hudCopy && hudCopy->IsInit())
@@ -748,7 +765,8 @@ ffxReturnCode_t FSRFG_Dx12::DispatchCallback(ffxDispatchDescFrameGeneration* par
                 {
                     if (_hudlessCompareCompute.get() == nullptr)
                     {
-                        _hudlessCompareCompute = std::make_unique<HCC_Dx12>("HudlessCompareCompute", _device);
+                    if (_hudlessCompareCompute.get() == nullptr && callbackDevice != nullptr)
+                        _hudlessCompareCompute = std::make_unique<HCC_Dx12>("HudlessCompareCompute", callbackDevice);
                     }
 
                     if (auto hudlessCompareCompute = _hudlessCompareCompute.get();
