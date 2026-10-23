@@ -825,9 +825,6 @@ namespace OptScalerNR.Launcher
                 : (!string.IsNullOrEmpty(result.Recommend)
                     ? L("导入表候选：" + result.Recommend + "，实际可用性待确认。", "Import candidate: " + result.Recommend + "; compatibility is unverified.")
                     : L("没有足够证据推荐代理，请手动选择。", "Insufficient evidence to recommend a proxy. Choose manually."));
-            if (_injectRecommendation != null && !failed && result != null && result.MochizukiInstall != null && result.MochizukiInstall.Detected)
-                _injectRecommendation.Text += "\n" + L("注意：检测到 Mochizuki（DLSSNR-AMD）自己的安装（" + string.Join(", ", result.MochizukiInstall.Files ?? new string[0]) + "）。同类 NR 模组共存可能冲突；安装器不会移动或删除这些文件。",
-                    "Note: a Mochizuki (DLSSNR-AMD) installation is in this folder (" + string.Join(", ", result.MochizukiInstall.Files ?? new string[0]) + "). The same kind of NR mod twice can conflict; the installer never moves or deletes these files.");
             foreach (var id in new[] { "lmxxf", "daniel", "mochizuki" })
             {
                 BackendInfo capability = null;

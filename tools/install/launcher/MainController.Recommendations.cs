@@ -70,7 +70,7 @@ namespace OptScalerNR.Launcher
             finally{_selectingOptiPatcher=false;}
             ApplyOptiPatcherPluginLock();
             _decisions.OptiPatcher=optiPatcher?"install":"skip";
-            if(_selectedGame==null)return;
+            if(_selectedGame==null){AppendMochizukiNote();return;}
             string manual;
             var hasManual=_proxyChoices.TryGetValue(_selectedGame.Id,out manual)&&ProxyRecommendations.Supports(manual);
             var guess=_lastInspectResult!=null?_lastInspectResult.Recommend:quickCandidate;
@@ -83,9 +83,20 @@ namespace OptScalerNR.Launcher
                 else if(!string.IsNullOrEmpty(guess))_injectRecommendation.Text=L("本地检测候选（未验证注入）：","Local candidate (injection not verified): ")+guess;
                 else _injectRecommendation.Text=L("尚无已验证的游戏规则，也未找到可靠导入候选。请手动选择代理。","No reviewed game rule or reliable import candidate was found. Select a proxy manually.");
                 if(profile!=null)_injectRecommendation.Text+="\n"+(_language=="zh"?profile.NotesZh:profile.NotesEn)+"\n"+profile.Source;
+                AppendMochizukiNote();
             }
             if(_injectIcon!=null){_injectIcon.Text=hasManual||profile!=null?"✓":"ℹ";_injectIcon.Foreground=hasManual||profile!=null?ReadyBrush:WarningBrush;}
         }
+        // Idempotent: every refresh of the recommendation text re-appends the coexistence note when
+        // the last inspection found a Mochizuki installation, so no caller order can drop it.
+        void AppendMochizukiNote()
+        {
+            if(_injectRecommendation==null)return;
+            var mochi=_lastInspectResult==null?null:_lastInspectResult.MochizukiInstall;
+            if(mochi==null||!mochi.Detected)return;
+            if(_injectRecommendation.Text.Contains("DLSSNR-AMD"))return;
+            _injectRecommendation.Text+="\n"+L("注意：检测到 Mochizuki（DLSSNR-AMD）自己的安装（"+string.Join(", ",mochi.Files??new string[0])+"）。同类 NR 模组共存可能冲突；安装器不会移动或删除这些文件。","Note: a Mochizuki (DLSSNR-AMD) installation is in this folder ("+string.Join(", ",mochi.Files??new string[0])+"). The same kind of NR mod twice can conflict; the installer never moves or deletes these files.");
+            }
         async void RefreshProfiles()
         {
             if(_recommendations==null)return;

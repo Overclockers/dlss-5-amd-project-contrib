@@ -203,6 +203,11 @@ try {
             $backend.ReasonCode = 'ready'
             $result.Backends[$i] = $backend
         }
+        $mochiType = $assembly.GetType('OptScalerNR.Launcher.MochizukiInstallInfo')
+        $mochiInfo = [Activator]::CreateInstance($mochiType)
+        $mochiInfo.Detected = $true
+        $mochiInfo.Files = [string[]]@('dlssnr_core.dll', 'dlssnr-amd-install.txt')
+        $result.MochizukiInstall = $mochiInfo
         Invoke-Controller $window 'ApplyInspect' @($result)
         Invoke-Controller $window 'SelectProxy' @('winmm.dll')
         $window.FindName('DanielCheck').IsChecked = $false
@@ -224,6 +229,9 @@ try {
             Assert-True ($window.FindName('ReplaceIni').IsChecked -eq $false) 'Theme change reset INI choice'
             Assert-True ($controllerType.GetField('_activeBackend', $flags).GetValue($window.Tag) -eq 'mochizuki') 'Theme change reset active backend'
         }
+        # The Mochizuki coexistence note must survive every refresh of the recommendation text.
+        $recText = [string]($window.FindName('InjectRecommendation').Text)
+        Assert-True ($recText -match 'Mochizuki') 'Mochizuki coexistence note lost after inspection refresh'
         Save-Preview $window 'english-library.png'
         Save-Preview $window 'english-settings.png' $true
         $result.Backends[2].PreparationState = 'ready'
