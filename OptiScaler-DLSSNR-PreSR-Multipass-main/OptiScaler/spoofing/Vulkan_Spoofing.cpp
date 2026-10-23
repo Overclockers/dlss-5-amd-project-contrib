@@ -510,6 +510,11 @@ struct VulkanDeviceFeatureState::Impl
     std::vector<ModifiedFeature> modifiedFeatures;
 
     VkPhysicalDeviceFeatures2 features2 { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+    VkPhysicalDeviceVulkan11Features vulkan11Features { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES };
+    VkPhysicalDevice16BitStorageFeatures storage16Bit { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES };
+    VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR workgroupLayout {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WORKGROUP_MEMORY_EXPLICIT_LAYOUT_FEATURES_KHR
+    };
     VkPhysicalDeviceVulkan12Features vulkan12Features { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };
     VkPhysicalDeviceVulkan13Features vulkan13Features { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES };
     VkPhysicalDeviceVulkan14Features vulkan14Features { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES };
@@ -567,10 +572,10 @@ struct VulkanDeviceFeatureState::Impl
     void CopyOwnedFeatureChain()
     {
         pCreateInfo->pNext =
-            CopyFeatureChain(pCreateInfo->pNext, features2, vulkan12Features, vulkan13Features, shaderFloat16Int8,
-                             storage8Bit, descriptorIndexing, bufferDeviceAddress, vulkanMemoryModel, synchronization2,
-                             subgroupSizeControl, timelineSemaphore, descriptorBuffer, shaderFloat8, cooperativeMatrix,
-                             cooperativeMatrix2, computeShaderDerivatives);
+            CopyFeatureChain(pCreateInfo->pNext, features2, vulkan11Features, vulkan12Features, vulkan13Features,
+                             shaderFloat16Int8, storage16Bit, storage8Bit, descriptorIndexing, bufferDeviceAddress,
+                             vulkanMemoryModel, synchronization2, subgroupSizeControl, timelineSemaphore, descriptorBuffer,
+                             shaderFloat8, cooperativeMatrix, cooperativeMatrix2, computeShaderDerivatives, workgroupLayout);
     }
 
     bool CanUpgradeExtBufferDeviceAddress(VkPhysicalDevice physicalDevice)
@@ -824,6 +829,58 @@ struct VulkanDeviceFeatureState::Impl
         return true;
     }
 
+    template <typename Core, typename Separate>
+    void EnablePromotedFeature(Core& core, VkBool32 Core::* coreMember, Separate& separate,
+                               VkBool32 Separate::* member, VkBool32 supported)
+    {
+        auto* existing = const_cast<Core*>(FindFeatureStruct<Core>(pCreateInfo->pNext, core.sType));
+        if (existing)
+            EnableExistingFeature(modifiedFeatures, existing, core, coreMember, supported);
+        else
+            EnableSupportedFeature(pCreateInfo, modifiedFeatures, separate, member, supported);
+    }
+
+    void EnableMochizukiFeatures(VkPhysicalDevice physicalDevice)
+    {
+        if (!getFeatures2) return;
+        CopyOwnedFeatureChain();
+        const auto v11 = GetSupportedFeatureStruct(getFeatures2, physicalDevice, vulkan11Features);
+        const auto v12 = GetSupportedFeatureStruct(getFeatures2, physicalDevice, vulkan12Features);
+        const auto v13 = GetSupportedFeatureStruct(getFeatures2, physicalDevice, vulkan13Features);
+        EnablePromotedFeature(vulkan11Features, &VkPhysicalDeviceVulkan11Features::storageBuffer16BitAccess,
+                              storage16Bit, &VkPhysicalDevice16BitStorageFeatures::storageBuffer16BitAccess,
+                              v11.storageBuffer16BitAccess);
+#define MZ_ENABLE_12(FIELD, SEPARATE, TYPE) \
+        EnablePromotedFeature(vulkan12Features, &VkPhysicalDeviceVulkan12Features::FIELD, SEPARATE, \
+                              &TYPE::FIELD, v12.FIELD)
+        MZ_ENABLE_12(storageBuffer8BitAccess, storage8Bit, VkPhysicalDevice8BitStorageFeatures);
+        MZ_ENABLE_12(shaderFloat16, shaderFloat16Int8, VkPhysicalDeviceShaderFloat16Int8Features);
+        MZ_ENABLE_12(shaderInt8, shaderFloat16Int8, VkPhysicalDeviceShaderFloat16Int8Features);
+        MZ_ENABLE_12(vulkanMemoryModel, vulkanMemoryModel, VkPhysicalDeviceVulkanMemoryModelFeatures);
+        MZ_ENABLE_12(timelineSemaphore, timelineSemaphore, VkPhysicalDeviceTimelineSemaphoreFeatures);
+        if (!HasExtension(pCreateInfo, VK_EXT_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME))
+            MZ_ENABLE_12(bufferDeviceAddress, bufferDeviceAddress, VkPhysicalDeviceBufferDeviceAddressFeatures);
+#undef MZ_ENABLE_12
+        EnablePromotedFeature(vulkan13Features, &VkPhysicalDeviceVulkan13Features::subgroupSizeControl,
+                              subgroupSizeControl, &VkPhysicalDeviceSubgroupSizeControlFeatures::subgroupSizeControl,
+                              v13.subgroupSizeControl);
+        EnablePromotedFeature(vulkan13Features, &VkPhysicalDeviceVulkan13Features::synchronization2,
+                              synchronization2, &VkPhysicalDeviceSynchronization2Features::synchronization2,
+                              v13.synchronization2);
+        if (HasExtension(pCreateInfo, VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME))
+            EnableFeatureStruct(pCreateInfo, getFeatures2, physicalDevice, modifiedFeatures, cooperativeMatrix,
+                                &VkPhysicalDeviceCooperativeMatrixFeaturesKHR::cooperativeMatrix);
+        if (HasExtension(pCreateInfo, VK_EXT_SHADER_FLOAT8_EXTENSION_NAME))
+            EnableFeatureStruct(pCreateInfo, getFeatures2, physicalDevice, modifiedFeatures, shaderFloat8,
+                                &VkPhysicalDeviceShaderFloat8FeaturesEXT::shaderFloat8,
+                                &VkPhysicalDeviceShaderFloat8FeaturesEXT::shaderFloat8CooperativeMatrix);
+        if (HasExtension(pCreateInfo, VK_KHR_WORKGROUP_MEMORY_EXPLICIT_LAYOUT_EXTENSION_NAME))
+            EnableFeatureStruct(pCreateInfo, getFeatures2, physicalDevice, modifiedFeatures, workgroupLayout,
+                                &VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR::workgroupMemoryExplicitLayout,
+                                &VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR::workgroupMemoryExplicitLayout8BitAccess,
+                                &VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR::workgroupMemoryExplicitLayout16BitAccess);
+    }
+
     void EnableExtensionFeatures(VkPhysicalDevice physicalDevice)
     {
         const auto* vulkan12Features = FindFeatureStruct<VkPhysicalDeviceVulkan12Features>(
@@ -887,6 +944,11 @@ VulkanDeviceFeatureState::~VulkanDeviceFeatureState() = default;
 bool VulkanDeviceFeatureState::EnableTimelineSemaphores(VkPhysicalDevice physicalDevice)
 {
     return impl->EnableTimelineSemaphores(physicalDevice);
+}
+
+void VulkanDeviceFeatureState::EnableMochizukiFeatures(VkPhysicalDevice physicalDevice)
+{
+    impl->EnableMochizukiFeatures(physicalDevice);
 }
 
 VkResult VulkanSpoofing::hkvkCreateDevice(VkPhysicalDevice physicalDevice, VkDeviceCreateInfo* pCreateInfo,

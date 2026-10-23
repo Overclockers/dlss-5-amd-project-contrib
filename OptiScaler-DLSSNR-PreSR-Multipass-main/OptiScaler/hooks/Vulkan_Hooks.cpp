@@ -26,6 +26,7 @@
 
 #include <unordered_map>
 #include <dlssnr/DlssNr_VkExtensions.h>
+#include <dlssnr/backend/mochizuki_runtime/MochizukiVulkanRegistry.h>
 #include <misc/VulkanCallScope.h>
 
 #include <detours/detours.h>
@@ -399,7 +400,7 @@ static VkResult hkvkCreateWin32SurfaceKHR(VkInstance instance, const VkWin32Surf
 
 static void TrackPhysicalDevice(VkInstance instance, VkPhysicalDevice physicalDevice)
 {
-    if (physicalDevice == VK_NULL_HANDLE || ScopedSkipVulkanHooks::Active() || ScopedCreatingD3DDevice::Active())
+    if (physicalDevice == VK_NULL_HANDLE || !VulkanInteropGameCreation())
         return;
 
     std::scoped_lock lock(_vkApiVersionMutex);
@@ -561,6 +562,13 @@ static VkResult hkvkCreateInstance(const VkInstanceCreateInfo* pCreateInfo, cons
         result = o_vkCreateInstance(&localCreateInfo, pAllocator, pInstance);
     }
 
+    if (result == VK_SUCCESS && ScopedGameD3D12Device::Active())
+    {
+        // Track the owning instance without capturing it for the Vulkan overlay.
+        std::scoped_lock lock(_vkApiVersionMutex);
+        _instanceApiVersions[*pInstance] = requestedApiVersion;
+    }
+
     // OptiScaler's own Streamline only makes short lived ones
     if (result == VK_SUCCESS && !StreamlineProxy::IsInitializing() && !ScopedCreatingD3DDevice::Active())
     {
@@ -602,6 +610,7 @@ static void hkvkDestroyInstance(VkInstance instance, const VkAllocationCallbacks
 VALIDATE_HOOK(hkvkDestroyDevice, PFN_vkDestroyDevice)
 static void hkvkDestroyDevice(VkDevice device, const VkAllocationCallbacks* pAllocator)
 {
+    mz::device::CreatedDevices().Destroyed(device);
     {
         std::scoped_lock lock(_vkApiVersionMutex);
         _devicePhysicalDevices.erase(device);
@@ -755,7 +764,70 @@ static VkResult hkvkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevice
             }
         }
 
+        // Prepare the game's Wine/vkd3d device at D3D12 initialization, even if NR
+        // is selected later. Never gate this on DXGI presentation or the current
+        // backend selector, and never alter our private/Windows devices.
+        DlssNr::VkExt::Merged protonExtensions;
+        const VkDeviceCreateInfo originalCreateInfo = localCreateInfo;
+        std::unique_ptr<VulkanDeviceFeatureState> protonFeatures;
+        VkPhysicalDeviceProperties protonProperties {};
+        const bool protonGameDevice = State::Instance().isRunningOnLinux &&
+            ScopedGameD3D12Device::Active() && !ScopedSkipVulkanHooks::Active();
+        if (protonGameDevice && getPhysicalDeviceFeatures2 && requestedApiVersion >= VK_API_VERSION_1_3)
+        {
+            ScopedSkipSpoofingGlobal skipSpoofing {};
+            vkGetPhysicalDeviceProperties(physicalDevice, &protonProperties);
+        }
+        if (protonProperties.apiVersion >= VK_API_VERSION_1_3)
+        {
+            try
+            {
+                ScopedSkipSpoofingGlobal skipSpoofing {};
+                const auto supported = DlssNr::VkExt::SupportedDeviceExtensions(
+                    o_vkGetInstanceProcAddr, physicalDeviceInstance, physicalDevice);
+                if (localCreateInfo.enabledExtensionCount)
+                    protonExtensions.names.assign(localCreateInfo.ppEnabledExtensionNames,
+                        localCreateInfo.ppEnabledExtensionNames + localCreateInfo.enabledExtensionCount);
+                for (const char* extension : mz::device::Extensions)
+                    if (!DlssNr::VkExt::ListHas(localCreateInfo.ppEnabledExtensionNames,
+                                              localCreateInfo.enabledExtensionCount, extension) &&
+                        DlssNr::VkExt::Contains(supported, extension))
+                        protonExtensions.names.push_back(extension);
+                localCreateInfo.enabledExtensionCount = static_cast<uint32_t>(protonExtensions.names.size());
+                localCreateInfo.ppEnabledExtensionNames = protonExtensions.names.data();
+                protonFeatures = std::make_unique<VulkanDeviceFeatureState>(&localCreateInfo, getPhysicalDeviceFeatures2);
+                protonFeatures->EnableMochizukiFeatures(physicalDevice);
+                LOG_INFO("Mochizuki Proton device create: extensions=0x{:x}, features=0x{:x}",
+                         mz::device::ExtensionBits(localCreateInfo.enabledExtensionCount,
+                                                   localCreateInfo.ppEnabledExtensionNames),
+                         mz::device::FeatureBits(localCreateInfo.pNext));
+            }
+            catch (const std::exception& e)
+            {
+                protonFeatures.reset();
+                localCreateInfo = originalCreateInfo;
+                LOG_WARN("Mochizuki Proton augmentation skipped: {}", e.what());
+            }
+        }
+
         result = o_vkCreateDevice(physicalDevice, &localCreateInfo, pAllocator, pDevice);
+        if (result != VK_SUCCESS && protonFeatures)
+        {
+            LOG_WARN("Mochizuki Proton augmented vkCreateDevice failed ({}); retrying original game request", int(result));
+            protonFeatures.reset();
+            localCreateInfo = originalCreateInfo;
+            result = o_vkCreateDevice(physicalDevice, &localCreateInfo, pAllocator, pDevice);
+        }
+        if (result == VK_SUCCESS && protonGameDevice)
+        {
+            try { mz::device::CreatedDevices().Created(*pDevice, localCreateInfo); }
+            catch (const std::exception& e)
+            {
+                // Recording must never turn a successful game-device creation
+                // into a C++ exception. Adoption can still use vkd3d reflection.
+                LOG_WARN("Mochizuki device creation record unavailable: {}", e.what());
+            }
+        }
     }
 
     if (result == VK_SUCCESS && !ScopedCreatingD3DDevice::Active() && !StreamlineProxy::IsInitializing())

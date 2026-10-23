@@ -36,6 +36,11 @@ def main():
         return
     obj = out / 'obj'
     obj.mkdir(parents=True, exist_ok=True)
+    identity = manifest['build_identity']()
+    identity_header = obj / 'mochizuki_build_identity.h'
+    identity_header.write_text('#pragma once\n' + ''.join(
+        f'#define MZ_BUILD_{key.upper()} {json.dumps(value)}\n' for key, value in identity.items()),
+        encoding='ascii')
     headers, glslang = deps.dependencies(repo)
     slang = deps.slang_dependency(repo) if not args.skip_shaders else None
     up = repo / 'third_party/mochizuki'
@@ -49,7 +54,7 @@ def main():
               'vkCreatePipelineLayout', 'vkCreatePipelineCache', 'vkDestroyPipelineCache']
     sources = [(up / 'windows/src/core/nr_runtime.cpp', ['/D' + d for d in defines] + ['/D' + n + '=mzi_' + n for n in rename]),
                (up / 'windows/src/core/nr_native_plan.cpp', []), (up / 'windows/src/core/nr_renodx.cpp', []), (adapter / 'mz_interpose.cpp', []),
-               (adapter / 'MochizukiNrRuntime.cpp', ['/DLMXXF_NR_RUNTIME_EXPORTS'])]
+               (adapter / 'MochizukiNrRuntime.cpp', ['/DLMXXF_NR_RUNTIME_EXPORTS', '/FI' + str(identity_header)])]
     if args.test_full_barriers:
         # Derive only this test translation unit. The production/vendor file and
         # graph/arena layout stay identical; no menu, INI, environment or ABI switch.
@@ -70,8 +75,8 @@ def main():
                     str(product / 'library/vulkan/vulkan-1.lib'), 'd3d12.lib', 'delayimp.lib',
                     '/DELAYLOAD:vulkan-1.dll'], check=True)
     if args.test_full_barriers:
-        if source_hashes != manifest['sources']():
-            raise SystemExit('Sources changed during the reference build')
+        if source_hashes != manifest['sources']() or identity != manifest['build_identity']():
+            raise SystemExit('Sources or build identity changed during the reference build')
         proof = {'test_only': True, 'policy': 'all-inter-dispatch-barriers', 'sources': source_hashes,
                  'runtime_sha256': hashlib.sha256((out / 'MochizukiNrRuntime.dll').read_bytes()).hexdigest(),
                  'translation_unit_sha256': hashlib.sha256(reference.read_bytes()).hexdigest()}
@@ -120,8 +125,8 @@ def main():
                     'delayimp.lib', '/DELAYLOAD:vulkan-1.dll'], check=True)
     shutil.copy2(up / 'linux/data/int4/rdna4/dlssnr-int4.sha256', model_tools / 'dlssnr-int4.sha256')
     if not args.skip_shaders:
-        if source_hashes != manifest['sources']():
-            raise SystemExit('Sources changed during build; rebuild before using these artifacts')
+        if source_hashes != manifest['sources']() or identity != manifest['build_identity']():
+            raise SystemExit('Sources or build identity changed during build; rebuild before using these artifacts')
         manifest['write'](out)
     print('BUILD_OK', out / 'MochizukiNrRuntime.dll')
 

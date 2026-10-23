@@ -29,3 +29,27 @@ class ScopedCreatingD3DDevice
     ScopedCreatingD3DDevice& operator=(const ScopedCreatingD3DDevice&) = delete;
     static bool Active() noexcept { return depth != 0; }
 };
+
+// The game D3D12 hook also uses ScopedCreatingD3DDevice to suppress GPU spoofing.
+// Distinguish that translation from private probes without removing its guard.
+class ScopedGameD3D12Device
+{
+    inline static thread_local unsigned depth = 0;
+    bool entered;
+  public:
+    ScopedGameD3D12Device() noexcept
+        : entered(!ScopedSkipVulkanHooks::Active() && (!ScopedCreatingD3DDevice::Active() || Active()))
+    {
+        if (entered) ++depth;
+    }
+    ~ScopedGameD3D12Device() { if (entered) --depth; }
+    ScopedGameD3D12Device(const ScopedGameD3D12Device&) = delete;
+    ScopedGameD3D12Device& operator=(const ScopedGameD3D12Device&) = delete;
+    static bool Active() noexcept { return depth != 0; }
+};
+
+inline bool VulkanInteropGameCreation() noexcept
+{
+    return !ScopedSkipVulkanHooks::Active() &&
+           (!ScopedCreatingD3DDevice::Active() || ScopedGameD3D12Device::Active());
+}

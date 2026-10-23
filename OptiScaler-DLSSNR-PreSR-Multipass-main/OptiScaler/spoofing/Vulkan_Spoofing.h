@@ -17,6 +17,7 @@ class VulkanDeviceFeatureState
     ~VulkanDeviceFeatureState();
 
     bool EnableTimelineSemaphores(VkPhysicalDevice physicalDevice);
+    void EnableMochizukiFeatures(VkPhysicalDevice physicalDevice);
 
     VulkanDeviceFeatureState(const VulkanDeviceFeatureState&) = delete;
     VulkanDeviceFeatureState& operator=(const VulkanDeviceFeatureState&) = delete;

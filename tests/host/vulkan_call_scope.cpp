@@ -59,6 +59,7 @@ int main()
 {
     Nesting<ScopedSkipVulkanHooks>();
     Nesting<ScopedCreatingD3DDevice>();
+    Nesting<ScopedGameD3D12Device>();
     for (int i = 0; i < 100; ++i)
     {
         ConcurrentProbe<ScopedSkipVulkanHooks>();
@@ -73,6 +74,20 @@ int main()
     {
         ScopedSkipVulkanHooks internal;
         Check(!ScopedCreatingD3DDevice::Active(), "hook bypass does not imply a D3D creation");
+    }
+    Check(VulkanInteropGameCreation(), "ordinary Vulkan remains independently trackable");
+    {
+        ScopedCreatingD3DDevice privateDevice;
+        ScopedGameD3D12Device cannotPromotePrivate;
+        Check(!ScopedGameD3D12Device::Active() && !VulkanInteropGameCreation(), "private D3D device stays excluded");
+    }
+    {
+        ScopedGameD3D12Device game;
+        ScopedCreatingD3DDevice translation;
+        ScopedGameD3D12Device nestedCoreHook;
+        Check(ScopedGameD3D12Device::Active() && VulkanInteropGameCreation(), "game vkd3d creation survives spoof guard");
+        ScopedSkipVulkanHooks privateRuntime;
+        Check(!VulkanInteropGameCreation(), "explicit private bypass wins over game marker");
     }
     std::puts("Vulkan call scope: PASS (nested exceptions, 200 controlled thread interleavings, native caller isolation)");
 }

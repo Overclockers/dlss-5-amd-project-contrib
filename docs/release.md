@@ -11,6 +11,7 @@
 ## 版本号
 
 - 版本串来自仓库根的 `VERSION`；`PACKAGE_RELEASE.ps1` 未显式给 `-Version` 时读它，并把 `VERSION` 放进包里。
+- 宿主的 `OptiScaler.log` 首行、后续 `Host build` 行和 Mochizuki 的 `mochizuki_nr.log` 身份来自各自编译时的 `VERSION`、完整 Git HEAD 和源码内容指纹，不从运行目录里的 VERSION 或 Git 推断。源码压缩包/无 Git 环境明确写 `unknown`，仍保留内容指纹；本地未提交修改由内容指纹区分。Mochizuki 日志每次进程首次写入及轮转后重写身份。
 - 日常发版只更新三语 README 的标题版本号，保留其 Release 更新日志入口，不再向 README 添加逐版更新摘要。中英文发布正文直接维护在 `.github/workflows/release.yml` 的 `Prepare release notes` 步骤中，不另存 docs；正文为空或版本标题与 VERSION 不一致则中止；安装说明等长期文档仅在功能用法确有变化时更新。
 - 当前产品名为 **OptScaler(NR)**。品牌仅用于安装/卸载窗口、README、包名等产品展示：窗口显示 `OptScaler(NR) <版本>`，正式 ZIP 为 `OptScaler-NR-<版本>.zip`，直接作为 GitHub Release 附件上传。ZIP 使用连字符，避免 GitHub 上传附件时将括号改为点号、导致按文件名核验失败。同步修改名称时检查打包、上传和下载路径。`OptiScaler.dll` / INI、旧日志名、源码目录及注册表位置保持兼容，旧安装记录仍可识别，新记录写入 `project=OptScaler(NR)`。
 - **tag 与 GitHub Release 标题固定为 `v<版本>`**（例如 `v1.10.2`），不添加品牌或其他描述；workflow 的发布标题直接使用 `github.ref_name`。CI 在 tag 名含 `-alpha`、`-beta` 或 `-rc` 时发成 prerelease，否则是正式版（Latest）。只认这三个后缀。
@@ -25,8 +26,9 @@
 
 脚本使用所选工作树（包括未提交修改），不切分支、不提交、不发布。默认宿主使用
 MSBuild Build 增量编译，Mochizuki 使用现有 `--reuse` 内容校验，人物 Worker 的源码/
-产物哈希匹配时跳过编译。lmxxf 单文件编译仍每次执行；宿主预构建时间戳仍可能触发
-资源重编和链接，因此不是完全零编译。加 `-Rebuild` 强制全部重编，不新增依赖追踪系统。
+产物哈希匹配时跳过编译。lmxxf 单文件编译仍每次执行；宿主身份在 MSBuild
+PrepareForBuild 阶段生成，内容不变时不改头文件时间戳；提交、VERSION 或宿主源码改变时
+更新日志/资源的身份并触发相关重编。加 `-Rebuild` 强制全部重编，不新增依赖追踪系统。
 HIP `.hsaco` 使用该分支已提交模块，不另行追更或重编 HIP 实验。Daniel 闭源 DLL 和
 模型仍由安装器原有流程获取，不属于本仓库可编译目标。
 
@@ -98,8 +100,9 @@ GPU/device 按实际改动补充。日常发包不再以完整开发工具回归
 就机械重复所有历史GPU场景；按实际源码/工具链/模块变化和产物身份判断证据范围。
 
 Mochizuki 使用 `build-mochizuki-runtime.cmd --reuse`：源码、生成器、构建脚本、
-Vulkan导入库、MSVC/SDK/Python身份、DLL及全部shader哈希匹配才复用。
-旧清单或任何不匹配均重建；不传 `--reuse` 可强制完整构建。
+VERSION、当前 Git HEAD、Vulkan导入库、MSVC/SDK/Python身份、DLL及全部shader哈希匹配才复用。
+`build-manifest.json` 的 `build_identity` 与编入 DLL 的版本/提交/源码 SHA256 一致；打包器
+校验当前身份，旧清单或任何不匹配均重建，不把旧提交的 DLL 改贴新标签。
 本地一键试包默认启用此选项，`-Rebuild` 强制重编。
 
 Actions按精确键缓存Mochizuki产物及公开人物模型/ONNX Runtime（键包含准备脚本；CRT每次刷新），不使用模糊restore key，
@@ -134,6 +137,10 @@ Actions按精确键缓存Mochizuki产物及公开人物模型/ONNX Runtime（键
    pwsh -File tools/release/BUILD_LOCAL_PACKAGE.ps1 -Root . -Version <VERSION>
    ```
    产物输出至 `dist/OptScaler-NR-<VERSION>-local-<时间>.zip`。
+   Proton 回传前以完整 ZIP 覆盖安装，核对新生成的 `OptiScaler.log` 首行/`Host build`
+   和 `mochizuki_nr.log` 本次启动身份：版本与包内 VERSION 一致、两者完整提交与此次
+   构建源码一致，并保留各自源码指纹及 ZIP SHA256。不要只替换某个 DLL，或拿历史
+   追加日志首行当本次身份；runtime 日志会在本次进程第一条诊断之前追加身份。
 5. **直接创建并推送 tag，一次完成发布。**
    将准备好的提交推送到 GitHub，在该提交上创建与 `VERSION` 一致的 tag：
    ```bash

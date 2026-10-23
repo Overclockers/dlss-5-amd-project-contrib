@@ -304,6 +304,45 @@ pipelines discards that graph and builds one complete native network.
 Diagnostics show requested, effective and the reason. `NR_ACO_DIR` does not
 select the bundle after `own_directory()`.
 
+**Proton/vkd3d transport:** the host prepares supported Mochizuki-required Vulkan
+extensions/features during the game-facing D3D12 creation hooks, independent of
+the selected NR backend or its current configuration. `ScopedGameD3D12Device`
+distinguishes game translation from private `ScopedCreatingD3DDevice` probes;
+`ScopedSkipVulkanHooks` always excludes private devices. Raw Vulkan game creation
+is not augmented by this path. Both instance and physical device must support
+Vulkan 1.3. Failed capability merging or augmented creation falls back to the
+original game request. This allows choosing Mochizuki later without trying to
+enable features on an already-created game device.
+Adoption uses the host's successful per-`VkDevice` creation record when available;
+only devices without a host record fall back to vkd3d's extension/feature reports,
+including both core-version and individual promoted feature structures. The core
+does not require `shaderSubgroupExtendedTypes`.
+
+On the adopted path, frame buffers borrow vkd3d's `VkBuffer` and allocation offset;
+only their D3D12 resource owner is released. Producer submissions hold the game's
+vkd3d queue after its D3D12 signal has been flushed; background build submissions
+hold the build queue and stop on a failed lock. Separate imported timeline fences
+order D3D12 capture, Vulkan work and D3D12 consumption. Buffers return to D3D12
+`COMMON` at the copy boundaries and Vulkan copies include the borrowed offset.
+Completion-based recording retirement and builder joining precede resource/device
+release; the game's borrowed Vulkan device is never destroyed by the runtime.
+
+The own-device route now imports and binds a shared buffer before building a
+network. Under Wine the probe is 64 KiB; Windows retains the 16 MiB minimum needed
+by its shared-handle workaround, also retained for real frame buffers. Probe and
+import diagnostics identify the buffer, requested/actual byte sizes,
+`D3D12_RESOURCE` handle type, buffer/handle/intersection `memoryTypeBits`,
+`allocationSize` and failing API/result. Unavailable fields are zero when failure
+occurs before their query. Fixed Proton external-import failures, including
+winevulkan's host-memory error during the tiny probe, report external interop unsupported
+and are remembered for the adapter for this process, rather than recompiling the
+same network. Native Windows out-of-memory classification/backoff is unchanged;
+D3D12 allocation OOM, Vulkan device-memory pressure and larger allocations on a
+successfully probed path retain their memory-pressure classification.
+`tests\mochizuki\run.cmd transport-policy` covers probe sizing and this platform-
+specific failure boundary without a GPU and is included in `abi`. Proton first-frame,
+rebuild/exit and Windows transport/OOM regression checks still require GPU runs.
+
 **RADV/Mesa:** the actual Vulkan physical-device driver selects the Linux graph and
 `dlssnr-amd/aco/shaders` independently of the saved ACO checkbox. This applies to
 both the owned device and borrowed vkd3d device. RADV compiles those SPIR-V shaders

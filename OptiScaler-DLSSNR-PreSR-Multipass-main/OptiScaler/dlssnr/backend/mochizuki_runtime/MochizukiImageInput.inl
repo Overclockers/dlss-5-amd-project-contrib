@@ -51,7 +51,7 @@ struct ImageInput
     {
         width = w; height = h; format = f; usage = u;
         family = vk.computeQueue ? VK_QUEUE_FAMILY_IGNORED : vk.family;
-        upload.Create(d, vk, fp.bytes);
+        upload.Create(d, vk, fp.bytes, f == VK_FORMAT_R16G16_SFLOAT ? "motion input" : "colour input");
         image.Create(vk, f, w, h, u);
         VkMemoryRequirements req {};
         vkGetImageMemoryRequirements(vk.device, image.image, &req);

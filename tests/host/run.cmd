@@ -76,6 +76,8 @@ call "%REPO%\tests\host\menu-localization.cmd" "%OUT%\menu" || goto fail
 "%OUT%\dx12_interop_desc.exe" || goto fail
 %CXX% /utf-8 tests\host\vulkan_call_scope.cpp /Fe"%OUT%\vulkan_call_scope.exe" /Fo"%OUT%\vulkan_call_scope.obj" || goto fail
 "%OUT%\vulkan_call_scope.exe" || goto fail
+%CXX% /utf-8 tests\host\mochizuki_vulkan_device.cpp /Fe"%OUT%\mochizuki_vulkan_device.exe" /Fo"%OUT%\mochizuki_vulkan_device.obj" || goto fail
+"%OUT%\mochizuki_vulkan_device.exe" || goto fail
 %CXX% /utf-8 tests\host\nr_sr_placement.cpp /Fe"%OUT%\nr_sr_placement.exe" /Fo"%OUT%\nr_sr_placement.obj" || goto fail
 "%OUT%\nr_sr_placement.exe" || goto fail
 %CXX% /utf-8 tests\host\nr_install_status.cpp /Fe"%OUT%\nr_install_status.exe" /Fo"%OUT%\nr_install_status.obj" || goto fail

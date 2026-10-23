@@ -1589,6 +1589,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         PrepareLogger();
 
         spdlog::warn("{0} loaded", VER_PRODUCT_NAME);
+        spdlog::warn("Host build version=" NR_PRODUCT_VERSION " source=" NR_BUILD_SOURCE_ID);
         spdlog::warn("---------------------------------");
         spdlog::warn("OptiScaler is freely downloadable from");
         spdlog::warn("GitHub : https://github.com/optiscaler/OptiScaler/releases");

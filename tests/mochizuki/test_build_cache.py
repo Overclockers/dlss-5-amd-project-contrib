@@ -3,6 +3,8 @@ import importlib.util
 import os
 from pathlib import Path
 import tempfile
+import shutil
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -23,6 +25,7 @@ class BuildCacheTests(unittest.TestCase):
             'dlssnr/backend/lmxxf_runtime/LmxxfNrApi.h', 'dlssnr/NrPerformance.h', 'library/vulkan/vulkan-1.lib')),
             *(self.root / 'tools/build' / f for f in ('build-mochizuki-runtime.py',
               'build-mochizuki-runtime.cmd', 'mochizuki-deps.py', 'mochizuki-manifest.py', 'mochizuki-aco.py', 'mochizuki-renodx.py'))]
+        paths.append(self.root / 'VERSION')
         for p in paths:
             p.parent.mkdir(parents=True, exist_ok=True); p.write_bytes(b'fixture source')
         self.out = self.root / 'exports/mochizuki-runtime'
@@ -55,6 +58,27 @@ class BuildCacheTests(unittest.TestCase):
             self.assertFalse(manifest.reusable(self.out))
         new = self.source.with_name('new.h'); new.write_bytes(b'new include')
         self.assertFalse(manifest.reusable(self.out))
+
+    def test_version_and_commit_invalidate_identity(self):
+        (self.root / 'VERSION').write_text('1.13.4\n')
+        self.assertFalse(manifest.reusable(self.out))
+        manifest.write(self.out)
+        self.assertEqual(manifest.build_identity()['version'], '1.13.4')
+        with patch.object(manifest.subprocess, 'run') as git:
+            git.return_value.stdout = 'a' * 40 + '\n'
+            manifest.write(self.out)
+            self.assertTrue(manifest.reusable(self.out))
+            git.return_value.stdout = 'b' * 40 + '\n'
+            self.assertFalse(manifest.reusable(self.out))
+
+    def test_log_identity_has_independent_content_hash_without_git(self):
+        with patch.object(manifest.subprocess, 'run', side_effect=FileNotFoundError):
+            original = manifest.build_identity()
+            self.assertEqual(original['commit'], 'unknown')
+            self.source.write_bytes(b'local edit')
+            changed = manifest.build_identity()
+            self.assertNotEqual(original['source_sha256'], changed['source_sha256'])
+            self.assertEqual(original['version'], changed['version'])
 
     def test_windows005_cache_requires_generator_and_renodx_assets(self):
         for relative in ('model-tools/dlssnr-int4-weights.exe', 'model-tools/dlssnr-int4.sha256',
@@ -90,6 +114,50 @@ class BuildCacheTests(unittest.TestCase):
         for content in ('{broken', '{}', '[]'):
             path.write_text(content); self.assertFalse(manifest.reusable(self.out))
         path.unlink(); self.assertFalse(manifest.reusable(self.out))
+
+
+@unittest.skipUnless(os.name == 'nt' and shutil.which('powershell') and shutil.which('git'),
+                     'Windows PowerShell and Git identity generator')
+class HostIdentityTests(unittest.TestCase):
+    def test_commit_version_and_source_refresh_without_timestamp_churn(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            product = root / 'host/OptiScaler'
+            product.mkdir(parents=True)
+            source = product / 'startup.cpp'
+            source.write_text('// original\n')
+            version = root / 'VERSION'
+            version.write_text('1.13.3\n')
+            header = root / 'obj/amd_graphics_source_id.h'
+            def stamp():
+                subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                                str(ROOT / 'tools/build/write-amd-graphics-source-id.ps1'),
+                                '-ProjectDirectory', str(product), '-OutputPath', str(header)],
+                               check=True, capture_output=True)
+                return (product / 'resource_build_commit.h').read_text()
+            def git(*args):
+                return subprocess.run(['git', '-C', str(root), *args], check=True,
+                                      capture_output=True, text=True).stdout.strip()
+            git('init', '-q')
+            git('add', '.')
+            git('-c', 'user.name=Identity Fixture', '-c', 'user.email=identity@example.invalid',
+                '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture')
+            first = stamp()
+            self.assertIn(git('rev-parse', 'HEAD'), first)
+            files = [header, product / 'resource_build_commit.h', product / 'resource_build_date.h']
+            times = [p.stat().st_mtime_ns for p in files]
+            self.assertEqual(first, stamp())
+            self.assertEqual(times, [p.stat().st_mtime_ns for p in files])
+            source.write_text('// local edit\n')
+            changed = stamp()
+            self.assertNotEqual(first, changed)
+            version.write_text('1.13.4\n')
+            versioned = stamp()
+            self.assertNotEqual(changed, versioned)
+            git('add', 'VERSION', 'host/OptiScaler/startup.cpp')
+            git('-c', 'user.name=Identity Fixture', '-c', 'user.email=identity@example.invalid',
+                '-c', 'commit.gpgsign=false', 'commit', '-qm', 'next identity')
+            self.assertNotEqual(versioned, stamp())
 
 
 if __name__ == '__main__':

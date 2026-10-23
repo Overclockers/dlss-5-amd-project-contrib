@@ -117,7 +117,7 @@ Add-Type -TypeDefinition 'public static class PackageFixture { public static int
         for directory in ('third_party/mochizuki',
                           'OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/dlssnr/backend/mochizuki_runtime'):
             shutil.copytree(REPO / directory, self.root / directory, ignore=shutil.ignore_patterns('__pycache__'))
-        for name in ('OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/library/vulkan/vulkan-1.lib',
+        for name in ('VERSION', 'OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/library/vulkan/vulkan-1.lib',
                      'tools/build/mochizuki-manifest.py', 'tools/build/build-mochizuki-runtime.py',
                      'tools/build/build-mochizuki-runtime.cmd', 'tools/build/mochizuki-deps.py',
                      'tools/build/mochizuki-aco.py', 'tools/build/mochizuki-renodx.py',

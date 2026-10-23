@@ -7,6 +7,7 @@
 #include "ProxyDiagnostics.h"
 #include "../NrCoverageHost.h"
 #include "mochizuki_runtime/MochizukiNrApi.h"
+#include "mochizuki_runtime/MochizukiVulkanRegistry.h"
 #include "../amd/GraphicsInvocation.h"
 #include <State.h>
 #include <wrl/client.h>
@@ -131,6 +132,10 @@ struct MochizukiBackend::Impl
                 Status("mochizuki: host/runtime mismatch; overwrite with the complete current package");
                 return false;
             }
+            // Installed before Create/AdoptVkd3d; the host outlives this runtime.
+            if (const auto setQuery = reinterpret_cast<mz::device::SetQuery>(
+                    GetProcAddress(module, "MochizukiNrSetVulkanDeviceQuery")))
+                setQuery(&mz::device::QueryCreatedDevice);
         }
         setLogging((Config::Instance()->LogToFile.value_or_default() || Config::Instance()->NrFlickerDiag.value_or_default()));
         if (!HasMochizukiSelectedModel(directory, Config::Instance()->MochizukiNetworkModel.value_or_default()))

@@ -51,6 +51,8 @@
 #include "MochizukiStageTiming.h"
 #include "MochizukiVkd3dInterop.h"
 #include "MochizukiCompilePolicy.h"
+#include "MochizukiVulkanDevice.h"
+#include "MochizukiTransportPolicy.h"
 using mz::compile::CompilePolicy;
 
 #include "mz_interpose.h"
@@ -88,9 +90,14 @@ using mz::compile::CompilePolicy;
 #include <utility>
 #include <vector>
 
+#if !defined(MZ_BUILD_VERSION) || !defined(MZ_BUILD_COMMIT) || !defined(MZ_BUILD_SOURCE_SHA256)
+#error Build MochizukiNrRuntime with tools/build/build-mochizuki-runtime.cmd to stamp its source identity.
+#endif
+
 namespace
 {
 thread_local char g_lastError[256] = {};
+std::atomic<mz::device::Query> g_queryCreatedDevice { nullptr };
 // Last resort after device loss: never run a Vulkan destructor under uncertain work.
 template<class T> void Quarantine(std::shared_ptr<T>& p) noexcept
 {
@@ -278,9 +285,9 @@ std::atomic<bool> g_buildOomInjected { false }; // MZ_TEST_BUILD_OOM_ONCE: once 
 std::atomic<uint64_t> g_frameBudgetAttempts { 0 }; // candidate frame-buffer admissions, from 1
 std::atomic<bool> g_rejectAcoDeviceInjected { false }; // MZ_TEST_REJECT_ACO_DEVICE: once per process
 
-// Adapters the network cannot run on: a Start that threw "[unsupported] ..." (a missing extension or feature, or
-// no Vulkan device for the adapter). That does not change while the process lives, so a later PrepareSession on the
-// same adapter fails at once, without a VkInstance, and the reason is logged once.
+// Adapters the network cannot run on: missing device features or a fixed Proton external-import failure.
+// These do not change while the process lives, so later PrepareSession calls on the same adapter fail at once,
+// without creating another VkInstance or rebuilding a network; the reason is logged once.
 std::atomic<bool> g_unsupported { false };
 std::mutex g_unsupportedMutex;
 std::vector<std::pair<LUID, std::string>> g_unsupportedAdapters;
@@ -313,22 +320,33 @@ void LogLine(const char* line)
 {
     if (!g_logging.load(std::memory_order_relaxed)) return;
     static std::mutex mutex;
+    static bool identityWritten = false; // Protected by mutex; repeat after rotation or log deletion.
     static const std::wstring path = DataDirectory() + L"\\mochizuki_nr.log";
     static const std::wstring backupPath = DataDirectory() + L"\\mochizuki_nr.1.log";
     std::lock_guard lock(mutex);
     // Keep the runtime/core diagnostics bounded: rotate at 4 MiB to keep the most recent history.
     WIN32_FILE_ATTRIBUTE_DATA attr {};
-    if (GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &attr) &&
-        (attr.nFileSizeHigh || attr.nFileSizeLow >= 4u * 1024u * 1024u))
+    const bool exists = GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &attr) != FALSE;
+    if (!exists || (!attr.nFileSizeHigh && !attr.nFileSizeLow))
+        identityWritten = false;
+    if (exists && (attr.nFileSizeHigh || attr.nFileSizeLow >= 4u * 1024u * 1024u))
     {
         DeleteFileW(backupPath.c_str());
-        MoveFileW(path.c_str(), backupPath.c_str());
+        if (MoveFileW(path.c_str(), backupPath.c_str()))
+            identityWritten = false;
     }
     FILE* f = _wfopen(path.c_str(), L"ab");
     if (!f)
         return;
     SYSTEMTIME t {};
     GetLocalTime(&t);
+    if (!identityWritten)
+    {
+        std::fprintf(f, "%02u:%02u:%02u.%03u [mochizuki] MochizukiNrRuntime build version=" MZ_BUILD_VERSION
+                        " commit=" MZ_BUILD_COMMIT " source_sha256=" MZ_BUILD_SOURCE_SHA256 "\r\n",
+                     t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
+        identityWritten = true;
+    }
     std::fprintf(f, "%02u:%02u:%02u.%03u %s\r\n", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds, line);
     std::fclose(f);
 }
@@ -344,6 +362,7 @@ struct NrError : std::runtime_error
         OutOfMemory,
         Unsupported,
         Invalid,
+        Interop,
         Other,
     } kind;
     VkResult vk;
@@ -357,7 +376,7 @@ struct NrError : std::runtime_error
 
 const char* KindName(NrError::Kind k)
 {
-    static const char* const names[] = { "device lost", "timeout", "out of memory", "unsupported", "invalid", "error" };
+    static const char* const names[] = { "device lost", "timeout", "out of memory", "unsupported", "invalid", "external interop unsupported", "error" };
     return names[k];
 }
 
@@ -888,111 +907,52 @@ struct Vulkan
                 std::snprintf(text, sizeof text, "the GPU lacks the Vulkan feature %s", n.name);
                 return decline(text);
             }
-        // What vkd3d-proton enabled at its vkCreateDevice, per the DXVK interop interface. The network's
-        // pipelines require these extensions and features to be ENABLED, not merely supported: using them
-        // without enablement is invalid regardless of driver leniency (Vulkan spec, features chapter).
-        // Anything missing refuses the direct path; the self-created device (which enables what it needs)
-        // remains the fallback.
+        // The hook records the final request, including augmentation invisible
+        // to vkd3d reflection. Only fall back when no created-device record exists.
+        mz::device::Enabled enabled;
+        const auto query = g_queryCreatedDevice.load(std::memory_order_acquire);
+        const bool recorded = query && query(reinterpret_cast<uint64_t>(device), &enabled);
+        if (!recorded)
         {
             UINT count = 0;
-            std::vector<const char*> enabled;
+            std::vector<const char*> extensions;
             if (SUCCEEDED(found->GetDeviceExtensions(&count, nullptr)) && count)
             {
-                enabled.resize(count);
-                if (FAILED(found->GetDeviceExtensions(&count, enabled.data())))
-                    enabled.clear();
-                enabled.resize(std::min<size_t>(count, enabled.size()));
+                extensions.resize(count);
+                if (FAILED(found->GetDeviceExtensions(&count, extensions.data()))) extensions.clear();
+                extensions.resize(std::min<size_t>(count, extensions.size()));
             }
-            std::string missing;
-            for (const char* e : { VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME, VK_EXT_SHADER_FLOAT8_EXTENSION_NAME,
-                                   VK_KHR_WORKGROUP_MEMORY_EXPLICIT_LAYOUT_EXTENSION_NAME,
-                                   VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME })
-                if (std::none_of(enabled.begin(), enabled.end(),
-                                 [e](const char* x) { return x && !std::strcmp(x, e); }))
-                    missing += missing.empty() ? e : std::string(", ") + e;
-            if (!missing.empty())
-                return decline(("vkd3d-proton's device did not enable " + missing).c_str());
+            enabled.extensions = mz::device::ExtensionBits(static_cast<uint32_t>(extensions.size()), extensions.data());
+            const VkPhysicalDeviceFeatures2* feats = nullptr;
+            if (SUCCEEDED(found->GetDeviceFeatures(&feats)) && feats)
+                enabled.features = mz::device::FeatureBits(feats->pNext);
         }
-        // The features it enabled, read from the same interface's VkPhysicalDeviceFeatures2 chain.
-        bufferDeviceAddress = false;
-        bool coopMatrix = false, float8 = false, float8Coop = false, store16 = false, store8 = false,
-             half = false, int8 = false, memoryModel = false, timeline = false, subgroupSize = false,
-             sync2 = false, wgLayout = false, wgLayout8 = false, wgLayout16 = false;
-        if (const VkPhysicalDeviceFeatures2* feats = nullptr; SUCCEEDED(found->GetDeviceFeatures(&feats)) && feats)
-            for (auto* p = static_cast<const VkBaseInStructure*>(feats->pNext); p; p = p->pNext)
-                switch (p->sType)
-                {
-                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR:
-                    coopMatrix =
-                        reinterpret_cast<const VkPhysicalDeviceCooperativeMatrixFeaturesKHR*>(p)->cooperativeMatrix == VK_TRUE;
-                    break;
-                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT8_FEATURES_EXT:
-                {
-                    const auto* f = reinterpret_cast<const VkPhysicalDeviceShaderFloat8FeaturesEXT*>(p);
-                    float8 = f->shaderFloat8 == VK_TRUE;
-                    float8Coop = f->shaderFloat8CooperativeMatrix == VK_TRUE;
-                    break;
-                }
-                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES:
-                {
-                    const auto* f = reinterpret_cast<const VkPhysicalDeviceVulkan11Features*>(p);
-                    store16 = f->storageBuffer16BitAccess == VK_TRUE;
-                    break;
-                }
-                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES:
-                {
-                    const auto* f = reinterpret_cast<const VkPhysicalDeviceVulkan12Features*>(p);
-                    // 8-bit storage and float16/int8 were promoted into the 1.2 feature struct.
-                    store8 = f->storageBuffer8BitAccess == VK_TRUE;
-                    half = f->shaderFloat16 == VK_TRUE;
-                    int8 = f->shaderInt8 == VK_TRUE;
-                    memoryModel = f->vulkanMemoryModel == VK_TRUE;
-                    timeline = f->timelineSemaphore == VK_TRUE;
-                    bufferDeviceAddress = f->bufferDeviceAddress == VK_TRUE;
-                    break;
-                }
-                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES:
-                    bufferDeviceAddress |=
-                        reinterpret_cast<const VkPhysicalDeviceBufferDeviceAddressFeatures*>(p)->bufferDeviceAddress ==
-                        VK_TRUE;
-                    break;
-                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES:
-                {
-                    const auto* f = reinterpret_cast<const VkPhysicalDeviceVulkan13Features*>(p);
-                    subgroupSize = f->subgroupSizeControl == VK_TRUE;
-                    sync2 = f->synchronization2 == VK_TRUE;
-                    break;
-                }
-                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WORKGROUP_MEMORY_EXPLICIT_LAYOUT_FEATURES_KHR:
-                {
-                    const auto* f = reinterpret_cast<const VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR*>(p);
-                    wgLayout = f->workgroupMemoryExplicitLayout == VK_TRUE;
-                    wgLayout8 = f->workgroupMemoryExplicitLayout8BitAccess == VK_TRUE;
-                    wgLayout16 = f->workgroupMemoryExplicitLayout16BitAccess == VK_TRUE;
-                    break;
-                }
-                default:
-                    break;
-                }
-        const struct { bool has; const char* name; } enabledNeeds[] = {
-            { coopMatrix, "cooperativeMatrix" },
-            { float8, "shaderFloat8" },
-            { float8Coop, "shaderFloat8CooperativeMatrix" },
-            { store16, "storageBuffer16BitAccess" },
-            { store8, "storageBuffer8BitAccess" },
-            { half, "shaderFloat16" },
-            { int8, "shaderInt8" },
-            { memoryModel, "vulkanMemoryModel" },
-            { timeline, "timelineSemaphore" },
-            { bufferDeviceAddress, "bufferDeviceAddress" },
-            { subgroupSize, "subgroupSizeControl" },
-            { sync2, "synchronization2" },
-            { wgLayout, "workgroupMemoryExplicitLayout" },
-            { wgLayout8, "workgroupMemoryExplicitLayout8BitAccess" },
-            { wgLayout16, "workgroupMemoryExplicitLayout16BitAccess" },
+        nr::logf("[mochizuki] Proton enabled contract: source=%s extensions=0x%x features=0x%llx",
+                 recorded ? "host vkCreateDevice record" : "vkd3d reflection", enabled.extensions,
+                 static_cast<unsigned long long>(enabled.features));
+        for (uint32_t i = 0; i < 4; ++i)
+            if (!(enabled.extensions & (1u << i)))
+                return decline((std::string("vkd3d-proton's device did not enable ") + mz::device::Extensions[i]).c_str());
+        bufferDeviceAddress = (enabled.features & mz::device::BufferAddress) != 0;
+        const struct { uint64_t bit; const char* name; } enabledNeeds[] = {
+            { mz::device::CooperativeMatrix, "cooperativeMatrix" },
+            { mz::device::Float8, "shaderFloat8" },
+            { mz::device::Float8CooperativeMatrix, "shaderFloat8CooperativeMatrix" },
+            { mz::device::Storage16, "storageBuffer16BitAccess" },
+            { mz::device::Storage8, "storageBuffer8BitAccess" },
+            { mz::device::Float16, "shaderFloat16" },
+            { mz::device::Int8, "shaderInt8" },
+            { mz::device::MemoryModel, "vulkanMemoryModel" },
+            { mz::device::Timeline, "timelineSemaphore" },
+            { mz::device::BufferAddress, "bufferDeviceAddress" },
+            { mz::device::SubgroupSize, "subgroupSizeControl" },
+            { mz::device::Synchronization2, "synchronization2" },
+            { mz::device::WorkgroupLayout, "workgroupMemoryExplicitLayout" },
+            { mz::device::Workgroup8, "workgroupMemoryExplicitLayout8BitAccess" },
+            { mz::device::Workgroup16, "workgroupMemoryExplicitLayout16BitAccess" },
         };
         for (const auto& n : enabledNeeds)
-            if (!n.has)
+            if (!(enabled.features & n.bit))
             {
                 char text[160];
                 std::snprintf(text, sizeof text, "vkd3d-proton's device did not enable the Vulkan feature %s", n.name);
@@ -1415,18 +1375,53 @@ struct SharedBuffer
     VkDeviceSize offset = 0;
     bool borrowed = false;
 
-    void Create(ID3D12Device* d, Vulkan& vk, UINT64 bytes)
+    void Create(ID3D12Device* d, Vulkan& vk, UINT64 bytes, const char* name, bool probe = false)
     {
+        const bool wine = mochizuki_vkd3d::UnderWine();
+        const auto handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT;
+        VkMemoryRequirements req {};
+        VkMemoryWin32HandlePropertiesKHR props { VK_STRUCTURE_TYPE_MEMORY_WIN32_HANDLE_PROPERTIES_KHR };
+        VkMemoryAllocateInfo ai { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
         D3D12_HEAP_PROPERTIES hp {};
         hp.Type = D3D12_HEAP_TYPE_DEFAULT;
         D3D12_RESOURCE_DESC rd {};
         rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-        // Never below 16 MB. In Cyberpunk 2077 the driver refused the handle (E_INVALIDARG) of buffers of 1.9 to 4.2
-        // MB, for seconds to minutes, and never of those of 7.4 MB and more.
-        rd.Width = std::max((bytes + 65535) & ~UINT64(65535), UINT64(16) << 20);
+        // Real buffers retain the 16 MB shared-handle workaround; only Wine's probe is 64 KiB.
+        rd.Width = mz::transport::BufferBytes(bytes, wine && probe);
         rd.Height = rd.DepthOrArraySize = rd.MipLevels = 1;
         rd.SampleDesc.Count = 1;
         rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        auto describe = [&](const char* api, VkResult result, HRESULT hr)
+        {
+            nr::logf("[mochizuki] shared buffer name=%s requested=%llu size=%llu handleType=D3D12_RESOURCE(0x%X) "
+                     "memoryTypeBits=0x%X handleMemoryTypeBits=0x%X compatibleMemoryTypeBits=0x%X "
+                     "allocationSize=%llu API=%s VkResult=%d HRESULT=0x%08lX",
+                     name, static_cast<unsigned long long>(bytes), static_cast<unsigned long long>(rd.Width),
+                     unsigned(handleType), req.memoryTypeBits, props.memoryTypeBits,
+                     req.memoryTypeBits & props.memoryTypeBits, static_cast<unsigned long long>(ai.allocationSize),
+                     api, int(result), static_cast<unsigned long>(hr));
+        };
+        auto d3dCheck = [&](HRESULT hr, const char* api)
+        {
+            if (SUCCEEDED(hr)) return;
+            describe(api, VK_SUCCESS, hr);
+            const bool fixed = wine && (hr == E_INVALIDARG || hr == E_NOTIMPL || hr == E_NOINTERFACE);
+            char text[256];
+            std::snprintf(text, sizeof text, "shared buffer %s: %s failed, HRESULT 0x%08lX%s", name, api,
+                          static_cast<unsigned long>(hr), fixed ? "; Proton cross-device external interop unsupported" : "");
+            throw NrError(fixed ? NrError::Interop : KindOf(hr), text, VK_SUCCESS, hr);
+        };
+        auto importCheck = [&](VkResult result, const char* api, bool externalImport)
+        {
+            if (result == VK_SUCCESS) return;
+            describe(api, result, S_OK);
+            char text[256];
+            std::snprintf(text, sizeof text, "shared buffer %s: %s failed, VkResult %d%s", name, api, int(result),
+                          externalImport && mz::transport::FixedImportFailure(wine, probe, result)
+                              ? "; Proton cross-device D3D12_RESOURCE import unsupported (not memory pressure)" : "");
+            throw NrError(externalImport && mz::transport::FixedImportFailure(wine, probe, result)
+                              ? NrError::Interop : KindOf(result), text, result);
+        };
         // Proton direct path: no cross-API sharing to do. The D3D12 buffer is already memory of the device the
         // network runs on; its VkBuffer and offset come from vkd3d-proton.
         if (vk.adoptedVkd3d)
@@ -1447,9 +1442,8 @@ struct SharedBuffer
             borrowed = true;
             return;
         }
-        Check(d->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_SHARED, &rd, D3D12_RESOURCE_STATE_COMMON, nullptr,
-                                         IID_PPV_ARGS(&resource)),
-              "shared buffer");
+        d3dCheck(d->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_SHARED, &rd, D3D12_RESOURCE_STATE_COMMON, nullptr,
+                                            IID_PPV_ARGS(&resource)), "ID3D12Device::CreateCommittedResource");
         if (const HRESULT hr = d->CreateSharedHandle(resource, nullptr, GENERIC_ALL, nullptr, &handle); FAILED(hr))
         {
             // Seen in a game only (E_INVALIDARG); these say which of its causes it was.
@@ -1461,7 +1455,7 @@ struct SharedBuffer
                      static_cast<unsigned long>(hr), static_cast<unsigned long long>(rd.Width), int(got.Type),
                      unsigned(flags), static_cast<unsigned long>(query),
                      static_cast<unsigned long>(d->GetDeviceRemovedReason()), alive.load());
-            Check(hr, "shared buffer handle");
+            d3dCheck(hr, "ID3D12Device::CreateSharedHandle");
         }
         ++alive;
 
@@ -1480,23 +1474,24 @@ struct SharedBuffer
             bi.queueFamilyIndexCount = 2;
             bi.pQueueFamilyIndices = queueFamilies;
         }
-        VkCheck(vkCreateBuffer(vk.device, &bi, nullptr, &buffer), "vkCreateBuffer (shared)");
-        VkMemoryRequirements req {};
+        importCheck(vkCreateBuffer(vk.device, &bi, nullptr, &buffer), "vkCreateBuffer", false);
         vkGetBufferMemoryRequirements(vk.device, buffer, &req);
-        VkMemoryWin32HandlePropertiesKHR props { VK_STRUCTURE_TYPE_MEMORY_WIN32_HANDLE_PROPERTIES_KHR };
-        VkCheck(vk.memoryHandleProperties(vk.device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT, handle, &props),
-                "vkGetMemoryWin32HandlePropertiesKHR");
+        ai.allocationSize = std::max<UINT64>(req.size, d->GetResourceAllocationInfo(0, 1, &rd).SizeInBytes);
+        importCheck(vk.memoryHandleProperties(vk.device, handleType, handle, &props),
+                    "vkGetMemoryWin32HandlePropertiesKHR", true);
         VkMemoryDedicatedAllocateInfo dedicated { VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO };
         dedicated.buffer = buffer;
         VkImportMemoryWin32HandleInfoKHR import { VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR, &dedicated };
         import.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT;
         import.handle = handle;
-        VkMemoryAllocateInfo ai { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &import };
-        ai.allocationSize = std::max<UINT64>(req.size, d->GetResourceAllocationInfo(0, 1, &rd).SizeInBytes);
+        ai.pNext = &import;
+        if (!(req.memoryTypeBits & props.memoryTypeBits))
+            importCheck(VK_ERROR_INVALID_EXTERNAL_HANDLE, "memory type intersection", true);
         ai.memoryTypeIndex =
             vk.MemoryType(req.memoryTypeBits & props.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        VkCheck(vkAllocateMemory(vk.device, &ai, nullptr, &memory), "import of a D3D12 buffer");
-        VkCheck(vkBindBufferMemory(vk.device, buffer, memory, 0), "vkBindBufferMemory (shared)");
+        importCheck(vkAllocateMemory(vk.device, &ai, nullptr, &memory), "vkAllocateMemory", true);
+        importCheck(vkBindBufferMemory(vk.device, buffer, memory, 0), "vkBindBufferMemory", true);
+        describe("import ready", VK_SUCCESS, S_OK);
     }
 
     void Release(VkDevice device)
@@ -4173,7 +4168,7 @@ struct Session
                                    g.canonicalise ? kImageUsage | VK_IMAGE_USAGE_STORAGE_BIT : kImageUsage);
         b.input = b.colourInput->upload;
         b.colourImage = b.colourInput->image;
-        b.output.Create(device, vk, b.colourFootprint.bytes);
+        b.output.Create(device, vk, b.colourFootprint.bytes, "output");
         // Plan A: when the frame is canonicalised the answer comes back out of the canonical image *into this
         // one* (the readback's layout is the game's), so it needs to be a storage image as well as a sampled
         // and transfer one. Otherwise the plain usage, which is all a non-canonicalised frame ever needs.
@@ -4210,7 +4205,7 @@ struct Session
                                               IID_PPV_ARGS(&b.result)),
               "output texture");
         if (g.firstPass) {
-            b.firstOutput.Create(device, vk, b.colourFootprint.bytes);
+            b.firstOutput.Create(device, vk, b.colourFootprint.bytes, "first-pass output");
             b.firstColour.Create(vk, cf.vk, g.width, g.height);
             Check(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &desc,
                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, IID_PPV_ARGS(&b.firstResult)),
@@ -4595,6 +4590,23 @@ struct Session
                          acoFallback[0] ? ": " : "", acoFallback);
             if (mz::compile::Mandatory(compilePolicy))
                 nr::logf("[mochizuki] RADV driver compile policy: Linux SPIR-V required; PAL import off; Windows network fallback forbidden");
+        }
+        if (!vk.adoptedVkd3d)
+        {
+            // Prove the transport before any network construction. No work is submitted;
+            // release every partial object before AbandonStart can destroy the device.
+            SharedBuffer probe;
+            try
+            {
+                probe.Create(device, vk, 65536, "own-device transport probe", true);
+            }
+            catch (...)
+            {
+                probe.Release(vk.device);
+                throw;
+            }
+            probe.Release(vk.device);
+            nr::logf("[mochizuki] own-device transport probe passed; network construction permitted");
         }
         toVk.Create(device, vk, "toVk");
         fromVk.Create(device, vk, "fromVk");
@@ -5028,7 +5040,9 @@ struct Session
                 // Proton direct path: the builds' queue is vkd3d-proton's, shared with the game's queues.
                 ID3D12DXVKInteropDevice* interop = vk.interop;
                 ID3D12CommandQueue* queue = vk.interopQueue;
-                host.queue_lock = [interop, queue] { interop->LockCommandQueue(queue); };
+                host.queue_lock = [interop, queue] {
+                    Check(interop->LockCommandQueue(queue), "LockCommandQueue (Proton network builder)");
+                };
                 host.queue_unlock = [interop, queue] { interop->UnlockCommandQueue(queue); };
             }
             host.secondary_family = vk.computeFamily;
@@ -6678,7 +6692,7 @@ int32_t Destroy(void* context)
 }
 
 // A Start that fails is undone and reported UNAVAILABLE without failing the session, so the host may try again
-// later; one that fails "[unsupported] ..." is remembered for the adapter, and later calls return at once.
+// later. Missing capabilities and fixed external-import failures are remembered per adapter, without retry.
 int32_t PrepareSession(void* context)
 {
     auto* s = static_cast<Session*>(context);
@@ -6706,7 +6720,7 @@ int32_t PrepareSession(void* context)
                      catch (const std::exception& e)
                      {
                          s->AbandonStart();
-                         if (!std::strncmp(e.what(), "[unsupported] ", 14))
+                         if (KindOf(e) == NrError::Interop || !std::strncmp(e.what(), "[unsupported] ", 14))
                              RememberUnsupported(luid, e.what());
                          else
                              nr::logf("[mochizuki] error: %s (the session start was undone)", e.what());
@@ -7522,6 +7536,11 @@ int32_t GetControlDefaults(MochizukiNrControls* out)
 }
 #include "MochizukiRecording.inl"
 } // namespace
+
+extern "C" __declspec(dllexport) void MochizukiNrSetVulkanDeviceQuery(mz::device::Query query)
+{
+    g_queryCreatedDevice.store(query, std::memory_order_release);
+}
 
 extern "C" __declspec(dllexport) int32_t MochizukiNrGetApi(uint32_t abi_version, LmxxfNrApi* out)
 {

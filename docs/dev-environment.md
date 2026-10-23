@@ -19,7 +19,7 @@
 | `tools/diag/benchmark_person_models.py --models <JSON> --images <图片...> --out <结果目录>` | 实际 CPU 模型对照，记录来源/哈希、线程数、预处理/推理/解码耗时与蒙版图；不推导游戏帧率 |
 | `tools/build/build-lmxxf-runtime.cmd [输出目录]` | 编 `LmxxfNrRuntime.dll`：有 `cl.exe` 用 MSVC，否则 MinGW（`LMXXF_GXX`）。旧路径 `tools/build-lmxxf-runtime.cmd` 暂留一个转发脚本，等安装/同步脚本迁移后删除 |
 | `tools/build/build-rtgi-shaders.cmd` | 由 `assets/experimental_lighting/Lighting.hlsl` 重建两个 `.cso`（逐字节一致） |
-| `tools/build/write-amd-graphics-source-id.ps1` | 生成日志里的宿主源码指纹（MSBuild 自动调用） |
+| `tools/build/write-amd-graphics-source-id.ps1` | MSBuild PrepareForBuild 自动生成宿主完整提交、源码指纹与资源时间戳；内容不变不触发重编 |
 | `tools/release/PACKAGE_RELEASE.ps1`、`tools/release/check-release-freshness.ps1` | 出 zip；新鲜度门禁 |
 | `tools/install-amd-presr.ps1`、`tools/uninstall-amd-presr.ps1`、`tools/lmxxf-module-package.ps1`、`tools/stage-lmxxf-beside-optiscaler.*` | 安装、卸载、模块包、开发部署。计划移入 `tools/install/`，等上游集成审阅收尾后再动 |
 | `tools/sync-lmxxf-upstream.ps1`、`tools/audit-lmxxf-enablements.py` + `tools/lmxxf-sync/` | 上游同步与审阅门禁。计划整体移入 `tools/lmxxf-sync/`，时机同上 |
