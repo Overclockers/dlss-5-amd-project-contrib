@@ -837,6 +837,16 @@
       "files": [
         "windows/src/core/nrvk.hpp"
       ]
+    },
+    {
+      "feature": "radv-driver-compile-policy",
+      "path": "patches/29-radv-driver-compile-policy.patch",
+      "files": [
+        "windows/src/core/nr_graph.cpp",
+        "windows/src/core/nr_pipeline_binary.hpp",
+        "windows/src/core/nr_runtime.cpp",
+        "windows/src/core/nr_shader_manifest.hpp"
+      ]
     }
   ],
   "added_files": [

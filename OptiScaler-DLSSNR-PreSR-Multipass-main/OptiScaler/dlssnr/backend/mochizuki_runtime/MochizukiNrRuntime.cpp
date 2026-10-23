@@ -50,6 +50,8 @@
 #include <vulkan/vulkan.h>
 #include "MochizukiStageTiming.h"
 #include "MochizukiVkd3dInterop.h"
+#include "MochizukiCompilePolicy.h"
+using mz::compile::CompilePolicy;
 
 #include "mz_interpose.h"
 #include "nr_log.hpp"
@@ -2461,6 +2463,7 @@ struct NetworkKey
     bool compactTransfer = true;
     bool firstPass = false;
     bool aco = false; // this build imports the ACO network; the device must already expose pipeline binaries
+    CompilePolicy compilePolicy = CompilePolicy::WindowsDefault;
     bool int4 = false, renodx = false;
     uint32_t networkModel = 1;
     uint32_t renoWidth = 0, renoHeight = 0, sourceEncoding = 0;
@@ -2485,6 +2488,7 @@ struct NetworkKey
         return width == other.width && height == other.height && format == other.format &&
                scale == other.scale && linear == other.linear && prep == other.prep &&
                compactTransfer == other.compactTransfer && firstPass == other.firstPass && aco == other.aco &&
+               compilePolicy == other.compilePolicy &&
                networkModel == other.networkModel && int4 == other.int4 && renodx == other.renodx && renoWidth == other.renoWidth &&
                renoHeight == other.renoHeight && sourceEncoding == other.sourceEncoding && linearNits == other.linearNits &&
                computeConvert == other.computeConvert && computeDownscale == other.computeDownscale &&
@@ -2507,6 +2511,7 @@ struct ProductRuntime : nr::Runtime
     uint32_t renoPasses = 0;
     uint64_t id = 0;
     bool graphAco = false; // Actual compiler provenance, not requested ACO mode.
+    CompilePolicy graphPolicy = CompilePolicy::WindowsDefault;
     NetworkKey key {};
     VkQueue queue {};
 
@@ -3088,6 +3093,7 @@ struct Session
     SessionControls controls;
     bool deviceStarted = false;
     bool acoAtDevice = false;
+    CompilePolicy compilePolicy = CompilePolicy::WindowsDefault;
     bool acoEffective = false;
     std::atomic<uint32_t> infoInt4 {0}, infoReno {0}, infoNetwork {0};
     char acoFallback[128] {};
@@ -4549,6 +4555,11 @@ struct Session
             // The shared textures are D3D12_RESOURCE imports, which winevulkan cannot make; the direct path's
             // buffers are the game's own memory already. PlanShared refuses as well.
             sharedInputRequest = sharedMotionRequest = 0;
+        VkPhysicalDeviceDriverProperties driver {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+        VkPhysicalDeviceProperties2 properties {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &driver};
+        vkGetPhysicalDeviceProperties2(vk.physical, &properties);
+        static_assert(uint32_t(VK_DRIVER_ID_MESA_RADV) == 3);
+        compilePolicy = mz::compile::PolicyForDriver(uint32_t(driver.driverID));
         deviceStarted = true;
         // Bundle selection is this thread's. The extension is on only when this creation saw a bundle.
         // effective stays false until Install publishes the network that actually runs.
@@ -4568,7 +4579,9 @@ struct Session
             std::lock_guard lock(controlsMutex);
             if (deviceAco)
                 acoAtDevice = true;
-            if (controls.acoRequested == requested)
+            if (mz::compile::Mandatory(compilePolicy))
+                std::snprintf(acoFallback, sizeof acoFallback, "RADV Linux SPIR-V driver compile selected (no PAL import)");
+            else if (controls.acoRequested == requested)
             {
                 if (deviceAco && requested)
                     acoFallback[0] = 0;
@@ -4580,6 +4593,8 @@ struct Session
             if (requested || deviceAco)
                 nr::logf("[mochizuki] ACO %s%s%s", deviceAco && controls.acoRequested == requested ? "requested" : "off",
                          acoFallback[0] ? ": " : "", acoFallback);
+            if (mz::compile::Mandatory(compilePolicy))
+                nr::logf("[mochizuki] RADV driver compile policy: Linux SPIR-V required; PAL import off; Windows network fallback forbidden");
         }
         toVk.Create(device, vk, "toVk");
         fromVk.Create(device, vk, "fromVk");
@@ -4733,9 +4748,11 @@ struct Session
             std::lock_guard published(controlsMutex);
             if (candidateReady)
             {
-                const bool installedAco = buildKey.aco && candidateOn;
+                const bool installedAco = runtime->graphAco;
                 acoEffective = installedAco;
-                if (installedAco)
+                if (runtime->graphPolicy == CompilePolicy::LinuxSpirvDriverCompile)
+                    std::snprintf(acoFallback, sizeof acoFallback, "RADV driver-compiled Linux SPIR-V (no PAL import)");
+                else if (installedAco)
                     acoFallback[0] = 0;
                 else if (buildKey.aco)
                 {
@@ -5133,19 +5150,26 @@ struct Session
             // The compiler choice is local to this build thread. Pipelines already created stay with their
             // recording. A failed import discards that graph and builds a complete native one.
             // own_directory() keeps NR_ACO_* from selecting a bundle on this thread.
-            nr::binary::own_directory();
-            struct ClearAco
-            {
-                ~ClearAco() { nr::binary::configure("", {}, "", {}); }
-            } clearAco;
+            mz::compile::BackgroundScope policyScope(key.compilePolicy,
+                [&](CompilePolicy policy)
+                {
+                    nr::binary::own_directory();
+                    nr::binary::configure("", {}, "", {});
+                    if (mz::compile::Mandatory(policy))
+                    {
+                        const auto bundle = std::filesystem::path(assets) / L"dlssnr-amd" / L"aco";
+                        nr::binary::configure(RootUtf8(bundle.wstring()), {}, "", {}, false);
+                    }
+                }, []() noexcept { nr::binary::configure("", {}, "", {}); });
             auto useNative = [&](const std::string& reason)
             {
+                mz::compile::GuardWindowsFallback(key.compilePolicy);
                 acoOn = false;
                 acoWhy = reason;
                 nr::logf("[mochizuki] ACO unavailable: %s; using the driver compiler", reason.c_str());
                 nr::binary::configure("", {}, "", {});
             };
-            if (buildAco)
+            if (!mz::compile::Mandatory(key.compilePolicy) && buildAco)
             {
                 try
                 {
@@ -5164,8 +5188,9 @@ struct Session
             auto construct = [&]()
             {
                 nr::RuntimeConfig local = config;
-                const bool importing = !nr::binary::directory().empty();
-                if (donor && donor->graphAco == importing)
+                const bool linuxGraph = !nr::binary::directory().empty();
+                const bool importing = linuxGraph && nr::binary::import_enabled();
+                if (donor && donor->graphAco == importing && donor->graphPolicy == key.compilePolicy)
                     local.share = donor->share_for(config.width, config.height);
                 if (!local.share)
                     donor.reset();
@@ -5179,15 +5204,21 @@ struct Session
                 {
                     const nr::BuildCancelScope cancel(&abandon);
                     nr::g_build_stage.store(1, std::memory_order_relaxed);
-                    ReportProgress(this, "Building ACO network", 0, 0);
+                    ReportProgress(this, key.compilePolicy == CompilePolicy::LinuxSpirvDriverCompile
+                        ? "Building RADV Linux SPIR-V network" : "Building ACO network", 0, 0);
                     made = construct();
                     nr::g_build_stage.store(0, std::memory_order_relaxed);
                     const uint32_t imported = nr::binary::mode().imported;
-                    if (!imported)
-                        throw std::runtime_error("no ACO pipelines were imported");
-                    acoOn = true;
+                    if (nr::binary::import_enabled())
+                    {
+                        if (!imported)
+                            throw std::runtime_error("no ACO pipelines were imported");
+                        acoOn = true;
+                        nr::logf("[mochizuki] ACO network ready: %u imported pipelines", imported);
+                    }
+                    else
+                        nr::logf("[mochizuki] RADV network ready: driver-compiled Linux SPIR-V (no PAL import)");
                     acoWhy.clear();
-                    nr::logf("[mochizuki] ACO network ready: %u imported pipelines", imported);
                 }
                 catch (const std::exception& e)
                 {
@@ -5232,7 +5263,7 @@ struct Session
         // Releasing a donor never changes a retained recipe: it owns its original runtime/images.
         // Shared arenas/core survive through the candidate's own shared ownership.
         donor.reset();
-        if (made) made->graphAco = acoOn;
+        if (made) { made->graphAco = acoOn; made->graphPolicy = key.compilePolicy; }
         if (error[0] && abandon)
             nr::logf("[mochizuki] the network build at %ux%u stopped after %.1f s: the session is being destroyed",
                      config.width, config.height,
@@ -6853,6 +6884,7 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
                 keyFormat == VK_FORMAT_A2B10G10R10_UNORM_PACK32 || keyFormat == VK_FORMAT_A2R10G10B10_UNORM_PACK32;
             NetworkKey key { g.width, g.height, keyFormat, scale, maxPasses, linear, s->prepWanted || prepRequested,
                                     compactTransfer, g.firstPass, aco };
+            key.compilePolicy = s->compilePolicy;
             key.networkModel = networkModel;
             key.int4 = int4 && networkModel == 0; // INT4 records/weights describe the original model only.
             key.renodx = renodx;
@@ -7373,7 +7405,9 @@ int32_t SetControls(void* context, const MochizukiNrControls* in)
         s->controls = std::move(sanitised);
         // The device's pipeline-binary extension is fixed. Turning ACO on without it waits for a new device.
         // Turning it off, or back on, rebuilds the next network; the one already installed keeps its pipelines.
-        if (s->deviceStarted && s->controls.acoRequested && !s->acoAtDevice)
+        if (s->deviceStarted && mz::compile::Mandatory(s->compilePolicy))
+            std::snprintf(s->acoFallback, sizeof s->acoFallback, "RADV driver-compiled Linux SPIR-V (no PAL import)");
+        else if (s->deviceStarted && s->controls.acoRequested && !s->acoAtDevice)
             std::snprintf(s->acoFallback, sizeof s->acoFallback, "ACO mode applies on the next game start");
         else if (s->deviceStarted && !s->controls.acoRequested && !s->acoAtDevice)
             s->acoFallback[0] = 0;

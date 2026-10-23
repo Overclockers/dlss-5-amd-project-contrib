@@ -204,8 +204,8 @@ extern "C"
         float gpu_ms_network_last, gpu_ms_other_last;
         float gpu_ms_network_mean, gpu_ms_other_mean;
         uint32_t aco_requested; /* the setting last given to SetControls */
-        uint32_t aco_effective; /* 1 when this device was created with ACO and it stayed on */
-        char aco_fallback[128]; /* why ACO is off, or that a change waits for the next start; empty when unused */
+        uint32_t aco_effective; /* 1 only for the installed network's PAL pipeline imports */
+        char aco_fallback[128]; /* actual driver-compiled Linux source, PAL refusal, or pending-device reason */
         uint32_t int4_requested, int4_effective, renodx_effective;
         /* Last accepted sample's core stages, only on frames with MOCHIZUKI_NR_FRAME_FLAG_STAGE_TIMING; -1 when
          * the stage did not run in it (encode: linear input only) or stage timing was off. */

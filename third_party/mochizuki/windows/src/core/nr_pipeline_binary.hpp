@@ -16,6 +16,8 @@ namespace nr::binary {
 // bundle. Device enablement and the cache identity stay process-wide: the extension is chosen when
 // the device is created. NR_ACO_DIR still wins until own_directory(); the product calls that first.
 // disable() drops the bundle on this thread until the next configure().
+// configure(..., false) keeps Linux graph/shader selection but compiles its SPIR-V directly:
+// no records, shell templates, binary cache or pipeline-binary device features are used.
 struct Mode {
     std::mutex m;
     bool configured = false, disabled = false;
@@ -23,6 +25,7 @@ struct Mode {
     // NR_ACO_SHELL_DIR. Official callers leave it false, so those variables
     // still win. A host with its own settings calls own_directory() first.
     bool owned = false;
+    bool import = true;
     uint32_t imported = 0;             // network pipelines imported by this thread's current configure()
     std::string dir, why;
     std::vector<std::string> shells;   // template SPIR-V directories, searched in order
@@ -31,11 +34,15 @@ struct Mode {
 };
 inline Mode& mode() { static thread_local Mode s; return s; }
 inline void configure(const std::string& dir, std::vector<std::string> shells, const std::string& cache,
-                      std::map<std::string,std::string> aliases) {
+                      std::map<std::string,std::string> aliases, bool import = true) {
     auto& s=mode();std::lock_guard<std::mutex> l(s.m);
     s.disabled=false;s.why.clear();s.imported=0;
+    s.import=import;
     s.configured=true;s.dir=dir;s.shells=std::move(shells);s.cache=cache;
     s.aliases=std::move(aliases);
+}
+inline bool import_enabled() {
+    auto& s=mode();std::lock_guard<std::mutex> l(s.m);return s.import;
 }
 inline std::string alias_of(const std::string& name) {
     auto& s=mode();std::lock_guard<std::mutex> l(s.m);
@@ -94,7 +101,7 @@ struct Features {
     // A GPU, driver or device chain that cannot take the ACO network turns it off for the process
     // (disable): the device is created as it would be without it, never refused.
     void prepare(VkPhysicalDevice physical,VkDeviceCreateInfo& ci,std::vector<const char*>& extensions) {
-        if(directory().empty())return;
+        if(!import_enabled() || directory().empty())return;
         VkPhysicalDeviceDriverProperties drv{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
         VkPhysicalDeviceProperties2 props{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,&drv};
         vkGetPhysicalDeviceProperties2(physical,&props);
@@ -288,7 +295,7 @@ inline VkPipeline create(VkDevice device,const VkComputePipelineCreateInfo& ci,c
 inline VkResult create_or_default(VkDevice device,VkPipelineCache cache,const VkComputePipelineCreateInfo& ci,
                                  const std::string& path,const uint32_t* code,size_t bytes,VkPipeline* out,uint32_t push_bytes) {
     auto dir=directory();
-    if(dir.empty() || !network_path(path))return vkCreateComputePipelines(device,cache,1,&ci,nullptr,out);
+    if(!import_enabled() || dir.empty() || !network_path(path))return vkCreateComputePipelines(device,cache,1,&ci,nullptr,out);
     pal::require(enabled(device),"binary mode was not enabled when this device was created");
     auto h=pal::hash(code,bytes);
     const auto record_bytes=pal::load(dir+"/records/"+keyname(h));

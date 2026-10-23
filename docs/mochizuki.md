@@ -303,6 +303,20 @@ passes. A missing bundle, a record mismatch, or an import that produces no
 pipelines discards that graph and builds one complete native network.
 Diagnostics show requested, effective and the reason. `NR_ACO_DIR` does not
 select the bundle after `own_directory()`.
+
+**RADV/Mesa:** the actual Vulkan physical-device driver selects the Linux graph and
+`dlssnr-amd/aco/shaders` independently of the saved ACO checkbox. This applies to
+both the owned device and borrowed vkd3d device. RADV compiles those SPIR-V shaders
+normally; no PAL records, shell aliases or pipeline-binary extension are required.
+The selected model's kernels, temporal variants, accumulation marker and shader
+constants must match the host. Missing or invalid assets and compile failures
+report an NR build failure/bypass: RADV never retries the Windows network shaders.
+INT4 remains unavailable and the default model path runs with an explanatory note.
+Diagnostics distinguish `RADV driver-compiled Linux SPIR-V (no PAL import)` from
+PAL imports; `aco_effective` means actual PAL import only. The stored INI request
+is unchanged. `tests\mochizuki\run.cmd compile-policy` covers policy propagation
+on a real builder thread, cleanup, assets and failure veto without a GPU; it also
+runs in the `abi` tier.
 On 2026-10-11, `tests/mochizuki/run.cmd aco` used AMD Radeon RX 9070 XT
 (vendor 0x1002, device 0x7550, Vulkan 26.8.1 LLPC, driverVersion 0x0080018b).
 The runtime log recorded 58/58 record matches and 29 imported pipelines. The
@@ -336,6 +350,11 @@ measurable leaves the last measurement in place, and after a second without one 
 white point is back in charge with a line in the log; it resumes on its own once it measures
 again. Daniel/lmxxf exposure controls do not
 configure this backend, and preprocessing keeps its own histogram meter.
+
+The meter classifies finite samples by exponent bits (`(asuint(l) & 0x7f800000u) != 0x7f800000u`)
+for Wine d3dcompiler compatibility (E5005 on `isnan`), preserving Windows finite/zero/denormal acceptance.
+`tests\mochizuki\run.cmd exposure-recording` covers NaN/±Inf parity with Windows intrinsics,
+plus normal, mixed-invalid and all-invalid meter dispatches.
 
 ## Build and verification
 

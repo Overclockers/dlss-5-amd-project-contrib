@@ -1619,6 +1619,36 @@ struct GraphCore {
 // a build runs its arena-layout probe build on the same thread.
 static std::recursive_mutex g_build_lock;
 
+// The launch contract is shared by graph builds and the runtime's compile-only preflight.
+static std::map<std::string, uint32_t> host_shader_constants(uint32_t vattn_qt = 32) {
+    return {
+        {"vattn_qt", vattn_qt},
+        {"persist_strag", uint32_t(NR_STRAG_PCT)},
+        {"persist_one", uint32_t(NR_PERSIST_ONE_MASK)},
+        {"noise_field", uint32_t(NR_NOISE_FIELD)},
+        {"gemm_wide_mt", uint32_t(NR_GEMM_WIDE_MT)},
+        {"gemm_wide_nt", uint32_t(NR_GEMM_WIDE_NT)},
+        {"gemm_proj_mt", uint32_t(NR_GEMM_PROJ_MT)},
+        {"gemm_proj_nt", uint32_t(NR_GEMM_PROJ_NT)},
+        {"gemm_projw_mt", uint32_t(NR_GEMM_PROJW_MT)},
+        {"gemm_projw_nt", uint32_t(NR_GEMM_PROJW_NT)},
+        {"ffwd_wgw", uint32_t(NR_FFWD_WGW)},
+        {"ffwd_gmajor", uint32_t(NR_FFWD_GMAJOR)},
+        {"gemm_remap", uint32_t(NR_GEMM_REMAP_HOST)},
+        {"ffwd_fm2_min", uint32_t(NR_FFWD_FM2_MIN_TOKENS)},
+        {"post_alpha", uint32_t(NR_POST_ALPHA)},
+        {"tchain", uint32_t(NR_TCHAIN_TILES)},
+        {"upsview_vec", uint32_t(NR_UPSVIEW_VEC)},
+        {"repack_vec", uint32_t(NR_REPACK_VEC)},
+        {"wide_ups_mask", uint32_t(NR_WIDE_UPS_MASK)},
+        {"persist_df", uint32_t(NR_PERSIST_DF)},
+        {"ds_fuse", uint32_t(NR_DS_FUSE)},
+        {"persist_ds", uint32_t(NR_PERSIST_DS_MASK)},
+        {"persist_up", uint32_t(NR_PERSIST_UPS_MASK)},
+        {"decups_vec", uint32_t(NR_DECUPS_VEC)},
+    };
+}
+
 int NrSession::build(int argc, char** argv, const std::vector<Step>* prepared_plan) {
     if (share) return build_shared(argc, argv);   // no layout globals: not one of the builds the lock orders
     std::lock_guard<std::recursive_mutex> one_build(g_build_lock);
@@ -2166,32 +2196,7 @@ int NrSession::build(int argc, char** argv, const std::vector<Step>* prepared_pl
         }
         // Every entry is a constant compiled into a kernel that this file also
         // has to know. Add one here the moment the host reads a shader's shape.
-        const std::pair<const char*, uint32_t> want[] = {
-            {"vattn_qt", vattn_qt},
-            {"persist_strag", uint32_t(NR_STRAG_PCT)},
-            {"persist_one", uint32_t(NR_PERSIST_ONE_MASK)},
-            {"noise_field", uint32_t(NR_NOISE_FIELD)},
-            {"gemm_wide_mt", uint32_t(NR_GEMM_WIDE_MT)},
-            {"gemm_wide_nt", uint32_t(NR_GEMM_WIDE_NT)},
-            {"gemm_proj_mt", uint32_t(NR_GEMM_PROJ_MT)},
-            {"gemm_proj_nt", uint32_t(NR_GEMM_PROJ_NT)},
-            {"gemm_projw_mt", uint32_t(NR_GEMM_PROJW_MT)},
-            {"gemm_projw_nt", uint32_t(NR_GEMM_PROJW_NT)},
-            {"ffwd_wgw", uint32_t(NR_FFWD_WGW)},
-            {"ffwd_gmajor", uint32_t(NR_FFWD_GMAJOR)},
-            {"gemm_remap", uint32_t(NR_GEMM_REMAP_HOST)},
-            {"ffwd_fm2_min", uint32_t(NR_FFWD_FM2_MIN_TOKENS)},
-            {"post_alpha", uint32_t(NR_POST_ALPHA)},
-            {"tchain", uint32_t(NR_TCHAIN_TILES)},
-            {"upsview_vec", uint32_t(NR_UPSVIEW_VEC)},
-            {"repack_vec", uint32_t(NR_REPACK_VEC)},
-            {"wide_ups_mask", uint32_t(NR_WIDE_UPS_MASK)},
-            {"persist_df", uint32_t(NR_PERSIST_DF)},
-            {"ds_fuse", uint32_t(NR_DS_FUSE)},
-            {"persist_ds", uint32_t(NR_PERSIST_DS_MASK)},
-            {"persist_up", uint32_t(NR_PERSIST_UPS_MASK)},
-            {"decups_vec", uint32_t(NR_DECUPS_VEC)},
-        };
+        const auto want = host_shader_constants(vattn_qt);
         std::map<std::string, uint32_t> built;
         try { built = nr::detail::read_shader_manifest(f); }
         catch (const std::exception& e) {
@@ -2246,7 +2251,7 @@ int NrSession::build(int argc, char** argv, const std::vector<Step>* prepared_pl
             auto it = built.find(name);
             if (it == built.end()) {
                 std::fprintf(stderr, "%s does not record %s; run "
-                             "windows/build/build_network.py\n", path.c_str(), name);
+                             "windows/build/build_network.py\n", path.c_str(), name.c_str());
                 return 1;
             }
             if (it->second != mine) {
@@ -2254,7 +2259,7 @@ int NrSession::build(int argc, char** argv, const std::vector<Step>* prepared_pl
                              "binary dispatches %u. That launch is wrong and it is "
                              "*faster*, which no timing will tell you. Rebuild, or "
                              "pass the matching flag.\n",
-                             path.c_str(), name, it->second, mine);
+                             path.c_str(), name.c_str(), it->second, mine);
                 return 1;
             }
         }
@@ -5011,28 +5016,6 @@ int NrSession::build(int argc, char** argv, const std::vector<Step>* prepared_pl
         keep_tail(wblob);
         wblob.clear();
         timer.mark("weights-upload");
-        // The pre-block's noise features (NR_NOISE_FIELD): a fixed function of pixel,
-        // seed and gain, filled once here into the zeroed regions the lowering put
-        // in the weight blob, by the same GLSL the pre-block would run per frame.
-        if (!g_noise_jobs.empty()) {
-            nrvk::Kernel nk;
-            nk.create(ctx, spv_dir + "/g_noisefield.spv", {wgt.handle}, uint32_t(sizeof(NoiseJob)));
-            ctx.one_shot([&](VkCommandBuffer cmd) {
-                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, nk.pipeline);
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, nk.layout, 0, 1, &nk.set, 0, nullptr);
-                for (const NoiseJob& j : g_noise_jobs) {
-                    vkCmdPushConstants(cmd, nk.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof j, &j);
-                    vkCmdDispatch(cmd, (j.width + 7u) / 8u, (j.height + 7u) / 8u, 1);
-                }
-                VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-                mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-                mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                                     0, 1, &mb, 0, nullptr, 0, nullptr);
-            });
-            nk.destroy();
-            timer.mark("noise-field");
-        }
 
         // **The arena is not seeded here.** It used to be filled with a plausible
         // activation distribution, one staged 16 MB upload at a time, because an
@@ -5271,6 +5254,26 @@ int NrSession::build(int argc, char** argv, const std::vector<Step>* prepared_pl
         nr::g_build_pipes_total = uint32_t(kinds.size()); nr::g_build_pipes_done = 0; nr::g_build_stage = 4;
     }
     create_kernels(spv_dir, g_chain_kern);
+    // The pre-block's noise features are filled only after all selected pipelines pass preflight.
+    if (!g_noise_jobs.empty()) {
+        nrvk::Kernel nk;
+        nk.create(ctx, spv_dir + "/g_noisefield.spv", {wgt.handle}, uint32_t(sizeof(NoiseJob)));
+        ctx.one_shot([&](VkCommandBuffer cmd) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, nk.pipeline);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, nk.layout, 0, 1, &nk.set, 0, nullptr);
+            for (const NoiseJob& j : g_noise_jobs) {
+                vkCmdPushConstants(cmd, nk.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof j, &j);
+                vkCmdDispatch(cmd, (j.width + 7u) / 8u, (j.height + 7u) / 8u, 1);
+            }
+            VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+            mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                 0, 1, &mb, 0, nullptr, 0, nullptr);
+        });
+        nk.destroy();
+        timer.mark("noise-field");
+    }
     const size_t cache_bytes = ctx.save_pipeline_cache();
     timer.mark("pipelines");
     nr::g_build_stage = 5;
@@ -5541,6 +5544,13 @@ bool NrSession::make_images(int argc, char** argv) {
 }
 
 void NrSession::create_kernels(const std::string& spv_dir, const std::set<std::string>& chain) {
+    if (!nr::binary::import_enabled()) {
+        // Lowering is authoritative: validate this model/extent's actual kernels before creating any.
+        std::set<std::string> selected;
+        for (const Disp& d : disp) selected.insert("g_" + d.kern + ".spv");
+        if (!g_noise_jobs.empty() || (core && !core->noise.empty())) selected.insert("g_noisefield.spv");
+        nr::detail::require_shader_assets(spv_dir, std::vector<std::string>(selected.begin(), selected.end()));
+    }
     for (const Disp& d : disp) {
         if (kern.count(d.kern)) continue;
 #ifdef NR_NO_MAIN

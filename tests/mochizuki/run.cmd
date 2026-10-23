@@ -31,11 +31,13 @@ if /i "%~1"=="exposure-recording" goto exposurerecording
 if /i "%~1"=="inline-auto-spin" goto inlineautospin
 if /i "%~1"=="pool-trim" goto pooltrim
 if /i "%~1"=="abi" call :acounit || exit /b 1
+if /i "%~1"=="abi" call :compilepolicy || exit /b 1
 if /i "%~1"=="abi" call :networkmodel || exit /b 1
 if /i "%~1"=="abi" call :exposurerecording || exit /b 1
 if /i "%~1"=="abi" call :inlineautospin || exit /b 1
 if /i "%~1"=="abi" call :pooltrim || exit /b 1
 if /i "%~1"=="aco-unit" goto acounit
+if /i "%~1"=="compile-policy" goto compilepolicy
 if /i "%~1"=="network-model" goto networkmodel
 if /i "%~1"=="windows005" goto windows005
 if /i "%~1"=="inline" goto inline
@@ -320,6 +322,11 @@ exit /b %errorlevel%
 cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /I third_party/mochizuki/windows/src/core tests/mochizuki/network_model.cpp third_party/mochizuki/windows/src/core/nr_native_plan.cpp /Foexports/mochizuki-tests/ /Feexports/mochizuki-tests/network_model.exe || exit /b 1
 exports\mochizuki-tests\network_model.exe || exit /b 1
 exit /b 0
+
+:compilepolicy
+cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS /I OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler /I exports/mochizuki-toolchain/Vulkan-Headers-e3b1eec08173d6b825cd3ac88c885a63b621504a/include /I third_party/mochizuki/windows/src/core tests/mochizuki/compile_policy.cpp /Foexports/mochizuki-tests/compile_policy.obj /Feexports/mochizuki-tests/compile_policy.exe || exit /b 1
+exports\mochizuki-tests\compile_policy.exe exports\mochizuki-tests
+exit /b %errorlevel%
 
 :acounit
 cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS /I exports/mochizuki-toolchain/Vulkan-Headers-e3b1eec08173d6b825cd3ac88c885a63b621504a/include /I third_party/mochizuki/windows/src/core tests/mochizuki/aco.cpp /Foexports/mochizuki-tests/aco.obj /Feexports/mochizuki-tests/aco.exe || exit /b 1

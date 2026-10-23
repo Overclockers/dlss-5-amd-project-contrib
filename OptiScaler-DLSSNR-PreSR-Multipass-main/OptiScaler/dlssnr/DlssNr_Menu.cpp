@@ -742,8 +742,9 @@ static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const 
             MenuUi::TextWrapped("Inline path: whole chain on compute");
         else if (timing.inline_path == 2)
             MenuUi::TextWrapped("Inline path: segmented (%s)", timing.inline_path_why[0] ? timing.inline_path_why : "?");
-        if (timing.aco_requested)
-            MenuUi::TextWrapped("ACO requested, effective %u. %s", timing.aco_effective, timing.aco_fallback);
+        if (timing.aco_requested || timing.aco_fallback[0])
+            MenuUi::TextWrapped("PAL import: requested %u, effective %u. %s", timing.aco_requested,
+                                timing.aco_effective, timing.aco_fallback);
         if (timing.frame_w) {
             MenuUi::TextWrapped("Active model: %s", timing.network_effective ? "310.9.16" : "310.8.0");
             if (timing.network_requested != timing.network_effective)

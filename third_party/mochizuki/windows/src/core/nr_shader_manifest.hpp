@@ -1,12 +1,15 @@
 #pragma once
 #include <charconv>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <istream>
 #include <limits>
 #include <map>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace nr::detail {
 // A nonnumeric version token deliberately stops the pre-v2 reader before it
@@ -53,4 +56,50 @@ inline std::map<std::string, uint32_t> read_shader_manifest(std::istream& input)
         throw std::runtime_error("unsupported shader math profile");
     return values;
 }
+// Both import and driver-compile modes use this network corpus, never the native shell directory.
+inline std::filesystem::path network_shader_directory(const std::filesystem::path& native,
+                                                       const std::string& bundle) {
+    return bundle.empty() ? native : std::filesystem::path(bundle) / "shaders";
+}
+
+template<class Constants>
+inline std::map<std::string, uint32_t> require_linux_shader_bundle(
+    const std::filesystem::path& shaders, const std::string& accumulation, const Constants& expected) {
+    std::error_code ec;
+    if (!std::filesystem::is_directory(shaders, ec))
+        throw std::runtime_error("Linux SPIR-V bundle: missing directory " + shaders.string());
+    std::ifstream policy(shaders / "accumulation.txt");
+    std::string value, extra;
+    if (!(policy >> value) || value != accumulation || (policy >> extra))
+        throw std::runtime_error("Linux SPIR-V bundle: missing or mismatched accumulation marker in " + shaders.string());
+    std::ifstream manifest(shaders / "shader-constants.txt");
+    if (!manifest)
+        throw std::runtime_error("Linux SPIR-V bundle: missing shader-constants.txt in " + shaders.string());
+    const auto constants = read_shader_manifest(manifest);
+    for (const auto& [key, value] : expected) {
+        const auto found = constants.find(key);
+        if (found == constants.end() || found->second != value)
+            throw std::runtime_error("Linux SPIR-V bundle: constant mismatch: " + std::string(key) + " in " + shaders.string());
+    }
+    return constants;
+}
+
+inline void require_shader_assets(const std::filesystem::path& directory,
+                                  const std::vector<std::string>& names) {
+    for (const auto& name : names) {
+        const auto path = directory / name;
+        std::error_code ec;
+        const auto bytes = std::filesystem::file_size(path, ec);
+        if (!std::filesystem::is_regular_file(path, ec) || ec)
+            throw std::runtime_error("Linux SPIR-V bundle: missing required shader: " + path.string());
+        uint32_t header[5]{};
+        std::ifstream input(path, std::ios::binary);
+        input.read(reinterpret_cast<char*>(header), sizeof header);
+        if (bytes < sizeof header || bytes % sizeof(uint32_t) || !input || header[0] != 0x07230203u ||
+            (header[1] & 0xff0000ffu) || header[1] < 0x00010000u || header[1] > 0x00010600u ||
+            !header[3] || header[4])
+            throw std::runtime_error("Linux SPIR-V bundle: invalid required shader: " + path.string());
+    }
+}
+
 } // namespace nr::detail

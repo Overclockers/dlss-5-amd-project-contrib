@@ -1277,13 +1277,13 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
     // development tree has build/ and artifacts/ at its root instead.
     const auto data = std::filesystem::is_directory(root / "dlssnr-amd") ? root / "dlssnr-amd" : root;
     const bool installed = data != root;
-    // The ACO network (nr_pipeline_binary.hpp) needs a device created with pipeline binaries; one that
-    // was not (a game's device made before we could add them) builds with the driver's compiler.
-    if (!nr::binary::directory().empty() && !nr::binary::enabled(host.device))
+    // Only binary import needs device enablement. Compile-only keeps the Linux graph directory.
+    const bool compile_only = !nr::binary::import_enabled();
+    if (!compile_only && !nr::binary::directory().empty() && !nr::binary::enabled(host.device))
         nr::binary::disable("the device was created without pipeline binaries");
     const std::string aco = nr::binary::directory();
     const auto native_shaders = installed ? data / "shaders" : root / "build";
-    const auto network_shaders = !aco.empty() ? std::filesystem::path(aco) / "shaders" : native_shaders;
+    const auto network_shaders = nr::detail::network_shader_directory(native_shaders, aco);
     // Shaders are read from inside the NR root, or from the ACO bundle when one is in use.
     const auto inside = [&](const std::filesystem::path& p) {
         for (const auto& base : {root, aco.empty() ? root : std::filesystem::canonical(aco)}) {
@@ -1292,6 +1292,56 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
         }
         return false;
     };
+    if (compile_only && aco.empty())
+        throw std::runtime_error("Linux SPIR-V driver compile requires a configured bundle; Windows network shaders are not a fallback");
+    auto selected_network_shaders = network_shaders;
+    if (config.accumulation == "round-fp16") selected_network_shaders /= "round-fp16";
+    const auto temporal_shaders = temporal_config.shaders.empty()
+        ? (!aco.empty() ? network_shaders / "temporal"
+           : installed ? data / "shaders/temporal" : root / "build/windows/rdna4/network/temporal")
+        : std::filesystem::path(temporal_config.shaders);
+    if (compile_only) {
+        nr::detail::require_linux_shader_bundle(selected_network_shaders, config.accumulation, host_shader_constants());
+        if (config.require_style_grade)
+            nr::detail::require_shader_assets(selected_network_shaders, {"g_fswinimagepost32_grade.spv"});
+        if (mask_config.width) {
+            const auto mask_shaders = network_shaders / "runtime";
+            std::ifstream mask_manifest(mask_shaders / "shader-constants.txt");
+            std::ifstream network_manifest(selected_network_shaders / "shader-constants.txt");
+            if (!mask_manifest || nr::detail::read_shader_manifest(mask_manifest) != nr::detail::read_shader_manifest(network_manifest))
+                throw std::runtime_error("Linux SPIR-V control-mask shader constants differ from the network");
+            nr::detail::require_shader_assets(mask_shaders,
+                {config.accumulation == "fp32" ? "mask_pre_fp32.spv" : "mask_pre_round.spv"});
+        }
+        if (temporal_config.enable) {
+            // A caller override must still resolve to this Linux bundle, not native Windows image variants.
+            if (std::filesystem::canonical(temporal_shaders) != std::filesystem::canonical(network_shaders / "temporal"))
+                throw std::runtime_error("Linux SPIR-V temporal shaders must come from the configured bundle");
+            std::ifstream manifest(temporal_shaders / "shader-constants.txt");
+            std::ifstream network_manifest(selected_network_shaders / "shader-constants.txt");
+            if (!manifest || nr::detail::read_shader_manifest(manifest) != nr::detail::read_shader_manifest(network_manifest))
+                throw std::runtime_error("Linux SPIR-V temporal shader constants differ from the network");
+            std::vector<std::string> required = {"temporal_pre_fp32.spv", "temporal_post_fp32.spv",
+                                                  "motion_luma.spv", "motion_estimate.spv"};
+            if (config.require_style_grade) required.push_back("temporal_post_fp32_grade.spv");
+            nr::detail::require_shader_assets(temporal_shaders, required);
+            if (std::filesystem::exists(temporal_shaders / "temporal_pre_fp32nh.spv"))
+                nr::detail::require_shader_assets(temporal_shaders, {"temporal_pre_fp32nh.spv"});
+            const bool hp_requested = std::getenv("NR_HPASS") && std::atoi(std::getenv("NR_HPASS"));
+            const bool h16_requested = std::getenv("NR_HIST16") && std::atoi(std::getenv("NR_HIST16")) && config.max_passes == 1;
+            for (const char* name : {"temporal_pre_fp32hp.spv", "temporal_pre_fp32nhhp.spv",
+                                     "temporal_post_fp32hp.spv", "temporal_post_fp32h16.spv"}) {
+                const bool requested = std::string(name).find("h16") != std::string::npos ? h16_requested : hp_requested;
+                if (!requested || !std::filesystem::exists(temporal_shaders / name)) continue;
+                nr::detail::require_shader_assets(temporal_shaders, {name});
+                if (config.require_style_grade && std::string(name).rfind("temporal_post_", 0) == 0) {
+                    auto grade = std::string(name);
+                    grade.insert(grade.size() - 4, "_grade");
+                    nr::detail::require_shader_assets(temporal_shaders, {grade});
+                }
+            }
+        }
+    }
     if (!std::isfinite(config.model_scale) || config.model_scale <= 0.f || config.model_scale > 1.f)
         throw std::invalid_argument("model_scale must be in (0, 1]");
     if (config.max_passes < 1 || config.max_passes > 30)
@@ -1444,7 +1494,8 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
     const std::filesystem::path i4root = data / "int4";
     if (int4_env == "1") {
         std::error_code ec;
-        const char* missing = network == NetworkModel::Small ? "the small model has no int4 network"
+        const char* missing = compile_only ? "INT4 is unavailable with Linux SPIR-V driver compilation"
+            : network == NetworkModel::Small ? "the small model has no int4 network"
             : !installed ? "not an installed tree"
             : !std::filesystem::is_directory(i4root / "shaders" / "temporal", ec) || !std::filesystem::is_directory(i4root / "vit", ec) ||
                       !std::filesystem::is_regular_file(i4root / "settings.txt", ec) ? "dlssnr-amd/int4/ is incomplete"
@@ -1987,8 +2038,9 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
     };
     if (bool(mask_config.width) != bool(mask_config.height))
         throw std::invalid_argument("both control mask dimensions are required");
+    const auto mask_shaders = compile_only ? network_shaders / "runtime" : adapters;
     if (mask_config.width) {
-        if (config.accumulation == "fp32") require_variant_profile(adapters);
+        if (config.accumulation == "fp32") require_variant_profile(mask_shaders);
         impl_->mask_image=s.ctx.image(mask_config.width,mask_config.height,VK_FORMAT_R32G32B32A32_SFLOAT,true);
         impl_->mask_rect=s.ctx.buffer(24);
         auto& k=impl_->mask_pre;
@@ -1997,12 +2049,12 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
         const std::string pre_name = s.kern.count("fswinimagepreds32nh") ? "fswinimagepreds32nh" : "fswinimagepreds32";
         if (s.kern.count(pre_name)) {
             impl_->original_pre=&s.kern.at(pre_name);
-            k.create(s.ctx,(adapters/"mask_pre_fp32.spv").string(),
+            k.create(s.ctx,(mask_shaders/"mask_pre_fp32.spv").string(),
                 {s.act.handle,s.act.handle,s.wgt.handle,s.wgt.handle,s.wgt.handle,s.act.handle,impl_->mask_rect.handle},
                 sizeof(PushFSwin)+sizeof(PushPreImage),{&s.tex_in,&impl_->mask_image});
         } else if (s.kern.count("imgin16fast")) {
             impl_->original_pre=&s.kern.at("imgin16fast");
-            k.create(s.ctx,(adapters/"mask_pre_round.spv").string(),
+            k.create(s.ctx,(mask_shaders/"mask_pre_round.spv").string(),
                 {s.act.handle,s.wgt.handle,impl_->mask_rect.handle},sizeof(PushImgIn),{&s.tex_in,&impl_->mask_image});
         } else throw std::runtime_error("control mask pre-input variant unavailable");
         impl_->mask_resolve.create(s.ctx,(adapters/"runtime_control_mask.spv").string(),
@@ -2031,10 +2083,7 @@ Runtime::Runtime(const HostDevice& host, const RuntimeConfig& config, const Cont
     if (temporal_config.enable) {
         auto& t = impl_->temporal;
         // The temporal pre/post blocks are network kernels: the ACO bundle's own SPIR-V when it is in use.
-        auto shaders = std::filesystem::canonical(temporal_config.shaders.empty()
-            ? (!aco.empty() ? std::filesystem::path(aco) / "shaders/temporal"
-               : installed ? data / "shaders/temporal" : root / "build/windows/rdna4/network/temporal")
-            : std::filesystem::path(temporal_config.shaders));
+        auto shaders = std::filesystem::canonical(temporal_shaders);
 #if NR_INT4
         // The int4 network's temporal pre/post variants are built with its defines (hard-swish, whose scale
         // NR_HS_FOLDPP folds into the pre/post weights): int4/shaders/temporal, never the default ones.
