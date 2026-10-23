@@ -21,20 +21,15 @@ namespace OptScalerNR.Launcher
             _styleInButton = _window.FindName("StyleInButton") as Button;
             if (_styleInButton != null) _styleInButton.Click += delegate { ShowShareCode(true); };
 
-            // The XAML-declared GhostButton style's DynamicResource template does not resolve
-            // on this XamlReader path (buttons fall back to the default chrome with its white
-            // bevel ring). Re-apply the implicit Button style from the LIVE resource tree in
-            // code — the exact path the (visually clean) dialog buttons use.
-            var implicitStyle = _window.FindResource(typeof(Button)) as Style;
-            var accent = TryFindResourceString("ThemeAccent");
-            foreach (var b in new[] { _styleOutButton, _styleInButton })
-            {
-                if (b == null) continue;
-                b.Style = implicitStyle;
-                b.SetResourceReference(System.Windows.Controls.Control.BackgroundProperty, "ThemeAccent");
-                b.SetResourceReference(System.Windows.Controls.Control.BorderBrushProperty, "ThemeAccent");
-                b.Foreground = System.Windows.Media.Brushes.White;
-            }
+            // The XAML-declared GhostButton style's DynamicResource TEMPLATE setter does not
+            // resolve on this XamlReader path (buttons fall back to the default chrome with its
+            // white bevel ring). Inject MaterialButtonTemplate as a LOCAL value instead — local
+            // values beat style setters and resolve against the live tree. Everything else
+            // (size, padding, colors) keeps the original GhostButton look.
+            var material = _window.FindResource("MaterialButtonTemplate") as ControlTemplate;
+            if (material != null)
+                foreach (var b in new[] { _mochiShareCodeButton, _styleOutButton, _styleInButton })
+                    if (b != null) b.Template = material;
         }
 
         void RefreshShareCode(bool enabled)
