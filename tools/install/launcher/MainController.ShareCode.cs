@@ -80,7 +80,7 @@ namespace OptScalerNR.Launcher
         }
 
         // MZ code inside arbitrary pasted text (share text with a pitch line, chat quotes, anything)
-        static readonly Regex CodeInText = new Regex(@"MZ[12]:[^;\r\n]*;[0-9A-Fa-f]{4}", RegexOptions.Compiled);
+        static readonly Regex CodeInText = new Regex(@"MZ[1-3]:[^;\r\n]*;[0-9A-Fa-f]{4}", RegexOptions.Compiled);
         static string ExtractCode(string text)
         {
             if (text == null) return null;
