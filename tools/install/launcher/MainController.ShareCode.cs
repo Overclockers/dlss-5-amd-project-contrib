@@ -20,6 +20,21 @@ namespace OptScalerNR.Launcher
             if (_styleOutButton != null) _styleOutButton.Click += delegate { ShowShareCode(false); };
             _styleInButton = _window.FindName("StyleInButton") as Button;
             if (_styleInButton != null) _styleInButton.Click += delegate { ShowShareCode(true); };
+
+            // The XAML-declared GhostButton style's DynamicResource template does not resolve
+            // on this XamlReader path (buttons fall back to the default chrome with its white
+            // bevel ring). Re-apply the implicit Button style from the LIVE resource tree in
+            // code — the exact path the (visually clean) dialog buttons use.
+            var implicitStyle = _window.FindResource(typeof(Button)) as Style;
+            var accent = TryFindResourceString("ThemeAccent");
+            foreach (var b in new[] { _styleOutButton, _styleInButton })
+            {
+                if (b == null) continue;
+                b.Style = implicitStyle;
+                b.SetResourceReference(System.Windows.Controls.Control.BackgroundProperty, "ThemeAccent");
+                b.SetResourceReference(System.Windows.Controls.Control.BorderBrushProperty, "ThemeAccent");
+                b.Foreground = System.Windows.Media.Brushes.White;
+            }
         }
 
         void RefreshShareCode(bool enabled)
