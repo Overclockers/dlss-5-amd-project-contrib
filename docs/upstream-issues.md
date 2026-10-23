@@ -62,6 +62,49 @@ SoftDefault,显式值持久化并在此后启动被尊重。唯一无门的是 F
 auto=从未显式设置(门控自动调整,显式设一次即固定);ini 显式值仍在而行为相反=Int8
 强制(看日志);两者皆非=新问题,收日志。
 
+## 上游同步审计(2026-10-23,9df512d → 990ff98,19 commits)
+
+上游快照落后 19 个提交,已全量比对。结论:**我们修复的 5 个问题上游全部未修**(still-broken),
+上游有 3 个新修复我们缺(we-lack)。无一方方案需替换——上游的新代码不与我们的门控冲突,
+我们的 5 个修复保持不动。
+
+### A. 我们已修、上游仍未修(提 issue 的候选,附下游证据)
+
+| # | 问题 | 上游位置(990ff98) | 下游修复 |
+|---|---|---|---|
+| U1 | 驱动 DLL 无条件钩子 → AC 击杀 | fsr4/FSR4DriverProvider.cpp:181-182 | e9767600(Fsr4Preset/Fsr4Model has_value 门) |
+| U1b | SDK DLL 无条件钩子(同 AC 面 + ZZZ 卡顿源) | proxies/FfxApi_Proxy.h:285-286,433-434 | 85df65da(同款门控,双 DLL 四处) |
+| U2 | XeLL 配对无版本校验 → 旧栈崩 | framegen/xefg/XeFG_Dx12.cpp:110-112 | 3182b248(BundledVersion 比对) |
+| U3 | Win10 Agility 0<615 陷阱 | dllmain.cpp:1160-1167(无 >0 下限) | 2138e127(gameAgilityVersion > 0 门) |
+| U4 | FsrAgilitySDKUpgrade WithDefault{false} 显式值存不住 | Config.h:485 | 2138e127(改 NoDefault) |
+
+注:上游 d8aebe4 "Improve auto model selection" 给 hkIsSupported 加了 DetectedModel() 回退,
+**不是** ZZZ 卡顿修复——它仍每次调用 o_IsSupported、无缓存、钩子仍无条件安装;只改了
+Auto 时的模型选择策略(INT8 检测到就当已选)。与我们的门控不冲突,也不构成替换方案。
+
+### B. 上游新修复、我们缺(移植候选)
+
+| # | 上游提交 | 内容 | 移植判断 |
+|---|---|---|---|
+| P1 | d06f31e 菜单 >8 缓冲区崩溃 | 数组 8→16(DXGI 上限),blur 描述符 20→36,拒绝超大链,越界帧跳过 | **应移植**:我们 NUM_BACK_BUFFERS=8,9-16 缓冲区链菜单直接不可用;已有越界守卫但容量不足 |
+| P2 | fa44a4a Vulkan RDR2 Reflex/FSRFG 崩溃 | KHR/EXT 别名解析设备函数 + vkSignalSemaphore[KHR] 时间线信号 + vkAcquireNextImage2KHR FG 路由 | **应移植**:5 文件(hooks/Vulkan_Hooks.{h,cpp}、input_reflex{,_vk}.cpp、nvapi_calls.cpp);我们有 Vulkan 用户 |
+| P3 | 33e434e DX12 FSR4 交换链升级 | FrameGeneration 选项链加 FrameGenerationSwapchain next 项 | **应移植**:3 行改动,我们 FSR4DriverProviderDx12.cpp 只传 frameGeneration |
+| P4 | d8aebe4 FSR4 Auto 模型选择改进 | DetectedModel() 回退 + FP8 抑制 | **暂缓**:与我们的门控设计重叠(Auto 不挂钩),移植需评估"显式选择才挂钩"与"检测即选择"的交互;上游仍在活跃演化此文件 |
+
+### C. 上游其余新提交(记录,暂不动)
+
+- b686ef4/824a7b7/62887bf:FSR4 Vulkan 支持、FG 隐藏、VK 管线 workaround——大特性,待下次同步窗口
+- d1a146a AL2→AL2 FSRFG 转换修复、223cf6b Enshrouded MV 修复、0778a10 FSRFG Vulkan vsync——游戏专项,有用户报告再移
+- c2529ed/c471428 菜单 upscale ratio 显示、a8d0f0a flip meter、03e6ef0 FSR4 水印切换、c220ad9 UI——低风险小改进,可随下次同步顺手带
+- 5dfedd6 fakenvapi 简化、a79c2f3 移除非 LL 路径、42d6162 回退消息修复——结构性改动,同步时需评估与我们 fork 的冲突
+
+### D. 行动项
+
+1. **提 issue(高优先)**:U1/U1b(AC 击杀,有星铁现场)、U3+U4(Win10 Agility 死循环)——上游修复成本低
+2. **提 issue(中优先)**:U2(XeLL 配对)、U6(DxgiSpoofing 无提示覆盖)
+3. **移植 P1-P3**(小改动,低风险):菜单缓冲区、Vulkan RDR2、FSR4 交换链
+4. **下次同步窗口**:评估 b686ef4(Vulkan FSR4)与 P4(d8aebe4)的合并策略
+
 ## 非上游问题的说明
 
 菜单虚基下转崩溃(bdd11179)与 `_ffxFGIndex` 越界是**我们集成时引入**(上游无此代码/上游本有上界保护),不属于上游问题,已在 decisions.md 记录。
