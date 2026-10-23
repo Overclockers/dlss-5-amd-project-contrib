@@ -201,14 +201,12 @@ void* __stdcall NvApiHooks::hkNvAPI_QueryInterface(unsigned int InterfaceId)
     // a Reflex query would disable it, so forward to the real function table.
     if (State::Instance().externalFrameGeneration)
         return o_NvAPI_QueryInterface ? o_NvAPI_QueryInterface(InterfaceId) : nullptr;
-#ifdef LOW_LATENCY_INPUTS
     // Frame generation reports its multiplier through Reflex Sync, OptiScaler's own FG output reports its own
     if (InterfaceId == GET_ID(NvAPI_D3D_SetReflexSync))
     {
         if (auto hooked = ReflexHooks::getHookedReflexSync(o_NvAPI_QueryInterface))
             return hooked;
     }
-#endif
 
 
     if (!o_NvAPI_QueryInterface)
@@ -231,16 +229,13 @@ void* __stdcall NvApiHooks::hkNvAPI_QueryInterface(unsigned int InterfaceId)
         InterfaceId == GET_ID(NvAPI_D3D_GetLatency) || InterfaceId == GET_ID(NvAPI_D3D_SetLatencyMarker) ||
         InterfaceId == GET_ID(NvAPI_D3D12_SetAsyncFrameMarker) || InterfaceId == GET_ID(NvAPI_Vulkan_GetLatency) ||
         InterfaceId == GET_ID(NvAPI_Vulkan_SetLatencyMarker) || InterfaceId == GET_ID(NvAPI_Vulkan_SetSleepMode)
-#ifdef LOW_LATENCY_INPUTS
         || InterfaceId == GET_ID(NvAPI_D3D_GetSleepStatus) ||
         InterfaceId == GET_ID(NvAPI_Vulkan_InitLowLatencyDevice) ||
         InterfaceId == GET_ID(NvAPI_Vulkan_DestroyLowLatencyDevice) ||
         InterfaceId == GET_ID(NvAPI_Vulkan_GetSleepStatus) || InterfaceId == GET_ID(NvAPI_Vulkan_Sleep) ||
         InterfaceId == GET_ID(NvAPI_Vulkan_NotifyOutOfBandVkQueue)
-#endif
     )
     {
-#ifdef LOW_LATENCY_INPUTS
         if (InterfaceId == GET_ID(NvAPI_D3D_SetSleepMode))
             return InputReflex::D3D_SetSleepMode;
         if (InterfaceId == GET_ID(NvAPI_D3D_GetSleepStatus))
@@ -269,7 +264,6 @@ void* __stdcall NvApiHooks::hkNvAPI_QueryInterface(unsigned int InterfaceId)
             return InputReflex::Vulkan_SetLatencyMarker;
         else if (InterfaceId == GET_ID(NvAPI_Vulkan_NotifyOutOfBandVkQueue))
             return InputReflex::Vulkan_NotifyOutOfBandVkQueue;
-#endif
 
         // LOG_DEBUG("counter: {}, hookReflex()", qiCounter);
         ReflexHooks::hookReflex(o_NvAPI_QueryInterface);

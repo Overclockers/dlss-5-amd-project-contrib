@@ -1322,7 +1322,6 @@ class Config
     CustomOptional<bool> FN_ForceLatencyFlex { false };
     CustomOptional<LFXMode> FN_LatencyFlexMode { LFXMode::Conservative };
     CustomOptional<ForceReflex> FN_ForceReflex { ForceReflex::InGame };
-    CustomOptional<bool> ImASillyGooseThatIsAboutToMisuseReflex { false };
     CustomOptional<LowLatencyInput> LowLatencyInput { LowLatencyInput::Auto };
     CustomOptional<LowLatencyMode> LowLatencyOutput { LowLatencyMode::Auto };
 

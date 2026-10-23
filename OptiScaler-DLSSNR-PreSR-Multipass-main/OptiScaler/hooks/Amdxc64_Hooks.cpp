@@ -185,7 +185,6 @@ HRESULT STDMETHODCALLTYPE Amdxc64Hooks::hkAmdExtD3DCreateInterface(IUnknown* pOu
         return S_OK;
     }
 
-#ifdef LOW_LATENCY_INPUTS
     else if (riid == IID_IAmdExtAntiLagApi && giveGameAl2Proxy)
     {
         if (amdExtAntiLagApi == nullptr)
@@ -198,18 +197,6 @@ HRESULT STDMETHODCALLTYPE Amdxc64Hooks::hkAmdExtD3DCreateInterface(IUnknown* pOu
 
         return S_OK;
     }
-#else
-    else if (riid == IID_IAmdExtAntiLagApi && giveGameAl2Proxy &&
-             (StreamlineHooks::isReflexHooked() || State::Instance().activeFgInput == FGInput::NvngxFG ||
-              State::Instance().activeFgInput == FGInput::DLSSG))
-    {
-        *ppvObject = nullptr;
-
-        LOG_INFO("Killing native AL2");
-
-        return S_OK;
-    }
-#endif
 
     auto result = original(pOuter, riid, ppvObject);
 

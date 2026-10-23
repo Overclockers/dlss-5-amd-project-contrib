@@ -1483,8 +1483,6 @@ void CheckMemoryForProxies()
     XeFGInputs::Hook(gameXeFG);
 
 
-    XellHooks::Hook();
-
     NVNGXProxy::InitNVNGX();
 }
 

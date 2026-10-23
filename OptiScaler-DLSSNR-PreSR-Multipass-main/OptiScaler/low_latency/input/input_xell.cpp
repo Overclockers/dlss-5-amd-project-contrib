@@ -9,12 +9,7 @@
 // The real XeLL's function, its exports go to OptiScaler's
 static FARPROC RealExport(const char* name)
 {
-#ifdef LOW_LATENCY_INPUTS
     return (FARPROC) XeLLProxy::RealFunction(name);
-#else
-    auto module = XeLLProxy::Module();
-    return module != nullptr ? KernelBaseProxy::GetProcAddress_()(module, name) : nullptr;
-#endif
 }
 
 // The contexts OptiScaler gave out. A context the real XeLL made before it was redirected goes to it untouched.
@@ -61,12 +56,7 @@ bool InputXeLL::CreateReal(xell_input_handle_t context)
     if (context->real != nullptr)
         return true;
 
-#ifdef LOW_LATENCY_INPUTS
     auto create = XeLLProxy::RealD3D12CreateContext();
-#else
-    // Without the input redirect the loaded module's export is the real XeLL
-    auto create = (PFN_xellD3D12CreateContext) RealExport("xellD3D12CreateContext");
-#endif
 
     if (create == nullptr || create(context->device, &context->real) != XELL_RESULT_SUCCESS)
     {
@@ -91,12 +81,7 @@ xell_result_t InputXeLL::SetRealSleepMode(xell_input_handle_t context)
     if (auto limit = fpsLimitUs.load(); limit != 0 && !context->inputContext.localContext)
         params.minimumIntervalUs = limit;
 
-#ifdef LOW_LATENCY_INPUTS
     return XeLLProxy::RealSetSleepMode()(context->real, &params);
-#else
-    auto setSleepMode = (PFN_xellSetSleepMode) RealExport("xellSetSleepMode");
-    return setSleepMode != nullptr ? setSleepMode(context->real, &params) : XELL_RESULT_ERROR_NOT_IMPLEMENTED;
-#endif
 }
 
 xell_result_t InputXeLL::D3D12CreateLocalContext(ID3D12Device* device, xell_input_handle_t* out_context)
@@ -507,7 +492,6 @@ xell_result_t InputXeLL::SetGeneratedFramesCount(xell_input_handle_t context, ui
                          : XELL_RESULT_SUCCESS;
 }
 
-#ifdef LOW_LATENCY_INPUTS
 
 // A context OptiScaler didn't give out goes to the real XeLL as is
 #define FORWARD_FOREIGN(name, context, ...)                                                                            \
@@ -628,4 +612,3 @@ XELL_EXPORT uint32_t xellAILGetVersion() { return InputXeLL::AILGetVersion(); }
 
 XELL_EXPORT bool xellAILIsSupportedDevice(uint32_t param1) { return InputXeLL::AILIsSupportedDevice(param1); }
 
-#endif

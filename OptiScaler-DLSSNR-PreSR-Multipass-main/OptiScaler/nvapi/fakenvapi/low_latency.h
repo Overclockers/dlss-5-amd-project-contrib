@@ -49,7 +49,6 @@ class LowLatency
         }
     }
     bool get_low_latency_tech_context(void** low_latency_tech_context, LowLatencyMode* low_latency_tech);
-    bool set_low_latency_tech_mode(IUnknown* device, LowLatencyMode low_latency_tech);
 
     bool is_low_latency_enabled();
 

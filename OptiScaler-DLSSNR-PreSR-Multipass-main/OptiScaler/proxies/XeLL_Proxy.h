@@ -8,7 +8,6 @@
 
 #include <proxies/Ntdll_Proxy.h>
 #include <proxies/KernelBase_Proxy.h>
-#include <hooks/Xell_Hooks.h>
 
 #include <xell.h>
 #include <xell_d3d12.h>
@@ -199,7 +198,6 @@ class XeLLProxy
 
     static bool InitXeLLInput()
     {
-#ifdef LOW_LATENCY_INPUTS
         // External frame generation owns the game's XeLL: no redirect, its calls stay native so an
         // external unlocker keeps working on an untouched libxell
         if (State::Instance().externalFrameGeneration)
@@ -209,12 +207,10 @@ class XeLLProxy
 
         if (_memoryDll != nullptr && _memoryDll != _dll)
             RedirectToInput(_memoryDll);
-#endif
 
         return true;
     }
 
-#ifdef LOW_LATENCY_INPUTS
     // Only called on the real XeLL by the low latency inputs
     inline static PVOID _xellQueryInterface = nullptr;
     inline static PVOID _xellGetContextParameterP = nullptr;
@@ -248,10 +244,8 @@ class XeLLProxy
 
     inline static std::recursive_mutex _redirectMutex;
     inline static std::vector<HMODULE> _redirected;
-#endif
 
   public:
-#ifdef LOW_LATENCY_INPUTS
     // Every libxell's calls go to OptiScaler's XeLL exports, also the ones from libraries that import it or got it
     // before OptiScaler, so the game's XeLL is the low latency input. The first one becomes the real XeLL, reached
     // through the trampolines, any other one goes to OptiScaler's entirely.
@@ -312,7 +306,6 @@ class XeLLProxy
 
         return _dll != nullptr && _dll != dllModule ? (PVOID) KernelBaseProxy::GetProcAddress_()(_dll, name) : nullptr;
     }
-#endif
 
     static HMODULE Module() { return _dll; }
     static std::wstring Module_Path() { return _dllPath; }
@@ -364,13 +357,11 @@ class XeLLProxy
                     (PFN_xellGetLastPresentStartFrameId) KernelBaseProxy::GetProcAddress_()(
                         _dll, "xellGetLastPresentStartFrameId");
 
-#ifdef LOW_LATENCY_INPUTS
                 _xellQueryInterface = (PVOID) KernelBaseProxy::GetProcAddress_()(_dll, "xellQueryInterface");
                 _xellGetContextParameterP =
                     (PVOID) KernelBaseProxy::GetProcAddress_()(_dll, "xellGetContextParameterP");
                 _xellSetContextParameterP =
                     (PVOID) KernelBaseProxy::GetProcAddress_()(_dll, "xellSetContextParameterP");
-#endif
             }
         }
 
@@ -442,7 +433,6 @@ class XeLLProxy
         return bundled;
     }
 
-#ifdef LOW_LATENCY_INPUTS
     // We export / implement those functions
     static PFN_xellDestroyContext DestroyContext() { return xellDestroyContext; }
     static PFN_xellSetSleepMode SetSleepMode() { return xellSetSleepMode; }
@@ -472,34 +462,4 @@ class XeLLProxy
     {
         return _xellGetLastPresentStartFrameId;
     }
-#else
-    static PFN_xellDestroyContext DestroyContext() { return _xellDestroyContext; }
-    static PFN_xellSetSleepMode SetSleepMode() { return _xellSetSleepMode; }
-    static PFN_xellGetSleepMode GetSleepMode() { return _xellGetSleepMode; }
-    static PFN_xellSleep Sleep() { return _xellSleep; }
-    static PFN_xellAddMarkerData AddMarkerData() { return _xellAddMarkerData; }
-    static PFN_xellGetVersion GetVersion() { return _xellGetVersion; }
-    static PFN_xellSetLoggingCallback SetLoggingCallback() { return _xellSetLoggingCallback; }
-    static PFN_xellGetFramesReports GetFramesReports() { return _xellGetFramesReports; }
-    static PFN_xellD3D12CreateContext D3D12CreateContext() { return _xellD3D12CreateContext; }
-
-    // Pointing to the actual DLL
-    static PFN_xellDestroyContext RealDestroyContext() { return _xellDestroyContext; }
-    static PFN_xellSetSleepMode RealSetSleepMode() { return _xellSetSleepMode; }
-    static PFN_xellGetSleepMode RealGetSleepMode() { return _xellGetSleepMode; }
-    static PFN_xellSleep RealSleep() { return _xellSleep; }
-    static PFN_xellAddMarkerData RealAddMarkerData() { return _xellAddMarkerData; }
-    static PFN_xellGetVersion RealGetVersion() { return _xellGetVersion; }
-    static PFN_xellSetLoggingCallback RealSetLoggingCallback() { return _xellSetLoggingCallback; }
-    static PFN_xellGetFramesReports RealGetFramesReports() { return _xellGetFramesReports; }
-    static PFN_xellD3D12CreateContext RealD3D12CreateContext() { return _xellD3D12CreateContext; }
-    static PFN_xellD3D12SetAppQueue RealD3D12SetAppQueue() { return _xellD3D12SetAppQueue; }
-    static PFN_xellSetDisplayInfo RealSetDisplayInfo() { return _xellSetDisplayInfo; }
-    static PFN_xellSetFgEnabled RealSetFgEnabled() { return _xellSetFgEnabled; }
-    static PFN_xellSetGeneratedFramesCount RealSetGeneratedFramesCount() { return _xellSetGeneratedFramesCount; }
-    static PFN_xellGetLastPresentStartFrameId RealGetLastPresentStartFrameId()
-    {
-        return _xellGetLastPresentStartFrameId;
-    }
-#endif
 };

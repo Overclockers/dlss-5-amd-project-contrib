@@ -187,7 +187,6 @@ class MenuCommon
     static void RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx);
     static void RenderFsrCommonSettings(RenderMenuContext& ctx);
     static void RenderFramerateSettings(RenderMenuContext& ctx);
-    static void RenderFakenvapiSettings(RenderMenuContext& ctx);
     static void RenderLowLatencySettings(RenderMenuContext& ctx);
     static void RenderActiveImageSettings(RenderMenuContext& ctx);
     static void RenderMagnifierSettings(RenderMenuContext& ctx);

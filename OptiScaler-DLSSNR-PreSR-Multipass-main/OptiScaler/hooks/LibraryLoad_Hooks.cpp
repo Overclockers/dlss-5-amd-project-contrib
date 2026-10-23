@@ -1177,7 +1177,6 @@ bool LibraryLoadHooks::IsApiSetName(const std::wstring_view& n)
 
 void LibraryLoadHooks::AfterLoadLibrary(HMODULE library)
 {
-#ifdef LOW_LATENCY_INPUTS
     if (library == nullptr || State::Instance().isShuttingDown)
         return;
 
@@ -1196,5 +1195,4 @@ void LibraryLoadHooks::AfterLoadLibrary(HMODULE library)
     {
         XeLLProxy::RedirectToInput(library);
     }
-#endif
 }
