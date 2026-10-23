@@ -826,8 +826,8 @@ namespace OptScalerNR.Launcher
                     ? L("导入表候选：" + result.Recommend + "，实际可用性待确认。", "Import candidate: " + result.Recommend + "; compatibility is unverified.")
                     : L("没有足够证据推荐代理，请手动选择。", "Insufficient evidence to recommend a proxy. Choose manually."));
             if (_injectRecommendation != null && !failed && result != null && result.MochizukiInstall != null && result.MochizukiInstall.Detected)
-                _injectRecommendation.Text += "\n" + L("注意：检测到 Mochizuki（DLSSNR-AMD）自己的安装（" + string.Join(", ", result.MochizukiInstall.Files ?? new string[0]) + "），与本项目冲突；安装前会询问是否移走。",
-                    "Warning: a Mochizuki (DLSSNR-AMD) installation is in this folder (" + string.Join(", ", result.MochizukiInstall.Files ?? new string[0]) + "); it conflicts with this project. Installing asks whether to move it aside.");
+                _injectRecommendation.Text += "\n" + L("注意：检测到 Mochizuki（DLSSNR-AMD）自己的安装（" + string.Join(", ", result.MochizukiInstall.Files ?? new string[0]) + "）。同类 NR 模组共存可能冲突；安装器不会移动或删除这些文件。",
+                    "Note: a Mochizuki (DLSSNR-AMD) installation is in this folder (" + string.Join(", ", result.MochizukiInstall.Files ?? new string[0]) + "). The same kind of NR mod twice can conflict; the installer never moves or deletes these files.");
             foreach (var id in new[] { "lmxxf", "daniel", "mochizuki" })
             {
                 BackendInfo capability = null;
@@ -1456,7 +1456,6 @@ namespace OptScalerNR.Launcher
             if (_folderScan != null) _folderScan.Cancel();
             SelectProxy(null);
             _decisions.ForeignProxy.Clear();
-            _decisions.MochizukiInstall = null;
             _resumeInstallAction = "";
             if (game == null || _selectedGame == null || !SameLibraryGame(game, _selectedGame)) _decisions.ModelSourceDll = null;
             _selectedGame = game;
@@ -2199,7 +2198,7 @@ namespace OptScalerNR.Launcher
             }
 
             // Decisions are valid only for this attempt and its explicit needsInput retries.
-            if (!keepModelChoice) { _decisions.ForeignProxy.Clear(); _decisions.MochizukiInstall = null; }
+            if (!keepModelChoice) { _decisions.ForeignProxy.Clear(); }
             var dir = Path.GetDirectoryName(_selectedGame.Exe);
             if (!TryLockTarget(dir))
             {
@@ -2508,25 +2507,6 @@ namespace OptScalerNR.Launcher
             }
         }
 
-        // Mochizuki's own installation in the game folder: never removed without two explicit confirmations here;
-        // "remove" moves the listed files into OptiScaler-mochizuki-backup\<time>\ (the worker deletes nothing).
-        string AskMochizukiInstall(MochizukiInstallInfo info, string fallbackFiles)
-        {
-            var files = info != null && info.Files != null && info.Files.Length > 0 ? string.Join("\n  ", info.Files) : (fallbackFiles ?? "");
-            var proxy = info != null ? info.Proxy : null;
-            var prompt = L("游戏目录里有一份 Mochizuki（DLSSNR-AMD）自己的安装，两套 NR 同时存在会冲突：\n  " + files +
-                    (string.IsNullOrEmpty(proxy) ? "" : "\n\n其中 " + proxy + " 是它的代理 DLL。") +
-                    "\n\n是 = 移走这些文件（移到游戏目录下的 OptiScaler-mochizuki-backup，可手动还原，不会删除）\n否 = 保留，继续安装\n取消 = 停止操作",
-                "This game folder has a Mochizuki (DLSSNR-AMD) installation of its own; two NR installations conflict:\n  " + files +
-                    (string.IsNullOrEmpty(proxy) ? "" : "\n\n" + proxy + " is its proxy DLL.") +
-                    "\n\nYes = move these files aside (into OptiScaler-mochizuki-backup in the game folder; restorable, nothing is deleted)\nNo = keep them and continue\nCancel = abort");
-            var pick = DialogTheme.Show(_window, prompt, _window.Title, MessageBoxButton.YesNoCancel, MessageBoxImage.Warning);
-            if (pick == MessageBoxResult.No) return "keep";
-            if (pick != MessageBoxResult.Yes) return "cancel";
-            var confirm = DialogTheme.Show(_window, L("确认把上面列出的 Mochizuki 文件移到 OptiScaler-mochizuki-backup？", "Move the listed Mochizuki files into OptiScaler-mochizuki-backup?"),
-                _window.Title, MessageBoxButton.OKCancel, MessageBoxImage.Warning);
-            return confirm == MessageBoxResult.OK ? "remove" : "cancel";
-        }
 
         bool AskDecisions(LauncherResult result, string action)
         {
@@ -2547,16 +2527,6 @@ namespace OptScalerNR.Launcher
                         return false;
                     }
                 }
-                else if (d.Id == "mochizukiInstall")
-                {
-                    var pick = AskMochizukiInstall(result.MochizukiInstall, d.File);
-                    if (string.IsNullOrEmpty(pick) || pick == "cancel")
-                    {
-                        if (_statusText != null) _statusText.Text = L("已取消。", "Cancelled.");
-                        return false;
-                    }
-                    _decisions.MochizukiInstall = pick;
-                }
                 else if (d.Id == "lmxxfModels")
                 {
                     _decisions.LmxxfModels = SelectLmxxfModels();
@@ -2570,7 +2540,6 @@ namespace OptScalerNR.Launcher
                 else if (d.Id == "reinspect")
                 {
                     _decisions.ForeignProxy.Clear();
-                    _decisions.MochizukiInstall = null;
                     if (_selectedGame != null) InspectGame(_selectedGame);
                     return true;
                 }

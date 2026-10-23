@@ -1,3 +1,19 @@
+## 2026-10-23 — 启动器 Mochizuki 安装检测降为纯提示(不再弹窗/移走/拦截)
+
+实机截图反馈:f3ac3f7f 的检测把他安装记录里的惰性文件(LICENSE、OptiScaler.ini、nvngx
+备份对、dlssnr-amd\dlssnr-int4.bin——本项目安装器 1231 行复用的同一份模型)全列进"移走"
+清单,且记录文件重复列出。降级为只读提示:mochizukiInstall 字段保留(inspect 后 GUI 显示
+一行说明),删除 mochizukiInstall 决策、AskMochizukiInstall 对话窗、二次确认、
+Move-MochizukiInstall 与 keep 拒绝;安装器不再因他的安装移动或拒绝任何文件,同名代理互踩
+回落到通用 foreignProxy 决策。检测范围收窄为可加载的真冲突文件:三个 marker
+(dlssnr_core.dll/dlssnr_amd.addon64/OptiScaler.asi,任何 OptiScaler/ASI loader 都会捡起)、
+记录中命中本项目候选代理名的 DLL、记录文件本身(清检测标志);只剩惰性残留时不报告。
+本项目自身安装(dxgi.dll、mochizuki-owned.txt、dlssnr-amd\dlssnr.bin)永不触发,已钉测试。
+uninstall 恢复无条件 retire dlssnr_core.dll(f3ac3f7f 之前的行为)。顺手修两个被
+launcher-localization 挡住的旧失败:MainWindow.xaml 硬编码中文 ToolTip(f2668a30,英文
+界面显示中文)改为代码内 L() 双语;模型对话框夹具按 2138e127 的 preparable 语义更正。
+tests/install test_launcher_worker 27 例 + launcher-localization 571 checks 通过。
+
 ## 2026-10-22 — Proton 直连重做:ID3D12DXVKInteropDevice(源码完成、待实机)
 
 取代 bd6d388a 的 gate off。不再找 d3d12.dll 不导出的 vkd3d_get_vk_*,改走 vkd3d-proton 的

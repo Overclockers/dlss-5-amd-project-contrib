@@ -38,7 +38,6 @@ namespace OptScalerNR.Launcher
         [DataMember(Name = "foreignProxy")] public Dictionary<string, string> ForeignProxy;
         [DataMember(Name = "xessGroups")] public string[] XessGroups;
         [DataMember(Name = "modelSourceDll")] public string ModelSourceDll;
-        [DataMember(Name = "mochizukiInstall")] public string MochizukiInstall;
     }
 
     [DataContract]
@@ -72,7 +71,6 @@ namespace OptScalerNR.Launcher
         [DataMember(Name = "detected")] public bool Detected;
         [DataMember(Name = "recorded")] public bool Recorded;
         [DataMember(Name = "files")] public string[] Files;
-        [DataMember(Name = "folders")] public string[] Folders;
         [DataMember(Name = "proxy")] public string Proxy;
     }
 

@@ -547,9 +547,6 @@ function Test-FileLocked([string]$path) {
 # Legacy standalone NR core is not used by our integrated runtimes. Only this
 # exact DLL and DLSS Enabler's disposable logs are retired; keep its DLL/INI.
 # Collect and check locks before changing the installation, including store logs.
-# The launcher's explicit "keep" for a Mochizuki installation in the folder (its
-# dlssnr_core.dll is that installation's core) leaves the DLL where it is.
-$keepMochizukiCore = $launcherDecisions -and [string]$launcherDecisions.mochizukiInstall -eq 'keep'
 $legacyCleanupFiles = @()
 foreach ($legacyRoot in @($game, (Join-Path $game '_storage_'))) {
     if (-not (Test-Path -LiteralPath $legacyRoot -PathType Container)) { continue }
@@ -558,7 +555,6 @@ foreach ($legacyRoot in @($game, (Join-Path $game '_storage_'))) {
     foreach ($file in (Get-ChildItem -LiteralPath $legacyRoot -File -Force)) {
         if ($file.Name -ine 'dlssnr_core.dll' -and
             $file.Name -notmatch '^dlss-enabler(\.[0-9]+)?\.log(\.[0-9]+)?$') { continue }
-        if ($keepMochizukiCore -and $file.Name -ieq 'dlssnr_core.dll') { continue }
         try { $legacyCleanupFiles += Assert-LmxxfUnlinkedPath $file.FullName }
         catch { Write-Warning "Legacy cleanup skipped linked file: $($file.FullName)" }
     }
