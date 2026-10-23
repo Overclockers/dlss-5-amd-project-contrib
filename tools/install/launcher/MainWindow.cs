@@ -148,6 +148,13 @@ namespace OptScalerNR.Launcher
 
         internal static Window Create(string[] args, string settingsDirectory)
         {
+            // Merge the theme BEFORE the window XAML is parsed: GhostButton's
+            // Template={DynamicResource MaterialButtonTemplate} does not re-resolve for a
+            // dictionary merged after XamlReader.Load in this path, and the buttons fall back
+            // to the default chrome (the white bevel ring). At app level the lookup succeeds
+            // during parsing itself.
+            if (Application.Current != null)
+                Application.Current.Resources.MergedDictionaries.Add(DialogTheme.Resources());
             Window window;
             using (var stream = Program.OpenXaml("MainWindow.xaml"))
                 window = (Window)XamlReader.Load(stream);
