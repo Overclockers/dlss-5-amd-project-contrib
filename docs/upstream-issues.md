@@ -86,12 +86,27 @@ Auto 时的模型选择策略(INT8 检测到就当已选)。与我们的门控�
 
 | # | 上游提交 | 内容 | 移植判断 |
 |---|---|---|---|
-| P1 | d06f31e 菜单 >8 缓冲区崩溃 | 数组 8→16(DXGI 上限),blur 描述符 20→36,拒绝超大链,越界帧跳过 | **应移植**:我们 NUM_BACK_BUFFERS=8,9-16 缓冲区链菜单直接不可用;已有越界守卫但容量不足 |
-| P2 | fa44a4a Vulkan RDR2 Reflex/FSRFG 崩溃 | KHR/EXT 别名解析设备函数 + vkSignalSemaphore[KHR] 时间线信号 + vkAcquireNextImage2KHR FG 路由 | **应移植**:5 文件(hooks/Vulkan_Hooks.{h,cpp}、input_reflex{,_vk}.cpp、nvapi_calls.cpp);我们有 Vulkan 用户 |
-| P3 | 33e434e DX12 FSR4 交换链升级 | FrameGeneration 选项链加 FrameGenerationSwapchain next 项 | **应移植**:3 行改动,我们 FSR4DriverProviderDx12.cpp 只传 frameGeneration |
-| P4 | d8aebe4 FSR4 Auto 模型选择改进 | DetectedModel() 回退 + FP8 抑制 | **暂缓**:与我们的门控设计重叠(Auto 不挂钩),移植需评估"显式选择才挂钩"与"检测即选择"的交互;上游仍在活跃演化此文件 |
+| P1 | d06f31e 菜单 >8 缓冲区崩溃 | 数组 8→16(DXGI 上限),blur 描述符 20→36,拒绝超大链,越界帧跳过 | **已移植**(a7537612):NUM_BACK_BUFFERS 8→16 + MaxBackBuffers 8→16;下游越界守卫原已存在 |
+| P2 | fa44a4a Vulkan RDR2 Reflex/FSRFG 崩溃 | KHR/EXT 别名解析设备函数 + vkSignalSemaphore[KHR] 时间线信号 + vkAcquireNextImage2KHR FG 路由 | **已移植**(a7537612):5 文件全量;SignalSemaphore 按设备解析 core/KHR,GetDeviceProcAddr 带 KHR/EXT 回退 |
+| P3 | 33e434e DX12 FSR4 交换链升级 | FrameGeneration 选项链加 FrameGenerationSwapchain next 项 | **已移植**(a7537612) |
+| P4 | d8aebe4 FSR4 Auto 模型选择改进 | DetectedModel() 回退 + FP8 抑制 | **策略层已移植**(a7537612,见下);IdentifyGpu.cpp 检测精化跳过(与 65ee5d6 重叠,待同步窗口) |
 
+
+### P4 移植说明(2026-10-23,与门控并存)
+
+d8aebe4 三部分,移植两部分、跳过一部分:
+
+1. **FSR4Models.cpp `DetectedModel()` + `hkIsSupported` 策略**——已移植。INT8/INT8_2/INT8Lite 检测值
+   映射为模型;selected 未设置时回退检测值(门控下不可达,保留与上游行为一致);FP8 抑制分支(显式
+   选择跑不动时不让 FFX 落到 FP8);device==nullptr 跳过 lastReportedSupport。
+2. **FSR4DriverProviderDx12.cpp FP8 仿真门**——已移植。仿真 FP8 wave matrix 只对 FG 模块和显式 FP8
+   超分开放(INT8 GPU 上 FFX 默认选 FP8 质量差/慢)。
+3. **IdentifyGpu.cpp 140 行**——跳过。与 65ee5d6 重叠,无 GPU 实测不整体搬;现有检测喂同一枚举,
+   策略层已完整生效。
+
+卡顿不受影响:门控不变,Auto(未显式选模型)依然零挂钩。
 ### C. 上游其余新提交(记录,暂不动)
+
 
 - b686ef4/824a7b7/62887bf:FSR4 Vulkan 支持、FG 隐藏、VK 管线 workaround——大特性,待下次同步窗口
 - d1a146a AL2→AL2 FSRFG 转换修复、223cf6b Enshrouded MV 修复、0778a10 FSRFG Vulkan vsync——游戏专项,有用户报告再移
