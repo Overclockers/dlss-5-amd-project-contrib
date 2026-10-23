@@ -406,6 +406,11 @@ bool FSR4DriverProviderVk::InitFg(VkPhysicalDevice physicalDevice)
     LUID actualLuid {};
     if (!VulkanHooks::GetPhysicalDeviceLuid(physicalDevice, actualLuid))
         return false;
+
+    // Real FP8 support comes from the D3D12 checks, the game's Vulkan device can be created before anything ran
+    // them. Must run before the GPU snapshot below: the probe results merge into the cached list.
+    IdentifyGpu::updateD3d12Capabilities();
+
     auto gpus = IdentifyGpu::getAllGpus();
     auto gpu = std::ranges::find_if(gpus, [actualLuid](const GpuInformation& value)
                                     { return IsEqualLUID(value.luid, actualLuid); });

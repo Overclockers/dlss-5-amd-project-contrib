@@ -3,6 +3,7 @@
 
 #include "State.h"
 #include "Config.h"
+#include <misc/VulkanCallScope.h>
 
 uint64_t SkipSpoof::AddEntry(SkipSpoofType type)
 {
@@ -69,8 +70,10 @@ bool SkipVulkanSpoofing()
     const bool vulkanSpoofing = Config::Instance()->VulkanSpoofing.value_or_default();
     bool skip = false;
 
+    // DXVK and VKD3D build their DXGI adapter and D3D12 device descs from these properties, which FFX's driver checks
+    // need to see as the real GPU. Games get the spoofed DXGI desc through DxgiSpoofing instead.
     if (vulkanSpoofing)
-        skip = SkipSpoof::ShouldSkip();
+        skip = ScopedCreatingD3DDevice::Active() || SkipSpoof::ShouldSkip();
 
     if (skip)
     {

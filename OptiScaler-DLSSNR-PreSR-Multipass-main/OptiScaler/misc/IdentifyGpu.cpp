@@ -12,6 +12,15 @@
 
 using Microsoft::WRL::ComPtr;
 
+// DXVK reports revision 0, then any entry of the device id is used, they share the generation
+static std::optional<device_info::CardInfo> GetAmdCardInfo(const GpuInformation& gpuInfo)
+{
+    if (auto cardInfo = device_info::GetCardInfo({ gpuInfo.vendorId, gpuInfo.deviceId, gpuInfo.revisionId }))
+        return cardInfo;
+
+    return device_info::GetCardInfo({ gpuInfo.vendorId, gpuInfo.deviceId, device_info::kRevisionIdAny });
+}
+
 // Prioritize Nvidia cards that can run DLSS and are connected to a display
 // void sortGpus(std::vector<GpuInformation>& gpus)
 //{
@@ -149,8 +158,7 @@ std::vector<GpuInformation> IdentifyGpu::checkGpuInfo()
 
             if (gpuInfo.vendorId == VendorId::AMD)
             {
-                device_info::AdapterId adapterId { gpuInfo.vendorId, gpuInfo.deviceId, gpuInfo.revisionId };
-                auto cardInfo = device_info::GetCardInfo(adapterId);
+                auto cardInfo = GetAmdCardInfo(gpuInfo);
 
                 if (cardInfo.has_value())
                     gpuInfo.amdHwGeneration = cardInfo.value().generation;
@@ -527,6 +535,10 @@ void IdentifyGpu::updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3
 
                         if (moduleAmdxc64 != nullptr)
                         {
+                            // With Fsr4DoNotLoadAmdxc64 the D3D12 driver is what loads amdxc64,
+                            // the load hooks don't see it and leave it unhooked
+                            Amdxc64Hooks::Init();
+
                             AmdExtD3DCreateInterface =
                                 (PFN_AmdExtD3DCreateInterface) KernelBaseProxy::GetProcAddress_()(
                                     moduleAmdxc64, "AmdExtD3DCreateInterface");
@@ -579,8 +591,7 @@ void IdentifyGpu::updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3
                     // Don't treat INT8 as real FP8 support, which is required for ML FG.
                     if (res.fsr4Support == FSR4Support::None)
                     {
-                        device_info::AdapterId adapterId(gpuInfo.vendorId, gpuInfo.deviceId, gpuInfo.revisionId);
-                        auto cardInfo = device_info::GetCardInfo(adapterId);
+                        auto cardInfo = GetAmdCardInfo(gpuInfo);
 
                         if (cardInfo.has_value())
                         {
