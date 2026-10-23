@@ -585,24 +585,59 @@ void IdentifyGpu::updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3
                     }
 
                     // Match the driver's ASIC model selection before the generation fallback.
-                    if (res.fsr4Support == FSR4Support::None && IsFsr4Int8(gpuInfo.fsr4DriverModel))
-                        res.fsr4Support = gpuInfo.fsr4DriverModel;
+                    // Asic family reported on Linux is unreliable, device_info takes precedence there when it
+                    // knows the card
+                    bool preferDeviceInfo = State::Instance().isRunningOnLinux &&
+                                            gpuInfo.amdHwGeneration != device_info::HwGeneration::kUndefinedGeneration;
 
-                    // Don't treat INT8 as real FP8 support, which is required for ML FG.
-                    if (res.fsr4Support == FSR4Support::None)
+                    if (res.fsr4Support == FSR4Support::None && !preferDeviceInfo &&
+                        IsFsr4Int8(gpuInfo.fsr4DriverModel))
+                    {
+                        res.fsr4Support = gpuInfo.fsr4DriverModel;
+                    }
+
+                    // Asic info not available or not trusted, fall back to device_info
+                    if (res.fsr4Support == FSR4Support::None && (preferDeviceInfo || gpuInfo.amdAsicFamily == 0))
                     {
                         auto cardInfo = GetAmdCardInfo(gpuInfo);
 
                         if (cardInfo.has_value())
                         {
-                            if (cardInfo.value().generation == device_info::HwGeneration::kGfx11)
-                                res.fsr4Support = FSR4Support::INT8;
+                            using device_info::AsicType;
+                            using device_info::HwGeneration;
 
-                            // if (cardInfo.value().generation == device_info::HwGeneration::kGfx11_5)
-                            //{
-                            //     res.fsr4Support = FSR4Support::INT8;
-                            //     res.fsr4ForcedSupport = true;
-                            // }
+                            auto& card = cardInfo.value();
+
+                            // Mirrors getFsr4ModelForAsic
+                            // RDNA4
+                            if (card.generation == HwGeneration::kGfx12)
+                            {
+                                res.fsr4Support = FSR4Support::FP8;
+                            }
+                            // Navi 3x (RDNA3) and Strix Halo
+                            else if ((card.generation == HwGeneration::kGfx11 && !card.is_apu) ||
+                                     card.asic_type == AsicType::kGfx11_5_1)
+                            {
+                                res.fsr4Support = FSR4Support::INT8;
+                            }
+                            // Navi 2x (RDNA2)
+                            else if (card.generation == HwGeneration::kGfx10_3 && !card.is_apu)
+                            {
+                                res.fsr4Support = FSR4Support::INT8_2;
+                            }
+                            // Van Gogh and Strix Point
+                            else if (card.asic_type == AsicType::kGfx10_3_3 || card.asic_type == AsicType::kGfx11_5_0)
+                            {
+                                res.fsr4Support = FSR4Support::INT8Lite;
+                            }
+                            // Phoenix, Hawk Point, Krackan, Navi 10 and Navi 12, not officially supported, we are
+                            // adding support for them. Navi 14 lacks hardware INT8
+                            else if ((card.generation == HwGeneration::kGfx11 && card.is_apu) ||
+                                     card.asic_type == AsicType::kGfx11_5_2 || card.asic_type == AsicType::kGfx10_1_0 ||
+                                     card.asic_type == AsicType::kGfx10_1_0Xl || card.asic_type == AsicType::kGfx10_1_1)
+                            {
+                                res.fsr4Support = FSR4Support::INT8Lite;
+                            }
                         }
                     }
 
@@ -841,27 +876,59 @@ bool IdentifyGpu::queryAmdAsicInfo(LUID luid, uint32_t vendorId, uint32_t device
 
 FSR4Support IdentifyGpu::getFsr4ModelForAsic(uint32_t family, uint32_t revision, uint32_t deviceId, bool asicInfoValid)
 {
-    auto inRange = [](uint32_t value, uint32_t min, uint32_t max) { return value >= min && value <= max; };
+    // Family ids and revision ranges (min <= revision < max) from amdgpu_asic_addr.h
+    constexpr uint32_t familyNv = 143;  // Navi 1x/2x
+    constexpr uint32_t familyVgh = 144; // Van Gogh
+    constexpr uint32_t familyNv3 = 145; // Navi 3x
+    constexpr uint32_t familyPhx = 148; // Phoenix / Hawk Point
+    constexpr uint32_t familyStx = 150; // Strix
+    constexpr uint32_t familyNv4 = 152; // Navi 4x
+
+    struct Asic
+    {
+        uint32_t family, min, max;
+    };
+
+    constexpr Asic navi10 { familyNv, 0x01, 0x0A };
+    constexpr Asic navi12 { familyNv, 0x0A, 0x14 };
+    constexpr Asic navi21 { familyNv, 0x28, 0x32 };
+    constexpr Asic navi22 { familyNv, 0x32, 0x3C };
+    constexpr Asic navi23 { familyNv, 0x3C, 0x46 };
+    constexpr Asic navi24 { familyNv, 0x46, 0x50 };
+    constexpr Asic vanGogh { familyVgh, 0x01, 0x80 }; // Driver checks a narrower range than the header's 0x01-0xFF
+    constexpr Asic navi31 { familyNv3, 0x01, 0x10 };
+    constexpr Asic navi33 { familyNv3, 0x10, 0x20 };
+    constexpr Asic navi32 { familyNv3, 0x20, 0xFF };
+    constexpr Asic phoenix1 { familyPhx, 0x01, 0x80 };
+    constexpr Asic phoenix2 { familyPhx, 0x80, 0xC0 };
+    constexpr Asic hawkPoint1 { familyPhx, 0xC0, 0xF0 };
+    constexpr Asic hawkPoint2 { familyPhx, 0xF0, 0xFF };
+    constexpr Asic strix1 { familyStx, 0x01, 0x40 };
+    constexpr Asic krackan1 { familyStx, 0x40, 0x50 };
+    constexpr Asic strixHalo { familyStx, 0xC0, 0xD0 };
+
+    auto is = [&](const Asic& asic) { return family == asic.family && revision >= asic.min && revision < asic.max; };
 
     // Checked in the same order as the driver
     // GFX12 (RDNA4)
-    if (family == 152)
+    if (family == familyNv4)
         return FSR4Support::FP8;
 
-    // GFX11 (RDNA3) or Strix Halo
+    // Navi 3x (RDNA3) or Strix Halo
     // Driver also falls back to it for device 0x7481 when it can't get the asic info
-    if ((family == 145 && inRange(revision, 1, 254)) || (family == 150 && inRange(revision, 192, 207)) ||
-        (!asicInfoValid && deviceId == 0x7481))
-    {
+    if (is(navi31) || is(navi32) || is(navi33) || is(strixHalo) || (!asicInfoValid && deviceId == 0x7481))
         return FSR4Support::INT8;
-    }
 
     // Navi 2x (RDNA2)
-    if (family == 143 && inRange(revision, 40, 79))
+    if (is(navi21) || is(navi22) || is(navi23) || is(navi24))
         return FSR4Support::INT8_2;
 
-    // Strix Point / Krackan (GFX11.5) and Van Gogh
-    if ((family == 150 && inRange(revision, 1, 63)) || (family == 144 && inRange(revision, 1, 127)))
+    if (is(strix1) || is(vanGogh))
+        return FSR4Support::INT8Lite;
+
+    // Not officially supported, we are adding support for them
+    // Navi 14 is left out as it lacks hardware INT8
+    if (is(phoenix1) || is(phoenix2) || is(hawkPoint1) || is(hawkPoint2) || is(krackan1) || is(navi10) || is(navi12))
         return FSR4Support::INT8Lite;
 
     return FSR4Support::None;

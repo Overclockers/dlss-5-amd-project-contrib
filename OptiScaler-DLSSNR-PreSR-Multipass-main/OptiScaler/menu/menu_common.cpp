@@ -640,7 +640,7 @@ void MenuCommon::RenderUpscalerCombo(const API api, Upscaler currentUpscaler, co
         for (auto opt : options)
         {
             // Check if GPU is capable of a given backend
-            if (opt == Upscaler::DLSS && !primaryGpu.dlssCapable)
+            if ((opt == Upscaler::DLSS || opt == Upscaler::DLSS_on12) && !primaryGpu.dlssCapable)
                 continue;
 
             // Not all Intel GPUs support native DX11 XeSS but don't think we have a good way to check exactly
@@ -1711,7 +1711,7 @@ void MenuCommon::HandleMenuShortcuts(RenderMenuContext& ctx)
                 else
                 {
                     fgHotkeyLeftDefault = config->FGFollowsGame();
-                    config->FGEnabled = !config->IsFGEnabled();
+                    config->FGEnabled.set_volatile_value(!config->IsFGEnabled());
                 }
                 state.fgChanged = true;
             }
@@ -3873,7 +3873,13 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
 
         const bool nvngxFgChanged = (replaceFgOutputWithNvngx || showNvngxFgDowndown) &&
                                     state.activeFgNvngx != config->FGNvngxReplacement.value_or_default();
-        state.fgSettingsChanged = state.activeFgOutput != config->FGOutput.value_or_default() ||
+        // Passthrough mode reports NoFG at runtime; treat the configured pair as current so the
+        // restart warning doesn't stay up forever
+        auto configFgOutput = config->FGOutput.value_or_default();
+        if (config->FGInput.value_or_default() == FGInput::XeFG && configFgOutput == FGOutput::XeFG)
+            configFgOutput = FGOutput::NoFG;
+
+        state.fgSettingsChanged = state.activeFgOutput != configFgOutput ||
                                   state.activeFgInput != config->FGInput.value_or_default() || nvngxFgChanged;
 
         if (state.fgSettingsChanged)
@@ -3978,7 +3984,7 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
 
             ImGui::BeginDisabled(state.dlssgLastSetMode != sl::DLSSGMode::eDynamic);
             static float fpsTarget = config->FGDLSSGFramerateTargetDMFG.value_or_default();
-            MenuUi::SliderFloat("DMFG FPS Target", &fpsTarget, 0, 200, "%.0f");
+            MenuUi::SliderFloat("DMFG FPS Target", &fpsTarget, 0, (std::max)(200, refreshRate), "%.0f");
 
             ShowHelpMarker("An active limit of 0 means auto-detect the display refresh rate");
 
@@ -4039,7 +4045,8 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
 
         const bool showOutputSpecificFGSettings = state.activeFgInput == FGInput::DLSSG ||
                                                   state.activeFgInput == FGInput::FSRFG ||
-                                                  state.activeFgInput == FGInput::FSRFG30;
+                                                  state.activeFgInput == FGInput::FSRFG30 ||
+                                                  state.activeFgInput == FGInput::XeFG;
 
         const bool showHudCutoff = state.activeFgInput == FGInput::NvngxFG || state.activeFgOutput == FGOutput::FSRFG;
 
@@ -4498,7 +4505,9 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
 
         if (!correctMVs || state.realExclusiveFullscreen)
         {
-            config->FGEnabled.reset();
+            // volatile, not reset: reset() would re-enter follow-game mode and read the game's
+            // FG state, defeating this guard
+            config->FGEnabled.set_volatile_value(false);
             config->FGXeFGDebugView.reset();
         }
 
@@ -4887,7 +4896,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
 
                 ImGui::BeginDisabled(!config->FGDLSSGForceDMFG.value_or_default());
                 static float fpsTarget = config->FGDLSSGFramerateTargetDMFG.value_or_default();
-                MenuUi::SliderFloat("DMFG FPS Target", &fpsTarget, 0, 200, "%.0f");
+                MenuUi::SliderFloat("DMFG FPS Target", &fpsTarget, 0, (std::max)(200, refreshRate), "%.0f");
 
                 ShowHelpMarker("An active limit of 0 means auto-detect the display refresh rate");
 
@@ -4909,7 +4918,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
         }
 
         bool useGamesMarkers = config->FGDLSSGUseGamesReflexMarkers.value_or_default();
-        ImGui::BeginDisabled(!ReflexHooks::gameIsSendingMarkers());
+        ImGui::BeginDisabled(!ReflexHooks::gameIsSendingMarkers() || state.swapchainApi == Vulkan);
         if (MenuUi::Checkbox("Use Game's Reflex Markers", &useGamesMarkers))
         {
             config->FGDLSSGUseGamesReflexMarkers = useGamesMarkers;
@@ -5357,12 +5366,6 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                     ShowHelpMarker("Makes a copy of the depth buffer\nCan fix broken visuals in some games on AMD "
                                    "GPUs under Windows\nCan cause stutters, so best to use only when necessary");
                 }
-            }
-            else if (state.swapchainApi == Vulkan)
-            {
-                MenuUi::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)),
-                                   "DLSSG is purposefully disabled when this menu is visible");
-                ImGui::Spacing();
             }
         }
 

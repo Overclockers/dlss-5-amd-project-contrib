@@ -12,6 +12,7 @@
 #include <upscalers/IFeature_Vk.h>
 #include <framegen/ffx/FSRFG_Vk.h>
 #include <framegen/dlssg/DLSSG_Vk.h>
+#include <framegen/reprojection/Reprojection_Vk.h>
 #include <fsr4/FSR4DriverProviderVk.h>
 
 #include <misc/FrameLimit.h>
@@ -344,6 +345,10 @@ static IFGFeature_Vk* CreateFGFeature(VkPhysicalDevice physicalDevice)
             state.currentVkFG = new DLSSG_Vk();
         else
             LOG_ERROR("Can't init Streamline, DLSSG won't be available");
+    }
+    else if (state.activeFgOutput == FGOutput::Reprojection)
+    {
+        state.currentVkFG = new Reprojection_Vk();
     }
 
     return state.currentVkFG;
