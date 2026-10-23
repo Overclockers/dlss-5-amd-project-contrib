@@ -105,24 +105,40 @@ d8aebe4 三部分,移植两部分、跳过一部分:
    策略层已完整生效。
 
 卡顿不受影响:门控不变,Auto(未显式选模型)依然零挂钩。
-### C. 上游其余未移植提交(19 中剩 15,记录备查)
+### C. 未移植提交(19 中剩 7,2026-10-24 二批移植后)
 
 勘误(2026-10-24):初版把 b686ef4/824a7b7/62887bf(Vulkan FSR4 支持、FG 隐藏、VK 管线 workaround)
 误列为待同步——经 `git merge-base --is-ancestor` 核实,它们是 9df512d 的祖先,早已随快照集成。
+策略修正:上游已修 = 上游用户报过真实 bug,同 bug 在我们树里;不再"等我们的用户再报一遍"。
 
-- 65ee5d6 GPU 检测 + FSR4 可用性大修——与 P4 跳过的 IdentifyGpu.cpp 部分配套,需 GPU 实测,下次同步窗口
-- 42d6162 "potential fallback" 误报修复(FSR4Models.cpp 3 行)——小,可顺手
-- d1a146a AL2→AL2 FSRFG 转换修复、223cf6b Enshrouded MV 修复、0778a10 FSRFG Vulkan vsync——游戏专项,有用户报告再移
-- c2529ed/c471428 菜单 upscale ratio 显示、a8d0f0a flip meter、03e6ef0 FSR4 水印切换、c220ad9/e0a4859 UI、14434bf FFX 版本计数——低风险小改进,可随下次同步顺手带
-- 5dfedd6 fakenvapi 简化、a79c2f3 移除非 LL 路径——结构性改动,与 fork 冲突面大,必须整窗评估
-- 990ff98 merge commit,无内容
+**已二批移植(P5-P8,小冲突直进)**:
+
+| # | 提交 | 内容 |
+|---|---|---|
+| P5 | d1a146a | AL2→AL2 转换 × FSRFG:UsingDifferentInput 容忍 + mark_present_start 的 AL2+FSRFG 帧标记 |
+| P6 | 0778a10 | FSRFG Vulkan vsync:vkWaitForPresent[KHR/2KHR] 挂钩,FG 持有交换链时立即返回成功(FG 自己节奏控制) |
+| P7 | 223cf6b | Enshrouded MV:新 velocity_convert 计算着色器(R16G16_SNORM/UNORM → R16G16_SFLOAT)+ FFXFeature_Vk 接线 + shaderStorageImageExtendedFormats 特性启用 |
+| P8 | 14434bf | HZD 重制版启动崩溃:版本枚举 outputCount 空指针防护 + 非零容量时才写数组 |
+| (P4 内含) | 42d6162 | device==nullptr 跳过 lastReportedSupport(已随 P4 移植) |
+
+**剩 7 个待评估(冲突面中大)**:
+
+| # | 提交 | 冲突点 |
+|---|---|---|
+| E1 | e0a4859 Amdxc64_Hooks 重构 | 我们该文件 420 行差异(Proton QI 守卫 334c9ebf),需人工对账 |
+| E2 | c220ad9 UI 重排(会话计时器/信息盒) | menu_common.cpp 我们四区布局大改 |
+| E3 | 03e6ef0/c471428/c2529ed/a8d0f0a FPS overlay 群组 | 新配置键须走我们 CfgKey 注册体系;overlay 布局分叉 |
+| E4 | 65ee5d6 GPU 检测大修 | 与 P4 跳过的 IdentifyGpu 部分配套,需 GPU 实测 |
+| E5 | a79c2f3 移除非 LL 路径 | 结构性,与我们 LL fork 配置强耦合 |
+| E6 | 5dfedd6 fakenvapi 简化 | 结构性 |
+| — | 990ff98 merge,无内容 |
 
 ### D. 行动项
 
 1. **提 issue(高优先)**:U1/U1b(AC 击杀,有星铁现场)、U3+U4(Win10 Agility 死循环)——上游修复成本低
 2. **提 issue(中优先)**:U2(XeLL 配对)、U6(DxgiSpoofing 无提示覆盖)
 3. ~~移植 P1-P3~~ 已完成(a7537612)
-4. **下次同步窗口**:评估 65ee5d6(与 P4 的 IdentifyGpu 部分配套)与 a79c2f3/5dfedd6(结构性)的合并策略
+4. **下次同步窗口**:评估 E1-E6(见 C 节);E3 overlay 群组需按 CfgKey 体系适配,非直拷
 
 ## 非上游问题的说明
 

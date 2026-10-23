@@ -2,6 +2,7 @@
 #include "FFXFeature.h"
 #include <upscalers/IFeature_Vk.h>
 
+#include <shaders/velocity_convert/VC_Vk.h>
 #include "vk/ffx_api_vk.h"
 #include <proxies/FfxApi_Proxy.h>
 
@@ -13,6 +14,8 @@ class FFXFeatureVk : public FFXFeature, public IFeature_Vk
 
     // Last logged inputs of the driver provided FSR 4
     std::string _lastFsr4Inputs;
+
+    std::unique_ptr<VelocityConvert_Vk> _velocityConvert = nullptr;
 
   protected:
     bool InitFFX(const NVSDK_NGX_Parameter* InParameters);
