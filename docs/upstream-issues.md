@@ -166,6 +166,18 @@ o_amdExtD3DShaderIntrinsics,上一个 real 引用泄漏。上游 990ff98 同样�
 3. ~~移植 P1-P3~~ 已完成(a7537612)
 4. **下次同步窗口**:评估 E1-E6(见 C 节);E3 overlay 群组需按 CfgKey 体系适配,非直拷
 
+## U9 DX11 桥上下文恢复的残余缺口(上游 9df512d 现存,我们已超集修复)
+
+上游 9df512d 的 IFeature_Dx11wDx12::Evaluate 用 ComPtr 持有绑定引用(修掉了旧版裸指针
+立即 Release 的悬垂问题,97e99b4c 旧基线仍带此 bug——我们 10-06 快照集成时中招,真机
+RX 9070 XT 复现 NR 关闭首帧 AV @0x50,32291157 修复),但恢复仍不完整:不恢复 compute
+shader 本体与 class instances(深度转换会改掉)、常量缓冲区区间被丢弃、UAV append counter
+恢复时清零(&raw, 0)、UAV 槽数未按 feature level。我们的 ScopedContextState
+(with_dx12/dx11_context_state.h)全部覆盖并有 WARP+哨兵 host 测试。可提上游:
+"ComPtr restore in IFeature_Dx11wDx12 misses CS/instances/CB ranges/UAV counters"。
+另:99c9eb15b 集成 Present 计时读取器时漏带桥的计时器构造与 ScopedGpuTime_Dx11 两配套件
+(纯本地遗漏,32291157 补齐),非上游问题。
+
 ## 非上游问题的说明
 
 菜单虚基下转崩溃(bdd11179)与 `_ffxFGIndex` 越界是**我们集成时引入**(上游无此代码/上游本有上界保护),不属于上游问题,已在 decisions.md 记录。
