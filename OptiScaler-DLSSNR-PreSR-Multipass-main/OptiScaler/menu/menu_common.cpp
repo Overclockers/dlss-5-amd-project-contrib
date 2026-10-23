@@ -5762,32 +5762,12 @@ void MenuCommon::RenderFramerateSettings(RenderMenuContext& ctx)
             "Framerate", "Uses Reflex when possible\nOn AMD/Intel cards, you can use Fakenvapi to substitute Reflex");
 
         static std::string currentMethod {};
-        LowLatencyMode fakenvapiMode = {};
+        const LowLatencyMode activeOutput = InputCommon::active_output();
+
+        // The Reflex output limits through the driver's Reflex
         if (state.reflexLimitsFps)
         {
-            fakenvapiMode = fakenvapi::getCurrentMode();
-
-            if (fakenvapiMode == LowLatencyMode::AntiLag2)
-                currentMethod = "FSR Anti-Lag 2.0";
-            else if (fakenvapiMode == LowLatencyMode::LatencyFlex)
-                currentMethod = "LatencyFlex";
-            else if (fakenvapiMode == LowLatencyMode::XeLL)
-                currentMethod = "XeLL";
-            else if (fakenvapiMode == LowLatencyMode::AntiLagVk)
-                currentMethod = "Vulkan AntiLag";
-            else if (fakenvapiMode == LowLatencyMode::None)
-            {
-                if (fakenvapi::isUsingAsMainNvapi())
-                    currentMethod = "None";
-                else
-                    currentMethod = "Reflex";
-            }
-
-            if (state.rtssReflexInjection && fakenvapiMode == LowLatencyMode::AntiLag2 &&
-                config->FGOutput.value_or_default() == FGOutput::FSRFG)
-                MenuUi::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)),
-                                   "Using RTSS Reflex injection with FSR Anti-Lag 2.0 and FSR FG "
-                                   "might cause issues");
+            currentMethod = "Reflex";
         }
         else
         {
@@ -5797,16 +5777,7 @@ void MenuCommon::RenderFramerateSettings(RenderMenuContext& ctx)
         if (state.rtssReflexInjection)
             currentMethod.append(" (RTSS)");
 
-        const bool fakenvapiInactive = (fakenvapi::isUsingAsMainNvapi() || fakenvapiMode == LowLatencyMode::XeLL) &&
-                                       !fakenvapi::isLowLatencyActive() && state.reflexLimitsFps;
-
-        if (fakenvapiInactive)
-            currentMethod.append(" (inactive)");
-
         MenuUi::Text("Current method: %s", currentMethod.c_str());
-
-        if (fakenvapiMode == LowLatencyMode::AntiLag2)
-            ShowHelpMarker("FSR Anti-Lag 2.0 is the new name for AntiLag 2\nDon't ask me why");
 
         if (state.reflexShowWarning)
         {
@@ -5847,7 +5818,7 @@ void MenuCommon::RenderFramerateSettings(RenderMenuContext& ctx)
 
             float refreshRateF = static_cast<float>(refreshRate);
             // it's fine to use with real reflex, we only care about antilag
-            auto fpsLimitTech = fakenvapi::getCurrentMode();
+            auto fpsLimitTech = InputCommon::active_output();
             constexpr float margin = 0.3f; // in ms
             float frameCap = std::round(10000.f / (1000.f / refreshRateF + margin)) / 10.f;
 

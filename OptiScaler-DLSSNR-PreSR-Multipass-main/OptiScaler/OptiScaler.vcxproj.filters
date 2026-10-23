@@ -890,7 +890,6 @@
     <ClInclude Include="nvapi\fakenvapi\log.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="nvapi\fakenvapi\low_latency.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="low_latency\low_latency_tech\ll_antilag2.h">
@@ -1547,10 +1546,8 @@
     <ClCompile Include="nvapi\fakenvapi\log.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="nvapi\fakenvapi\low_latency.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="nvapi\fakenvapi\low_latency_d3d.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="low_latency\low_latency_tech\ll_antilag2.cpp">
@@ -1574,7 +1571,6 @@
     <ClCompile Include="low_latency\low_latency_tech\ll_fps_limiter.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="nvapi\fakenvapi\low_latency_vk.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="nvapi\fakenvapi\nvapi_calls.cpp">

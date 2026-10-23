@@ -203,6 +203,10 @@ class InputCommon
     // AntiLag 2 an AMD GPU
     static const char* output_unavailable(LowLatencyMode output, API api);
 
+    // The driver's Reflex: an Nvidia GPU with its nvapi on D3D (fakenvapi's isn't Reflex), with VK_NV_low_latency2
+    // on Vulkan
+    static bool driver_reflex_available(API api);
+
     // Why the input can't drive the output, nullptr when it can
     static const char* incompatibility(LowLatencyInput input, LowLatencyMode output);
 
