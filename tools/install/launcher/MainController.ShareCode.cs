@@ -1,147 +1,182 @@
 using System;
 using System.IO;
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Threading;
 
 namespace OptScalerNR.Launcher
 {
     public sealed partial class MainController
     {
-        Button _mochiShareCodeButton;
-        Button _iniStyleCodeButton;
+        Button _styleOutButton;
+        Button _styleInButton;
+        DispatcherTimer _styleOutResetTimer;
+
         void InitShareCode()
         {
-            _mochiShareCodeButton = _window.FindName("MochiShareCodeButton") as Button;
-            if (_mochiShareCodeButton != null) _mochiShareCodeButton.Click += delegate { ShowShareCode(false); };
-            _iniStyleCodeButton = _window.FindName("IniStyleCodeButton") as Button;
-            if (_iniStyleCodeButton != null) _iniStyleCodeButton.Click += delegate { ShowShareCode(false); };
+            _styleOutButton = _window.FindName("StyleOutButton") as Button;
+            if (_styleOutButton != null) _styleOutButton.Click += delegate { ShareMyLook(); };
+            _styleInButton = _window.FindName("StyleInButton") as Button;
+            if (_styleInButton != null) _styleInButton.Click += delegate { ShowImportLook(); };
         }
+
         void RefreshShareCode(bool enabled)
         {
-            if (_mochiShareCodeButton != null)
+            var title = _window.FindName("StyleShareTitle") as TextBlock;
+            var sub = _window.FindName("StyleShareSub") as TextBlock;
+            if (title != null) title.Text = L("同款神仙画质，一键抄作业", "Share & try custom looks");
+            if (sub != null)
+                sub.Text = L("调出了满意画面？发到群里晒一晒，或者直接换上大佬的同款调色",
+                             "Show off your look in chat, or try a look from the community in one click");
+            if (_styleOutButton != null)
             {
-                _mochiShareCodeButton.Content = L("✨ 风格码", "✨ Style code");
-                _mochiShareCodeButton.ToolTip = L("导出/导入 Mochizuki 画面风格参数", "Export/import Mochizuki visual style parameters");
-                _mochiShareCodeButton.IsEnabled = enabled;
+                _styleOutButton.Content = L("晒出我的画面", "Share My Look");
+                _styleOutButton.ToolTip = L("生成一段可以发到群里、评论区的画面分享文本", "Copies a share text for chat and comments");
+                _styleOutButton.IsEnabled = enabled;
             }
-            if (_iniStyleCodeButton != null)
+            if (_styleInButton != null)
             {
-                _iniStyleCodeButton.Content = L("✨ 风格码", "✨ Style code");
-                _iniStyleCodeButton.ToolTip = L("导出/导入 Mochizuki 画面风格参数（分享你的画面风格）", "Export/import Mochizuki visual style parameters (share your look)");
-                _iniStyleCodeButton.IsEnabled = enabled;
+                _styleInButton.Content = L("换上同款画面", "Use a Shared Look");
+                _styleInButton.ToolTip = L("粘贴别人分享的画面文本，一键换上同款", "Paste someone's shared look and wear it");
+                _styleInButton.IsEnabled = enabled;
             }
         }
-        string ShareError(Exception error)
-        {
-            var code = error as MochizukiShareCode.CodeException;
-            if (code == null) return L("分享码操作失败，请检查文件权限、剪贴板与可用空间。", "Share-code operation failed. Check file permissions, clipboard and free space.");
-            switch (code.Reason) {
-                case "prefix": return L("分享码必须以 MZ1: 或 MZ2: 开头。", "Share code must start with MZ1: or MZ2:.");
-                case "crc": return L("校验码不匹配，分享码可能已损坏。", "Checksum mismatch; the share code may be damaged.");
-                case "index": return L("分享码包含未知参数编号，请更新启动器。", "Unknown parameter index. Update the launcher.");
-                case "range": return L("参数超出允许范围。", "A parameter is outside its allowed range.");
-                case "duplicate": return L("分享码包含重复参数编号。", "Duplicate parameter index in share code.");
-                case "encoding": return L("INI 必须采用 UTF-8 或带 BOM 的 UTF-16 编码。", "INI must use UTF-8 or BOM-marked UTF-16 encoding.");
-                case "value": return L("INI 中的风格参数值无效。", "Invalid visual-style value in the INI.");
-                default: return L("分享码格式无效。", "Invalid share-code format.");
-            }
-        }
-        void ShowShareCode(bool import)
+
+        // 晒出我的画面: zero-dialog export. The clipboard gets a self-explaining share text
+        // (pitch + code) so the code carries its own instructions wherever it is forwarded.
+        void ShareMyLook()
         {
             var game = CaptureIniGame();
             if (!CanUseIniGame(game)) return;
             string path = Path.Combine(game.Directory, "OptiScaler.ini");
-            string executable = _selectedGame.Exe;
             if (!File.Exists(path)) { SetIniStatus("noini", ""); return; }
             try {
-                var dialog = DialogTheme.Create(_window, L("Mochizuki 风格码", "Mochizuki style code"), 620);
+                string code = MochizukiShareCode.Encode(File.ReadAllBytes(path), _selectedGame.Exe);
+                string title = MochizukiShareCode.NormalizeGameTag(_selectedGame.Exe);
+                string pitch = title.Length > 0
+                    ? L("【" + title + "】我用 Mochizuki 调的画质，启动器点「换上同款画面」粘贴就能用：\n",
+                       "[" + title + "] My Mochizuki look — in the launcher hit \"Use a Shared Look\" and paste this:\n")
+                    : L("我用 Mochizuki 调的画质，启动器点「换上同款画面」粘贴就能用：\n",
+                       "My Mochizuki look — in the launcher hit \"Use a Shared Look\" and paste this:\n");
+                Clipboard.SetText(pitch + code);
+                if (_styleOutButton != null)
+                {
+                    _styleOutButton.Content = L("已复制！快去群里粘贴吧 ✓", "Copied! Go paste it ✓");
+                    if (_styleOutResetTimer == null)
+                    {
+                        _styleOutResetTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+                        _styleOutResetTimer.Tick += delegate
+                        {
+                            _styleOutResetTimer.Stop();
+                            if (_styleOutButton != null) _styleOutButton.Content = L("晒出我的画面", "Share My Look");
+                        };
+                    }
+                    _styleOutResetTimer.Stop();
+                    _styleOutResetTimer.Start();
+                }
+                SetIniStatus("share-copied", "");
+            } catch (Exception ex) { SetIniStatus("share-error", ShareError(ex)); }
+        }
+
+        // MZ code inside arbitrary pasted text (the share text we generate, chat quotes, anything)
+        static readonly Regex CodeInText = new Regex(@"MZ[12]:[^;\r\n]*;[0-9A-Fa-f]{4}", RegexOptions.Compiled);
+        static string ExtractCode(string text)
+        {
+            if (text == null) return null;
+            var match = CodeInText.Match(text);
+            return match.Success ? match.Value : null;
+        }
+
+        void ShowImportLook()
+        {
+            var game = CaptureIniGame();
+            if (!CanUseIniGame(game)) return;
+            string path = Path.Combine(game.Directory, "OptiScaler.ini");
+            if (!File.Exists(path)) { SetIniStatus("noini", ""); return; }
+            try {
+                var dialog = DialogTheme.Create(_window, L("换上同款画面", "Use a Shared Look"), 620);
                 var panel = new StackPanel { Margin = new Thickness(22) };
-                var modeRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 10) };
-                var exportRadio = new RadioButton { Content = L("导出", "Export"), GroupName = "ShareCodeMode", Margin = new Thickness(0, 0, 14, 0) };
-                var importRadio = new RadioButton { Content = L("导入", "Import"), GroupName = "ShareCodeMode" };
-                modeRow.Children.Add(exportRadio); modeRow.Children.Add(importRadio);
-                panel.Children.Add(modeRow);
-                var hint = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
+                var hint = new TextBlock
+                {
+                    Text = L("把群里或评论区复制来的分享内容粘贴在下面：", "Paste a shared look from chat or comments below:"),
+                    TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8)
+                };
                 panel.Children.Add(hint);
                 var input = new TextBox { TextWrapping = TextWrapping.Wrap, Height = 130, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
                 panel.Children.Add(input);
-                var includeGame = new CheckBox { Content = L("包含游戏标识（推荐）", "Include game tag (recommended)"), IsChecked = true, Margin = new Thickness(0, 10, 0, 0) };
-                panel.Children.Add(includeGame);
                 var summary = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 10) };
                 panel.Children.Add(summary);
                 var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
                 var close = new Button { Content = L("关闭", "Close"), MinWidth = 75, Margin = new Thickness(6) };
                 close.Click += delegate { dialog.Close(); };
-                var action = new Button { MinWidth = 90, Margin = new Thickness(6) };
-                var apply = new Button { Content = L("应用", "Apply"), MinWidth = 75, Margin = new Thickness(6), IsEnabled = false, Visibility = Visibility.Collapsed };
+                var apply = new Button { Content = L("立即换上这套画面", "Apply This Look"), MinWidth = 110, Margin = new Thickness(6), IsEnabled = false };
                 string validated = null, validatedGame = "";
-                bool isExport = !import;
-                byte[] exportedIni = null;
-                Action renderMode = null;
-                RoutedEventHandler switchMode = delegate {
-                    var nowExport = exportRadio.IsChecked == true;
-                    if (nowExport == isExport) return;
-                    isExport = nowExport;
-                    if (renderMode != null) renderMode();
-                };
-                exportRadio.Checked += switchMode; importRadio.Checked += switchMode;
-                renderMode = delegate {
-                    action.Content = isExport ? L("复制", "Copy") : L("预览", "Preview");
-                    apply.Visibility = isExport ? Visibility.Collapsed : Visibility.Visible;
-                    apply.IsEnabled = false; validated = null; validatedGame = "";
-                    includeGame.Visibility = isExport ? Visibility.Visible : Visibility.Collapsed;
-                    hint.Text = isExport
-                        ? L("仅共享 Mochizuki 视觉风格，不更改安装、后端或其他 INI 设置。", "Shares only Mochizuki visual style; installation, backend and other INI settings are unchanged.")
-                        : L("粘贴风格码，预览后将仅写入画面风格参数。", "Paste a style code; after preview only visual style parameters are written.");
-                    input.IsReadOnly = isExport;
-                    summary.Text = "";
-                    if (isExport) {
-                        if (exportedIni == null) exportedIni = File.ReadAllBytes(path);
-                        input.Text = MochizukiShareCode.Encode(exportedIni, includeGame.IsChecked == true ? executable : null);
-                        var decoded = MochizukiShareCode.Decode(input.Text);
-                        summary.Text = MochizukiShareCode.Summary(decoded, L("zh", "en") == "zh");
-                        // All-defaults means every encoded parameter equals its own default (a non-default
-                        // setting is sparse-coded, so an empty value map or all-default values); never compare
-                        // the code against the same INI it was just encoded from.
-                        if (MochizukiShareCode.NonDefaultCount(decoded) == 0)
-                            summary.Text += L("\n当前全部为默认值：分享码有效，导入方应用后将恢复同样的默认画面。",
-                                               "\nEverything is at defaults: the code is valid; importing it restores the same defaults.");
-                    } else {
-                        input.Text = "";
+
+                Action validate = delegate {
+                    validated = null; validatedGame = ""; apply.IsEnabled = false; summary.Text = "";
+                    var code = ExtractCode(input.Text);
+                    if (code == null)
+                    {
+                        if (input.Text.Trim().Length > 0)
+                            summary.Text = L("没认出画质方案哦。确认复制了别人分享的完整内容（里面会有一段 MZ 开头的字符）。",
+                                             "No shared look found here. Make sure you copied the full share text (including the MZ... part).");
+                        return;
                     }
-                };
-                input.TextChanged += delegate { if (!isExport) { validated = null; validatedGame = ""; apply.IsEnabled = false; summary.Text = ""; } };
-                includeGame.Checked += delegate { if (isExport && renderMode != null) renderMode(); };
-                includeGame.Unchecked += delegate { if (isExport && renderMode != null) renderMode(); };
-                action.Click += delegate {
                     try {
-                        if (isExport) { Clipboard.SetText(input.Text); return; }
-                        if (!CanUseIniGame(game)) return;
-                        var code = input.Text.Trim();
                         var values = MochizukiShareCode.Decode(code);
-                        int difference = MochizukiShareCode.DifferenceCount(File.ReadAllBytes(path), code);
-                        summary.Text = MochizukiShareCode.Summary(values, L("zh", "en") == "zh") + L("\n将更改 ", "\nWill change ") + difference + L(" 项设置（其余风格参数恢复默认）。", " settings (remaining visual parameters reset to defaults).");
+                        string tag = values.GameTag.Length > 0 ? "【" + values.GameTag + "】" : "";
+                        summary.Text = L("✨ 已识别" + tag + "同款画质（色调、质感等专属调校）",
+                                         "✨ Ready: custom look" + (values.GameTag.Length > 0 ? " for [" + values.GameTag + "]" : "") + " (color and texture tuning)");
                         validated = code; validatedGame = values.GameTag; apply.IsEnabled = true;
-                    } catch (Exception ex) { validated = null; apply.IsEnabled = false; summary.Text = ShareError(ex); }
+                    } catch (Exception ex) { summary.Text = ShareError(ex); }
                 };
+                input.TextChanged += delegate { validate(); };
                 apply.Click += delegate {
                     if (validated == null || !CanUseIniGame(game)) return;
-                    if (validatedGame.Length > 0 && !MochizukiShareCode.GameTagMatches(validatedGame, executable) &&
+                    if (validatedGame.Length > 0 && !MochizukiShareCode.GameTagMatches(validatedGame, _selectedGame.Exe) &&
                         DialogTheme.Show(dialog,
-                            L("该分享码来自「", "This share code was made for '") + validatedGame +
-                            L("」，与当前游戏不符，仍要导入吗？", "', which does not match the current game. Import anyway?"),
-                            L("游戏标识不匹配", "Game tag mismatch"), MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+                            L("这段画质来自「" + validatedGame + "」，和当前游戏不是同一个，还要换上吗？",
+                              "This look was made for '" + validatedGame + "', not this game. Apply anyway?"),
+                            L("游戏不一样", "Different game"), MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
                     if (ApplyShareCode(game, validated)) dialog.Close();
                 };
-                buttons.Children.Add(close); buttons.Children.Add(action); buttons.Children.Add(apply);
+                buttons.Children.Add(close); buttons.Children.Add(apply);
                 panel.Children.Add(buttons);
-                DialogTheme.Primary(dialog, action); DialogTheme.SetContent(dialog, panel);
-                exportRadio.IsChecked = !import; importRadio.IsChecked = import;
-                renderMode();
-                dialog.Loaded += delegate { if (!isExport) input.Focus(); };
+                DialogTheme.Primary(dialog, apply); DialogTheme.SetContent(dialog, panel);
+
+                // Prefill only when the clipboard already holds a recognizable code — never dump
+                // unrelated clipboard text into the box.
+                try {
+                    if (Clipboard.ContainsText()) {
+                        var code = ExtractCode(Clipboard.GetText());
+                        if (code != null) input.Text = code;
+                    }
+                } catch { }
+
+                dialog.Loaded += delegate { if (input.Text.Length == 0) input.Focus(); };
                 dialog.ShowDialog();
             } catch (Exception ex) { SetIniStatus("share-error", ShareError(ex)); }
         }
+
+        string ShareError(Exception error)
+        {
+            var code = error as MochizukiShareCode.CodeException;
+            if (code == null) return L("操作没成功，再试一次或检查文件权限。", "The operation failed. Try again or check file permissions.");
+            switch (code.Reason) {
+                case "prefix": return L("没认出画质方案哦。确认复制了别人分享的完整内容（里面会有一段 MZ 开头的字符）。",
+                                        "No shared look found here. Make sure you copied the full share text (including the MZ... part).");
+                case "crc": return L("内容好像没复制全，少了一截。把整段话重新复制一遍试试？",
+                                     "Looks like part of the text was cut off. Try copying the whole thing again.");
+                case "index": return L("这段画质来自更新的版本，更新启动器后再试。", "This look needs a newer launcher. Update first.");
+                case "range": return L("这段画质的内容有问题，可能没复制全。", "The shared look looks incomplete.");
+                case "duplicate": return L("这段画质的内容有问题，可能没复制全。", "The shared look looks incomplete.");
+                case "encoding": return L("游戏设置文件不是常见的编码，无法读取。", "The game INI uses an unsupported encoding.");
+                case "value": return L("这段画质的内容有问题，可能没复制全。", "The shared look looks incomplete.");
+                default: return L("没认出画质方案哦。确认复制了别人分享的完整内容。", "No shared look recognized. Copy the full share text.");
+            }
+        }
+
         bool ApplyShareCode(IniGameIdentity game, string code)
         {
             if (!CanUseIniGame(game)) return false;

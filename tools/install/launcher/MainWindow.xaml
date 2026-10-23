@@ -556,7 +556,6 @@
                   <Border Background="{DynamicResource ThemeSubtle}" BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1" CornerRadius="12" Padding="10,9" Margin="0,0,5,0" MinHeight="90">
                     <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                       <DockPanel>
-                        <Button x:Name="MochiShareCodeButton" DockPanel.Dock="Right" Style="{StaticResource GhostButton}" Height="24" FontSize="10.5" Padding="10,0" Margin="6,0,0,0" VerticalAlignment="Top" Background="#22E3122B" BorderBrush="#E3122B" Foreground="#FF8A93" FontWeight="SemiBold"/>
                         <CheckBox x:Name="MochiCheck" Content="mochizuki" FontWeight="SemiBold" FontSize="13" VerticalAlignment="Top"/>
                       </DockPanel>
                       <Grid Grid.Row="2" Margin="0,5,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
@@ -652,9 +651,21 @@
                 <Border Height="1" Background="{DynamicResource ThemeBorder}" Margin="0,0,0,12"/>
                 <Border Background="{DynamicResource ThemeSubtle}" BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1" CornerRadius="12" Padding="10">
                   <StackPanel>
-                    <DockPanel Margin="0,0,0,8"><StackPanel DockPanel.Dock="Right" Orientation="Horizontal"><Button x:Name="IniFolderButton" Style="{StaticResource GhostButton}" Height="25" FontSize="10.5" Padding="8,0"/><Button x:Name="IniSaveButton" Style="{StaticResource GhostButton}" Height="25" FontSize="10.5" Padding="8,0" Margin="5,0,0,0"/><Button x:Name="IniImportButton" Style="{StaticResource GhostButton}" Height="25" FontSize="10.5" Padding="8,0" Margin="5,0,0,0"/><Button x:Name="IniStyleCodeButton" Style="{StaticResource GhostButton}" Height="25" FontSize="10.5" Padding="10,0" Margin="5,0,0,0" Background="#22E3122B" BorderBrush="#E3122B" Foreground="#FF8A93" FontWeight="SemiBold"/><Button x:Name="IniApplyButton" Style="{StaticResource GhostButton}" Height="25" FontSize="10.5" Padding="12,0" Margin="5,0,0,0"/></StackPanel><TextBlock x:Name="IniHeading" Foreground="{DynamicResource ThemeMuted}" FontSize="11" VerticalAlignment="Center"/></DockPanel>
+                    <DockPanel Margin="0,0,0,8"><StackPanel DockPanel.Dock="Right" Orientation="Horizontal"><Button x:Name="IniFolderButton" Style="{StaticResource GhostButton}" Height="25" FontSize="10.5" Padding="8,0"/><Button x:Name="IniSaveButton" Style="{StaticResource GhostButton}" Height="25" FontSize="10.5" Padding="8,0" Margin="5,0,0,0"/><Button x:Name="IniImportButton" Style="{StaticResource GhostButton}" Height="25" FontSize="10.5" Padding="8,0" Margin="5,0,0,0"/><Button x:Name="IniApplyButton" Style="{StaticResource GhostButton}" Height="25" FontSize="10.5" Padding="12,0" Margin="5,0,0,0"/></StackPanel><TextBlock x:Name="IniHeading" Foreground="{DynamicResource ThemeMuted}" FontSize="11" VerticalAlignment="Center"/></DockPanel>
                     <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="160"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><ComboBox x:Name="IniProfileCombo" Height="30"/><TextBox x:Name="IniSearchBox" Grid.Column="1" Height="30" Margin="6,0,0,0" Background="{DynamicResource ThemeSurface}" Foreground="{DynamicResource ThemeInk}" BorderBrush="{DynamicResource ThemeBorder}" Padding="8,5"/><Button x:Name="IniRenameButton" Grid.Column="2" Style="{StaticResource GhostButton}" Height="30" Padding="8,0" FontSize="10.5" Margin="6,0,0,0"/><Button x:Name="IniDeleteButton" Grid.Column="3" Style="{StaticResource GhostButton}" Height="30" Padding="8,0" FontSize="10.5" Margin="6,0,0,0"/></Grid>
                     <DockPanel Margin="0,8,0,0"><Button x:Name="IniQuickSaveButton" Style="{StaticResource GhostButton}" Height="25" FontSize="10.5" Padding="8,0" Margin="0,0,10,0"/><TextBlock x:Name="IniSelectHint" Foreground="{DynamicResource ThemeMuted}" FontSize="10" VerticalAlignment="Center" TextWrapping="Wrap"/></DockPanel>
+                    <Border x:Name="StyleShareBar" Background="{DynamicResource ThemeSubtle}" BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1" CornerRadius="10" Padding="12,9" Margin="0,10,0,0">
+                      <DockPanel>
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                          <Button x:Name="StyleOutButton" Style="{StaticResource GhostButton}" Height="30" FontSize="11.5" Padding="12,0" Margin="6,0,0,0"/>
+                          <Button x:Name="StyleInButton" Style="{StaticResource GhostButton}" Background="{DynamicResource ThemeAccent}" BorderBrush="{DynamicResource ThemeAccent}" Foreground="White" Height="30" FontSize="11.5" FontWeight="SemiBold" Padding="12,0" Margin="6,0,0,0"/>
+                        </StackPanel>
+                        <StackPanel VerticalAlignment="Center">
+                          <TextBlock x:Name="StyleShareTitle" FontWeight="SemiBold" FontSize="11.5" Foreground="{DynamicResource ThemeInk}"/>
+                          <TextBlock x:Name="StyleShareSub" FontSize="10" Foreground="{DynamicResource ThemeMuted}" TextWrapping="Wrap" Margin="0,2,8,0"/>
+                        </StackPanel>
+                      </DockPanel>
+                    </Border>
                     <TextBlock x:Name="IniProfileStatus" Foreground="{DynamicResource ThemeMuted}" FontSize="10.5" TextWrapping="Wrap" Margin="0,5,0,0"/>
                   </StackPanel>
                 </Border>
