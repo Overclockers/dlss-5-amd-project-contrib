@@ -51,7 +51,16 @@ namespace OptScalerNR.Launcher
             window.ShowInTaskbar = false;
             window.ResizeMode = ResizeMode.NoResize;
             window.WindowStyle = WindowStyle.None;
-            WindowChrome.SetWindowChrome(window, new WindowChrome { CaptionHeight = 0, GlassFrameThickness = new Thickness(0), ResizeBorderThickness = new Thickness(0) });
+            WindowChrome.SetWindowChrome(window, new WindowChrome {
+                CaptionHeight = 0,
+                GlassFrameThickness = new Thickness(0),
+                ResizeBorderThickness = new Thickness(0),
+                CornerRadius = new CornerRadius(0),
+                UseAeroCaptionButtons = false
+            });
+            // Match the main window: SizeToContent must land on physical pixels too.
+            window.UseLayoutRounding = true;
+            window.SnapsToDevicePixels = true;
             window.SetResourceReference(Window.BackgroundProperty, "ThemeSurface");
             window.SetResourceReference(Window.ForegroundProperty, "ThemeInk");
             window.SetResourceReference(Window.BorderBrushProperty, "ThemeBorder");

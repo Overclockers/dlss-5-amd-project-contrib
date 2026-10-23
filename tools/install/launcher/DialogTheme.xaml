@@ -31,6 +31,46 @@
     <Setter Property="Foreground" Value="{DynamicResource ThemeOnAccent}"/>
     <Setter Property="FontWeight" Value="SemiBold"/>
   </Style>
+  <!-- Shared button styles live here (not in MainWindow.xaml) so the Template references are
+       StaticResource within THIS dictionary: a DynamicResource template reference inside a style
+       loaded by XamlReader did not resolve against a dictionary merged after parsing, and the
+       buttons silently fell back to the default Windows chrome (white bevel ring). -->
+    <!-- AMD Crimson Primary Button -->
+    <Style x:Key="PrimaryButton" TargetType="Button">
+      <Setter Property="Background" Value="{DynamicResource ThemeAccent}"/>
+      <Setter Property="Foreground" Value="{DynamicResource ThemeOnAccent}"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Height" Value="40"/>
+      <Setter Property="FontSize" Value="13.5"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Padding" Value="18,0"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+      <Setter Property="Template" Value="{StaticResource MaterialButtonTemplate}"/>
+    </Style>
+
+    <!-- Modern Dark Ghost Button -->
+    <Style x:Key="GhostButton" TargetType="Button">
+      <Setter Property="Background" Value="{DynamicResource ThemeSubtle}"/>
+      <Setter Property="Foreground" Value="{DynamicResource ThemeInk}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource ThemeBorder}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Height" Value="32"/>
+      <Setter Property="Padding" Value="12,0"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+      <Setter Property="Template" Value="{StaticResource MaterialButtonTemplate}"/>
+    </Style>
+
+    <Style x:Key="HeroButton" TargetType="Button" BasedOn="{StaticResource GhostButton}">
+      <Setter Property="Background" Value="#AC202938"/>
+      <Setter Property="BorderBrush" Value="#405D697E"/>
+      <Setter Property="Foreground" Value="#F1F4F9"/>
+    </Style>
+
   <Style TargetType="RadioButton">
     <Setter Property="Foreground" Value="{DynamicResource ThemeInk}"/><Setter Property="Background" Value="{DynamicResource ThemeSubtle}"/>
     <Setter Property="BorderBrush" Value="{DynamicResource ThemeBorder}"/><Setter Property="BorderThickness" Value="1"/>
