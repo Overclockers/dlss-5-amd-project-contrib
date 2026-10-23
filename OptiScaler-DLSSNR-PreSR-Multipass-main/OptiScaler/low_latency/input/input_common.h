@@ -130,10 +130,9 @@ class InputCommon
     // The time the output slept since the last call, 0 if it didn't
     static double take_sleep_ms() { return last_sleep_ms.exchange(0.0); }
 
-    // Shared writer for the measured output sleep. Both the input driven sleep (sleep) and fakenvapi's
-    // own tech (NvAPI_D3D_Sleep -> LowLatency::Sleep, also compiled with LOW_LATENCY_INPUTS off) store
-    // their measurement here: the last sleep of a frame wins, never a sum, so two writers can't double
-    // count. XeFG's Dynamic MFG reads it back with take_sleep_ms().
+    // Shared writer for the measured output sleep. The input driven sleep (sleep) stores its
+    // measurement here: the last sleep of a frame wins, never a sum. XeFG's Dynamic MFG reads it
+    // back with take_sleep_ms().
     static void record_sleep_ms(double ms) { last_sleep_ms = ms; }
 
     static InputResult sleep(const InputContext& inputContext, IUnknown* pDevice,

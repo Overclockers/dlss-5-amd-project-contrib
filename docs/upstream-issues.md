@@ -143,6 +143,16 @@ signal→sleep 在 LL 构建不可达);九提交一次合入,无实机门槛。1
 host ci PASS。**验收缺口(源码完成、待实机)**:AMD FSR-FG flip meter、GPU 检测矩阵
 (RDNA2/3/4 + Intel/NV + 混合适配器)、Linux/Proton Vulkan 变更、XeLL/XeFG 全组合。
 
+## U8 a8d0f0a 的钩子安装竞态(上游同样存在,下游已修)
+
+HookFactory/HookFlipMeter 的"判空→装钩→提交"无锁:两个并发首次请求都会过判空,
+失败的 Detours 提交会清掉另一线程已装好的 o_ 指针,下次调用走空指针。上游 990ff98
+同样存在;我们已加 installMutex 单一所有者修复(2026-10-23 审查 P1)。同批审查另修:
+FG 水印开关需 fgChanged+scChanged 才真正重建原生 FSR FG 上下文(上游只设 fgChanged,
+在我们的 FSRFG 实现里不会销毁重建,驱动在创建时读环境变量,故不生效);SDK 预热的
+set/call/clear 事务加专用 primingMutex(DX12/VK 两个 provider 首载可并发,互相清标记
+会让旧游戏 SDK 赢得粘性版本决策)。
+
 ## U7 e0a4859 的 intrinsics 全局覆盖泄漏(上游同样存在,观察)
 
 每次 IAmdExtD3DFactory::CreateInterface(IID_IAmdExtD3DShaderIntrinsics) 覆盖全局

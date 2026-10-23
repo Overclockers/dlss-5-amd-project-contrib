@@ -4324,9 +4324,13 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                             config->FSRFGEnableWatermark = fgwm;
                             Util::SetFlagEnvVar(L"MLFI-WATERMARK", fgwm);
 
-                            // The driver reads the variable on context creation
+                            // The driver reads the variable on context creation; the native FSR FG
+                            // context is only destroyed and recreated when scChanged is set too
                             if (config->IsFGEnabled())
+                            {
                                 state.fgChanged = true;
+                                state.scChanged = true;
+                            }
                         }
                     }
 
@@ -5546,9 +5550,12 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                         config->FSRFGEnableWatermark = fgwm;
                         Util::SetFlagEnvVar(L"MLFI-WATERMARK", fgwm);
 
-                        // The driver reads the variable on context creation
+                        // The driver reads the variable on context creation; recreation needs scChanged
                         if (config->IsFGEnabled())
+                        {
                             state.fgChanged = true;
+                            state.scChanged = true;
+                        }
                     }
                 }
             }

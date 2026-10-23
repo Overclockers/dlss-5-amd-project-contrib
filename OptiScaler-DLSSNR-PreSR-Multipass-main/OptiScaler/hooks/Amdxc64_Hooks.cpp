@@ -208,6 +208,12 @@ HRESULT STDMETHODCALLTYPE Amdxc64Hooks::hkAmdExtD3DCreateInterface(IUnknown* pOu
 
 void Amdxc64Hooks::HookFactory(IAmdExtD3DFactory* factory)
 {
+    // Single-owner installation: two concurrent first-time factory requests could both pass the
+    // null check, race their detour transactions, and a failed commit would clear the pointer the
+    // other thread installed (upstream-inherited race, fixed here)
+    static std::mutex installMutex;
+    std::scoped_lock lock(installMutex);
+
     if (o_FactoryCreateInterface != nullptr)
         return;
 
@@ -229,6 +235,10 @@ void Amdxc64Hooks::HookFactory(IAmdExtD3DFactory* factory)
 
 void Amdxc64Hooks::HookFlipMeter(IAmdExtFlipMeter* flipMeter)
 {
+    // Same single-owner rule as HookFactory
+    static std::mutex installMutex;
+    std::scoped_lock lock(installMutex);
+
     if (o_FlipMeterSetConfig != nullptr)
         return;
 

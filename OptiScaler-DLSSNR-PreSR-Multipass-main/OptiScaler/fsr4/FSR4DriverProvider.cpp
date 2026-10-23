@@ -182,6 +182,14 @@ HMODULE FSR4DriverDll::Load(std::optional<LUID> actualLuid)
                                data.structVersion = 2;
                                data.descType = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
 
+                               // The DX12 and Vulkan providers own separate FSR4DriverDll objects whose
+                               // first loads can overlap; serialize the whole set/call/clear transaction so
+                               // one load can't clear or steal the other's marker (hkGetModuleHandleW would
+                               // then miss the priming branch and an old game SDK could win the sticky
+                               // SDK-version decision)
+                               static std::mutex primingMutex;
+                               std::scoped_lock primingLock(primingMutex);
+
                                primingDll = module;
                                auto result = UpdateFfxApiProvider(&data, ExternalProviderData::SizeFor(2));
                                primingDll = nullptr;
