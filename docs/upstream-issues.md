@@ -153,6 +153,44 @@ FG 水印开关需 fgChanged+scChanged 才真正重建原生 FSR FG 上下文(�
 set/call/clear 事务加专用 primingMutex(DX12/VK 两个 provider 首载可并发,互相清标记
 会让旧游戏 SDK 赢得粘性版本决策)。
 
+## 半程审计:97e99b4c→990ff98 残留真缺口(2026-10-23,五路并行审计)
+
+背景:10-21 对 9df512d 是选择性文件级合并,产生函数级"半跟"。行级扫描对上游 990ff98
+共 ~1200 缺失行,语义分类后 97% 为噪音(等价新版/有意 fork/格式),真缺口 16 项(G1-G16)。
+证据:agent://AuditCore|AuditHooks|AuditMenu|AuditFG|AuditUpscale,材料 work/scratch/audit-vs-990ff98/。
+
+**高危(崩溃/功能死/安全守卫失效)**:
+| # | 位置 | 问题 |
+|---|---|---|
+| G1 | FG_Hooks.cpp:769,1014 | DLSSG 的 ALLOW_TEARING 强制被错放进 FGSkipResizeBuffers 分支(默认关)→ DLSSG 激活时 resize 失败(上游 b48fcb0) |
+| G2 | Vulkan_Hooks.cpp CreateFGFeature | 缺 FGOutput::Reprojection 分支 → Vulkan 重投影编译进工程/菜单可选但永不实例化,功能死 |
+| G3 | D3D12_Hooks.cpp:3100 HookToDevice | 缺 !ScopedCreatingD3DDevice::Active() 守卫 → 探测用临时 D3D12 设备初始化 Streamline(上游 e3d24c7) |
+| G4 | Gdi32_Hooks.h:66-82 | D3DKMTQueryAdapterInfo 伪装缺 INT8_2(143/40)/INT8Lite(150/1) → Linux/强制支持下 FFX SDK ASIC 校验拒绝 FSR4 |
+| G5 | IdentifyGpu.cpp:587-609,843-867 | Linux 检测缺 preferDeviceInfo + 代数回退扩展(kGfx12→FP8、gfx11.5.1→INT8、gfx10.3→INT8_2、INT8Lite 族);getFsr4ModelForAsic 缺 Phoenix(148)/Krackan(150 rev40-50)/Navi10-12(143 rev1-20)→INT8Lite |
+| G6 | menu_common.cpp:4501 | XeFG 安全守卫用 FGEnabled.reset() 而非 set_volatile_value(false) → follow-game 下守卫被绕过(坏 MV/独占全屏仍启用 XeFG) |
+| G7 | menu_common.cpp:5755-5955 | RenderLowLatency/FramerateSettings 停在 E5/E6 前:Reflex/AL-Vk 输出被误禁、"None"静默变 Auto、缺 OptiScaler 输入显示/forced 锁/incompat 警告/实际限帧器文案 |
+
+**中危**:
+| # | 位置 | 问题 |
+|---|---|---|
+| G8 | menu_common.cpp:4782-4836 | Reprojection 控制缺启用滑条(菜单里关不掉/开不了)、Parallax Scale 应为 0-10000 对数(现为 0-2 线性,shader 期望世界单位 ~1000)、缺第三人称/视差遥测 |
+| G9 | menu_common.cpp:4413,5225-5275 | Vulkan FSR-FG 帧节奏调整被 DX12 版本检查隐藏;Vulkan OptiFG 缺 Flip(Unity)/FlipOffset 勾选(后端已实现) |
+| G10 | menu_common.cpp:1714 | FG 切换热键写持久值 → 保存后 FGEnabled=auto(跟随游戏)永久丢失(应 set_volatile_value) |
+| G11 | menu_common.cpp:3876 | XeFG→XeFG passthrough 下 fgSettingsChanged 恒真 → 永久显示"保存并重启"红字 |
+| G12 | FSRFG_Dx12.cpp:718-754 | _hudCopy/_hudlessCompareCompute 用缓存 _device 而非 cmdList->GetDevice 解析(上游 1ec11b8)→ 设备不匹配边角崩溃/花屏 |
+| G13 | NvApiHooks.cpp:238 | hookReflex 在 Reflex ID 分支 return 之后才调 → 仅 Reflex 接口被查询时 ReflexHooks 未初始化 |
+
+**低危(UI 小修)**:
+| # | 位置 | 问题 |
+|---|---|---|
+| G14 | menu_common.cpp:642,4040,4912,5360,2865/2897,3981/4890 | DLSS_on12 未按 dlssCapable 禁;XeFG 输入的 Advanced FG 区隐藏;Vulkan DLSSG Reflex 标记勾选应禁;01195e9 已修的过时 Vulkan 警告文本残留;Vulkan usesDlssd 组合守卫+(DRS) 徽标;DMFG 目标上限 200(<高刷屏) |
+| G15 | Streamline_Hooks.cpp:633 | cmdBuffer 残留 D3D12 强转(8e9e6f9 Vk SL 场景) |
+| G16 | menu_common.cpp:2897 | Vulkan 分支 AddVulkanBackends 未按 usesDlssd 守卫(DX11/12 已守) |
+
+**审计同时确认的"勿回搬"项**:dllmain Agility 判断(我们的 >0 门更对,U3)、
+State::creatingD3DDevice/vulkanSkipHooks 布尔(我们的线程局部 RAII 更对)、
+XeFG_DynamicCount(含超出上游的 Restart/clamp 安全改进)。
+
 ## U7 e0a4859 的 intrinsics 全局覆盖泄漏(上游同样存在,观察)
 
 每次 IAmdExtD3DFactory::CreateInterface(IID_IAmdExtD3DShaderIntrinsics) 覆盖全局
