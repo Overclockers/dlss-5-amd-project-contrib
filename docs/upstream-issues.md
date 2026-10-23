@@ -105,7 +105,7 @@ d8aebe4 三部分,移植两部分、跳过一部分:
    策略层已完整生效。
 
 卡顿不受影响:门控不变,Auto(未显式选模型)依然零挂钩。
-### C. 未移植提交(19 中剩 7,2026-10-24 二批移植后)
+### C. 剩余提交处理记录(二批 + 三批)
 
 勘误(2026-10-24):初版把 b686ef4/824a7b7/62887bf(Vulkan FSR4 支持、FG 隐藏、VK 管线 workaround)
 误列为待同步——经 `git merge-base --is-ancestor` 核实,它们是 9df512d 的祖先,早已随快照集成。
@@ -121,17 +121,33 @@ d8aebe4 三部分,移植两部分、跳过一部分:
 | P8 | 14434bf | HZD 重制版启动崩溃:版本枚举 outputCount 空指针防护 + 非零容量时才写数组 |
 | (P4 内含) | 42d6162 | device==nullptr 跳过 lastReportedSupport(已随 P4 移植) |
 
-**剩 7 个待评估(冲突面中大)**:
+**E1-E6 已全部移植(2026-10-23 第三批,wt-upstream-sync 单 worktree 按上游拓扑序串行)**:
 
-| # | 提交 | 冲突点 |
-|---|---|---|
-| E1 | e0a4859 Amdxc64_Hooks 重构 | 我们该文件 420 行差异(Proton QI 守卫 334c9ebf),需人工对账 |
-| E2 | c220ad9 UI 重排(会话计时器/信息盒) | menu_common.cpp 我们四区布局大改 |
-| E3 | 03e6ef0/c471428/c2529ed/a8d0f0a FPS overlay 群组 | 新配置键须走我们 CfgKey 注册体系;overlay 布局分叉 |
-| E4 | 65ee5d6 GPU 检测大修 | 与 P4 跳过的 IdentifyGpu 部分配套,需 GPU 实测 |
-| E5 | a79c2f3 移除非 LL 路径 | 结构性,与我们 LL fork 配置强耦合 |
-| E6 | 5dfedd6 fakenvapi 简化 | 结构性 |
-| — | 990ff98 merge,无内容 |
+审阅(work/notes/REVIEW-upstream-e1-e6.md)修正三处误判后全量执行:E4 全量移植
+(三项"拒收"是 diff 上下文,上游 creatingD3DDevice 本就 thread_local);E6 不暂缓
+(导出 nvapi_QueryInterface 作主 nvapi 时被 NvApiHooks detour,不绕过;被删
+signal→sleep 在 LL 构建不可达);九提交一次合入,无实机门槛。19/19 全部消化。
+
+| # | 提交 | 我们的提交 | 适配要点 |
+|---|---|---|---|
+| E3d | a8d0f0a | 8b566b20 | 旧单例直接可套;[FSRFG] DisableFlipMetering 不进 kKnown(防与 [NvApi] 同名混淆),直读 |
+| E3b | c471428 | 540b326f | FpsOverlayShowRatio 进 kKnown([Menu],host allowlist 已加) |
+| E3c | c2529ed | 5b8b5c42 | OverlayLine 栈数组;接受上游语义(Just FPS 不再显示比例) |
+| E3a | 03e6ef0 | 4c4528a2 | SetFlagEnvVar 删变量语义;表格 hunk 适配我们 MenuUi |
+| E1 | e0a4859 | 7baef8c3 | 修真 bug:Release 归零后 intrinsics 空指针;上游残留照搬,见 U7 |
+| E4 | 65ee5d6 | ce1a8939 | LUID 绑定/线程局部保留;修我们的 InitFg"先置 initTried 后检查"永久拒绝 bug |
+| E5 | a79c2f3 | 12b180f7 | 47 处 ifdef 扁平化 + Xell_Hooks 删除 + 旧 fakenvapi FG/计时路径删除 |
+| E6 | 5dfedd6 | fb8f6da4 | 加导出侧防御(延迟 ID 直接导出→InputReflex),闭合上游同样存在的 detour 失败缺口 |
+| E2 | c220ad9 | edec0643 | 计时器进底栏状态组;信息卡用 MenuCard;标题保留 (Q)/(OP) |
+
+host ci PASS。**验收缺口(源码完成、待实机)**:AMD FSR-FG flip meter、GPU 检测矩阵
+(RDNA2/3/4 + Intel/NV + 混合适配器)、Linux/Proton Vulkan 变更、XeLL/XeFG 全组合。
+
+## U7 e0a4859 的 intrinsics 全局覆盖泄漏(上游同样存在,观察)
+
+每次 IAmdExtD3DFactory::CreateInterface(IID_IAmdExtD3DShaderIntrinsics) 覆盖全局
+o_amdExtD3DShaderIntrinsics,上一个 real 引用泄漏。上游 990ff98 同样存在;我们照搬,
+不单独修(等上游;若多交换链场景出现泄漏证据再处理)。
 
 ### D. 行动项
 
