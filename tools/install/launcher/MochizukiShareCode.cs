@@ -169,14 +169,27 @@ namespace OptScalerNR.Launcher
         {
             public readonly SortedDictionary<int, decimal> Values;
             public readonly string GameTag;
-            internal DecodedCode(SortedDictionary<int, decimal> values, string gameTag)
-            { Values = values; GameTag = gameTag; }
+            public readonly string Note;
+            internal DecodedCode(SortedDictionary<int, decimal> values, string gameTag, string note = "")
+            { Values = values; GameTag = gameTag; Note = note ?? ""; }
         }
         public static string NormalizeGameTag(string game)
         {
             if (string.IsNullOrEmpty(game)) return "";
             var name = Path.GetFileName(game);
             return name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? name.Substring(0, name.Length - 4) : name;
+        }
+        public static string SanitizeNote(string note)
+        {
+            if (string.IsNullOrEmpty(note)) return "";
+            var clean = new StringBuilder(note.Length);
+            foreach (var ch in note.Trim())
+            {
+                if (ch == ';' || ch == '|' || ch == '\r' || ch == '\n' || char.IsControl(ch)) continue;
+                clean.Append(ch);
+                if (clean.Length >= 60) break;
+            }
+            return clean.ToString().Trim();
         }
         public static bool GameTagMatches(string tag, string executable)
         { return string.Equals(NormalizeGameTag(tag), NormalizeGameTag(executable), StringComparison.OrdinalIgnoreCase); }
@@ -226,8 +239,9 @@ namespace OptScalerNR.Launcher
             }
             return values;
         }
-        public static string Encode(byte[] ini, string game = null) { return EncodeValues(ReadValues(ini), NormalizeGameTag(game)); }
-        static string EncodeValues(IDictionary<int, decimal> values, string game)
+        public static string Encode(byte[] ini, string game = null, string note = null)
+        { return EncodeValues(ReadValues(ini), NormalizeGameTag(game), SanitizeNote(note)); }
+        static string EncodeValues(IDictionary<int, decimal> values, string game, string note = null)
         {
             var pairs = new List<string>();
             foreach (var key in Keys) {
@@ -239,28 +253,47 @@ namespace OptScalerNR.Launcher
                 pairs.Add(key.Index.ToString(Invariant) + "=" + raw.ToString("0", Invariant));
             }
             string payload = string.Join(",", pairs.ToArray());
+            if (!string.IsNullOrEmpty(note))
+            {
+                // MZ3 carries an author note after the game tag; the CRC covers the whole tagged payload
+                string noted = payload + "|" + game + "|" + note;
+                return "MZ3:" + noted + ";" + Crc16(noted).ToString("X4", Invariant);
+            }
             if (game.Length == 0) return "MZ1:" + payload + ";" + Crc16(payload).ToString("X4", Invariant);
             string tagged = payload + "|" + game;
             return "MZ2:" + tagged + ";" + Crc16(tagged).ToString("X4", Invariant);
         }
         public static DecodedCode Decode(string code)
         {
-            if (code == null || (!code.StartsWith("MZ1:", StringComparison.Ordinal) && !code.StartsWith("MZ2:", StringComparison.Ordinal))) throw new CodeException("prefix");
+            if (code == null || (!code.StartsWith("MZ1:", StringComparison.Ordinal) && !code.StartsWith("MZ2:", StringComparison.Ordinal) &&
+                                 !code.StartsWith("MZ3:", StringComparison.Ordinal))) throw new CodeException("prefix");
             bool tagged = code.StartsWith("MZ2:", StringComparison.Ordinal);
+            bool noted = code.StartsWith("MZ3:", StringComparison.Ordinal);
             int end = code.LastIndexOf(';');
             ushort crc;
             if (end < 4 || code.Length != end + 5 || !ushort.TryParse(code.Substring(end + 1), NumberStyles.AllowHexSpecifier, Invariant, out crc)) throw new CodeException("format");
             string payload = code.Substring(4, end - 4);
             if (Crc16(payload) != crc) throw new CodeException("crc");
             string game = "";
-            if (tagged) {
+            string note = "";
+            if (noted) {
+                // pairs|game|note — the game segment may be empty, the note may not
+                int first = payload.IndexOf('|');
+                int second = first < 0 ? -1 : payload.IndexOf('|', first + 1);
+                if (first < 0 || second < 0 || payload.IndexOf('|', second + 1) >= 0) throw new CodeException("format");
+                note = payload.Substring(second + 1);
+                game = payload.Substring(first + 1, second - first - 1);
+                payload = payload.Substring(0, first);
+                if (note.Length == 0) throw new CodeException("format");
+            }
+            else if (tagged) {
                 int separator = payload.IndexOf('|');
                 if (separator < 0 || separator == payload.Length - 1 || payload.IndexOf('|', separator + 1) >= 0) throw new CodeException("format");
                 game = payload.Substring(separator + 1);
                 payload = payload.Substring(0, separator);
             }
             var result = new SortedDictionary<int, decimal>();
-            if (payload.Length == 0) return new DecodedCode(result, game);
+            if (payload.Length == 0) return new DecodedCode(result, game, note);
             foreach (string pair in payload.Split(',')) {
                 var match = Regex.Match(pair, @"^(\d+)=(-?\d+)$");
                 int index; decimal raw;
@@ -275,7 +308,7 @@ namespace OptScalerNR.Launcher
                 value = Math.Max(key.Min, Math.Min(key.Max, value));
                 result.Add(index, value);
             }
-            return new DecodedCode(result, game);
+            return new DecodedCode(result, game, note);
         }
         public static string Summary(DecodedCode code, bool chinese)
         {

@@ -32,7 +32,7 @@ namespace OptScalerNR.Launcher
                              "Turn your tuned look into a share code, or paste someone else's to wear it");
             if (_mochiShareCodeButton != null)
             {
-                _mochiShareCodeButton.Content = L("✨ 风格码", "✨ Style code");
+                _mochiShareCodeButton.Content = SparkleLabel(L("风格码", "Style code"));
                 _mochiShareCodeButton.ToolTip = L("导出/导入 Mochizuki 画面风格参数", "Export/import Mochizuki visual style parameters");
                 _mochiShareCodeButton.IsEnabled = enabled;
             }
@@ -48,6 +48,34 @@ namespace OptScalerNR.Launcher
                 _styleInButton.ToolTip = L("粘贴别人的分享码，换上同款画面（默认打开导入）", "Paste a share code and wear that look (opens import)");
                 _styleInButton.IsEnabled = enabled;
             }
+        }
+
+        // WPF renders emoji as monochrome glyphs (no color-font support), so the sparkle is a
+        // vector path in emoji gold instead of the ✨ character
+        object SparkleLabel(string text)
+        {
+            var panel = new StackPanel { Orientation = Orientation.Horizontal };
+            var star = new System.Windows.Shapes.Path
+            {
+                Data = System.Windows.Media.Geometry.Parse("M 6 0 L 7.2 4.2 L 11.5 5.5 L 7.2 6.8 L 6 11 L 4.8 6.8 L 0.5 5.5 L 4.8 4.2 Z"),
+                Fill = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xF5, 0xC5, 0x18)),
+                Stroke = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xD4, 0x9A, 0x0A)),
+                StrokeThickness = 0.4,
+                Width = 11, Height = 11, Stretch = System.Windows.Media.Stretch.Uniform,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 4, 0)
+            };
+            var mini = new System.Windows.Shapes.Path
+            {
+                Data = System.Windows.Media.Geometry.Parse("M 2.6 0 L 3.1 1.5 L 4.6 2 L 3.1 2.5 L 2.6 4 L 2.1 2.5 L 0.6 2 L 2.1 1.5 Z"),
+                Fill = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFF, 0xE0, 0x66)),
+                Width = 4.5, Height = 4.5, Stretch = System.Windows.Media.Stretch.Uniform,
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(-9, 0, 0, 0)
+            };
+            var label = new TextBlock { Text = text, VerticalAlignment = VerticalAlignment.Center };
+            panel.Children.Add(star); panel.Children.Add(mini); panel.Children.Add(label);
+            return panel;
         }
 
         // MZ code inside arbitrary pasted text (share text with a pitch line, chat quotes, anything)
@@ -105,9 +133,24 @@ namespace OptScalerNR.Launcher
                 panel.Children.Add(input);
                 var includeGame = new CheckBox { Content = L("附带游戏名（朋友导入时会显示这段画面来自哪个游戏）", "Include game title (shown to whoever imports it)"), IsChecked = true, Margin = new Thickness(0, 10, 0, 0) };
                 panel.Children.Add(includeGame);
+                var sourceRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
+                var pickIni = new Button { Content = L("从 INI 文件读取…", "Read from INI file…"), MinWidth = 110, Margin = new Thickness(0, 0, 8, 0), Padding = new Thickness(10, 3, 10, 3) };
+                var sourceHint = new TextBlock { Foreground = TryFindResourceString("ThemeMuted"), FontSize = 11, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 330 };
+                sourceHint.Text = L("默认：当前游戏的 OptiScaler.ini", "Default: the current game's OptiScaler.ini");
+                sourceRow.Children.Add(pickIni); sourceRow.Children.Add(sourceHint);
+                panel.Children.Add(sourceRow);
+                var noteHint = new TextBlock { Text = L("备注（可选，随分享码一起发过去）：", "Note (optional, travels with the code):"), Foreground = TryFindResourceString("ThemeMuted"), FontSize = 11, Margin = new Thickness(0, 8, 0, 2) };
+                var noteBox = new TextBox { Height = 26, Padding = new Thickness(6, 3, 6, 3), Background = TryFindResourceString("ThemeSurface"), Foreground = TryFindResourceString("ThemeInk"), BorderBrush = TryFindResourceString("ThemeBorder") };
+                var notePlaceholder = L("给这段画面起个名字，比如：夜之城 冷蓝电影感", "Name this look, e.g. cold cinematic night");
+                noteBox.Text = notePlaceholder; noteBox.Foreground = TryFindResourceString("ThemeMuted");
+                bool noteDirty = false;
+                noteBox.GotFocus += delegate { if (!noteDirty) { noteBox.Text = ""; noteBox.Foreground = TryFindResourceString("ThemeInk"); } };
+                noteBox.LostFocus += delegate { if (!noteDirty && noteBox.Text.Length == 0) { noteBox.Text = notePlaceholder; noteBox.Foreground = TryFindResourceString("ThemeMuted"); } };
+                panel.Children.Add(noteHint); panel.Children.Add(noteBox);
                 var summary = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 10) };
                 panel.Children.Add(summary);
                 byte[] exportedIni = null;
+                string exportSourcePath = path;
                 bool isExport = !import;
                 Action renderMode = null;
                 RoutedEventHandler switchMode = delegate {
@@ -129,6 +172,8 @@ namespace OptScalerNR.Launcher
                     apply.Visibility = isExport ? Visibility.Collapsed : Visibility.Visible;
                     apply.IsEnabled = false; validated = null; validatedGame = "";
                     includeGame.Visibility = isExport ? Visibility.Visible : Visibility.Collapsed;
+                    sourceRow.Visibility = noteHint.Visibility = noteBox.Visibility =
+                        isExport ? Visibility.Visible : Visibility.Collapsed;
                     hint.Text = isExport
                         ? L("你调好的画面风格会变成下面这段分享码（只含画面参数，不动其他设置）。复制后发给朋友或发到群里，TA 粘贴解析后就能用上一模一样的画面。",
                            "Your tuned look becomes the share code below (visual parameters only, nothing else changes). Send it to friends or chat; they paste, parse and wear your exact look.")
@@ -137,8 +182,9 @@ namespace OptScalerNR.Launcher
                     input.IsReadOnly = isExport;
                     summary.Text = "";
                     if (isExport) {
-                        if (exportedIni == null) exportedIni = File.ReadAllBytes(path);
-                        input.Text = MochizukiShareCode.Encode(exportedIni, includeGame.IsChecked == true ? executable : null);
+                        if (exportedIni == null) exportedIni = File.ReadAllBytes(exportSourcePath);
+                        input.Text = MochizukiShareCode.Encode(exportedIni, includeGame.IsChecked == true ? executable : null,
+                                                               noteDirty ? MochizukiShareCode.SanitizeNote(noteBox.Text) : null);
                         var decoded = MochizukiShareCode.Decode(input.Text);
                         summary.Text = MochizukiShareCode.Summary(decoded, L("zh", "en") == "zh");
                         if (MochizukiShareCode.NonDefaultCount(decoded) == 0)
@@ -156,14 +202,32 @@ namespace OptScalerNR.Launcher
                         try {
                             var values = MochizukiShareCode.Decode(code);
                             string tag = values.GameTag.Length > 0 ? "【" + values.GameTag + "】" : "";
-                            summary.Text = L("✨ 已识别" + tag + "同款画质（色调、质感等专属调校）",
-                                             "✨ Ready: custom look" + (values.GameTag.Length > 0 ? " for [" + values.GameTag + "]" : "") + " (color and texture tuning)");
+                            string noteLine = values.Note.Length > 0 ? L("（备注：" + values.Note + "）", " (note: " + values.Note + ")") : "";
+                            summary.Text = L("✨ 已识别" + tag + "同款画质（色调、质感等专属调校）" + noteLine,
+                                             "✨ Ready: custom look" + (values.GameTag.Length > 0 ? " for [" + values.GameTag + "]" : "") + " (color and texture tuning)" + noteLine);
                             validated = code; validatedGame = values.GameTag; apply.IsEnabled = true;
                         } catch (Exception ex) { summary.Text = ShareError(ex); }
                     }
                 };
                 includeGame.Checked += delegate { if (isExport && renderMode != null) renderMode(); };
                 includeGame.Unchecked += delegate { if (isExport && renderMode != null) renderMode(); };
+                noteBox.TextChanged += delegate {
+                    if (!noteDirty && noteBox.Text == notePlaceholder) return;
+                    noteDirty = true;
+                    if (isExport && renderMode != null) renderMode();
+                };
+                pickIni.Click += delegate {
+                    var dlg = new Microsoft.Win32.OpenFileDialog { Filter = L("INI 文件|*.ini|所有文件|*.*", "INI files|*.ini|All files|*.*"), Title = L("选择要导出的 INI", "Choose an INI to export") };
+                    if (dlg.ShowDialog(dialog) == true)
+                    {
+                        try {
+                            exportedIni = File.ReadAllBytes(dlg.FileName);
+                            exportSourcePath = dlg.FileName;
+                            sourceHint.Text = System.IO.Path.GetFileName(dlg.FileName);
+                            if (isExport && renderMode != null) renderMode();
+                        } catch (Exception ex) { SetIniStatus("share-error", ShareError(ex)); }
+                    }
+                };
                 action.Click += delegate {
                     try {
                         if (isExport) { Clipboard.SetText(input.Text); return; }
@@ -171,7 +235,8 @@ namespace OptScalerNR.Launcher
                         var code = ExtractCode(input.Text);
                         var values = MochizukiShareCode.Decode(code);
                         int difference = MochizukiShareCode.DifferenceCount(File.ReadAllBytes(path), code);
-                        summary.Text = MochizukiShareCode.Summary(values, L("zh", "en") == "zh") + L("\n将更改 ", "\nWill change ") + difference + L(" 项画面设置（其余风格参数恢复默认）。", " settings (remaining visual parameters reset to defaults).");
+                        summary.Text = (values.Note.Length > 0 ? L("备注：", "Note: ") + values.Note + "\n" : "") +
+                                       MochizukiShareCode.Summary(values, L("zh", "en") == "zh") + L("\n将更改 ", "\nWill change ") + difference + L(" 项画面设置（其余风格参数恢复默认）。", " settings (remaining visual parameters reset to defaults).");
                         validated = code; validatedGame = values.GameTag; apply.IsEnabled = true;
                     } catch (Exception ex) { validated = null; apply.IsEnabled = false; summary.Text = ShareError(ex); }
                 };
