@@ -453,6 +453,7 @@ int main() {
                 "kMenuSection",  # Host window settings do not cross the runtime boundary.
                 "MenuLanguage", "MenuBlur", "MenuBlurStrength", "MenuWindowWidth", "MenuWindowHeight", "MenuWindowAnchor",
                 "FpsOverlayColorR", "FpsOverlayColorG", "FpsOverlayColorB",
+                "FpsOverlayShowRatio",
                 "ToneCurve",
                 "ToneLift",
                 "AmdUseGameExposure",
