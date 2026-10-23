@@ -1394,6 +1394,9 @@ VkResult VulkanHooks::SignalSemaphore(VkDevice device, const VkSemaphoreSignalIn
     static VkDevice lastDevice = VK_NULL_HANDLE;
     static PFN_vkSignalSemaphore signalSemaphore = nullptr;
 
+    // Snapshot inside the lock: another thread swapping the cache for its device after the null
+    // check would make this thread call the wrong device's function, or a torn nullptr
+    PFN_vkSignalSemaphore resolved = nullptr;
     {
         std::scoped_lock lock(mutex);
 
@@ -1406,12 +1409,14 @@ VkResult VulkanHooks::SignalSemaphore(VkDevice device, const VkSemaphoreSignalIn
 
             lastDevice = device;
         }
+
+        resolved = signalSemaphore;
     }
 
-    if (signalSemaphore == nullptr)
+    if (resolved == nullptr)
         return VK_ERROR_FEATURE_NOT_PRESENT;
 
-    return signalSemaphore(device, pSignalInfo);
+    return resolved(device, pSignalInfo);
 }
 
 PFN_vkVoidFunction VulkanHooks::GetInstanceProcAddr(VkInstance instance, const char* pName)
