@@ -64,6 +64,8 @@ call :NrCoverage || goto fail
 "%OUT%\descriptor_copy_range.exe" || goto fail
 %CXX% /utf-8 tests\host\dx11_companion_resize.cpp /Fe"%OUT%\dx11_companion_resize.exe" /Fo"%OUT%\dx11_companion_resize.obj" /link d3d11.lib dxgi.lib user32.lib || goto fail
 "%OUT%\dx11_companion_resize.exe" || goto fail
+%CXX% /utf-8 tests\host\dx11_context_state.cpp /Fe"%OUT%\dx11_context_state.exe" /Fo"%OUT%\dx11_context_state.obj" /link d3d11.lib d3dcompiler.lib dxguid.lib || goto fail
+"%OUT%\dx11_context_state.exe" || goto fail
 %CXX% /O2 /utf-8 /LD /DFIXTURE_ID=11 tests\host\streamline_plugin_fixture.cpp /Fe"%OUT%\sl_fixture_a.dll" /Fo"%OUT%\sl_fixture_a.obj" /link /IMPLIB:"%OUT%\sl_fixture_a.lib" || goto fail
 %CXX% /O2 /utf-8 /LD /DFIXTURE_ID=22 tests\host\streamline_plugin_fixture.cpp /Fe"%OUT%\sl_fixture_b.dll" /Fo"%OUT%\sl_fixture_b.obj" /link /IMPLIB:"%OUT%\sl_fixture_b.lib" || goto fail
 %CXX% /O2 /utf-8 /I"%INC%" tests\host\streamline_plugin_slots.cpp /Fe"%OUT%\streamline_plugin_slots.exe" /Fo"%OUT%\streamline_plugin_slots.obj" /link "%DETOURS%" || goto fail

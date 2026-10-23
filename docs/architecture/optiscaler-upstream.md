@@ -1,5 +1,42 @@
 # OptiScaler upstream integration
 
+## DX11 bridge Present timing integration repair (2026-10-23)
+
+The timing reader imported in local commit `99c9eb15b` dereferences the bridge's
+D3D11 `UpscalerTime`. The bridge overrides `Init` and `Evaluate`, bypassing the
+ordinary D3D11 timer initialization and measurement. The upstream `9df512d`
+snapshot initializes this timer and uses `ScopedGpuTime_Dx11`; those two companion
+changes were missing locally. They are now restored. This is a local integration
+omission, independent of NR and of the view ownership defect below.
+
+An actual-host fixture extended with a hidden D3D11 swapchain reproduced an AV
+reading address `0x50` at the first Present with the first ownership-only repair.
+Restoring timer construction and scoped measurement allowed eight Evaluate/Present
+pairs and GPU readback on both SDK and driver FSR4 routes. This closes a gap in the
+earlier fixture, which evaluated and read back without presenting. Game acceptance
+remains pending.
+
+## DX11 bridge context ownership repair (2026-10-23)
+
+The DX11 upscaler bridge must retain every reference acquired by the context's
+binding getters until restoration finishes. Releasing a saved RTV/DSV/SRV/UAV
+immediately leaves a borrowed pointer: when the game leaves the context as its
+sole owner, the bridge's unbind/conversion can destroy the view before restoration.
+`with_dx12/dx11_context_state.h` now owns the saved references and restores them
+before release. It also restores the compute shader/class instances changed by
+depth conversion, preserves D3D11.1 constant-buffer ranges and UAV counters, and
+uses the feature level's supported compute UAV slot count.
+
+`tests/host/dx11_context_state.cpp` uses a real WARP context and view destruction
+sentinels to check sole-context ownership, restoration, shader identity, constant
+buffer ranges, append-counter preservation and final reference release. It is
+wired into the host CI tier. A bounded RX 9070 XT fixture against the actual host
+DLL also reproduced an access violation on the first NR-disabled bridge frame
+before the repair; the repaired host completed eight frames and GPU readback with
+both the driver provider and the SDK upscaler. This establishes the ownership
+defect and its repair; it does not establish that every reported game crash has
+the same cause. Dying Light and Baldur's Gate 3 game acceptance remains separate.
+
 Reviewed snapshot: **97e99b4c5d9e8af38f14e3b00e1b3f7b35ab5aed**, from
 [optiscaler/OptiScaler](https://github.com/optiscaler/OptiScaler/commit/97e99b4c5d9e8af38f14e3b00e1b3f7b35ab5aed),
 2026-10-06. This is a selective integration baseline, not a full upstream merge.
