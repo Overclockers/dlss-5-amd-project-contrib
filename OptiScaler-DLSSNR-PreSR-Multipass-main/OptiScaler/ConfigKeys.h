@@ -24,6 +24,7 @@ inline constexpr const char *MenuWindowAnchor = "WindowAnchor";
 inline constexpr const char *FpsOverlayColorR = "FpsOverlayColorR";
 inline constexpr const char *FpsOverlayColorG = "FpsOverlayColorG";
 inline constexpr const char *FpsOverlayColorB = "FpsOverlayColorB";
+inline constexpr const char *FpsOverlayShowRatio = "FpsOverlayShowRatio";
 inline constexpr const char *kSection = "DlssNr";
 inline constexpr const char *Fsr4GpuSupport = "Fsr4GpuSupport";
 inline constexpr const char *Fsr4Model = "Fsr4Model";
@@ -293,6 +294,7 @@ inline constexpr const char *const kKnown[] = {
     ReprojectionParallaxAuto, ReprojectionParallaxScale, ReprojectionThirdPersonDetection,
     MenuLanguage, MenuWindowWidth, MenuWindowHeight, MenuWindowAnchor, MenuBlur, MenuBlurStrength,
     FpsOverlayColorR, FpsOverlayColorG, FpsOverlayColorB, // [Menu], no runtime env aliases
+    FpsOverlayShowRatio,                                   // [Menu], overlay upscale ratio display
     "Enabled",
     XeFGInterpolationCount,
     XeFGDynamicMFG, XeFGFramerateTargetDMFG, XeFGRoundingDMFG, XeFGDynamicAllow1X,
