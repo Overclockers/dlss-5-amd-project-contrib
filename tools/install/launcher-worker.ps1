@@ -462,8 +462,14 @@ if ($req.action -ne 'uninstall') {
     if ($probe.conflicts.Count -gt 0) {
         $map = @{}
         if ($dec -and $dec.foreignProxy) { $map = ConvertTo-ForeignProxyMap $dec.foreignProxy }
+        # Files the user already chose to move aside with the Mochizuki installation need no second decision.
+        $movedAside = @()
+        if ($script:mochizukiInstall -and $dec -and [string]$dec.mochizukiInstall -eq 'remove') {
+            $movedAside = @($script:mochizukiInstall.files)
+        }
         foreach ($c in $probe.conflicts) {
             $name = $c.name
+            if ($movedAside | Where-Object { $_ -ieq $name }) { continue }
             $has = $map.ContainsKey($name) -or $map.ContainsKey($name.ToLowerInvariant())
             if (-not $has) {
                 $script:needed += @{
