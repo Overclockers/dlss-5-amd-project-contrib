@@ -307,6 +307,12 @@ NrConvenience=1
 ; Logging also needs measurement and file logging; at most one summary per five seconds.
 NrTimingEnabled=false
 NrTimingLog=false
+; One-switch flicker capture: coverage details, frame trace, game-thread timing and file logging.
+; Save and restart after changing. Does not alter inline, barrier, wrapping or picture settings.
+NrFlickerDiag=false
+NrFrameDiag=false
+; Game-thread wait timing (needs NrFrameDiag): Present -> first submit and fence waits, gw_* fields. Timestamps only.
+NrGameWaitDiag=false
 ; Shared final-output blend for either AMD backend. 0..2, default 1.
 ; 0 shows the original but still runs NR; disable NR to save model computation.
 NrOverallIntensity=1.0
