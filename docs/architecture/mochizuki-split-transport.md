@@ -1,9 +1,9 @@
 # Mochizuki split 共享颜色、motion 输入与纹理输出
 
-## 准入外分支改共享纹理（2026-10-22，feat/nr-bridge-opt，源码完成、待实机）
+## 准入外分支改共享纹理（2026-10-22，feat/nr-bridge-opt，离线夹具通过、游戏内待测）
 
-逐分支结论。证据为本分支源码位置；**未编译、未跑离线 split 夹具、未进游戏**（本轮 NUC
-离线，box 无 C++ 编译器），下列"已接入"均只是源码完成，没有任何性能或正确性数字。
+逐分支结论。证据为本分支源码位置；2026-10-23 已在 NUC 编译 runtime 并跑离线夹具（见本节末），
+**未进游戏**。
 
 | 分支 | 结论 | 依据 |
 |---|---|---|
@@ -18,10 +18,26 @@
 内部回滚：`MZ_TEST_SHARED_EXTENDED=0`（进程启动前设置）恢复 2026-10-19 的窄准入；
 `MZ_TEST_SHARED_INPUT=0` 仍整体回到 buffer。默认开启扩展准入，失败/预算/退避机制不变。
 
-待实机验收（NUC 恢复后）：Release 编译到 TEMP；离线 split 夹具覆盖 bucket 子矩形
-（w<W、h<H，含 Pad 边缘逐字节对 buffer 路线）、exact DRS 大分配子矩形、scale<1、
-passes=2/3（无首遍导出）、RenoDX 各一组，核对实际路线日志 `split colour input: shared texture`
-与输出 hash；再按 PLAN.md 的游戏内 A/B 流程测净收益。没有这些之前不声称更快或正确。
+离线夹具（2026-10-23 NUC，`tests/mochizuki/run.cmd shared-extended`，`shared_extended.cpp` +
+`shared_extended.py`）：256×256 RGBA16F 分配、小模型、native；每个场景默认与 `MZ_TEST_SHARED_EXTENDED=0`
+各跑一次（另手工跑了 `MZ_TEST_SHARED_INPUT=0` 与 D3D12 debug layer）。比较的是子矩形内的输出 hash
+（hash0 = ResetHistory 后首帧，hash1 = 下一帧时域输出），不是 Pad 后的中间图像。
+
+| 场景 | 默认路线（颜色/motion） | `EXTENDED=0` | `INPUT=0` | 输出 hash | wall 中位 ms 默认 / EXT0 / INPUT0 |
+|---|---|---|---|---|---|
+| 整尺寸（对照） | 共享/共享 | 共享/共享 | buffer | 三者相同 | 2.082 / 2.074 / 2.147 |
+| exact 子矩形 200×180 | 共享/buffer | buffer | buffer | 三者相同 | 2.136 / 2.155 / 2.167 |
+| bucket（drs_mode=1，200×180） | 共享/buffer | buffer | buffer | 三者相同 | 2.151 / 2.223 / 2.254 |
+| scale=0.5 | 共享/共享 | buffer | buffer | 三者相同 | 2.086 / 2.176 / 2.204 |
+| passes=2 | 共享/共享 | buffer | buffer | 三者相同 | 3.469 / 3.429 / 3.446 |
+| passes=3 | 共享/共享 | buffer | buffer | 三者相同 | 4.633 / 4.662 / 4.754 |
+| RenoDX（passes=1） | 共享/共享 | buffer | buffer | hash0 三者相同；hash1 同一路线两次也不同 | 2.088 / 2.130 / 2.200 |
+
+- D3D12 debug layer 下所有场景 0 条错误；dispatch 数各路线相同（71/142/213）。
+- RenoDX：`ResetHistory` 不清 RenoDX 的时域状态，同进程两次参考帧的 hash1 也不一致（buffer 路线同样），
+  所以只能比 hash0；这与载体无关，夹具对 reno 只报告 `repro=0` 不判失败。
+- 时间：每个变体单次 200 帧，差异约 0.1 ms 内，与运行间波动同量级；256×256 的拷贝量太小，
+  **不据此声称更快**。净收益仍按 PLAN.md 的游戏内 A/B 流程测。
 
 ## 最新进度核对（2026-10-21）
 

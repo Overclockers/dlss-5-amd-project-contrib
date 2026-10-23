@@ -51,7 +51,8 @@ winevulkan 不支持 `VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT` 的 Win
 ## 验证
 
 - Windows: 构建通过 + 现有游戏(燕云/巫师 3)NR 功能不变
-- Linux: Dying Light: The Beast 用户实测,日志不再出现 `import of a D3D12 buffer failed`,NR 正常工作
+- Linux: 待有 Linux/Proton 环境后实测(如 Dying Light: The Beast),日志不再出现 `import of a D3D12 buffer failed`,NR 正常工作;
+  在此之前 Proton 直连保持为验收缺口
 
 ## 实现(源码完成、待实机)
 
@@ -82,8 +83,9 @@ winevulkan 不支持 `VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT` 的 Win
 
 ### 验收缺口(待实机)
 
-1. **未在 Proton 实机运行**:需 Linux 用户(DL:The Beast 等)抓 OptiScaler.log,看
-   `Proton direct path: vkd3d-proton's device …` 一行与是否仍出现 `import of a D3D12 buffer failed`。
+1. **未在 Proton 实机运行**:目前没有 Linux 环境,此项保持为验收缺口,直到有 Linux/Proton 环境自行验证。
+   届时抓 OptiScaler.log,看 `Proton direct path: vkd3d-proton's device …` 一行与是否仍出现
+   `import of a D3D12 buffer failed`。
 2. **vkd3d-proton 不启用 VK_KHR_workgroup_memory_explicit_layout**(其 vkCreateDevice 扩展表里没有):
    与 Linux 路线一样只查物理设备支持,依赖 RADV 不校验;日志会列出 vkd3d 未启用的扩展,便于区分失败原因。
 3. **nativevulkanloader 游戏**:直连被拒绝,回到原状态(自建设备 + 熔断器),不是支持。
@@ -91,6 +93,8 @@ winevulkan 不支持 `VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT` 的 Win
 5. **LockCommandQueue 会排空游戏队列**:每帧一次额外同步点,性能代价未测。
 
 ## 游戏内同场景 split A/B 流程(共享纹理 vs buffer)
+
+此流程由 Kenny 在自己的 Windows 机上执行,不依赖其他人参与。Proton 直连不在此流程内(见上文验收缺口)。
 
 共享纹理路线的开关是进程启动时读的环境变量,不能在同一会话内原地切换,所以这是**跨会话**比较,
 违反 [docs/measurement.md](docs/measurement.md) "只比同一会话"一条;下面靠交替多次启动和固定站位压低偏差,
