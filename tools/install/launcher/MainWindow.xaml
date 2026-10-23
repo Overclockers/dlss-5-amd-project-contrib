@@ -210,7 +210,7 @@
       <Setter Property="Padding" Value="18,0"/>
       <Setter Property="Cursor" Value="Hand"/>
       <Setter Property="HorizontalContentAlignment" Value="Center"/>
-      <Setter Property="FocusVisualStyle" Value="{DynamicResource KeyboardFocus}"/>
+      <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
       <Setter Property="Template" Value="{DynamicResource MaterialButtonTemplate}"/>
     </Style>
 
@@ -225,7 +225,7 @@
       <Setter Property="FontSize" Value="12"/>
       <Setter Property="Cursor" Value="Hand"/>
       <Setter Property="HorizontalContentAlignment" Value="Center"/>
-      <Setter Property="FocusVisualStyle" Value="{DynamicResource KeyboardFocus}"/>
+      <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
       <Setter Property="Template" Value="{DynamicResource MaterialButtonTemplate}"/>
     </Style>
 
