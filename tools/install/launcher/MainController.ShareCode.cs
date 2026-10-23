@@ -18,6 +18,7 @@ namespace OptScalerNR.Launcher
             if (_mochiShareCodeButton != null)
             {
                 _mochiShareCodeButton.Content = L("✨ 风格码", "✨ Style code");
+                _mochiShareCodeButton.ToolTip = L("导出/导入 Mochizuki 画面风格参数", "Export/import Mochizuki visual style parameters");
                 _mochiShareCodeButton.IsEnabled = enabled;
             }
         }

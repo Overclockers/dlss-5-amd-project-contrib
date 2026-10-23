@@ -227,6 +227,8 @@ try {
         Save-Preview $window 'english-library.png'
         Save-Preview $window 'english-settings.png' $true
         $result.Backends[2].PreparationState = 'ready'
+        $result.Backends[2].OriginalState = 'preparable'
+        $result.Backends[2].SmallState = 'preparable'
         foreach ($language in @('zh','en')) {
             Invoke-Controller $window 'SetLanguage' @($language)
             $dialog = Invoke-Controller $window 'CreateMochizukiModelDialog'

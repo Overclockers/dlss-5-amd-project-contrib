@@ -556,7 +556,7 @@
                   <Border Background="{DynamicResource ThemeSubtle}" BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1" CornerRadius="12" Padding="10,9" Margin="0,0,5,0" MinHeight="90">
                     <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                       <DockPanel>
-                        <Button x:Name="MochiShareCodeButton" DockPanel.Dock="Right" Style="{StaticResource GhostButton}" Height="22" FontSize="10" Padding="8,0" Margin="6,0,0,0" VerticalAlignment="Top" ToolTip="导出/导入 Mochizuki 画面风格参数"/>
+                        <Button x:Name="MochiShareCodeButton" DockPanel.Dock="Right" Style="{StaticResource GhostButton}" Height="22" FontSize="10" Padding="8,0" Margin="6,0,0,0" VerticalAlignment="Top"/>
                         <CheckBox x:Name="MochiCheck" Content="mochizuki" FontWeight="SemiBold" FontSize="13" VerticalAlignment="Top"/>
                       </DockPanel>
                       <Grid Grid.Row="2" Margin="0,5,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
