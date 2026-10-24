@@ -1,6 +1,8 @@
 #include <pch.h>
 #include <dlssnr/amd/AmdBridge.h>
 #include <dlssnr/DlssNr.h>
+#include <dlssnr/backend/Selector.h>
+#include <dlssnr/submission/SubmissionHooks.h>
 
 #include "IFeature_VkwDx12.h"
 
@@ -1927,6 +1929,17 @@ HRESULT IFeature_VkwDx12::CreateDx12Device()
         }
     }
 
+    // These are bridge-owned lists, not game EXE calls. Prepare submission
+    // expansion before exposing any proxy, independently of early-wrap policy.
+    const bool recordingProxy = DlssNr::Backend::SubmissionHooksWanted();
+    if (recordingProxy &&
+        (Dx12CommandListType != D3D12_COMMAND_LIST_TYPE_DIRECT ||
+         !DlssNr::AmdBridge::EnsureRecordingSubmissionHook(Dx12CommandQueue)))
+    {
+        LOG_ERROR("Vulkan companion: could not prepare recording proxy submission");
+        return E_NOINTERFACE;
+    }
+
     for (size_t i = 0; i < VKDX12_BUFFER_COUNT; i++)
     {
         if (Dx12CommandAllocator[i] == nullptr)
@@ -1943,9 +1956,15 @@ HRESULT IFeature_VkwDx12::CreateDx12Device()
 
         if (Dx12CommandList[i] == nullptr && Dx12CommandAllocator[i] != nullptr)
         {
-            // CreateCommandList
-            result = _dx11on12Device->CreateCommandList(0, Dx12CommandListType, Dx12CommandAllocator[i], nullptr,
-                                                        IID_PPV_ARGS(&Dx12CommandList[i]));
+            // Avoid depending on early any-module wrapping for our own lists.
+            // This helper suppresses nested wrapping if creation is hooked.
+            if (recordingProxy)
+                result = DlssNr::Submission::Hooks::CreateProxiedCommandList(
+                    _dx11on12Device, 0, Dx12CommandListType, Dx12CommandAllocator[i], nullptr,
+                    IID_PPV_ARGS(&Dx12CommandList[i]));
+            else
+                result = _dx11on12Device->CreateCommandList(0, Dx12CommandListType, Dx12CommandAllocator[i], nullptr,
+                                                          IID_PPV_ARGS(&Dx12CommandList[i]));
 
             if (result != S_OK)
             {
@@ -1953,9 +1972,17 @@ HRESULT IFeature_VkwDx12::CreateDx12Device()
                 return E_NOINTERFACE;
             }
 
-            Dx12CommandList[i]->Close();
+            result = Dx12CommandList[i]->Close();
+            if (FAILED(result))
+            {
+                LOG_ERROR("Vulkan companion: initial command list Close failed: {:X}", (UINT) result);
+                return result;
+            }
         }
     }
+
+    LOG_INFO("Vulkan companion: recordingProxy={} submissionExpansion={} queue={:p}", recordingProxy,
+             DlssNr::Submission::Hooks::ExpandEnabled(), reinterpret_cast<void*>(Dx12CommandQueue));
 
     if (Dx12Fence == nullptr)
     {

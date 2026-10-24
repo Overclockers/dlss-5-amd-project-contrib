@@ -951,6 +951,20 @@ void VulkanDeviceFeatureState::EnableMochizukiFeatures(VkPhysicalDevice physical
     impl->EnableMochizukiFeatures(physicalDevice);
 }
 
+PFN_vkEnumerateDeviceExtensionProperties VulkanSpoofing::GetOriginalDeviceExtensionEnumerator()
+{
+    // Detours rewrites this pointer to the trampoline. Looking the export up
+    // again through vkGetInstanceProcAddr can return the patched entry instead.
+    if (o_vkEnumerateDeviceExtensionProperties != nullptr)
+        return o_vkEnumerateDeviceExtensionProperties;
+
+    const auto module = KernelBaseProxy::GetModuleHandleA_()("vulkan-1.dll");
+    return module != nullptr
+               ? reinterpret_cast<PFN_vkEnumerateDeviceExtensionProperties>(
+                     KernelBaseProxy::GetProcAddress_()(module, "vkEnumerateDeviceExtensionProperties"))
+               : nullptr;
+}
+
 VkResult VulkanSpoofing::hkvkCreateDevice(VkPhysicalDevice physicalDevice, VkDeviceCreateInfo* pCreateInfo,
                                           const VkAllocationCallbacks* pAllocator, VkDevice* pDevice,
                                           VulkanDeviceFeatureState* featureState, uint32_t requestedApiVersion)

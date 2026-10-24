@@ -714,18 +714,11 @@ static VkResult hkvkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevice
 
         if (Config::Instance()->DlssNrEnabled.value_or_default())
         {
-            // Query through the instance that owns this physical device (resolved above via
-            // GetPhysicalDeviceApiVersion), never State::VulkanInstance: under Proton, vkd3d-proton's
-            // D3D12 instance does not update that global ( ScopedCreatingD3DDevice guard) and it is
-            // not cleared on destroy, so it is often a stale handle from an earlier, destroyed
-            // instance - enumerating extensions through it crashes inside winevulkan.
-            VkInstance extensionInstance = physicalDeviceInstance;
-
-            if (extensionInstance == VK_NULL_HANDLE)
-                extensionInstance = State::Instance().VulkanInstance;
-
+            // The game-facing enumeration includes spoofed NVX extensions on AMD.
+            // Query the original loader trampoline with this physical device;
+            // neither a patched export nor a stale global instance is safe here.
             const auto supported = DlssNr::VkExt::SupportedDeviceExtensions(
-                o_vkGetInstanceProcAddr, extensionInstance, physicalDevice);
+                VulkanSpoofing::GetOriginalDeviceExtensionEnumerator(), physicalDevice);
 
             nrExtensions.names.assign(localCreateInfo.ppEnabledExtensionNames,
                                       localCreateInfo.ppEnabledExtensionNames + localCreateInfo.enabledExtensionCount);
@@ -784,7 +777,7 @@ static VkResult hkvkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevice
             {
                 ScopedSkipSpoofingGlobal skipSpoofing {};
                 const auto supported = DlssNr::VkExt::SupportedDeviceExtensions(
-                    o_vkGetInstanceProcAddr, physicalDeviceInstance, physicalDevice);
+                    VulkanSpoofing::GetOriginalDeviceExtensionEnumerator(), physicalDevice);
                 if (localCreateInfo.enabledExtensionCount)
                     protonExtensions.names.assign(localCreateInfo.ppEnabledExtensionNames,
                         localCreateInfo.ppEnabledExtensionNames + localCreateInfo.enabledExtensionCount);
@@ -818,6 +811,9 @@ static VkResult hkvkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevice
             localCreateInfo = originalCreateInfo;
             result = o_vkCreateDevice(physicalDevice, &localCreateInfo, pAllocator, pDevice);
         }
+        if (result != VK_SUCCESS)
+            LOG_ERROR("vkCreateDevice failed: {} ({} requested extensions)", int(result),
+                      localCreateInfo.enabledExtensionCount);
         if (result == VK_SUCCESS && protonGameDevice)
         {
             try { mz::device::CreatedDevices().Created(*pDevice, localCreateInfo); }

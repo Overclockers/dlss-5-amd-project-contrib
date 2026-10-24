@@ -44,6 +44,9 @@ class VulkanSpoofing
     static PFN_vkVoidFunction hkvkGetDeviceProcAddr(const PFN_vkVoidFunction orgFunc, const char* pName);
     static PFN_vkVoidFunction hkvkGetInstanceProcAddr(const PFN_vkVoidFunction orgFunc, const char* pName);
 
+    // Driver capability queries must bypass the game-facing extension spoof.
+    static PFN_vkEnumerateDeviceExtensionProperties GetOriginalDeviceExtensionEnumerator();
+
     static void HookForVulkanSpoofing(HMODULE vulkanModule);
     static void HookForVulkanExtensionSpoofing(HMODULE vulkanModule);
     static void HookForVulkanVRAMSpoofing(HMODULE vulkanModule);

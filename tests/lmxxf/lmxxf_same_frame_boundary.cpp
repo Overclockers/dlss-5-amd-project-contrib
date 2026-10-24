@@ -233,10 +233,18 @@ int main()
     Check(dev4->CreateCommandList1(0, D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_LIST_FLAG_NONE, IID_PPV_ARGS(&closed)), "CL1");
     Check(closed->Reset(a.Get(), nullptr), "CL1 first reset");
     Check(closed->Close(), "CL1 close");
+    // Bridge-owned lists must be proxied even before a wrapped swapchain and
+    // with every early-wrap policy disabled (BG3 Vulkan companion regression).
+    H::SetProxyWrap(false);
+    H::SetEarlyExeWrap(false);
+    H::SetEarlyAnyModuleWrap(false);
+    H::SetEarlyUnityPlayerWrap(false);
     ComPtr<ID3D12GraphicsCommandList> explicitProxy;
     auto c = allocator();
     Check(H::CreateProxiedCommandList(device.Get(), 0, D3D12_COMMAND_LIST_TYPE_DIRECT, c.Get(), nullptr,
                                      IID_PPV_ARGS(&explicitProxy)), "explicit proxy helper");
+    ComPtr<ILogicalCommandList> explicitLogical;
+    Check(explicitProxy.As(&explicitLogical), "explicit helper owns recording proxy without early wrap");
     Check(explicitProxy->Close(), "explicit close");
     ID3D12CommandList *tail[] = {closed.Get(), explicitProxy.Get()};
     H::ExecuteExpanded(queue.Get(), 2, tail, nullptr, nullptr, TraceRaw);

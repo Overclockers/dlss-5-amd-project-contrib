@@ -48,29 +48,32 @@ struct Merged
 };
 
 // Everything the physical device is willing to offer, by name.
-inline std::vector<std::string> SupportedDeviceExtensions(PFN_vkGetInstanceProcAddr getInstanceProcAddr,
-                                                          VkInstance instance, VkPhysicalDevice physicalDevice)
+// Pass the original enumeration trampoline, never a fresh function lookup:
+// extension spoofing patches that entry and would make NVX appear supported on AMD.
+inline std::vector<std::string> SupportedDeviceExtensions(PFN_vkEnumerateDeviceExtensionProperties enumerate,
+                                                          VkPhysicalDevice physicalDevice)
 {
     std::vector<std::string> out;
 
-    if (getInstanceProcAddr == nullptr || physicalDevice == VK_NULL_HANDLE)
-        return out;
-
-    auto enumerate = (PFN_vkEnumerateDeviceExtensionProperties) getInstanceProcAddr(
-        instance, "vkEnumerateDeviceExtensionProperties");
-
-    if (enumerate == nullptr)
+    if (enumerate == nullptr || physicalDevice == VK_NULL_HANDLE)
         return out;
 
     uint32_t count = 0;
 
-    if (enumerate(physicalDevice, nullptr, &count, nullptr) != VK_SUCCESS || count == 0)
-        return out;
-
-    std::vector<VkExtensionProperties> props(count);
-
-    if (enumerate(physicalDevice, nullptr, &count, props.data()) != VK_SUCCESS)
-        return out;
+    std::vector<VkExtensionProperties> props;
+    for (;;)
+    {
+        if (enumerate(physicalDevice, nullptr, &count, nullptr) != VK_SUCCESS || count == 0)
+            return out;
+        props.resize(count);
+        const auto result = enumerate(physicalDevice, nullptr, &count, props.data());
+        if (result == VK_INCOMPLETE)
+            continue;
+        if (result != VK_SUCCESS)
+            return out;
+        props.resize(count);
+        break;
+    }
 
     out.reserve(count);
 
