@@ -845,7 +845,8 @@
         "windows/src/core/nr_graph.cpp",
         "windows/src/core/nr_pipeline_binary.hpp",
         "windows/src/core/nr_runtime.cpp",
-        "windows/src/core/nr_shader_manifest.hpp"
+        "windows/src/core/nr_shader_manifest.hpp",
+        "windows/src/core/nrvk.hpp"
       ]
     },
     {

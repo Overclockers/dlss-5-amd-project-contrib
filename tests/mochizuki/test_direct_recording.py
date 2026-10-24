@@ -230,5 +230,11 @@ class DirectRecordingContract(unittest.TestCase):
             self.assertIn("s && s->vk.adoptedVkd3d", fn)
             self.assertIn("s->RejectAdoptedLegacyPath(", fn)
 
+    def test_radv_linux_spirv_compacts_windows_bda_push_constants(self):
+        nrvk = source(ROOT / "third_party/mochizuki/windows/src/core/nrvk.hpp")
+        create = nrvk[nrvk.index("struct Kernel"):nrvk.index("void make_pipeline")]
+        self.assertIn("bool linux_push = !nr::binary::import_enabled()", create)
+        self.assertIn('aco_push_gap=name.rfind("g_gemm",0)==0 && push_bytes>=88 ? 80u : name=="g_vitattn.spv" ? 20u : 0u', create)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

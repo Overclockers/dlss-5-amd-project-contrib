@@ -407,3 +407,38 @@
 +}
 +
  } // namespace nr::detail
+--- a/windows/src/core/nrvk.hpp
++++ b/windows/src/core/nrvk.hpp
+@@ -937,7 +937,7 @@
+     VkDescriptorPool pool{};
+     VkDescriptorSet set{};
+     uint32_t push_range{};   // the layout's push constant bytes
+-    uint32_t aco_push_gap{}; // ACO INT4 uses Linux's push layout, omitting Windows's arena address.
++    uint32_t aco_push_gap{}; // Linux SPIR-V (ACO INT4 or RADV compile-only) omits Windows's arena address.
+     void push_constants(VkCommandBuffer cmd, uint32_t bytes, const void* data) const {
+         if (!bytes) return;
+         if (!aco_push_gap) {
+@@ -968,13 +968,17 @@
+                 const std::vector<Context::Image*>& images = {}) {
+         device = ctx.device;
+         push_range = push_bytes;
+-#if NR_INT4
+-        if (!nr::binary::directory().empty() && nr::build_cfg("NR_I4_WEIGHTS")) {
+-            const auto name=spirv_path.substr(spirv_path.find_last_of("/\\")+1);
+-            if (!nr::binary::native_shell(name))
+-                aco_push_gap=name.rfind("g_gemm",0)==0 && push_bytes>=88 ? 80u : name=="g_vitattn.spv" ? 20u : 0u;
+-        }
++        if (!nr::binary::directory().empty()) {
++            bool linux_push = !nr::binary::import_enabled();
++#if NR_INT4
++            linux_push = linux_push || nr::build_cfg("NR_I4_WEIGHTS") != nullptr;
+ #endif
++            if (linux_push) {
++                const auto name=spirv_path.substr(spirv_path.find_last_of("/\\")+1);
++                if (!nr::binary::native_shell(name))
++                    aco_push_gap=name.rfind("g_gemm",0)==0 && push_bytes>=88 ? 80u : name=="g_vitattn.spv" ? 20u : 0u;
++            }
++        }
+         const uint32_t nb = uint32_t(bindings.size());
+         const uint32_t ni = uint32_t(images.size());
+         const uint32_t n = nb + ni;
