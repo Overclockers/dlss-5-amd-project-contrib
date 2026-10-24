@@ -2824,6 +2824,8 @@ struct Session
     Microsoft::WRL::ComPtr<ID3D12Resource> pipelineInvalidator;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> invalidatorCpu, invalidatorGpu;
     bool invalidatorFailed = false;
+    std::atomic<bool> frameAbiRejected { false };
+    std::atomic<bool> adoptedLegacyRejected { false };
     uint64_t directRecorded = 0, directSubmitted = 0, directCompleted = 0;
     std::shared_ptr<FrameBuffers> allocation;
     std::shared_ptr<ImageInput> colourInput;
@@ -3873,6 +3875,26 @@ struct Session
             nr::logf("[mochizuki] %s", text);
         else if (n == kErrorsLogged || n % 1000 == 0)
             nr::logf("[mochizuki] %s (error %u of the session; from now on one in 1000 is logged)", text, n);
+    }
+
+    int32_t RejectFrameAbiMismatch(const char* text) noexcept
+    {
+        RememberError(text);
+        if (!frameAbiRejected.exchange(true, std::memory_order_relaxed))
+            nr::logf("[mochizuki] REJECTED: OptiScaler.dll and MochizukiNrRuntime.dll are from different builds "
+                     "(frame ABI size mismatch). Install the FULL package (both DLLs from the same build). "
+                     "Runtime commit=" MZ_BUILD_COMMIT ".");
+        return Fail(LMXXF_NR_INVALID_ARGUMENT, text);
+    }
+
+    int32_t RejectAdoptedLegacyPath(const char* text) noexcept
+    {
+        RememberError(text);
+        if (!adoptedLegacyRejected.exchange(true, std::memory_order_relaxed))
+            nr::logf("[mochizuki] REJECTED: host is driving the legacy execution path on an adopted vkd3d device. "
+                     "OptiScaler.dll is older than MochizukiNrRuntime.dll — install the FULL package (both DLLs from "
+                     "the same build). Runtime commit=" MZ_BUILD_COMMIT ".");
+        return Fail(LMXXF_NR_INVALID_ARGUMENT, text);
     }
 
     // A Start that threw has submitted nothing: free what it made, so that a later PrepareSession can try again.
@@ -6799,8 +6821,10 @@ int32_t PrepareSession(void* context)
 int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfNrJob* job)
 {
     auto* s = static_cast<Session*>(context);
-    if (!s || !info || !job || job->struct_size != sizeof(LmxxfNrJob) || info->struct_size != sizeof(MochizukiNrFrameInfo))
+    if (!s || !info || !job || job->struct_size != sizeof(LmxxfNrJob))
         return Fail(LMXXF_NR_INVALID_ARGUMENT, "PrepareFrame: bad arguments");
+    if (info->struct_size != sizeof(MochizukiNrFrameInfo))
+        return s->RejectFrameAbiMismatch("PrepareFrame: bad arguments");
     job->handle = nullptr;
     job->private_output = nullptr;
     job->first_pass_output = nullptr;
@@ -6811,6 +6835,13 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
             if (!s->vk.device)
                 return Fail(LMXXF_NR_NOT_IMPLEMENTED, "PrepareFrame: call PrepareSession first");
             s->FreeBuried(false);
+            const bool directRecording = (info->flags & MOCHIZUKI_NR_FRAME_FLAG_DIRECT_RECORDING) != 0;
+            if (directRecording != s->vk.adoptedVkd3d)
+            {
+                if (s->vk.adoptedVkd3d)
+                    return s->RejectAdoptedLegacyPath("PrepareFrame: adopted vkd3d requires direct recording");
+                return Fail(LMXXF_NR_INVALID_ARGUMENT, "PrepareFrame: adopted vkd3d requires direct recording");
+            }
             auto* colour = static_cast<ID3D12Resource*>(info->color);
             if (!colour || !info->color_width || !info->color_height)
                 return Fail(LMXXF_NR_INVALID_ARGUMENT, "PrepareFrame: colour and its size are required");
@@ -7070,9 +7101,7 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
             next.colour = colour;
             next.normalizationReset = info->reset != 0;
             next.colourState = static_cast<D3D12_RESOURCE_STATES>(info->color_state);
-            next.directRecording = (info->flags & MOCHIZUKI_NR_FRAME_FLAG_DIRECT_RECORDING) != 0;
-            if (next.directRecording != s->vk.adoptedVkd3d)
-                return Fail(LMXXF_NR_INVALID_ARGUMENT, "PrepareFrame: adopted vkd3d requires direct recording");
+            next.directRecording = directRecording;
             next.depth = static_cast<ID3D12Resource*>(info->depth);
             next.depthState = static_cast<D3D12_RESOURCE_STATES>(info->depth_state);
             next.depthWidth = info->depth_width;

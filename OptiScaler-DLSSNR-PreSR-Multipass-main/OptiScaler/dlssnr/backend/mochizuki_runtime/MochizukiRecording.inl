@@ -143,8 +143,13 @@ int32_t PrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfNrJob
     });
 }
 
-int32_t RejectLmxxfFrame(void*, const LmxxfNrFrameInfo*, LmxxfNrJob*)
-{ return Fail(LMXXF_NR_INVALID_ARGUMENT, "Use MochizukiNrPrepareFrame from the current package"); }
+int32_t RejectLmxxfFrame(void* context, const LmxxfNrFrameInfo*, LmxxfNrJob*)
+{
+    auto* s = static_cast<Session*>(context);
+    if (s && s->vk.adoptedVkd3d)
+        return s->RejectAdoptedLegacyPath("Use MochizukiNrPrepareFrame from the current package");
+    return Fail(LMXXF_NR_INVALID_ARGUMENT, "Use MochizukiNrPrepareFrame from the current package");
+}
 
 template<class F> int32_t WithRecording(void* context, void* token, F fn)
 {
@@ -159,10 +164,20 @@ template<class F> int32_t WithRecording(void* context, void* token, F fn)
 }
 
 int32_t RecordInputs(void* context, void* token, void* list)
-{ return WithRecording(context, token, [list](Session* s, void* j) { return CoreRecordInputs(s, j, list); }); }
+{
+    auto* s = static_cast<Session*>(context);
+    if (s && s->vk.adoptedVkd3d)
+        return s->RejectAdoptedLegacyPath("RecordInputs: adopted vkd3d requires direct recording");
+    return WithRecording(context, token, [list](Session* s, void* j) { return CoreRecordInputs(s, j, list); });
+}
 
 int32_t RecordOutputs(void* context, void* token, void* list)
-{ return WithRecording(context, token, [list](Session* s, void* j) { return CoreRecordOutputs(s, j, list); }); }
+{
+    auto* s = static_cast<Session*>(context);
+    if (s && s->vk.adoptedVkd3d)
+        return s->RejectAdoptedLegacyPath("RecordOutputs: adopted vkd3d requires direct recording");
+    return WithRecording(context, token, [list](Session* s, void* j) { return CoreRecordOutputs(s, j, list); });
+}
 
 int32_t CheckExecutionDevice(Session* s, ID3D12DeviceChild* object, const char* phase)
 {
@@ -242,6 +257,8 @@ int32_t BeginRecordingExecution(void* context, void* token, void* queue)
 int32_t EnqueueHip(void* context, void* token, void* queue)
 {
     auto* s = static_cast<Session*>(context);
+    if (s && s->vk.adoptedVkd3d)
+        return s->RejectAdoptedLegacyPath("direct recording executes only in the game submission");
     auto* r = FindRecording(s, token);
     if (r && r->job.directRecording)
         return Fail(LMXXF_NR_INVALID_ARGUMENT, "direct recording executes only in the game submission");
