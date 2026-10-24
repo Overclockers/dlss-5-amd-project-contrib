@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -84,7 +84,7 @@ namespace OptScalerNR.Launcher
         readonly Window _window;
         TextBox _searchBox, _logView, _packageRootBox;
         Button _minBtn, _maxBtn, _closeBtn;
-        Button _libraryTab, _settingsTab, _addButton, _primaryButton, _openFolderButton, _uninstallButton, _openLogButton, _refreshButton, _langToggle, _packageBrowse;
+        Button _libraryTab, _settingsTab, _addButton, _primaryButton, _launchGameButton, _openFolderButton, _uninstallButton, _openLogButton, _refreshButton, _langToggle, _packageBrowse;
         FrameworkElement _libraryPage, _settingsPage;
         ComboBox _filterCombo, _proxyCombo, _activeCombo, _langCombo;
         ListBox _gameList;
@@ -196,6 +196,7 @@ namespace OptScalerNR.Launcher
             _heroBgImage = (Image)window.FindName("HeroBgImage");
 
             _primaryButton = (Button)window.FindName("PrimaryButton");
+            _launchGameButton = (Button)window.FindName("LaunchGameButton");
             _openFolderButton = (Button)window.FindName("OpenFolderButton");
             _uninstallButton = (Button)window.FindName("UninstallButton");
             _compatButton = (Button)window.FindName("CompatButton");
@@ -358,6 +359,7 @@ namespace OptScalerNR.Launcher
 
             if (_addButton != null) _addButton.Click += (s, e) => AddGame();
             if (_gameList != null) _gameList.SelectionChanged += (s, e) => OnGameSelected();
+            if (_launchGameButton != null) _launchGameButton.Click += (s, e) => LaunchSelectedGame();
             if (_openFolderButton != null) _openFolderButton.Click += (s, e) => OpenSelectedFolder();
             if (_primaryButton != null) _primaryButton.Click += (s, e) => OnPrimaryAction();
             if (_uninstallButton != null) _uninstallButton.Click += (s, e) => OnUninstall();
@@ -723,6 +725,11 @@ namespace OptScalerNR.Launcher
                 if (_libraryTab != null) _libraryTab.Content = isZh ? "游戏库" : "Library";
                 if (_settingsTab != null) _settingsTab.Content = L("设置", "Settings");
                 if (_addButton != null) _addButton.Content = L("添加游戏 EXE…", "Add game EXE…");
+                if (_launchGameButton != null)
+                {
+                    _launchGameButton.Content = isZh ? "▶ 启动游戏" : "▶ Launch";
+                    _launchGameButton.ToolTip = isZh ? "直接运行当前选中的游戏主程序" : "Directly run the selected game executable";
+                }
                 if (_openFolderButton != null) _openFolderButton.Content = isZh ? "打开目录" : "Open Folder";
                 if (_uninstallButton != null) _uninstallButton.Content = isZh ? "卸载" : "Uninstall";
                 if (_removeGameMenuItem != null) _removeGameMenuItem.Header = L("从列表移除", "Remove from list");
@@ -1324,6 +1331,37 @@ namespace OptScalerNR.Launcher
             if (_statusText != null) _statusText.Text = L("已从列表移除；游戏文件未改动。可通过“添加游戏”重新添加。", "Removed from the list; game files were kept. Use Add Game to add it again.");
         }
 
+        void LaunchSelectedGame()
+        {
+            if (_selectedGame == null || !_selectedGame.HasExecutable) return;
+            try
+            {
+                var workDir = _selectedGame.RootDirectory;
+                if (string.IsNullOrEmpty(workDir) || !Directory.Exists(workDir))
+                {
+                    try { workDir = Path.GetDirectoryName(_selectedGame.Exe); } catch { }
+                }
+
+                var psi = new ProcessStartInfo
+                {
+                    FileName = _selectedGame.Exe,
+                    WorkingDirectory = workDir ?? "",
+                    UseShellExecute = true
+                };
+                Process.Start(psi);
+                if (_statusText != null)
+                {
+                    _statusText.Text = L("已启动游戏：" + _selectedGame.DisplayName, "Launched game: " + _selectedGame.DisplayName);
+                }
+            }
+            catch (Exception ex)
+            {
+                DialogTheme.Show(_window,
+                    L("启动游戏失败：" + ex.Message, "Failed to launch game: " + ex.Message),
+                    L("启动失败", "Launch Failed"));
+            }
+        }
+
         void OpenSelectedFolder()
         {
             if (_selectedGame == null) return;
@@ -1368,7 +1406,7 @@ namespace OptScalerNR.Launcher
                 Action<string, string> add = delegate(string id, string label) { var item = new ComboBoxItem { Tag = id, Content = label }; _filterCombo.Items.Add(item); if (id == _libraryFilter) _filterCombo.SelectedItem = item; };
                 add("all", L("全部", "All")); add("installed", L("已安装", "Installed")); add("uninstalled", L("未安装", "Not installed"));
                 _filterCombo.Items.Add(new Separator { Style = (Style)_window.FindResource("GameContextMenuSeparator"), Width = 74, IsEnabled = false, Focusable = false, IsHitTestVisible = false });
-                var sources = new List<string> { "Steam", "Xbox", "Epic", "Manual" };
+                var sources = new List<string> { "Steam", "XBOX", "Epic", "Manual" };
                 foreach (var game in _allGames) if (!string.IsNullOrEmpty(game.Source) && !sources.Exists(s => string.Equals(s, game.Source, StringComparison.OrdinalIgnoreCase))) sources.Add(game.Source);
                 foreach (var source in sources) add("source:" + source.ToLowerInvariant(), source);
                 if (_filterCombo.SelectedItem == null) { _libraryFilter = "all"; _filterCombo.SelectedItem = _filterCombo.Items[0]; }
@@ -1531,6 +1569,7 @@ namespace OptScalerNR.Launcher
             if (_selectedGame == null)
             {
                 _primaryButton.IsEnabled = false;
+                if (_launchGameButton != null) _launchGameButton.IsEnabled = false;
                 if (_uninstallButton != null) _uninstallButton.IsEnabled = false;
                 return;
             }
@@ -1543,9 +1582,13 @@ namespace OptScalerNR.Launcher
             var isBusy = _session != null && _session.IsRunning;
             if (!_selectedGame.HasExecutable) {
                 _primaryButton.IsEnabled = !isBusy && !_writeBusy && _folderScan == null;
+                if (_launchGameButton != null) _launchGameButton.IsEnabled = false;
                 if (_uninstallButton != null) _uninstallButton.IsEnabled = false;
                 return;
             }
+
+            if (_launchGameButton != null)
+                _launchGameButton.IsEnabled = !isBusy && !_writeBusy && _folderScan == null;
 
             _primaryButton.IsEnabled = !isBusy && !_writeBusy && _folderScan == null && hasBackend && proxyChosen;
             if (_uninstallButton != null)
@@ -2631,6 +2674,7 @@ namespace OptScalerNR.Launcher
             if (busy) _eventStage = action;
             if (_addButton != null) _addButton.IsEnabled = !busy;
             if (_removeGameMenuItem != null) _removeGameMenuItem.IsEnabled = !busy && _removeGameMenuItem.Tag is GameInfo;
+            if (_launchGameButton != null) _launchGameButton.IsEnabled = !busy && _selectedGame != null && _selectedGame.HasExecutable;
             if (_openFolderButton != null) _openFolderButton.IsEnabled = !busy;
             if (_refreshButton != null) _refreshButton.IsEnabled = !busy;
             if (_primaryButton != null) _primaryButton.IsEnabled = !busy;

@@ -18,7 +18,7 @@ namespace OptScalerNR.Launcher
     {
         Button _addFolderButton, _manageGameButton;
         ContextMenu _manageGameMenu;
-        MenuItem _changeExeMenuItem, _scanExeMenuItem, _editGameMenuItem, _removeSelectedGameMenuItem;
+        MenuItem _changeExeMenuItem, _scanExeMenuItem, _editGameMenuItem, _removeSelectedGameMenuItem, _launchSteamMenuItem;
         CancellationTokenSource _folderScan;
         static string EntryLocation(GameInfo game) { return game == null ? null : !string.IsNullOrEmpty(game.Exe) ? game.Exe : game.RootDirectory; }
         static bool SamePath(string a,string b)
@@ -35,10 +35,12 @@ namespace OptScalerNR.Launcher
             {
                 var itemStyle=(Style)_window.FindResource("GameContextMenuItem");
                 _manageGameMenu=new ContextMenu{Style=(Style)_window.FindResource("GameContextMenu")};
+                _launchSteamMenuItem=new MenuItem{Style=itemStyle};_launchSteamMenuItem.Click+=(s,e)=>LaunchSelectedGameViaSteam();
                 _changeExeMenuItem=new MenuItem{Style=itemStyle};_changeExeMenuItem.Click+=(s,e)=>ChangeExe();
                 _scanExeMenuItem=new MenuItem{Style=itemStyle};_scanExeMenuItem.Click+=(s,e)=>ScanExecutables();
                 _editGameMenuItem=new MenuItem{Style=itemStyle};_editGameMenuItem.Click+=(s,e)=>EditSelectedGame();
                 _removeSelectedGameMenuItem=new MenuItem{Style=itemStyle};_removeSelectedGameMenuItem.Click+=(s,e)=>RemoveGame(_selectedGame);
+                _manageGameMenu.Items.Add(_launchSteamMenuItem);
                 _manageGameMenu.Items.Add(_changeExeMenuItem);
                 _manageGameMenu.Items.Add(_scanExeMenuItem);
                 _manageGameMenu.Items.Add(_editGameMenuItem);
@@ -69,11 +71,34 @@ namespace OptScalerNR.Launcher
                 _manageGameButton.IsEnabled=_folderScan!=null||canManage;
                 if(!canManage&&_manageGameMenu!=null)_manageGameMenu.IsOpen=false;
             }
+            bool isSteam = _selectedGame != null && !string.IsNullOrEmpty(_selectedGame.Id) && _selectedGame.Id.StartsWith("steam:", StringComparison.OrdinalIgnoreCase);
+            if(_launchSteamMenuItem!=null){_launchSteamMenuItem.Header=L("通过 Steam 启动…","Launch via Steam…");_launchSteamMenuItem.Visibility=isSteam?Visibility.Visible:Visibility.Collapsed;_launchSteamMenuItem.IsEnabled=canManage;}
             if(_changeExeMenuItem!=null){_changeExeMenuItem.Header=L("更换 EXE…","Change EXE…");_changeExeMenuItem.IsEnabled=canManage;}
             if(_scanExeMenuItem!=null){_scanExeMenuItem.Header=L("扫描启动程序…","Find game EXE…");_scanExeMenuItem.IsEnabled=canManage;}
             if(_editGameMenuItem!=null){_editGameMenuItem.Header=L("编辑信息…","Edit details…");_editGameMenuItem.IsEnabled=canManage;}
             if(_removeSelectedGameMenuItem!=null){_removeSelectedGameMenuItem.Header=L("从列表移除","Remove from list");_removeSelectedGameMenuItem.IsEnabled=canManage;}
         }
+        void LaunchSelectedGameViaSteam()
+        {
+            if (_selectedGame == null) return;
+            try
+            {
+                var appId = _selectedGame.Id.StartsWith("steam:", StringComparison.OrdinalIgnoreCase)
+                    ? _selectedGame.Id.Substring("steam:".Length).Trim()
+                    : null;
+                if (!string.IsNullOrEmpty(appId))
+                {
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("steam://rungameid/" + appId) { UseShellExecute = true });
+                    if (_statusText != null)
+                        _statusText.Text = L("已请求 Steam 启动：" + _selectedGame.DisplayName, "Requested Steam to launch: " + _selectedGame.DisplayName);
+                }
+            }
+            catch (Exception ex)
+            {
+                DialogTheme.Show(_window, L("无法通过 Steam 启动：" + ex.Message, "Failed to launch via Steam: " + ex.Message), L("启动失败", "Launch Failed"));
+            }
+        }
+
         void RestoreHiddenPath(string path)
         {
             foreach(var key in _hiddenGames.Where(p=>SamePath(p.Value,path)).Select(p=>p.Key).ToArray())_hiddenGames.Remove(key);

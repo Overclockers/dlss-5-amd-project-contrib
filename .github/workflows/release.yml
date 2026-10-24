@@ -130,7 +130,7 @@ jobs:
           ### v1.13.3 (vs. v1.12.2)
 
           - **New graphical launcher and installation manager**:
-            - **Automatic local game library discovery**: Scans local Steam, Xbox PC, Epic and GOG games; add a single game manually or add a folder first and scan for executables.
+            - **Automatic local game library discovery**: Scans local Steam, XBOX PC, Epic and GOG games; add a single game manually or add a folder first and scan for executables.
             - **Smart game executable and injection detection**: Prioritizes the real game binary containing native upscaler DLLs or `x64_dx12` / `Shipping.exe`, filtering out game launchers and crash-helper processes.
             - **Multi-backend management**: Install several backends at once, pick the default Active Backend, with a **red top banner** for missing models/runtimes and in-place import; live Chinese/English switching.
             - **OptiPatcher integration**: Checkable in the installer, with live OptiScaler Wiki proxy recommendations.
