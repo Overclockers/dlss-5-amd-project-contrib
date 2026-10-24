@@ -106,4 +106,28 @@ Patch 27 preserves official standalone defaults while letting this adapter requi
 
 Patch 28 preserves each private Kernel's strong pipeline ownership while avoiding extra permanent arena pins when `share_pipelines=false`. Registry/deferred users keep their original pinning. This supports the adapter's bounded same-model `share_for` background rebuild without enabling global pipeline registry reuse or changing the upstream pin. Replay it after patch 27; it changes only `windows/src/core/nrvk.hpp`.
 
+Patch 30 adds optional Windows recording-resource retention. Pair
+`Runtime::begin_recording_resources()` with `end_recording_resources()` even
+when recording fails. The returned `shared_ptr<void>` owns independent direct,
+frame-read/write and depth pools/views, per-recording timestamp query pools and
+referenced or released feature-history images. It survives arbitrary later
+recordings without pool reset/reuse or recording-count reclamation of its images.
+Core timing retains total/network/stage sampling without waiting; pending samples
+hold only weak references and never extend a recipe's resource lifetime. A retained
+recipe keeps the handle until all
+executions finish and replay is impossible, then releases it before participating
+runtimes (including a `carry_history` source). Caller images and runtime/scratch
+synchronization remain the adapter's responsibility. Unscoped recordings keep
+the official rings/retirement behaviour. Replay after patch 29; the pin is unchanged.
+
+Patch 31 extends the same begin/end resource scope to Windows `renodx::Stage`.
+Its handle owns independent borrowed views/pools, cached descriptor-set pools and
+shared references to stage images, including look histories and motion/exposure
+images later retired by settings changes. Optional `NR_RENODX_PROF` timestamps
+also use recipe-owned pools with weak pending-sample tracking. Release handles
+after every execution and replay invalidation, before the Stage. Caller images,
+scratch ordering and temporal-state commit/discard decisions remain adapter-owned.
+Unscoped recordings retain the original rings, caches and retirement behaviour.
+Replay after patch 30; the source pin and public C ABI remain unchanged.
+
 The current closure includes both Linux and Windows grade includes: Linux recipes generate the product's Windows ACO SPIR-V. Update the exact ownership generator/pin together with recipes and records; copying only Windows shader sources is insufficient. The original now covers HDR patch 24 and the allocation part of patch 07; the local pack_img release in patch 11 remains necessary.

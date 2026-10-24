@@ -48,6 +48,11 @@ void SubmissionTrace(uint64_t frame, const char* phase, const void* object, int3
         LOG_INFO("mochizuki submission frame={} phase={} object={:p} result={}", frame, phase, object, result);
     } catch (...) {}
 }
+struct DirectStateScope
+{
+    Submission::IRecordingResources* resources = nullptr; // borrowed; QI owner outlives this scope
+    ~DirectStateScope() { if (resources) resources->EndDirectState(); }
+};
 }
 struct MochizukiBackend::Impl
 {
@@ -58,6 +63,8 @@ struct MochizukiBackend::Impl
     HMODULE module = nullptr;
     LmxxfNrApi api {};
     PFN_MochizukiNrPrepareFrame prepare = nullptr;
+    PFN_MochizukiNrGetDirectCommandBuffer getDirectCommandBuffer = nullptr;
+    PFN_MochizukiNrRecordDirect recordDirect = nullptr;
     PFN_MochizukiNrSetControls setControls = nullptr;
     PFN_MochizukiNrGetInfo getInfo = nullptr;
     PFN_MochizukiNrGetBuildProgress getBuildProgress = nullptr;
@@ -111,6 +118,9 @@ struct MochizukiBackend::Impl
             if (!module) { Status("mochizuki: runtime could not load; install the complete package and current AMD driver"); return false; }
             auto getApi = reinterpret_cast<PFN_MochizukiNrGetApi>(GetProcAddress(module, "MochizukiNrGetApi"));
             prepare = reinterpret_cast<PFN_MochizukiNrPrepareFrame>(GetProcAddress(module, "MochizukiNrPrepareFrame"));
+            getDirectCommandBuffer = reinterpret_cast<PFN_MochizukiNrGetDirectCommandBuffer>(
+                GetProcAddress(module, "MochizukiNrGetDirectCommandBuffer"));
+            recordDirect = reinterpret_cast<PFN_MochizukiNrRecordDirect>(GetProcAddress(module, "MochizukiNrRecordDirect"));
             setControls = reinterpret_cast<PFN_MochizukiNrSetControls>(GetProcAddress(module, "MochizukiNrSetControls"));
             getInfo = reinterpret_cast<PFN_MochizukiNrGetInfo>(GetProcAddress(module, "MochizukiNrGetInfo"));
             getBuildProgress = reinterpret_cast<PFN_MochizukiNrGetBuildProgress>(GetProcAddress(module, "MochizukiNrGetBuildProgress"));
@@ -119,7 +129,7 @@ struct MochizukiBackend::Impl
             setAutoExposure = reinterpret_cast<PFN_MochizukiNrSetAutoExposure>(GetProcAddress(module, "MochizukiNrSetAutoExposure"));
             setExposureTexture = reinterpret_cast<PFN_MochizukiNrSetExposureTexture>(GetProcAddress(module, "MochizukiNrSetExposureTexture"));
             api.struct_size = sizeof api;
-            if (!getApi || !prepare || !setControls || !getInfo || !getBuildProgress || !setLogging ||
+            if (!getApi || !prepare || !getDirectCommandBuffer || !recordDirect || !setControls || !getInfo || !getBuildProgress || !setLogging ||
                 getApi(LMXXF_NR_ABI_VERSION, &api) != LMXXF_NR_OK || !api.Create || !api.Destroy ||
                 !api.PrepareSession || !api.RecordInputs || !api.RecordOutputs || !api.EnqueueHip ||
                 !api.BeginRecordingExecution || !api.EndRecordingExecution || !api.InvalidateRecording ||
@@ -298,10 +308,22 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     // must not consume a number, or the next accepted frame looks like a gap and the
     // runtime resets its temporal history for nothing.
     const auto frameId = ++p->frameId;
-    const bool inlineMode = Config::Instance()->NrInline.value_or_default();
-    if (logical->IsSplitIneligible()) logical->TraceOpenQueries();
+    if (!p->Ensure(*this)) { coverage.Set(Coverage::Outcome::SessionUnavailable, "ensure_session"); return nullptr; }
+    // Resolve the current generation, not the initial producer or a queried native alias.
+    // An adopted device missing its extension must fail, never fall back to a side queue.
+    auto* nativeList = logical->RecordingNativeList();
+    uint64_t commandBuffer = 0;
+    if (p->getDirectCommandBuffer(p->owner->context, nativeList, &commandBuffer) != LMXXF_NR_OK) {
+        coverage.Set(Coverage::Outcome::RecordFailed, "direct_command_buffer_unavailable");
+        p->Error("direct command buffer unavailable");
+        return nullptr;
+    }
+    const bool directRecording = commandBuffer != 0;
+    const bool inlineMode = !directRecording && Config::Instance()->NrInline.value_or_default();
+    if (!directRecording && logical->IsSplitIneligible()) logical->TraceOpenQueries();
     InlineRecording::StateScope inlineState;
-    if (!inlineMode && logical->IsSplitIneligible()) {
+    DirectStateScope directState;
+    if (!directRecording && !inlineMode && logical->IsSplitIneligible()) {
         const char* reason = logical->SplitRejectionReason();
         coverage.Set(Coverage::Outcome::Rejected, reason);
         p->Status(std::string("mochizuki: recording boundary unavailable: ") + reason + "; original frame");
@@ -315,7 +337,26 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     }
     const bool motion = (input.nativeGuideScale || !input.motionJittered) &&
         Config::Instance()->MochizukiTemporal.value_or_default();
-    if (FAILED(inlineState.Begin(cmd, input, motion, false, false, !inlineMode))) {
+    if (directRecording) {
+        ID3D12Resource* sources[] {input.colour, motion ? input.motion : nullptr, input.depth, input.exposure};
+        D3D12_RESOURCE_STATES states[] {input.colourState, input.motionState, input.depthState, input.exposureState};
+        if (FAILED(resources->BeginDirectState(4, sources, states))) {
+            coverage.Set(Coverage::Outcome::InputRejected, resources->InlineRejectionReason());
+            p->Status(std::string("mochizuki: direct input state unavailable: ") + resources->InlineRejectionReason());
+            return nullptr;
+        }
+        directState.resources = resources.Get();
+        input.colourState = states[0]; input.motionState = states[1];
+        input.depthState = states[2]; input.exposureState = states[3];
+        // Native layout normalization may rotate vkd3d's command buffer. Selection
+        // used the earlier query; the recording must use this current handle.
+        if (p->getDirectCommandBuffer(p->owner->context, nativeList, &commandBuffer) != LMXXF_NR_OK || !commandBuffer) {
+            coverage.Set(Coverage::Outcome::RecordFailed, "direct_command_buffer_changed");
+            p->Error("direct command buffer unavailable after input normalization");
+            return nullptr;
+        }
+    }
+    if (!directRecording && FAILED(inlineState.Begin(cmd, input, motion, false, false, !inlineMode))) {
         coverage.Set(Coverage::Outcome::InputRejected, inlineState.Reason().c_str());
         p->Status(std::string("mochizuki: input state unavailable: ") + inlineState.Reason());
         static unsigned rejectedInput = 0;
@@ -323,8 +364,7 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
             inlineState.TraceFailure("mochizuki", frameId, cmd, input, motion, false, false);
         return nullptr;
     }
-    if (!p->Ensure(*this)) { coverage.Set(Coverage::Outcome::SessionUnavailable, "ensure_session"); return nullptr; }
-    if (p->owner->InlineBusy()) {
+    if (!directRecording && p->owner->InlineBusy()) {
         coverage.Set(Coverage::Outcome::Busy, "inline_ahead_cap");
         p->owner->InlineBypassed();
         p->Status("mochizuki: inline ahead cap reached; original frame");
@@ -351,6 +391,7 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     frame.flags = LMXXF_NR_FRAME_FLAG_STRENGTH | (temporal ? MOCHIZUKI_NR_FRAME_FLAG_TEMPORAL : 0) |
         (first ? LMXXF_NR_FRAME_FLAG_FIRST_PASS : 0) |
         (inlineMode ? MOCHIZUKI_NR_FRAME_FLAG_INLINE_EXECUTION : 0) |
+        (directRecording ? MOCHIZUKI_NR_FRAME_FLAG_DIRECT_RECORDING : 0) |
         (input.nativeGuideScale ? MOCHIZUKI_NR_FRAME_FLAG_AFTER_UPSCALE : 0) |
         (FrameDiag::Enabled() ? MOCHIZUKI_NR_FRAME_FLAG_STAGE_TIMING : 0) |
         (inlineMode && Config::Instance()->NrInlineComputeConvert.value_or_default() ? MOCHIZUKI_NR_FRAME_FLAG_COMPUTE_CONVERT : 0) |
@@ -372,6 +413,14 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     frame.motion_scale_x = input.motionScaleX;
     frame.motion_scale_y = input.motionScaleY;
     frame.reset = input.reset;
+    frame.depth = input.depth;
+    frame.depth_state = input.depthState;
+    if (input.depth) {
+        const auto depthDesc = input.depth->GetDesc();
+        frame.depth_width = UINT(depthDesc.Width);
+        frame.depth_height = depthDesc.Height;
+    }
+    frame.depth_inverted = input.depthInverted ? 1u : 0u;
     if (p->setControls(p->owner->context, &controls) != LMXXF_NR_OK) { p->Error("controls rejected"); return nullptr; }
     // Exposure for the linear encode, same semantics as the lmxxf lane (native_codec_encode.hlsl EffectivePaperWhite):
     // a usable game exposure texture gives exposure = texel * DLSS_Exposure_Scale / DLSS_Pre_Exposure (read back by
@@ -513,11 +562,11 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
         p->owner->autoSpin.UpdateConfigAndWorkload(autoCfg, {});
         FrameDiag::AutoSpinPresentRing().SetActive(false);
     }
-    auto lease = LmxxfRecording::Attach(p->owner, job.handle, logical.Get(), inlineResources);
+    auto lease = LmxxfRecording::Attach(p->owner, job.handle, logical.Get(), inlineResources, directRecording);
     if (!lease) { p->Status("mochizuki: this recording already owns NR work"); return nullptr; }
     if (!inlineMode) {
         FrameDiag::Begin(lease->diag, "mochizuki", frameId, frame.color_width, frame.color_height,
-                         OPTI_VERSION, "split");
+                         OPTI_VERSION, directRecording ? "direct" : "split");
         const auto id0 = logical->Identity();
         lease->diag.listId = id0.list;
         lease->diag.generation = id0.generation;
@@ -531,6 +580,25 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
     }
     auto* invocation = AmdPreSr::GraphicsSnap::GraphicsInvocationFor(reinterpret_cast<uint64_t>(cmd));
     if (invocation) { invocation->commandsRecorded = true; invocation->outcome = "recording_attempted"; }
+    if (directRecording) {
+        // The runtime owns the native barriers, layout restoration and cache invalidation.
+        // Do not restore a private binding scope over its null setters / meta dispatch.
+        const int32_t rc = p->recordDirect(p->owner->context, job.handle, nativeList, commandBuffer);
+        resources->InvalidateDirectComputeBindings();
+        if (rc != LMXXF_NR_OK) {
+            coverage.Set(Coverage::Outcome::RecordFailed, "direct_recording_failed");
+            p->failed = true; p->Error("direct recording failed");
+            if (invocation) invocation->outcome = "direct_recording_failed";
+            return nullptr;
+        }
+        lease->ready = true;
+        coverage.Set(Coverage::Outcome::Recorded, "direct_recording_ready");
+        if (lease->trace) SubmissionTrace(frameId, "record.direct.ready", nativeList, rc);
+        if (invocation) invocation->outcome = "direct_recorded";
+        p->Info();
+        if (first) *first = static_cast<ID3D12Resource*>(job.first_pass_output);
+        return static_cast<ID3D12Resource*>(job.private_output);
+    }
     // NrFrameDiag GPU stamps (default off): capture begin/end, resume, done on the game queue.
     if (inlineResources) inlineResources->DiagStamp(cmd, FrameDiag::kGpuCapBegin);
     else if (lease->diag.active) {

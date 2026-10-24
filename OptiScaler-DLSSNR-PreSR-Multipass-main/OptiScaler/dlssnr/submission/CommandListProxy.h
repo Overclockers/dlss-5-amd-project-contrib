@@ -73,6 +73,11 @@ IRecordingResources : public IUnknown
                                                        D3D12_RESOURCE_STATES* states) = 0;
     virtual void STDMETHODCALLTYPE TraceNrInputState(const char* backend, uint64_t frame, const char* role,
                                                      ID3D12Resource* resource, D3D12_RESOURCE_STATES expected) = 0;
+    // Restore caller heaps only, then synchronize tracking without replaying native compute bindings.
+    virtual void STDMETHODCALLTYPE InvalidateDirectComputeBindings() = 0;
+    virtual HRESULT STDMETHODCALLTYPE BeginDirectState(UINT count, ID3D12Resource** resources,
+                                                       D3D12_RESOURCE_STATES* states) = 0;
+    virtual void STDMETHODCALLTYPE EndDirectState() = 0;
 };
 // D3D12Core's private presentation face, not a GraphicsCommandList version or XeLL IID.
 // Microsoft D3D12Core.pdb F597AC0490C849B7992AAAA0485E83EB1: GUID RVA 0x1CAA20;
@@ -119,6 +124,7 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
     std::atomic<bool> rawInterfaceEscaped { false }; // Lifetime-wide; an alias can outlive Reset.
     const char *splitIneligibleReason = nullptr;
     bool inlineUnsafe = false, inlineStateActive = false;
+    bool directStateActive = false, predicationActive = false;
     // A lane's own recording may bind private state (see BeginPrivateBindings). While this is set the tracked setters
     // write into inlineState, so the game's snapshot stays what the continuation is seeded from, while the native list
     // still receives the private bindings the dispatch needs.
@@ -250,6 +256,48 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
         }
         return BeginNrState(count, resources, states, true);
     }
+    HRESULT STDMETHODCALLTYPE BeginDirectState(UINT count, ID3D12Resource** resources,
+                                               D3D12_RESOURCE_STATES* states) override
+    {
+        // Open queries are legal in an unsplit recording. Active render passes and
+        // predication are not: raw Vulkan ignores the caller's conditional execution.
+        if (renderPassActive) inlineRejection = "render_pass";
+        else if (predicationActive) inlineRejection = "predication";
+        else if (presentCommandsUsed) inlineRejection = "private_present_commands";
+        else if (!resBook.CanSplit(nullptr)) inlineRejection = "open_split_barrier";
+        else if (privateBindings || inlineStateActive || directStateActive) inlineRejection = "nr_state_already_active";
+        else {
+            const auto hr = BeginNrState(count, resources, states, false);
+            if (FAILED(hr)) return hr;
+            // Prefer an observed whole-resource legacy state; unobserved inputs
+            // retain the incoming Frame contract, including prior-list transitions.
+            for (UINT i = 0; i < count; ++i) {
+                if (!resources[i]) continue;
+                const auto* observed = enhancedBook.Find(resources[i]);
+                if (!observed || observed->legacy) resBook.TryGet(resources[i], &states[i]);
+            }
+            directStateActive = true;
+            return S_OK;
+        }
+        return E_UNEXPECTED;
+    }
+    void STDMETHODCALLTYPE EndDirectState() override
+    {
+        if (!directStateActive) return;
+        auto* list7 = inlineLayouts.empty() ? nullptr : CurAs<ID3D12GraphicsCommandList7>();
+        for (const auto& [resource, state] : inlineLayouts) {
+            // Runtime restores the COMMON layout provided by BeginNrState.
+            TransitionEnhanced(list7, resource, state, false);
+            enhancedBook.Restore(resource, state);
+            resBook.Forget(resource);
+        }
+        if (list7) list7->Release();
+        inlineLayouts.clear();
+        inlineState.Reset();
+        inlineStateActive = directStateActive = false;
+        // Never ApplyTo or reset native compute bindings here: the runtime's
+        // null PSO/root and partial ClearUAV invalidation must survive this scope.
+    }
 private:
     HRESULT BeginNrState(UINT count, ID3D12Resource** resources, D3D12_RESOURCE_STATES* states, bool split)
     {
@@ -330,6 +378,21 @@ public:
         // was never written to, so the continuation is still seeded from the game's bindings.
         if (auto* c = Cur()) contState.ApplyTo(c);
         inlineState.Reset();
+    }
+    void STDMETHODCALLTYPE InvalidateDirectComputeBindings() override
+    {
+        // The runtime's native exposure meter can change descriptor heaps. Restore
+        // only those: replaying PSO/root would overwrite its null setters and the
+        // partial ClearUAV meta invalidation needed for subsequent Vulkan rebinds.
+        if (auto* c = Cur(); c && contState.hasHeaps)
+            c->SetDescriptorHeaps(contState.numHeaps, contState.heaps);
+        // Raw Vulkan changed the compute bind point; discard its old snapshots.
+        contState.OnPso(nullptr);
+        contState.OnComputeRoot(nullptr);
+        contState.computeRoots.Reset();
+        inlineState.OnPso(nullptr);
+        inlineState.OnComputeRoot(nullptr);
+        inlineState.computeRoots.Reset();
     }
     void STDMETHODCALLTYPE TraceOpenQueries() override
     {
@@ -574,6 +637,7 @@ public:
         renderPassActive = enhancedBarriersSeen = false;
         splitIneligibleReason = nullptr;
         inlineUnsafe = inlineStateActive = privateBindings = false;
+        directStateActive = predicationActive = false;
         inlineUnsafeReason = nullptr; inlineRejection = "eligible";
         enhancedBook.Reset(); inlineLayouts.clear();
         if (initial)
@@ -961,6 +1025,7 @@ public:
     }
     void STDMETHODCALLTYPE SetPredication(ID3D12Resource *b, UINT64 o, D3D12_PREDICATION_OP op) override
     {
+        predicationActive = b != nullptr;
         if (!inlineStateActive) MarkSplitIneligible("predication");
         if (auto *c = Cur())
             c->SetPredication(b, o, op);

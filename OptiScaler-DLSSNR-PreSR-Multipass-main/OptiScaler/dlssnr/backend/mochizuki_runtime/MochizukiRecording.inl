@@ -39,12 +39,37 @@ struct BoundRecording
         s.job = std::move(savedJob);
     }
 };
+#include "MochizukiDirectRecording.inl"
+
 
 void LogAdmission(Session* s, const char* mode, const char* event)
 {
     nr::logf("[mochizuki] %s %s recipe=%u in_flight=%u physical=%u",
              mode, event, s->RecipeCount(), s->InFlightRecordings(), s->recordingBuffersOutstanding);
 }
+
+void ObserveDirectCompletions(Session* s)
+{
+    if (!s->vk.adoptedVkd3d) return;
+    for (auto& [token, record] : s->recordings) {
+        auto& r = *record;
+        if (!r.job.directRecording || !r.tail || r.executingQueue || r.uncertain ||
+            r.completedExecutions == r.executions) continue;
+        const auto completed = r.tail->GetCompletedValue();
+        if (completed == UINT64_MAX || completed < r.tailValue) continue;
+        s->directCompleted += r.executions - r.completedExecutions;
+        r.completedExecutions = r.executions;
+        if (r.directTiming)
+            r.directTiming->Harvest(r.directSerial, [s](const MochizukiStageTiming::Sample& sample) {
+                s->PushGpuSample(sample.total, sample.network, -1.f, -1.f);
+            });
+        if (s->directCompleted <= 2 || s->directCompleted % 3600 == 0)
+            nr::logf("[mochizuki] direct consumer-completion frame=%llu tail=%llu completed=%llu",
+                     (unsigned long long)r.frameId, (unsigned long long)r.tailValue,
+                     (unsigned long long)s->directCompleted);
+    }
+}
+
 
 int32_t PrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfNrJob* out)
 {
@@ -54,8 +79,9 @@ int32_t PrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfNrJob
     // INLINE_QUEUE on the session is only permission for a side queue.
     if (!s || s->uncertainExecution)
         return Fail(LMXXF_NR_UNAVAILABLE, "PrepareFrame: execution unresolved");
+    ObserveDirectCompletions(s);
     const bool inlineExec = info && (info->flags & MOCHIZUKI_NR_FRAME_FLAG_INLINE_EXECUTION) != 0;
-    if (!inlineExec && s->executing)
+    if (!inlineExec && !(info && (info->flags & MOCHIZUKI_NR_FRAME_FLAG_DIRECT_RECORDING)) && s->executing)
         return Fail(LMXXF_NR_UNAVAILABLE, "PrepareFrame: execution unresolved");
     if (inlineExec && s->InFlightRecordings() >= Session::kRecordingSlots)
     {
@@ -71,7 +97,7 @@ int32_t PrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfNrJob
     const int32_t rc = CorePrepareFrame(context, info, out);
     if (rc != LMXXF_NR_OK) return rc;
     return Guard(s, [&] {
-        if (!inlineExec) {
+        if (!inlineExec && !s->vk.adoptedVkd3d) {
             s->SelectColourInput(s->job);
             s->SelectMotionInput(s->job);
             s->LogColourInput();
@@ -82,13 +108,14 @@ int32_t PrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfNrJob
         r->frameId = info->frame_id;
         r->colour = s->job.colour;
         r->motion = s->job.motion;
+        r->depth = s->job.depth;
         r->exposureTexture = s->job.exposureTexture;
         r->network = s->runtime;
         r->net = s->net;
         r->inlineExecution = inlineExec;
         bool checkedOut = false;
         try {
-            if (inlineExec) {
+            if (inlineExec || s->job.directRecording) {
                 if (!s->CheckoutRecordingBuffers(r->buffers)) {
                     s->lastFrameId = savedFrame;
                     s->lastFrameTick = savedTick;
@@ -143,6 +170,9 @@ int32_t CheckExecutionDevice(Session* s, ID3D12DeviceChild* object, const char* 
     const HRESULT hr = object ? object->GetDevice(IID_PPV_ARGS(&dev)) : E_POINTER;
     if (SUCCEEDED(hr) && DlssNr::Backend::IsRecordingDevice(s->device, s->toVk.fence, dev.Get()))
         return LMXXF_NR_OK;
+    if (SUCCEEDED(hr) && s->vk.adoptedVkd3d &&
+        DlssNr::Backend::IsRecordingDevice(s->device, s->pipelineInvalidator.Get(), dev.Get()))
+        return LMXXF_NR_OK;
     Microsoft::WRL::ComPtr<IUnknown> expected, observed;
     if (s->device) s->device->QueryInterface(IID_PPV_ARGS(&expected));
     if (dev) dev->QueryInterface(IID_PPV_ARGS(&observed));
@@ -164,6 +194,23 @@ int32_t BeginRecordingExecution(void* context, void* token, void* queue)
     if (!q || q->GetDesc().Type != D3D12_COMMAND_LIST_TYPE_DIRECT)
         return Fail(LMXXF_NR_INVALID_ARGUMENT, "Begin: a direct execution queue is required");
     if (const auto rc = CheckExecutionDevice(s, q, "Begin queue"); rc != LMXXF_NR_OK) return rc;
+    if (r->job.directRecording) {
+        if (s->uncertainExecution || s->failed)
+            return Fail(LMXXF_NR_UNAVAILABLE, "direct Begin: previous execution unresolved");
+        if (!r->job.enqueued || r->executingQueue)
+            return Fail(LMXXF_NR_UNAVAILABLE, "direct Begin: recording unavailable or overlapping replay");
+        if (r->tail && r->tail->GetCompletedValue() == UINT64_MAX)
+            return Fail(LMXXF_NR_DEVICE_LOST, "direct Begin: device removed");
+        if (r->tail && r->tail->GetCompletedValue() < r->tailValue)
+            return Fail(LMXXF_NR_UNAVAILABLE, "direct Begin: previous replay has not completed");
+        if (s->previousTail && FAILED(q->Wait(s->previousTail.Get(), s->previousTailValue)))
+            return Fail(LMXXF_NR_FAILED, "direct Begin: previous game consumer wait failed");
+        r->executingQueue = q;
+        ++r->executions;
+        s->exposure.Begin(r->job.meterTicket);
+        s->gameTexel.Begin(r->job.texelTicket);
+        return LMXXF_NR_OK;
+    }
     if (s->uncertainExecution || s->failed)
         return Fail(LMXXF_NR_UNAVAILABLE, "Begin: previous execution unresolved");
     if (!r->inlineExecution && s->executing)
@@ -194,6 +241,8 @@ int32_t EnqueueHip(void* context, void* token, void* queue)
 {
     auto* s = static_cast<Session*>(context);
     auto* r = FindRecording(s, token);
+    if (r && r->job.directRecording)
+        return Fail(LMXXF_NR_INVALID_ARGUMENT, "direct recording executes only in the game submission");
     if (!r || s->executing != token || (!r->inlineExecution && r->executingQueue.Get() != queue))
         return Fail(LMXXF_NR_INVALID_ARGUMENT, "Enqueue: Begin on this queue is required");
     if (r->inlineExecution) {
@@ -256,13 +305,15 @@ int32_t EndRecordingExecution(void* context, void* token, void* queue, uint32_t 
 {
     auto* s = static_cast<Session*>(context);
     auto* r = FindRecording(s, token);
-    if (!r || s->executing != token || r->executingQueue.Get() != queue)
+    if (!r || (!r->job.directRecording && s->executing != token) || r->executingQueue.Get() != queue)
         return Fail(LMXXF_NR_INVALID_ARGUMENT, "End: no matching Begin");
     r->ended = true;
-    s->executing = nullptr;
-    if (!s->enqueueOrder.empty()) {
-        s->executing = s->enqueueOrder.front();
-        s->enqueueOrder.pop_front();
+    if (!r->job.directRecording) {
+        s->executing = nullptr;
+        if (!s->enqueueOrder.empty()) {
+            s->executing = s->enqueueOrder.front();
+            s->enqueueOrder.pop_front();
+        }
     }
     r->executingQueue.Reset();
     if (submitted)
@@ -289,6 +340,16 @@ int32_t EndRecordingExecution(void* context, void* token, void* queue, uint32_t 
         }
         s->previousTail = f;
         s->previousTailValue = value;
+        if (r->job.directRecording) {
+            ++s->frames;
+            ++s->directSubmitted;
+            if (r->directTiming)
+                r->directTiming->Submitted(r->directTimingSlot, r->directSerial);
+            if (s->directSubmitted <= 2 || s->directSubmitted % 3600 == 0)
+                nr::logf("[mochizuki] direct game-submission frame=%llu execution=%llu tail=%llu actual_nr_frames=%llu",
+                         (unsigned long long)r->frameId, (unsigned long long)r->executions,
+                         (unsigned long long)value, (unsigned long long)s->frames.load());
+        }
     }
     return LMXXF_NR_OK;
 }
@@ -318,13 +379,15 @@ int32_t CollectRecording(void* context, void* token)
         const uint64_t done = r->tail->GetCompletedValue();
         if (done == UINT64_MAX || done < r->tailValue) return LMXXF_NR_UNAVAILABLE;
     }
-    if (!r->inlineExecution && r->job.vkFinished)
+    if (!r->job.directRecording && !r->inlineExecution && r->job.vkFinished)
     {
         uint64_t done = 0;
         if (vkGetSemaphoreCounterValue(s->vk.device, s->fromVk.semaphore, &done) != VK_SUCCESS ||
             done == UINT64_MAX || done < r->job.vkFinished)
             return LMXXF_NR_UNAVAILABLE;
     }
+    ObserveDirectCompletions(s);
+    if (r->job.directRecording && !r->tail) s->RequestHistoryReset(Session::ResetCancel);
     const bool recycle = r->privateBuffers;
     FrameBuffers buffers = std::move(r->buffers);
     s->recordings.erase(token);

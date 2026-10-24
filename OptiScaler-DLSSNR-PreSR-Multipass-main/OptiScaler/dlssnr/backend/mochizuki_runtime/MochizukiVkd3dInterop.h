@@ -27,6 +27,23 @@ ID3D12DXVKInteropDevice : public IUnknown
     virtual HRESULT STDMETHODCALLTYPE UnlockCommandQueue(ID3D12CommandQueue* queue) = 0;
 };
 
+// Pinned Linux PE interop, cc27501d: query the current native list, never a
+// cached proxy generation. GetVulkanHandle does not begin/end the recording.
+MIDL_INTERFACE("77a86b09-2bea-4801-b89a-37648e104af1")
+ID3D12GraphicsCommandListExt : public IUnknown
+{
+    virtual HRESULT STDMETHODCALLTYPE GetVulkanHandle(VkCommandBuffer* command) = 0;
+    virtual HRESULT STDMETHODCALLTYPE LaunchCubinShader(void* handle, UINT32 x, UINT32 y, UINT32 z,
+                                                       const void* params, UINT32 size) = 0;
+};
+
+MIDL_INTERFACE("902d8115-59eb-4406-9518-fe00f991ee65")
+ID3D12DXVKInteropDevice1 : public ID3D12DXVKInteropDevice
+{
+    virtual HRESULT STDMETHODCALLTYPE GetVulkanResourceInfo1(ID3D12Resource* resource, UINT64* handle,
+                                                           UINT64* offset, VkFormat* format) = 0;
+};
+
 namespace mochizuki_vkd3d
 {
 // Wine's ntdll exports wine_get_version; Windows' never does.

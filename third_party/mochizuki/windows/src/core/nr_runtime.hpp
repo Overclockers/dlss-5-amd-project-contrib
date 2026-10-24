@@ -480,6 +480,18 @@ public:
     Runtime(const Runtime&) = delete;
     Runtime& operator=(const Runtime&) = delete;
 
+    // Opt-in ownership for retained/replayed command lists. Begin before recording
+    // (including carry_history); end also on failure. Nested begins throw; end
+    // without a begin returns empty. The returned handle owns recording-local
+    // views/pools, timestamp queries and referenced feature histories, independently
+    // of later calls. Core timing is sampled without waiting on later recordings.
+    // Keep it until every execution completes AND the list cannot replay, and
+    // release it before this runtime (and any carry_history source runtime).
+    // This does not retain caller images or synchronize runtime/scratch access.
+    // Without a scope the original recording-count rings/retirement are unchanged.
+    void begin_recording_resources();
+    std::shared_ptr<void> end_recording_resources();
+
     // Records only: no submit, wait, readback, image resizing or host allocation.
     // Caller supplies a recording command buffer on queue_family, synchronizes
     // incoming work and serializes uses of this runtime's scratch arena.

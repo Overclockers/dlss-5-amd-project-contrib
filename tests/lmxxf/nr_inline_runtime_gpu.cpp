@@ -212,6 +212,34 @@ int main(int argc, char** argv) {
     const auto originalHash = Hash(device.Get(), game.Get(), colour.Get());
     producer.Reset(); consumer.Reset(); ok(api.InvalidateRecording(context, baseline.handle), "baseline invalidate");
     ok(api.CollectRecording(context, baseline.handle), "baseline collect");
+    uint32_t singlePassDispatches = 0;
+    if (threePasses) {
+        // Measure this installed graph, not an Original-model magic threshold:
+        // Small legitimately has 71 merged dispatches per pass, so 3*71 < 250.
+        auto getInfo = reinterpret_cast<PFN_MochizukiNrGetInfo>(GetProcAddress(dll, "MochizukiNrGetInfo"));
+        Check(pa->Reset(), "single-pass baseline allocator");
+        Check(ca->Reset(), "single-pass baseline output allocator");
+        Check(device->CreateCommandList(0, q.Type, pa.Get(), nullptr, IID_PPV_ARGS(&producer)), "single-pass producer");
+        Check(device->CreateCommandList(0, q.Type, ca.Get(), nullptr, IID_PPV_ARGS(&consumer)), "single-pass consumer");
+        threePasses = false;
+        auto single = prepare(producer.Get(), 1, nullptr, false);
+        threePasses = true;
+        ok(api.RecordInputs(context, single.handle, producer.Get()), "single-pass inputs");
+        ok(api.RecordOutputs(context, single.handle, consumer.Get()), "single-pass outputs");
+        Check(producer->Close(), "single-pass producer close"); Check(consumer->Close(), "single-pass consumer close");
+        ok(api.BeginRecordingExecution(context, single.handle, game.Get()), "single-pass begin");
+        In::Execute(game.Get(), producer.Get()); ok(api.EnqueueHip(context, single.handle, game.Get()), "single-pass enqueue");
+        In::Execute(game.Get(), consumer.Get());
+        Check(game->Signal(tail.Get(), 2), "single-pass tail");
+        ok(api.EndRecordingExecution(context, single.handle, game.Get(), 3, tail.Get(), 2, S_OK), "single-pass end");
+        WaitQueue(device.Get(), game.Get());
+        MochizukiNrInfo state {sizeof state}; Require(getInfo, "single-pass info export");
+        ok(getInfo(context, &state), "single-pass info"); singlePassDispatches = state.network_dispatches;
+        Require(singlePassDispatches != 0, "single-pass graph executed no dispatches");
+        producer.Reset(); consumer.Reset();
+        ok(api.InvalidateRecording(context, single.handle), "single-pass invalidate");
+        ok(api.CollectRecording(context, single.handle), "single-pass collect");
+    }
     std::puts("split baseline completed; testing actual inline worker"); std::fflush(stdout);
     Ptr<ID3D12GraphicsCommandList> native; Ptr<Sub::CommandListProxy> proxy;
     Check(pa->Reset(), "inline allocator");
@@ -462,7 +490,7 @@ int main(int argc, char** argv) {
         auto getInfo = reinterpret_cast<PFN_MochizukiNrGetInfo>(GetProcAddress(dll, "MochizukiNrGetInfo"));
         MochizukiNrInfo info {}; info.struct_size = sizeof info;
         Require(getInfo && getInfo(context, &info) == 0, "three-pass info");
-        Require(info.max_passes >= 3 && info.network_dispatches > 250,
+        Require(info.max_passes >= 3 && singlePassDispatches && info.network_dispatches == 3 * singlePassDispatches,
                 "three-pass request fell back to fewer network executions");
         std::printf("inline three passes: capacity=%u dispatches=%u PASS\n", info.max_passes, info.network_dispatches);
     }

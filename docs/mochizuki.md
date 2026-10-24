@@ -1,8 +1,10 @@
 # Mochizuki backend (local integration)
 
 This backend runs mochizuki0323's Vulkan network on the game's AMD adapter while the
-game stays on native D3D12. This integration targets Windows and RDNA4. Other GPU
-architectures and individual games are not validated by this integration.
+game uses the D3D12 interface. Native Windows uses the existing interop bridge;
+the Proton path records into the adopted vkd3d game's current Vulkan command buffer.
+Windows RDNA4 remains the established target; Proton acceptance is pending below.
+Other GPU architectures and individual games are not validated by this integration.
 Recordings with unsupported state (including enhanced barriers or an active render
 pass) pass through without NR on the ordinary split path. Experimental `NrInline=true`
 adds a separate same-list path, including validated whole-resource enhanced-layout
@@ -26,6 +28,74 @@ through this host's existing Ins menu and `[DlssNr]` settings. ACO defaults on;
 INT4 mixed and RenoDX default off. The official DX9/DX10/DX11 hosts, ReShade,
 Present hooks, End menu and screenshot capture are outside this Windows D3D12
 integration. See the [0.0.7 adoption boundaries](architecture/mochizuki-upstream-extensions.md#windows-007-adoption-boundary) and the [historical 0.0.6 review](architecture/mochizuki-006-integration.md).
+
+## Proton direct recording (review v7)
+
+The reference protocol is the Linux PE `run_after` path at official source pin
+`cc27501dc116bdcfbb43612e497c5ca12497574a`, not a second Vulkan device or a
+side-queue approximation. The host resolves the borrowed native game command list
+and queries `MochizukiNrGetDirectCommandBuffer` **before splitting**. An adopted
+vkd3d device must supply its current nonzero `VkCommandBuffer`; missing interop is
+an error. Native Windows returns success with zero and keeps the existing bridge.
+The direct frame uses `MOCHIZUKI_NR_FRAME_FLAG_DIRECT_RECORDING` (`1u << 16`),
+the exact-size current frame ABI (including depth state, extent and inversion),
+and `MochizukiNrRecordDirect` only after preparation and lease attachment.
+It does not use `RecordInputs`, `RecordOutputs`, `Split`, `EnqueueHip` or the
+inline side worker. Host and runtime must be updated together from one package.
+
+The pinned protocol brackets network recording with `ALL_COMMANDS` barriers,
+restores imported image layouts, then invalidates native compute state with
+`SetPipelineState(nullptr)`, `SetComputeRootSignature(nullptr)` and a partial
+1×1 ClearUAV rectangle on a 2×1 resource. Proxy bookkeeping must agree without replaying
+cached compute state over that native invalidation. Retained-list ownership,
+invalidation and completion-based resource release still apply. Runtime
+Begin/End execution notifications describe only the actual game submission;
+completion uses the real game-tail fence, value and Signal result, never a
+synthetic worker completion or an Evaluate-time completion assumption.
+
+The load-bearing safety property is recipe ownership: patch 30 gives each direct
+recording its own descriptor pools, image views, timestamp queries and retained
+feature-history pins. Patch 31 adds equivalent optional recording-resource scopes
+to the RenoDX stage, so multipass stage descriptors cannot wrap a recording-count
+ring while an older game list is retained. Both scope handles are captured on
+success and failure, remain owned through every submitted execution, and are
+released only after invalidation plus the actual game-tail certificate.
+Game-queue waits serialize shared activation/history GPU use; recording count
+alone never certifies descriptor or image retirement on this path.
+
+Known divergence risk: retained-recipe replay temporal continuity is pending
+real-machine acceptance. Like the official recording model, CPU history parity
+advances when commands are recorded; an old recipe replays its fixed parity.
+Discard/invalidation requests a reset for the next recording, not a rewrite of
+already closed commands. Test repeated Evaluate with discarded and reordered
+lists, retained-list replay across resize, and repeated NR off/on cycling.
+
+
+This transport change retains the product deltas: both selectable models, host
+controls and saved INI preferences, multipass and first-pass output, exposure
+routing, and Plan A ownership/history behavior. It does not replace the product
+with upstream's overlay or controls. Implementation/source assertions are not
+evidence of successful Proton rendering.
+
+### Pending Proton acceptance matrix
+
+All items below remain **pending hardware/game acceptance**, not passed checks:
+
+| Stage | Required observation |
+|---|---|
+| First frame | Small model, one pass: first real processed frame, then sustained rendering with increasing completed frame/timing counts |
+| Models and passes | Original model; multipass including first-pass output; temporal history and reset; Natural/Cinematic grade versus Standard |
+| Images and lifetime | Supported input/output formats; resize/DRS; repeated Evaluate with discarded/reordered lists and retained-list replay across resize; repeated NR off/on; clean exit; resource release only after real completion |
+| Game coexistence | FSR coexistence; game PSO/root-signature restoration after NR; no stale history or corruption on resumed rendering |
+| Exposure | Tester chooses source 2 or 3 explicitly; record that choice and preserve the user's INI rather than rewriting it for acceptance |
+| Compilation | Report cold and warm network build time separately, each with peak process RSS; do not substitute steady-state GPU timing |
+| Distribution | Exercise the full dist package, recording real host/runtime hashes, model identities, shader/ACO assets, source pin, Proton/vkd3d version, driver and GPU; no placeholder package identities |
+
+Acceptance must distinguish network construction from a rendered first frame,
+and actual game-tail completion from merely recorded commands. Native Windows
+bridge behavior requires a separate regression run; Proton success cannot stand
+in for it.
+
 
 Ins → Mochizuki → **Network model** selects **310.9.16 (new)** or
 **310.8.0 (original)**. `[DlssNr] MochizukiNetworkModel=1` selects the new model;

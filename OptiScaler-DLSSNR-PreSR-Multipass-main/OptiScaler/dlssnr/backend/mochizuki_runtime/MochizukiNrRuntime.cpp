@@ -1,13 +1,11 @@
 // MochizukiNrRuntime.dll: mochizuki0323's Vulkan network (third_party/mochizuki) behind the lmxxf C ABI.
 //
-// The network runs on a Vulkan device of its own, on the game's adapter. Before the cut, the game's colour and
-// motion vectors are captured into imported D3D12 resources (shared images for eligible split inputs, buffers otherwise). Between the two halves of the game's command
-// list, the game queue signals a shared fence (toVk), a Vulkan submit waits on it, runs the network and writes the
-// result into a third shared buffer, then signals a second shared fence (fromVk), which the game queue waits on.
-// After the cut, the result is copied into the texture handed to Super Resolution. Any game queue may run the list
-// (MOCHIZUKI_NR_FEATURE_ANY_QUEUE): a frame from another queue than the last one waits for the last one first. The
-// model's controls come from the frame (strengths, model scale, passes) and from MochizukiNrSetControls
-// (MochizukiNrControls.h), sanitised before the network sees them.
+// Proton adopts vkd3d's device and records into the current native game command
+// buffer, following pinned Linux PE run/run_after. Game-tail certificates own
+// recipes and resources; no frame submit or cross-API handshake runs there.
+// Windows keeps its separate-device split/inline shared-buffer bridge: toVk ->
+// private Vulkan recording/submit -> fromVk -> D3D12 output. Controls and the
+// asynchronous network construction policy are shared by both adapters.
 //
 // Networks are built off the render thread, on a second queue of the Vulkan device when its family has one, one core
 // build at a time in the process. A build for another model scale, pass count or colour encoding then runs while the
@@ -804,9 +802,8 @@ struct Vulkan
     PFN_vkGetMemoryWin32HandlePropertiesKHR memoryHandleProperties {};
     PFN_vkImportSemaphoreWin32HandleKHR importSemaphore {};
     std::string name;
-    // Proton direct path: the instance, physical device and device are vkd3d-proton's own (borrowed: never
-    // destroyed here), the frames' buffers are the D3D12 buffers' own VkBuffers, and every submit holds the vkd3d
-    // queue it goes to (LockCommandQueue). False on Windows and whenever Wine's D3D12 is not vkd3d-proton.
+    // Proton borrows vkd3d's device and game command stream. Only background
+    // builds submit independently, under the vkd3d queue lock.
     bool adoptedVkd3d = false;
     ID3D12DXVKInteropDevice* interop {};  // AddRef'd, with adoptedVkd3d
     ID3D12CommandQueue* interopQueue {};  // ours, DIRECT: the network builds' vkd3d queue (vk.queue)
@@ -970,7 +967,7 @@ struct Vulkan
         interop = found;
         adoptedVkd3d = true;
         nr::logf("[mochizuki] Proton direct path: vkd3d-proton's device %s, queue family %u, bufferDeviceAddress %d; "
-                 "the frames' buffers are the game's own memory, every submit holds the vkd3d queue",
+                 "frames record in the game's current command stream; background builds hold the vkd3d queue",
                  name.c_str(), family, bufferDeviceAddress ? 1 : 0);
         return true;
     }
@@ -2349,6 +2346,7 @@ struct Job
     uint32_t state = LMXXF_NR_JOB_NONE;
     bool firstPass = false;
     bool inlineExecution = false;
+    bool directRecording = false;
     bool stageTiming = false; // MOCHIZUKI_NR_FRAME_FLAG_STAGE_TIMING (diagnostic)
     bool enqueued = false; // EnqueueHip ran for it: a second call does nothing
     uint64_t vkFinished = 0; // actual execution's accepted submission, not its preparation order
@@ -2359,6 +2357,10 @@ struct Job
     D3D12_RESOURCE_STATES colourState {};
     ID3D12Resource* motion {};
     D3D12_RESOURCE_STATES motionState {};
+    ID3D12Resource* depth {};
+    D3D12_RESOURCE_STATES depthState {};
+    UINT depthWidth = 0, depthHeight = 0;
+    bool depthInverted = false;
     // The frame's valid extents, copied from the top-left of its colour and motion: the geometry's own, except with
     // dynamic resolution.
     UINT width = 0, height = 0, motionWidth = 0, motionHeight = 0;
@@ -2782,10 +2784,16 @@ struct Recording
     FrameBuffers buffers;
     std::shared_ptr<ProductRuntime> network;
     NetworkKey net;
-    Microsoft::WRL::ComPtr<ID3D12Resource> colour, motion, exposureTexture;
+    Microsoft::WRL::ComPtr<ID3D12Resource> colour, motion, depth, exposureTexture;
     Microsoft::WRL::ComPtr<ID3D12Fence> tail;
     Microsoft::WRL::ComPtr<ID3D12CommandQueue> executingQueue;
     uint64_t tailValue = 0, executions = 0;
+    std::shared_ptr<void> coreResources;
+    std::shared_ptr<void> renoResources;
+    std::unique_ptr<MochizukiStageTiming> directTiming;
+    uint32_t directTimingSlot = MochizukiStageTiming::kUnavailable;
+    uint64_t completedExecutions = 0;
+    uint64_t directSerial = 0;
     bool invalidated = false, uncertain = false;
     // inlineExecution is this recording's mode, not the create-time INLINE_QUEUE bit.
     // privateBuffers is a checked-out set. Split recordings share the session set.
@@ -2813,6 +2821,9 @@ struct Session
         }
     }
     std::wstring assets;
+    Microsoft::WRL::ComPtr<ID3D12Resource> pipelineInvalidator;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> invalidatorCpu, invalidatorGpu;
+    uint64_t directRecorded = 0, directSubmitted = 0, directCompleted = 0;
     std::shared_ptr<FrameBuffers> allocation;
     std::shared_ptr<ImageInput> colourInput;
     std::shared_ptr<ImageInput> motionInput;
@@ -3385,6 +3396,12 @@ struct Session
     {
         if (buried.empty())
             return;
+        if (vk.adoptedVkd3d) {
+            // Recipes own allocations until invalidation AND their real game tail.
+            for (auto& b : buried) b.buffers.Release(vk.device);
+            buried.clear();
+            return;
+        }
         UINT64 produced = UINT64_MAX, finished = UINT64_MAX;
         if (!all)
         {
@@ -3463,6 +3480,7 @@ struct Session
     // everything, so a lost device is never a success), or the wait's own error.
     template <class Stop> VkResult WaitFinished(UINT64 value, Stop&& stop)
     {
+        if (vk.adoptedVkd3d) return VK_SUCCESS; // Recipes retain the network through their actual game tail.
         VkSemaphoreWaitInfo wi { VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO };
         wi.semaphoreCount = 1;
         wi.pSemaphores = &fromVk.semaphore;
@@ -3739,11 +3757,20 @@ struct Session
         si.pSignalSemaphores = &fromVk.semaphore;
         gpuUsed.store(true, std::memory_order_relaxed);
         VkQueue target = vk.queue;
+        const bool marker = enqueueCalls <= 2;
+        if (marker) nr::logf("[mochizuki] old-chain LockCommandQueue.begin");
         mochizuki_vkd3d::QueueHold hold;
         if (vk.adoptedVkd3d)
             if (const VkResult held = vk.HoldProducer(producer, hold, target); held != VK_SUCCESS)
                 return held;
+        if (marker) nr::logf("[mochizuki] old-chain LockCommandQueue.end QueueSubmit.begin");
         const VkResult r = vkQueueSubmit(target, 1, &si, signal);
+        if (marker) nr::logf("[mochizuki] old-chain QueueSubmit.end result=%d UnlockCommandQueue.begin", int(r));
+        if (hold.interop && hold.queue) {
+            hold.interop->UnlockCommandQueue(hold.queue);
+            hold.queue = nullptr;
+        }
+        if (marker) nr::logf("[mochizuki] old-chain UnlockCommandQueue.end");
         if (r == VK_SUCCESS)
             Submitted(produced, finished);
         return r;
@@ -4163,12 +4190,19 @@ struct Session
         b.resultDesc = desc;
         b.colourFootprint = Footprint(colourDxgi, cf.bytes, g.width, g.height);
         b.colourVk = cf.vk;
-        b.colourInput = std::make_shared<ImageInput>(vk.device);
-        b.colourInput->CreateBuffer(device, vk, b.colourFootprint, cf.vk, g.width, g.height,
-                                   g.canonicalise ? kImageUsage | VK_IMAGE_USAGE_STORAGE_BIT : kImageUsage);
-        b.input = b.colourInput->upload;
-        b.colourImage = b.colourInput->image;
-        b.output.Create(device, vk, b.colourFootprint.bytes, "output");
+        if (vk.adoptedVkd3d) {
+            // Same-device image adapters only. No D3D12/Vulkan transfer buffers,
+            // external memory, ownership handoff, or private frame submit.
+            b.colourImage.Create(vk, cf.vk, g.width, g.height,
+                                 g.canonicalise ? kImageUsage | VK_IMAGE_USAGE_STORAGE_BIT : kImageUsage);
+        } else {
+            b.colourInput = std::make_shared<ImageInput>(vk.device);
+            b.colourInput->CreateBuffer(device, vk, b.colourFootprint, cf.vk, g.width, g.height,
+                                       g.canonicalise ? kImageUsage | VK_IMAGE_USAGE_STORAGE_BIT : kImageUsage);
+            b.input = b.colourInput->upload;
+            b.colourImage = b.colourInput->image;
+            b.output.Create(device, vk, b.colourFootprint.bytes, "output");
+        }
         // Plan A: when the frame is canonicalised the answer comes back out of the canonical image *into this
         // one* (the readback's layout is the game's), so it needs to be a storage image as well as a sampled
         // and transfer one. Otherwise the plain usage, which is all a non-canonicalised frame ever needs.
@@ -4188,10 +4222,14 @@ struct Session
         if (mf.vk)
         {
             b.motionFootprint = Footprint(g.motionFormat, mf.bytes, g.motionWidth, g.motionHeight);
-            b.motionInput = std::make_shared<ImageInput>(vk.device);
-            b.motionInput->CreateBuffer(device, vk, b.motionFootprint, mf.vk, g.motionWidth, g.motionHeight, kImageUsage);
-            b.motionBuffer = b.motionInput->upload;
-            b.motionImage = b.motionInput->image;
+            if (vk.adoptedVkd3d)
+                b.motionImage.Create(vk, mf.vk, g.motionWidth, g.motionHeight, kImageUsage);
+            else {
+                b.motionInput = std::make_shared<ImageInput>(vk.device);
+                b.motionInput->CreateBuffer(device, vk, b.motionFootprint, mf.vk, g.motionWidth, g.motionHeight, kImageUsage);
+                b.motionBuffer = b.motionInput->upload;
+                b.motionImage = b.motionInput->image;
+            }
             if (g.bucketed)
                 b.motionScaled.Create(vk, mf.vk, g.width, g.height,
                                       g.computeMotion ? kImageUsage | VK_IMAGE_USAGE_STORAGE_BIT : kImageUsage);
@@ -4205,7 +4243,8 @@ struct Session
                                               IID_PPV_ARGS(&b.result)),
               "output texture");
         if (g.firstPass) {
-            b.firstOutput.Create(device, vk, b.colourFootprint.bytes, "first-pass output");
+            if (!vk.adoptedVkd3d)
+                b.firstOutput.Create(device, vk, b.colourFootprint.bytes, "first-pass output");
             b.firstColour.Create(vk, cf.vk, g.width, g.height);
             Check(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &desc,
                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, IID_PPV_ARGS(&b.firstResult)),
@@ -4215,8 +4254,10 @@ struct Session
         auto* raw = new FrameBuffers(b);
         // Each snapshot retains its colour owner directly. The allocation of the
         // other resources must not pin an obsolete buffer carrier after a route switch.
-        raw->input = {}; raw->colourImage = {}; raw->colourInput.reset();
-        raw->motionBuffer = {}; raw->motionImage = {}; raw->motionInput.reset();
+        if (!vk.adoptedVkd3d) {
+            raw->input = {}; raw->colourImage = {}; raw->colourInput.reset();
+            raw->motionBuffer = {}; raw->motionImage = {}; raw->motionInput.reset();
+        }
         b.allocation = std::shared_ptr<FrameBuffers>(raw, [dev = vk.device](FrameBuffers* p) {
             p->Release(dev); delete p;
         });
@@ -4608,6 +4649,7 @@ struct Session
             probe.Release(vk.device);
             nr::logf("[mochizuki] own-device transport probe passed; network construction permitted");
         }
+        if (!vk.adoptedVkd3d) {
         toVk.Create(device, vk, "toVk");
         fromVk.Create(device, vk, "fromVk");
         VkCommandPoolCreateInfo pi { VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
@@ -4635,6 +4677,7 @@ struct Session
             VkCheck(vkCreateFence(vk.device, &fi, nullptr, &f), "vkCreateFence");
         for (VkFence& f : fallbackDone)
             VkCheck(vkCreateFence(vk.device, &fi, nullptr, &f), "vkCreateFence (passthrough)");
+        }
         vram.Open(device->GetAdapterLuid());
         // Plan A's colour-format conversion passes, both directions, for R11G11B10 and RGBA16F. They are optional:
         // when one is missing or will not build, a pair that needs it is never converted (CanonicalFor) and the
@@ -5003,7 +5046,7 @@ struct Session
             config.linear_input = key.linear;
             config.model_scale = key.scale;
             config.network = int(key.networkModel); // Product INI/menu overrides DLSSNR_MODEL and upstream INI.
-            config.motion_without_depth = 1; // This bridge supplies motion, never game depth.
+            config.motion_without_depth = vk.adoptedVkd3d ? 0 : 1; // Direct Linux host supplies game depth; Windows bridge does not.
             // Keep independent graph compilation/import accounting and whole-graph
             // native fallback until cross-network pipeline reuse is separately proved.
             config.share_pipelines = false;
@@ -6003,6 +6046,7 @@ struct Session
             VkCommandBufferBeginInfo bi { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
             bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
             VkCheck(vkBeginCommandBuffer(c, &bi), "vkBeginCommandBuffer");
+            if (call <= 2) nr::logf("[mochizuki] old-chain frame=%llu BeginCommandBuffer.end", (unsigned long long)call);
         }
 
         // The frame's valid extent in the image the network runs on, W x H: the whole of it, except with dynamic
@@ -6281,7 +6325,9 @@ struct Session
                     if (ck.skin_structure < 0.f) ck.skin_structure = 1.f;
                 }
                 runtime->stageTiming.BeginNetwork(c, pendingTimingSlot);
+                if (call <= 2) nr::logf("[mochizuki] old-chain record_engine.begin renodx pass=%u", pass);
                 const auto result = runtime->record_engine(c, e, ck);
+                if (call <= 2) nr::logf("[mochizuki] old-chain record_engine.end renodx pass=%u", pass);
                 runtime->stageTiming.EndNetwork(c, pendingTimingSlot);
                 calls += result.frame.network_dispatches;
                 consumed |= result.history_consumed;
@@ -6294,7 +6340,9 @@ struct Session
         {
             try
             {
+                if (call <= 2) nr::logf("[mochizuki] old-chain record_engine.begin");
                 const nr::EngineResult r = runtime->record_engine(c, frame, job.controls);
+                if (call <= 2) nr::logf("[mochizuki] old-chain record_engine.end");
                 dispatches.store(r.frame.network_dispatches, std::memory_order_relaxed);
                 consumed = r.history_consumed;
             }
@@ -6430,7 +6478,9 @@ struct Session
             colourInput->Ownership(c, false, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
         if (sharedMotion)
             motionInput->Ownership(c, false, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
+        if (call <= 2) nr::logf("[mochizuki] old-chain EndCommandBuffer.begin");
         VkCheck(vkEndCommandBuffer(c), "vkEndCommandBuffer");
+        if (call <= 2) nr::logf("[mochizuki] old-chain EndCommandBuffer.end");
 
         // Plan A: report the output pass. The first conversions are named individually (they are what tells a
         // cutscene's RGBA16F frames apart from the same-format ones), then every 3600. The row pitch is the
@@ -6448,9 +6498,13 @@ struct Session
         // the rest.
         sub.produced = ++producedValue;
         sub.finished = ++finishedValue;
+        if (call <= 2) nr::logf("[mochizuki] old-chain Follow.begin");
         Check(Follow(producer), "the new queue's wait for the last frame");
+        if (call <= 2) nr::logf("[mochizuki] old-chain Follow.end");
         sub.followed = true;
+        if (call <= 2) nr::logf("[mochizuki] old-chain frame=%llu producer.Signal.begin", (unsigned long long)call);
         Check(producer->Signal(toVk.fence, sub.produced), "signal after the producer");
+        if (call <= 2) nr::logf("[mochizuki] old-chain frame=%llu producer.Signal.end", (unsigned long long)call);
         sub.signalled = true;
         lastSignalled = sub.produced;
         if (call == hooks.dropSubmitAt)
@@ -6483,7 +6537,9 @@ struct Session
                 runtime->int4_mixed() ? 1 : 0, runtime->reno ? 1 : 0, recordedPasses, recordedStyles.c_str(),
                 static_cast<unsigned long long>(sub.finished));
         }
+        if (call <= 2) nr::logf("[mochizuki] old-chain frame=%llu producer.Wait.begin", (unsigned long long)call);
         Check(producer->Wait(fromVk.fence, sub.finished), "wait for the network");
+        if (call <= 2) nr::logf("[mochizuki] old-chain frame=%llu producer.Wait.end", (unsigned long long)call);
         ++frames;
     }
 
@@ -7013,6 +7069,14 @@ int32_t CorePrepareFrame(void* context, const MochizukiNrFrameInfo* info, LmxxfN
             next.colour = colour;
             next.normalizationReset = info->reset != 0;
             next.colourState = static_cast<D3D12_RESOURCE_STATES>(info->color_state);
+            next.directRecording = (info->flags & MOCHIZUKI_NR_FRAME_FLAG_DIRECT_RECORDING) != 0;
+            if (next.directRecording != s->vk.adoptedVkd3d)
+                return Fail(LMXXF_NR_INVALID_ARGUMENT, "PrepareFrame: adopted vkd3d requires direct recording");
+            next.depth = static_cast<ID3D12Resource*>(info->depth);
+            next.depthState = static_cast<D3D12_RESOURCE_STATES>(info->depth_state);
+            next.depthWidth = info->depth_width;
+            next.depthHeight = info->depth_height;
+            next.depthInverted = info->depth_inverted != 0;
             next.canonicalise = g.canonicalise;
             next.width = w;
             next.height = h;
@@ -7661,6 +7725,14 @@ extern "C" __declspec(dllexport) uint32_t MochizukiNrGetFeatures(void) { return 
 extern "C" __declspec(dllexport) int32_t MochizukiNrPrepareFrame(
     void* context, const MochizukiNrFrameInfo* info, LmxxfNrJob* job)
 { return PrepareFrame(context, info, job); }
+
+extern "C" __declspec(dllexport) int32_t MochizukiNrGetDirectCommandBuffer(
+    void* context, void* nativeList, uint64_t* commandBuffer)
+{ return GetDirectCommandBuffer(context, nativeList, commandBuffer); }
+
+extern "C" __declspec(dllexport) int32_t MochizukiNrRecordDirect(
+    void* context, void* job, void* nativeList, uint64_t commandBuffer)
+{ return RecordDirect(context, job, nativeList, commandBuffer); }
 
 extern "C" __declspec(dllexport) void MochizukiNrSetLogging(uint32_t enabled)
 { g_logging.store(enabled != 0, std::memory_order_relaxed); }

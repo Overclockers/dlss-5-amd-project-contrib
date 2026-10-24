@@ -742,6 +742,8 @@ static void RenderMochizukiMenu(Config* config, PipelineUi::Section page, const 
             MenuUi::TextWrapped("Inline path: whole chain on compute");
         else if (timing.inline_path == 2)
             MenuUi::TextWrapped("Inline path: segmented (%s)", timing.inline_path_why[0] ? timing.inline_path_why : "?");
+        else if (timing.inline_path == 3)
+            MenuUi::TextWrapped("Recording path: Proton direct game command stream");
         if (timing.aco_requested || timing.aco_fallback[0])
             MenuUi::TextWrapped("PAL import: requested %u, effective %u. %s", timing.aco_requested,
                                 timing.aco_effective, timing.aco_fallback);

@@ -184,6 +184,14 @@ public:
     Stage(const Stage&) = delete;
     Stage& operator=(const Stage&) = delete;
 
+    // Opt-in retained command-list resources; end on success and failure. Nested
+    // begins throw; end without begin is empty. Keep the handle through every
+    // execution and until replay is impossible, then release it before this Stage.
+    // Caller images, execution ordering and temporal state remain host-owned.
+    // Unscoped recordings retain their original rings and retirement policy.
+    void begin_recording_resources();
+    std::shared_ptr<void> end_recording_resources();
+
     // The settings for the next frame (read once per frame).
     void set(const Settings&);
     // 0 SDR (legacy codec), 1 linear HDR, 2 PQ: what this frame format and flag resolve to.

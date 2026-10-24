@@ -1,4 +1,6 @@
 #include "runtime_test_helpers.h"
+#include <psapi.h>
+#include <filesystem>
 int wmain(int argc,wchar_t**argv) try {
     Require(argc>=2,"runtime path required");
     HMODULE dll=LoadLibraryW(argv[1]);Require(dll!=nullptr,"runtime load failed");
@@ -16,6 +18,12 @@ int wmain(int argc,wchar_t**argv) try {
     auto prepare=reinterpret_cast<PFN_MochizukiNrPrepareFrame>(GetProcAddress(dll,"MochizukiNrPrepareFrame"));
     auto getInfo=reinterpret_cast<PFN_MochizukiNrGetInfo>(GetProcAddress(dll,"MochizukiNrGetInfo"));
     auto getProgress=reinterpret_cast<PFN_MochizukiNrGetBuildProgress>(GetProcAddress(dll,"MochizukiNrGetBuildProgress"));
+    auto directHandle = reinterpret_cast<PFN_MochizukiNrGetDirectCommandBuffer>(GetProcAddress(dll, "MochizukiNrGetDirectCommandBuffer"));
+    auto directRecord = reinterpret_cast<PFN_MochizukiNrRecordDirect>(GetProcAddress(dll, "MochizukiNrRecordDirect"));
+    Require(directHandle && directRecord, "missing direct recording exports; replace complete package");
+    uint64_t invalidHandle = UINT64_MAX;
+    Require(directHandle(nullptr, nullptr, &invalidHandle) == LMXXF_NR_INVALID_ARGUMENT, "direct handle accepted null session");
+    Require(directRecord(nullptr, nullptr, nullptr, 0) == LMXXF_NR_INVALID_ARGUMENT, "direct record accepted null recipe");
     // The level the game shows the frame at. The runtime exports it and nothing has ever called it, so the image
     // mode names it on the command line to see what the network does when the frame is levelled like the other lanes.
     auto setExposure=reinterpret_cast<PFN_MochizukiNrSetExposure>(GetProcAddress(dll,"MochizukiNrSetExposure"));
@@ -299,6 +307,11 @@ int wmain(int argc,wchar_t**argv) try {
     }
     Rc(api.PrepareSession(context));Rc(set(context,&controls));
     {
+        uint64_t nativeHandle = UINT64_MAX;
+        Rc(directHandle(context, nullptr, &nativeHandle));
+        Require(nativeHandle == 0, "Windows unexpectedly selected direct game command stream");
+    }
+    {
         MochizukiNrControls aco=controls; aco.aco_mode=1; Rc(set(context,&aco));
         MochizukiNrInfo acoInfo {sizeof acoInfo}; Rc(getInfo(context,&acoInfo));
         Require(acoInfo.aco_requested==1 && acoInfo.aco_effective==0, "ACO request after device create stays off");
@@ -331,6 +344,7 @@ int wmain(int argc,wchar_t**argv) try {
         startupWidth=UINT(_wtoi(argv[5]));startupHeight=UINT(_wtoi(argv[6]));
         Require(startupWidth>0 && startupHeight>0 && startupWidth<=3840 && startupHeight<=2160,"invalid startup dimensions");
     }
+    const bool startupCachePresent = startup && std::filesystem::exists(std::filesystem::path(argv[2]) / L"dlssnr-amd/pipeline.cache");
     Frame frame(device.Get(),startup?startupWidth:256,startup?startupHeight:256,startup?DXGI_FORMAT_R11G11B10_FLOAT:DXGI_FORMAT_R16G16B16A16_FLOAT);
     List upload(device.Get());frame.Upload(upload.cmd.Get());Hr(upload.cmd->Close());Submit(q[0].Get(),upload);Hr(q[0]->Signal(tail.Get(),++value));Wait(tail.Get(),value);
     std::unique_ptr<Frame> timingMotion;
@@ -952,6 +966,11 @@ int wmain(int argc,wchar_t**argv) try {
                 Require(fwrite(static_cast<char*>(pixels)+y*frame.footprint.Footprint.RowPitch,4,frame.width,file)==frame.width,"output dump write failed");
             frame.readback->Unmap(0,nullptr);fclose(file);
         }
+        MochizukiNrInfo startupInfo {sizeof startupInfo}; Rc(getInfo(context, &startupInfo));
+        PROCESS_MEMORY_COUNTERS memory {sizeof memory};
+        Require(GetProcessMemoryInfo(GetCurrentProcess(), &memory, sizeof memory) != FALSE, "startup peak RSS query failed");
+        printf("STARTUP_BUILD seconds=%.3f peak_rss_bytes=%llu pipeline_cache_at_start=%s\n", startupInfo.build_seconds,
+               static_cast<unsigned long long>(memory.PeakWorkingSetSize), startupCachePresent ? "warm" : "cold");
         Rc(api.InvalidateRecording(context,job.handle));Rc(api.CollectRecording(context,job.handle));Rc(api.Destroy(context));
         FreeLibrary(dll);printf("MOCHIZUKI_STARTUP_OK %ux%u R11G11B10_FLOAT\n",frame.width,frame.height);return 0;
     }

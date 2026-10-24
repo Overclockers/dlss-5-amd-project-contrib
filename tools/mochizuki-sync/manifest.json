@@ -847,6 +847,22 @@
         "windows/src/core/nr_runtime.cpp",
         "windows/src/core/nr_shader_manifest.hpp"
       ]
+    },
+    {
+      "feature": "recording-resource-retention",
+      "path": "patches/30-recording-resource-retention.patch",
+      "files": [
+        "windows/src/core/nr_runtime.cpp",
+        "windows/src/core/nr_runtime.hpp"
+      ]
+    },
+    {
+      "feature": "renodx-recording-resource-retention",
+      "path": "patches/31-renodx-recording-resource-retention.patch",
+      "files": [
+        "windows/src/core/nr_renodx.cpp",
+        "windows/src/core/nr_renodx.hpp"
+      ]
     }
   ],
   "added_files": [

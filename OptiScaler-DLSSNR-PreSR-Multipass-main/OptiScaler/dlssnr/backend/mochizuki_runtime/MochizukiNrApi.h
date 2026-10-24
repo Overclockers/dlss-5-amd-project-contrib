@@ -5,8 +5,8 @@
 // Separate frame contract; the shared v2 table supplies recording ownership and
 // submission operations. It never reinterprets lmxxf's frame or the older fork ABI.
 #define MOCHIZUKI_NR_FRAME_FLAG_TEMPORAL (1u << 8)
-// This frame records on the inline side queue. Absent means command-list split.
-// Create-time LMXXF_NR_CREATE_FLAG_INLINE_QUEUE only permits the side queue.
+// This frame records on the inline side queue. Without INLINE_EXECUTION or
+// DIRECT_RECORDING it uses command-list split. Create-time INLINE_QUEUE only permits it.
 #define MOCHIZUKI_NR_FRAME_FLAG_INLINE_EXECUTION (1u << 9)
 // SR -> NR placement; RenoDX Auto detail stability depends on this frame's route.
 #define MOCHIZUKI_NR_FRAME_FLAG_AFTER_UPSCALE (1u << 10)
@@ -32,6 +32,9 @@
 // Diagnostic: GPU timestamp pairs around the core's linear-input encode and transfer pass
 // (MochizukiNrInfo::gpu_ms_encode_last / gpu_ms_transfer_last). Absent: none are written.
 #define MOCHIZUKI_NR_FRAME_FLAG_STAGE_TIMING (1u << 15)
+// Adopted vkd3d only: record into the game's current native Vulkan command buffer.
+// Mutually exclusive with INLINE_EXECUTION; Windows retains the bridge path.
+#define MOCHIZUKI_NR_FRAME_FLAG_DIRECT_RECORDING (1u << 16)
 typedef struct MochizukiNrFrameInfo
 {
     uint32_t struct_size;
@@ -44,16 +47,26 @@ typedef struct MochizukiNrFrameInfo
     uint32_t motion_state, motion_width, motion_height;
     float motion_scale_x, motion_scale_y;
     uint32_t reset;
+    void* depth;
+    uint32_t depth_state, depth_width, depth_height;
+    uint32_t depth_inverted;
 } MochizukiNrFrameInfo;
 
 typedef int32_t (*PFN_MochizukiNrPrepareFrame)(void*, const MochizukiNrFrameInfo*, LmxxfNrJob*);
 typedef int32_t (*PFN_MochizukiNrGetApi)(uint32_t, LmxxfNrApi*);
+// Both exports are required by the current package, alongside the exact-size frame ABI.
+// Get returns OK + nonzero for an adopted vkd3d device, OK + zero on Windows,
+// and an error when the adopted device cannot expose its current command buffer.
+typedef int32_t (*PFN_MochizukiNrGetDirectCommandBuffer)(void* context, void* native_list, uint64_t* command_buffer);
+typedef int32_t (*PFN_MochizukiNrRecordDirect)(void* context, void* job, void* native_list, uint64_t command_buffer);
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 MOCHIZUKI_NR_EXPORT int32_t MochizukiNrGetApi(uint32_t version, LmxxfNrApi* out);
 MOCHIZUKI_NR_EXPORT int32_t MochizukiNrPrepareFrame(void*, const MochizukiNrFrameInfo*, LmxxfNrJob*);
+MOCHIZUKI_NR_EXPORT int32_t MochizukiNrGetDirectCommandBuffer(void* context, void* native_list, uint64_t* command_buffer);
+MOCHIZUKI_NR_EXPORT int32_t MochizukiNrRecordDirect(void* context, void* job, void* native_list, uint64_t command_buffer);
 #ifdef __cplusplus
 }
 #endif

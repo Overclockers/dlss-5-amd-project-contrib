@@ -51,9 +51,9 @@ public:
                         name, Phase(p != 0), final, tick, last ? tick - last : 0,
                         calls, recorded, recorded != 0 && recorded != calls, reasons, causes, counters->offered.load(std::memory_order_relaxed));
             }
-            LOG_INFO("NR coverage execution backend={} final={} tick={} callbacks={} failed={} enqueues={} enqueue_failed={} split_accepted={} inline_applied={} inline_missed={} cumulative_callbacks={} units=executions_not_presents",
+            LOG_INFO("NR coverage execution backend={} final={} tick={} callbacks={} failed={} enqueues={} enqueue_failed={} split_accepted={} direct_accepted={} inline_applied={} inline_missed={} cumulative_callbacks={} units=executions_not_presents",
                 name, final, tick, delta.executions, delta.executionFailed, delta.enqueues, delta.enqueueFailed, delta.splitAccepted,
-                delta.inlineApplied, delta.inlineMissed, total.executions);
+                delta.directAccepted, delta.inlineApplied, delta.inlineMissed, total.executions);
             previous = total; last = tick;
         } catch (...) {} // Logging failure must not change rendering.
     }

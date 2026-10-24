@@ -323,6 +323,7 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
     void* job;
     Submission::RecordingIdentity identity;
     bool ready = false, invalidated = false, begun = false;
+    bool directRecording = false;
     std::shared_ptr<InlineRecording::Resources> inlineResources;
     bool inlineEnqueueFinished = false, executionReported = false;
     bool runtimeRetirementUncertain = false;
@@ -338,7 +339,7 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
     { if (tracing && trace && traceId) trace(traceId, phase, object, result); }
     bool neural = false, enqueued = false;
     uint64_t activityToken = 0;
-    // Split-path diag lives on the lease; inline uses InlineRecording::Resources::diag.
+    // Game-queue diag lives on the lease for split/direct; inline owns its own diag.
     FrameDiag::Counters diag;
     std::shared_ptr<FrameDiag::GpuStamps> splitStamps; // NrFrameDiag split GPU stamps
     std::shared_ptr<std::atomic<bool>> splitDiagReadable; // lazy: diagnostics off adds no per-lease allocation
@@ -373,6 +374,7 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
             return E_UNEXPECTED;
         }
         // Never reset flags still used by an earlier execution of this recording.
+        if (directRecording && begun) return E_PENDING;
         if (inlineResources && (begun || (inlineResources->Started() && !inlineResources->Complete()))) return E_PENDING;
         if (!inlineResources) {
             if (splitExecuted && splitDiagReadable) splitDiagReadable->store(false); // never read timestamps a replay may overwrite
@@ -553,7 +555,7 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
     }
     void Between(const Submission::RecordingExecution& e) noexcept override
     {
-        if (!begun || !ready) return;
+        if (directRecording || !begun || !ready) return;
         auto& diagnostic = LmxxfCut::Pending();
         diagnostic.betweenHits.fetch_add(1, std::memory_order_relaxed);
         diagnostic.enqueueCalls.fetch_add(1, std::memory_order_relaxed);
@@ -591,6 +593,7 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
             if (FAILED(e.status)) owner->coverage->executionFailed.fetch_add(1, std::memory_order_relaxed);
         }
         // A rejected overlapping replay must not end the still-running execution.
+        if (directRecording && begun && activeExecutionSerial != e.serial) return;
         if (inlineResources && inlineResetSerial != e.serial) return;
         if (inlineResources && inlineBypassSerial == e.serial) {
             inlineBypassSerial = 0;
@@ -621,8 +624,11 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
                                      "submission rejected before runtime execution; see first failure");
             return;
         }
+        // Direct recording's consumer is in the producer's native list. Its real
+        // game-queue tail certificate covers both; no continuation was submitted.
+        const bool consumerSubmitted = directRecording ? e.producerSubmitted && ready : e.continuationSubmitted;
         const uint32_t flags = (e.producerSubmitted ? LMXXF_NR_SUBMITTED_PRODUCER : 0) |
-                               (e.continuationSubmitted ? LMXXF_NR_SUBMITTED_CONSUMER : 0);
+                               (consumerSubmitted ? LMXXF_NR_SUBMITTED_CONSUMER : 0);
         Trace("retire.begin", e.queue, e.status);
         const int32_t rc = owner->api.EndRecordingExecution(owner->context, job, e.queue,
                                                           flags, e.fence, e.fenceValue, e.status);
@@ -637,11 +643,14 @@ struct Lease final : Submission::RecordingObserver, std::enable_shared_from_this
         splitDiagQueue = e.queue; splitDiagFence = e.fence; splitDiagValue = e.fenceValue;
         tracing = false;
         begun = false;
-        if (!inlineResources && neural && ready && enqueued && e.producerSubmitted && e.continuationSubmitted &&
+        if (!inlineResources && neural && ready && (directRecording || enqueued) && e.producerSubmitted && consumerSubmitted &&
             SUCCEEDED(e.status) && rc == LMXXF_NR_OK && !owner->failed.load(std::memory_order_acquire))
         {
             owner->activity.Succeeded(activityToken);
-            if (owner->coverage) owner->coverage->splitAccepted.fetch_add(1, std::memory_order_relaxed);
+            if (owner->coverage) {
+                auto& accepted = directRecording ? owner->coverage->directAccepted : owner->coverage->splitAccepted;
+                accepted.fetch_add(1, std::memory_order_relaxed);
+            }
             EmitSplitDiag("apply");
         }
         else if (!inlineResources && neural)
@@ -746,11 +755,12 @@ inline void Collect()
 // still leaves its observer attached, so partial private work is tracked safely.
 inline std::shared_ptr<Lease> Attach(const std::shared_ptr<SessionOwner>& owner, void* job,
                                      Submission::ILogicalCommandList* logical,
-                                     std::shared_ptr<InlineRecording::Resources> inlineResources = {})
+                                     std::shared_ptr<InlineRecording::Resources> inlineResources = {},
+                                     bool directRecording = false)
 {
-    // No private commands have been appended yet. An ineligible recording must
-    // not acquire an observer or retain a job merely to be rejected after input writes.
-    if (!logical || (!inlineResources && logical->IsSplitIneligible()))
+    // Splitting eligibility is irrelevant to direct recording in the existing list.
+    // No private commands have been appended yet if an ordinary split is rejected.
+    if (!logical || (!directRecording && !inlineResources && logical->IsSplitIneligible()))
     {
         owner->api.InvalidateRecording(owner->context, job);
         owner->api.CollectRecording(owner->context, job);
@@ -767,6 +777,7 @@ inline std::shared_ptr<Lease> Attach(const std::shared_ptr<SessionOwner>& owner,
         }
         lease = std::make_shared<Lease>(owner, job, logical->Identity());
         lease->inlineResources = inlineResources;
+        lease->directRecording = directRecording;
         if (inlineResources) owner->AdmitInline(inlineResources);
         Registry().push_back(lease);
     }

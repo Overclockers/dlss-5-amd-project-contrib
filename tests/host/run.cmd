@@ -50,6 +50,7 @@ exit /b 0
 
 :ci
 call :NrCoverage || goto fail
+"%AMD_TEST_PYTHON%" -B tests\mochizuki\test_direct_recording.py || goto fail
 %CXX% /utf-8 tests\host\mochizuki_network_shortcut.cpp /Fe"%OUT%\mochizuki_network_shortcut.exe" /Fo"%OUT%\mochizuki_network_shortcut.obj" || goto fail
 "%OUT%\mochizuki_network_shortcut.exe" || goto fail
 %CXX% /utf-8 tests\host\nr_recording_admission.cpp /Fe"%OUT%\nr_recording_admission.exe" /Fo"%OUT%\nr_recording_admission.obj" || goto fail

@@ -38,6 +38,7 @@ struct Snapshot {
     std::array<std::array<uint64_t, kOutcomes>, 2> calls {};
     std::array<std::array<uint64_t, kReasons>, 2> rejections {};
     uint64_t executions = 0, executionFailed = 0, splitAccepted = 0, enqueues = 0, enqueueFailed = 0;
+    uint64_t directAccepted = 0;
     uint64_t inlineApplied = 0, inlineMissed = 0;
 };
 struct Counters {
@@ -46,6 +47,7 @@ struct Counters {
     std::array<std::array<std::atomic<uint64_t>, kOutcomes>, 2> calls {};
     std::array<std::array<std::atomic<uint64_t>, kReasons>, 2> rejections {};
     std::atomic<uint64_t> executions {0}, executionFailed {0}, splitAccepted {0}, enqueues {0}, enqueueFailed {0};
+    std::atomic<uint64_t> directAccepted {0};
     std::atomic<uint64_t> inlineApplied {0}, inlineMissed {0};
     uint64_t Begin() noexcept { return offered.fetch_add(1, std::memory_order_relaxed) + 1; }
     void Finish(bool postReady, Outcome outcome, const char* reason = nullptr) noexcept {
@@ -64,6 +66,7 @@ struct Counters {
         s.executions = executions.load(std::memory_order_relaxed);
         s.executionFailed = executionFailed.load(std::memory_order_relaxed);
         s.splitAccepted = splitAccepted.load(std::memory_order_relaxed);
+        s.directAccepted = directAccepted.load(std::memory_order_relaxed);
         s.enqueues = enqueues.load(std::memory_order_relaxed);
         s.enqueueFailed = enqueueFailed.load(std::memory_order_relaxed);
         s.inlineApplied = inlineApplied.load(std::memory_order_relaxed);
@@ -82,6 +85,7 @@ inline Snapshot Delta(const Snapshot& now, const Snapshot& before) noexcept {
     d.executions = now.executions - before.executions;
     d.executionFailed = now.executionFailed - before.executionFailed;
     d.splitAccepted = now.splitAccepted - before.splitAccepted;
+    d.directAccepted = now.directAccepted - before.directAccepted;
     d.enqueues = now.enqueues - before.enqueues;
     d.enqueueFailed = now.enqueueFailed - before.enqueueFailed;
     d.inlineApplied = now.inlineApplied - before.inlineApplied;

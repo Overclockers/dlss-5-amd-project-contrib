@@ -2,6 +2,8 @@
 setlocal
 cd /d "%~dp0..\.."
 if /i "%~1"=="abi" (
+  python -B tests\mochizuki\test_direct_recording.py
+  if errorlevel 1 exit /b 1
   python -B tests\mochizuki\test_build_cache.py
   if errorlevel 1 exit /b 1
   python -B tests\mochizuki\test_source_pin.py
@@ -209,6 +211,10 @@ exit /b %errorlevel%
 set "MOCHI_ACO_ARG="
 if /i "%~1"=="aco-inline" set "MOCHI_ACO_ARG=--aco"
 set "INCLUDE=%INCLUDE%;%CD%"
+rem Shared recording ownership includes product headers using the vcxproj-style roots.
+rem Append after SDK/STL paths so <version> never resolves to repository VERSION.
+set "EXT=%CD%\OptiScaler-DLSSNR-PreSR-Multipass-main\external"
+set "INCLUDE=%INCLUDE%;%CD%\OptiScaler-DLSSNR-PreSR-Multipass-main\OptiScaler;%EXT%\nvngx_dlss_sdk;%EXT%\xess\inc\xess;%EXT%\xess\inc\xell;%EXT%\xess\inc\xess_fg;%EXT%\FidelityFX-SDK\ffx-api\include\ffx_api;%EXT%\simpleini;%EXT%\unordered_dense\include;%EXT%\spdlog\include;%EXT%\freetype;%EXT%\streamline;%EXT%\streamline1;%EXT%\nvapi;%EXT%\nlohmann;%EXT%\fakenvapi;%EXT%\magic_enum\include\magic_enum;%EXT%\AntiLag2-SDK;%EXT%\latencyflex;%EXT%\vulkan\include"
 set "MOCHI_INLINE_RUNTIME=%CD%\exports\mochizuki-runtime\MochizukiNrRuntime.dll"
 if not "%~2"=="" set "MOCHI_INLINE_RUNTIME=%~f2"
 cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /I OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/include tests/lmxxf/nr_inline_runtime_gpu.cpp /Foexports/mochizuki-tests/nr_inline_runtime_gpu.obj /Feexports/mochizuki-tests/nr_inline_runtime_gpu.exe /link d3d12.lib dxgi.lib dxguid.lib d3dcompiler.lib OptiScaler-DLSSNR-PreSR-Multipass-main/OptiScaler/library/detours/detours.lib || exit /b 1
