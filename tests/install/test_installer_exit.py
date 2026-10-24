@@ -1349,7 +1349,8 @@ class InstallerExitTests(unittest.TestCase):
         self.ready_legacy_install()
         args = [str(PS), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                 str(self.package / "Setup.ps1"), "-GameDir", str(self.game), "-NoPause"]
-        code, output = self.run_process(args, "NO\n1\n")
+        # Overwrite installation, dxgi proxy, Original model, then overwrite INI.
+        code, output = self.run_process(args, "NO\n1\n3\n1\n")
         self.assertEqual(code, 0, output)
         self.assertLess(output.index("Existing OptiScaler installation detected"), output.index("Which proxy DLL"))
 
