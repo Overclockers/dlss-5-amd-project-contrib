@@ -49,7 +49,8 @@ uint32_t Sl_Inputs::CheckForFrame(IFGFeature* fg, uint32_t frameId)
         _frameIdIndex[_currentIndex] = _currentFrameId;
     }
 
-    return _currentFrameId;
+    // Preserve explicit tokens: a delayed resource callback can belong to an older frame.
+    return frameId != 0 ? frameId : _currentFrameId;
 }
 
 int Sl_Inputs::IndexForFrameId(uint32_t frameId) const
@@ -142,10 +143,23 @@ bool Sl_Inputs::setConstants(const sl::Constants& values, uint32_t frameId)
             config->SaveXeFG();
         }
 
+        if (useActivationGate)
+            fgOutput->CancelPendingActivation();
+        const bool wasActiveBeforeEvaluate = useActivationGate && fgOutput->IsActive();
+
         if (state.currentFG != nullptr)
             state.currentFG->EvaluateState(state.currentD3D12Device, fgConstants);
         else
             state.currentVkFG->EvaluateState(fgConstants);
+
+        // FSR can auto-activate during context creation/recreation, before the input gate permits it.
+        // An already-running output remains uninterrupted when the user enables the wait at runtime.
+        if (useActivationGate && !wasActiveBeforeEvaluate)
+        {
+            if (fgOutput->IsActive())
+                fgOutput->Deactivate();
+            fgOutput->CancelPendingActivation();
+        }
 
         if (!config->IsFGEnabled())
         {

@@ -168,6 +168,67 @@ void MissingFrameBreaksSequence()
     CHECK(gate.Evaluate(true, false, false, false, 2) == Action::Activate);
 }
 
+void InterleavedFramesDoNotMixInputs()
+{
+    constexpr uint32_t older = 100;
+    constexpr uint32_t newer = older + 1;
+    for (const bool olderDepth : {false, true})
+    {
+        for (const bool completeOnPresent : {false, true})
+        {
+            Gate gate;
+            Prepare(gate);
+            // The newer constants can advance Sl_Inputs' current frame before an older tag arrives.
+            // Explicit resource tokens must still retain their own frame IDs.
+            gate.ReportConstants(newer, false);
+            gate.ReportDepth(olderDepth ? older : newer, 1920, 1080);
+            gate.ReportMotionVectors(olderDepth ? newer : older, 1920, 1080);
+            if (completeOnPresent)
+                gate.ReportPresent(newer);
+            else
+                gate.ReportEvaluate(newer);
+
+            const auto diagnostics = gate.GetDiagnostics();
+            CHECK(diagnostics.lastEvaluatedFrameId == newer);
+            CHECK(diagnostics.lastEvaluateHadDepth == !olderDepth);
+            CHECK(diagnostics.lastEvaluateHadMotionVectors == olderDepth);
+            CHECK(gate.ReadyFrameCount() == 0);
+            CHECK(gate.Evaluate(true, false, false, false, 1) == Action::None);
+            CHECK(!gate.ConfirmActivation(true, false, false, 1));
+        }
+    }
+}
+
+void InterleavedCompleteFramesCountSeparately()
+{
+    constexpr uint32_t older = 100;
+    constexpr uint32_t newer = older + 1;
+    Gate gate;
+    Prepare(gate);
+    gate.ReportConstants(newer, false);
+    gate.ReportDepth(older, 1920, 1080);
+    gate.ReportMotionVectors(newer, 1920, 1080);
+    gate.ReportMotionVectors(older, 1920, 1080);
+    gate.ReportDepth(newer, 1920, 1080);
+
+    gate.ReportEvaluate(older);
+    CHECK(gate.ReadyFrameCount() == 1);
+    CHECK(gate.GetDiagnostics().lastEvaluateHadDepth);
+    CHECK(gate.GetDiagnostics().lastEvaluateHadMotionVectors);
+    CHECK(gate.Evaluate(true, false, false, false, 2) == Action::None);
+    gate.ReportPresent(older);
+    CHECK(gate.ReadyFrameCount() == 1);
+
+    gate.ReportEvaluate(newer);
+    CHECK(gate.ReadyFrameCount() == 2);
+    CHECK(gate.GetDiagnostics().lastEvaluateHadDepth);
+    CHECK(gate.GetDiagnostics().lastEvaluateHadMotionVectors);
+    gate.ReportPresent(newer);
+    CHECK(gate.ReadyFrameCount() == 2);
+    CHECK(gate.Evaluate(true, false, false, false, 2) == Action::Activate);
+    CHECK(gate.ConfirmActivation(true, false, false, 2));
+}
+
 void RepeatedCallbacks()
 {
     Gate gate;
@@ -445,6 +506,8 @@ int main()
         {"missing_inputs", MissingInputs},
         {"invalid_sizes", InvalidSizes},
         {"missing_frame_breaks_sequence", MissingFrameBreaksSequence},
+        {"interleaved_frames_do_not_mix_inputs", InterleavedFramesDoNotMixInputs},
+        {"interleaved_complete_frames_count_separately", InterleavedCompleteFramesCountSeparately},
         {"repeated_callbacks", RepeatedCallbacks},
         {"frame_discontinuity", FrameDiscontinuity},
         {"reset_constants", ResetConstants},

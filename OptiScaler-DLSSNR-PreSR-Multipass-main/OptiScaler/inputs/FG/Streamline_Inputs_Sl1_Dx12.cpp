@@ -144,7 +144,19 @@ bool Sl1_Inputs_Dx12::applyConstants(const sl1::Constants& values, uint32_t fram
         config->SaveXeFG();
     }
 
+    if (useActivationGate)
+        fgOutput->CancelPendingActivation();
+    const bool wasActiveBeforeEvaluate = useActivationGate && fgOutput->IsActive();
+
     fgOutput->EvaluateState(State::Instance().currentD3D12Device, fgConstants);
+
+    // Context creation may activate the provider before the readiness threshold is reached.
+    if (useActivationGate && !wasActiveBeforeEvaluate)
+    {
+        if (fgOutput->IsActive())
+            fgOutput->Deactivate();
+        fgOutput->CancelPendingActivation();
+    }
 
     if (!config->IsFGEnabled())
     {

@@ -17,10 +17,10 @@ For example, to wait for 30 consecutive frames with ready inputs:
 RequiredReadyFrames=30
 ```
 
-The gate requires an FG request through Streamline 2 options, or rendering-game-
-frames constants in Streamline 1. After a Present boundary, a completed input
-frame counts when it has nonzero depth and
-motion-vector dimensions, camera constants, a nonzero interpolation size, and
+The gate requires an FG request through Streamline 2 options; Streamline 1 uses
+`notRenderingGameFrames=false`. After a Present boundary, a completed input
+frame counts when it has nonzero depth and motion-vector dimensions, camera
+constants, a nonzero interpolation size, and
 no reset flag. Constants and interpolation dimensions can be reused across
 frames, as Streamline permits. Evaluate and Present callbacks for the same
 frame count only once. Missing resources, a frame-ID gap, a reset, or a
