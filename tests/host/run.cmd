@@ -56,6 +56,8 @@ call :NrCoverage || goto fail
 "%OUT%\nr_recording_admission.exe" || goto fail
 %CXX% /utf-8 tests\host\recording_device_identity.cpp /Fe"%OUT%\recording_device_identity.exe" /Fo"%OUT%\recording_device_identity.obj" /link dxguid.lib || goto fail
 "%OUT%\recording_device_identity.exe" || goto fail
+%CXX% /utf-8 tests\host\command_list_present.cpp /Fe"%OUT%\command_list_present.exe" /Fo"%OUT%\command_list_present.obj" /link d3d12.lib dxgi.lib dxguid.lib || goto fail
+"%OUT%\command_list_present.exe" || goto fail
 %CXX% /utf-8 /I"%INC%" tests\host\amdxc64_hook_init.cpp /Fe"%OUT%\amdxc64_hook_init.exe" /Fo"%OUT%\amdxc64_hook_init.obj" /link "%DETOURS%" || goto fail
 "%OUT%\amdxc64_hook_init.exe" || goto fail
 %CXX% /utf-8 tests\host\plugin_path.cpp /Fe"%OUT%\plugin_path.exe" /Fo"%OUT%\plugin_path.obj" || goto fail
@@ -76,6 +78,8 @@ call "%REPO%\tests\host\menu-localization.cmd" "%OUT%\menu" || goto fail
 "%OUT%\dx12_interop_desc.exe" || goto fail
 %CXX% /utf-8 tests\host\vulkan_call_scope.cpp /Fe"%OUT%\vulkan_call_scope.exe" /Fo"%OUT%\vulkan_call_scope.obj" || goto fail
 "%OUT%\vulkan_call_scope.exe" || goto fail
+%CXX% /utf-8 tests\host\vulkan_nr_extensions.cpp /Fe"%OUT%\vulkan_nr_extensions.exe" /Fo"%OUT%\vulkan_nr_extensions.obj" /link "%DETOURS%" || goto fail
+"%OUT%\vulkan_nr_extensions.exe" || goto fail
 %CXX% /utf-8 tests\host\mochizuki_vulkan_device.cpp /Fe"%OUT%\mochizuki_vulkan_device.exe" /Fo"%OUT%\mochizuki_vulkan_device.obj" || goto fail
 "%OUT%\mochizuki_vulkan_device.exe" || goto fail
 %CXX% /utf-8 tests\host\nr_sr_placement.cpp /Fe"%OUT%\nr_sr_placement.exe" /Fo"%OUT%\nr_sr_placement.obj" || goto fail

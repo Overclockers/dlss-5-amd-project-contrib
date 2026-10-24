@@ -27,6 +27,38 @@ silently certify it. Cross-queue replay waits for the previous consumer fence be
 submitting its producer. UINT64_MAX is not normal completion; confirmed device removal
 has a separate teardown path.
 
+### Private D3D12 presentation interface
+
+KCD2's FG-enabled lists probe `B0B9E70E-59CE-4415-8116-C8C826B1E599`:
+Microsoft's private `ID3D12CommandListPresent_RS5`, not XeLL or a public
+`ID3D12GraphicsCommandList1..10` IID. It is absent from Windows SDK 10.0.26100
+headers. The bundled `external/directx_agility_sdk/lib/D3D12Core.dll` and its
+[Microsoft public PDB](https://msdl.microsoft.com/download/symbols/D3D12Core.pdb/F597AC0490C849B7992AAAA0485E83EB1/D3D12Core.pdb)
+identify the GUID at RVA `0x1CAA20`; `CGraphicsCommandList::_GetEntries` at
+`0x1C93F0` returns offset `0x300`, matching the named RTTI base's 768-byte
+offset. Its vtable has `IUnknown`, `Blt`, then `Present`; PDB decorated symbols
+provide both method signatures. The private argument structures remain opaque.
+
+`CommandListProxy` returns its own supported presentation face, with COM identity
+and reference counting on the proxy. Each method queries the **current** native
+list for the duration of that call; a retained face therefore follows Reset and
+continuation changes rather than retaining a stale producer alias. Capability
+probes alone remain recordable. The first actual `Blt`/`Present` call marks the
+recording `private_present_commands`, refusing subsequent NR append/inline/split
+until successful Reset because its opaque commands are not state-tracked.
+Failed Reset preserves that rejection. No FG-specific exception is involved.
+Windows `dxgi.dll` contains the same IID: matching public symbols identify its
+reference as `CD3D12Device::PresentExtended` (PDB
+`789AB40681C0E74D317E847CB26B52DB1`, GUID RVA `0xD8240`, probe RVA `0xA184B`).
+This is a shared DXGI/D3D12 presentation path, so FSR-FG and DLSSG can encounter
+the same probe; they receive exactly the same proxy behavior as XeFG. The supplied
+game logs demonstrate XeFG only, not a reproduced FSR-FG/DLSSG session.
+Unknown successful native QIs still set lifetime-wide `native_interface_escaped`;
+the Proton double-wrap guards and 燕云 unknown-interface forwarding remain intact.
+Host CI's `command_list_present` WARP test exercises both methods' arguments,
+QI-only admission, retained-face Reset, failed Reset, vendor escape and double-wrap.
+
+
 ## Missing recording proxy: menu recovery guidance
 
 `recording proxy unavailable`, lmxxf's `same-frame boundary unavailable`, and

@@ -74,8 +74,33 @@ IRecordingResources : public IUnknown
     virtual void STDMETHODCALLTYPE TraceNrInputState(const char* backend, uint64_t frame, const char* role,
                                                      ID3D12Resource* resource, D3D12_RESOURCE_STATES expected) = 0;
 };
+// D3D12Core's private presentation face, not a GraphicsCommandList version or XeLL IID.
+// Microsoft D3D12Core.pdb F597AC0490C849B7992AAAA0485E83EB1: GUID RVA 0x1CAA20;
+// CGraphicsCommandList COM-map RVA 0x1C93F0 returns +0x300, matching the
+// ID3D12CommandListPresent_RS5 RTTI base and its IUnknown/Blt/Present vtable.
+inline constexpr GUID IID_CommandListPresentRS5 =
+    {0xB0B9E70E, 0x59CE, 0x4415, {0x81, 0x16, 0xC8, 0xC8, 0x26, 0xB1, 0xE5, 0x99}};
+// Only opaque pointers cross this ABI; the runtime owns these private structures.
+struct SUBRESOURCE_BLT_MAP;
+struct D3D12_PRESENTSURFACE;
+struct D3D12_PRESENT;
+MIDL_INTERFACE("b0b9e70e-59ce-4415-8116-c8c826b1e599")
+ID3D12CommandListPresent_RS5 : public IUnknown
+{
+    virtual void STDMETHODCALLTYPE Blt(ID3D12Resource* destination, const RECT* destinationRect,
+                                      const RECT* destinationSubRect, UINT destinationSubresource,
+                                      ID3D12Resource* source, const RECT* sourceRect,
+                                      const SUBRESOURCE_BLT_MAP* subresources, UINT subresourceCount,
+                                      UINT flags) = 0;
+    virtual void STDMETHODCALLTYPE Present(ID3D12CommandQueue* queue, const D3D12_PRESENTSURFACE* surfaces,
+                                          UINT surfaceCount, ID3D12Resource* resource, const RECT* rect,
+                                          UINT flags, UINT interval, UINT presentCount, INT* result,
+                                          D3D12_PRESENT* present) = 0;
+};
 
-class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogicalCommandList, public IRecordingResources
+
+class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogicalCommandList, public IRecordingResources,
+                               public ID3D12CommandListPresent_RS5
 {
     std::atomic<ULONG> refs { 1 };
     inline static std::atomic<uint64_t> nextIdentity { 0 };
@@ -90,6 +115,7 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
     QueryStateBook queryBook;
     bool splitIneligible = false;
     bool renderPassActive = false, enhancedBarriersSeen = false;
+    bool presentCommandsUsed = false;
     std::atomic<bool> rawInterfaceEscaped { false }; // Lifetime-wide; an alias can outlive Reset.
     const char *splitIneligibleReason = nullptr;
     bool inlineUnsafe = false, inlineStateActive = false;
@@ -179,7 +205,7 @@ class CommandListProxy final : public ID3D12GraphicsCommandList10, public ILogic
             return S_OK;
         } catch (...) { return E_OUTOFMEMORY; }
     }
-    bool STDMETHODCALLTYPE CanAppendCompute() override { return !rawInterfaceEscaped && !renderPassActive && !enhancedBarriersSeen; }
+    bool STDMETHODCALLTYPE CanAppendCompute() override { return !rawInterfaceEscaped && !presentCommandsUsed && !renderPassActive && !enhancedBarriersSeen; }
     bool STDMETHODCALLTYPE CanRecordInline() override
     {
         if (rawInterfaceEscaped) inlineRejection = "native_interface_escaped";
@@ -422,6 +448,16 @@ public:
             AddRef();
             return S_OK;
         }
+        if (riid == IID_CommandListPresentRS5)
+        {
+            auto* supported = CurAs<ID3D12CommandListPresent_RS5>();
+            if (!supported) return E_NOINTERFACE;
+            supported->Release();
+            // Capability probing must not hand out a native alias that can survive Reset.
+            *ppv = static_cast<ID3D12CommandListPresent_RS5*>(this);
+            AddRef();
+            return S_OK;
+        }
         // Streamline / debug / vendor QIs: forward to the live producer/continuation list
         // instead of E_NOINTERFACE (燕云 crash with ArmCreate + wrap).
         if (auto *cur = logical.Current())
@@ -467,6 +503,37 @@ public:
         return n;
     }
 
+    void STDMETHODCALLTYPE Blt(ID3D12Resource* destination, const RECT* destinationRect,
+                              const RECT* destinationSubRect, UINT destinationSubresource,
+                              ID3D12Resource* source, const RECT* sourceRect,
+                              const SUBRESOURCE_BLT_MAP* subresources, UINT subresourceCount, UINT flags) override
+    {
+        // QI-only probes are harmless; an actual opaque command invalidates tracked state
+        // for this recording. Unlike a raw escaped alias, this proxy face follows Reset.
+        presentCommandsUsed = true;
+        MarkSplitIneligible("private_present_commands");
+        if (auto* current = CurAs<ID3D12CommandListPresent_RS5>())
+        {
+            current->Blt(destination, destinationRect, destinationSubRect, destinationSubresource,
+                         source, sourceRect, subresources, subresourceCount, flags);
+            current->Release();
+        }
+    }
+    void STDMETHODCALLTYPE Present(ID3D12CommandQueue* queue, const D3D12_PRESENTSURFACE* surfaces,
+                                  UINT surfaceCount, ID3D12Resource* resource, const RECT* rect,
+                                  UINT flags, UINT interval, UINT presentCount, INT* result,
+                                  D3D12_PRESENT* present) override
+    {
+        presentCommandsUsed = true;
+        MarkSplitIneligible("private_present_commands");
+        if (auto* current = CurAs<ID3D12CommandListPresent_RS5>())
+        {
+            current->Present(queue, surfaces, surfaceCount, resource, rect, flags, interval, presentCount,
+                             result, present);
+            current->Release();
+        }
+    }
+
     HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID guid, UINT *size, void *data) override
     {
         return logical.Current() ? logical.Current()->GetPrivateData(guid, size, data) : E_UNEXPECTED;
@@ -503,6 +570,7 @@ public:
         resBook.Reset();
         queryBook.Reset();
         splitIneligible = false;
+        presentCommandsUsed = false;
         renderPassActive = enhancedBarriersSeen = false;
         splitIneligibleReason = nullptr;
         inlineUnsafe = inlineStateActive = privateBindings = false;
