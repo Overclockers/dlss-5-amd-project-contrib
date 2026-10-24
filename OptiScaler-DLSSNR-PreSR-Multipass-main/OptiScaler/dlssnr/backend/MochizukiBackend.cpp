@@ -586,8 +586,11 @@ ID3D12Resource* MochizukiBackend::RecordLayers(ID3D12GraphicsCommandList* cmd, c
         const int32_t rc = p->recordDirect(p->owner->context, job.handle, nativeList, commandBuffer);
         resources->InvalidateDirectComputeBindings();
         if (rc != LMXXF_NR_OK) {
+            p->api.InvalidateRecording(p->owner->context, job.handle);
+            p->api.CollectRecording(p->owner->context, job.handle);
             coverage.Set(Coverage::Outcome::RecordFailed, "direct_recording_failed");
-            p->failed = true; p->Error("direct recording failed");
+            if (rc == LMXXF_NR_DEVICE_LOST) p->failed = true;
+            p->Error("direct recording failed");
             if (invocation) invocation->outcome = "direct_recording_failed";
             return nullptr;
         }

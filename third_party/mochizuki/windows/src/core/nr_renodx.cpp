@@ -750,7 +750,7 @@ struct Stage::Impl {
         if (b.motion) vkDestroyImageView(device, b.motion, nullptr);
         b.in = b.out = b.motion = VK_NULL_HANDLE;
         if (!b.pool) {
-            constexpr uint32_t kSets = 2 + kMaxUnlockedPasses;
+            constexpr uint32_t kSets = 2 + 2 * kMaxUnlockedPasses;
             VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 8 * kSets},
                                             {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 12 * kSets},
                                             {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4 * kSets}};
@@ -804,18 +804,22 @@ struct Stage::Impl {
                 if (!sample || prof_sample(sample->pool, 0, sample->names)) it = pending_profiles.erase(it);
                 else ++it;
             }
-            auto sample = std::make_shared<RecordingProfile>(device);
-            VkPhysicalDeviceProperties props{};
-            vkGetPhysicalDeviceProperties(physical, &props);
-            prof.ns = props.limits.timestampPeriod;
-            VkQueryPoolCreateInfo qi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
-            qi.queryType = VK_QUERY_TYPE_TIMESTAMP; qi.queryCount = Prof::kMax;
-            check(vkCreateQueryPool(device, &qi, nullptr, &sample->pool), "recording profile queries");
-            recording_resources->profiles.push_back(sample);
-            pending_profiles.push_back(sample);
-            recording_profile = std::move(sample);
-            vkCmdResetQueryPool(cmd, recording_profile->pool, 0, Prof::kMax);
-            mark(cmd, "start");
+            try {
+                auto sample = std::make_shared<RecordingProfile>(device);
+                VkPhysicalDeviceProperties props{};
+                vkGetPhysicalDeviceProperties(physical, &props);
+                prof.ns = props.limits.timestampPeriod;
+                VkQueryPoolCreateInfo qi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+                qi.queryType = VK_QUERY_TYPE_TIMESTAMP; qi.queryCount = Prof::kMax;
+                if (vkCreateQueryPool(device, &qi, nullptr, &sample->pool) != VK_SUCCESS || !sample->pool) return;
+                recording_resources->profiles.push_back(sample);
+                pending_profiles.push_back(sample);
+                recording_profile = std::move(sample);
+                vkCmdResetQueryPool(cmd, recording_profile->pool, 0, Prof::kMax);
+                mark(cmd, "start");
+            } catch (...) {
+                recording_profile.reset();
+            }
             return;
         }
         if (!prof.pool) {

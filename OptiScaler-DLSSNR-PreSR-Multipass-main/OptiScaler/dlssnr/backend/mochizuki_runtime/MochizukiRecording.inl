@@ -171,7 +171,9 @@ int32_t CheckExecutionDevice(Session* s, ID3D12DeviceChild* object, const char* 
     if (SUCCEEDED(hr) && DlssNr::Backend::IsRecordingDevice(s->device, s->toVk.fence, dev.Get()))
         return LMXXF_NR_OK;
     if (SUCCEEDED(hr) && s->vk.adoptedVkd3d &&
-        DlssNr::Backend::IsRecordingDevice(s->device, s->pipelineInvalidator.Get(), dev.Get()))
+        DlssNr::Backend::IsRecordingDevice(
+            s->device, s->pipelineInvalidator ? static_cast<ID3D12DeviceChild*>(s->pipelineInvalidator.Get()) : s->vk.interopQueue,
+            dev.Get()))
         return LMXXF_NR_OK;
     Microsoft::WRL::ComPtr<IUnknown> expected, observed;
     if (s->device) s->device->QueryInterface(IID_PPV_ARGS(&expected));

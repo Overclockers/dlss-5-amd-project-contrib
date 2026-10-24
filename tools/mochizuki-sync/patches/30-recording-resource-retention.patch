@@ -290,38 +290,44 @@
          impl_->retiring.emplace_back(it->second.history,
                                       impl_->recordings + Impl::kRetireAfter);
      impl_->features.erase(it);
-@@ -2811,13 +2908,27 @@
+@@ -2811,13 +2908,31 @@
          return result;
      }
      // Timed from here: a disabled pass records nothing and is not a cost.
 -    const uint32_t timing_slot = impl_->timing_slot;
 +    impl_->read_recording_timings();
 +    std::shared_ptr<Impl::RecordingTiming> recording_timing;
-+    VkQueryPool timing_pool = impl_->timing;
++    VkQueryPool timing_pool = impl_->recording_resources ? VK_NULL_HANDLE : impl_->timing;
 +    if (impl_->recording_resources && impl_->timing_ok) {
-+        recording_timing = std::make_shared<Impl::RecordingTiming>(impl_->session.ctx.device);
-+        VkQueryPoolCreateInfo qi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
-+        qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
-+        qi.queryCount = impl_->timing_stride;
-+        const VkResult created = vkCreateQueryPool(impl_->session.ctx.device, &qi, nullptr, &recording_timing->pool);
-+        if (created != VK_SUCCESS) throw std::runtime_error("NR recording timestamp pool creation failed");
-+        impl_->recording_resources->timings.push_back(recording_timing);
-+        impl_->pending_recording_timings.push_back(recording_timing);
-+        timing_pool = recording_timing->pool;
++        try {
++            auto sample = std::make_shared<Impl::RecordingTiming>(impl_->session.ctx.device);
++            VkQueryPoolCreateInfo qi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
++            qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
++            qi.queryCount = impl_->timing_stride;
++            if (vkCreateQueryPool(impl_->session.ctx.device, &qi, nullptr, &sample->pool) == VK_SUCCESS && sample->pool) {
++                impl_->recording_resources->timings.push_back(sample);
++                impl_->pending_recording_timings.push_back(sample);
++                recording_timing = std::move(sample);
++                timing_pool = recording_timing->pool;
++            }
++        } catch (...) {}
 +    }
++    const bool timing_active = impl_->timing_ok && timing_pool != VK_NULL_HANDLE;
 +    const uint32_t timing_slot = recording_timing ? 0 : impl_->timing_slot;
-     const bool time_stages = impl_->timing_ok && impl_->split_timing && impl_->stage_timing;
+-    const bool time_stages = impl_->timing_ok && impl_->split_timing && impl_->stage_timing;
++    const bool time_stages = timing_active && impl_->split_timing && impl_->stage_timing;
      const uint32_t stage_query = timing_slot * impl_->timing_stride + impl_->stage_base;
      uint8_t stages_written = 0;
-     if (impl_->timing_ok) {
+-    if (impl_->timing_ok) {
 -        vkCmdResetQueryPool(cmd, impl_->timing, timing_slot * impl_->timing_stride, impl_->timing_stride);
 -        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, impl_->timing, timing_slot * impl_->timing_stride);
++    if (timing_active) {
 +        vkCmdResetQueryPool(cmd, timing_pool, timing_slot * impl_->timing_stride, impl_->timing_stride);
 +        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, timing_pool, timing_slot * impl_->timing_stride);
      }
      auto& s = impl_->session;
      Controls effective=c;
-@@ -3061,10 +3172,10 @@
+@@ -3061,10 +3177,10 @@
          barrier(cmd, s.tex_in.handle, tin_layout, VK_IMAGE_LAYOUT_GENERAL, tin_stage, tin_access,
                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
          struct { uint32_t w, h; float white, knee; } push{nw, nh, impl_->white_point, 0.75f};
@@ -334,7 +340,7 @@
              stages_written |= 1;
          }
          barrier(cmd, s.tex_in.handle, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-@@ -3346,9 +3457,13 @@
+@@ -3346,9 +3462,13 @@
      // and this one's in. Only on a change, so the single-feature case records
      // nothing at all here.
      if (fs && impl_->bound_feature != temporal->feature) {
@@ -349,16 +355,18 @@
          }
          if (!fs->cleared) {
              // A fresh feature's image is whatever the allocator left there. The
-@@ -3422,7 +3537,7 @@
+@@ -3421,8 +3541,8 @@
+         }
          if (impl_->network_segments) cmd = impl_->network_segments(cmd, true);
-         const bool time_net = impl_->timing_ok && impl_->split_timing;
+-        const bool time_net = impl_->timing_ok && impl_->split_timing;
++        const bool time_net = timing_active && impl_->split_timing;
          const uint32_t net_query = timing_slot * impl_->timing_stride + 2 + 2 * pass;
 -        if (time_net) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, impl_->timing, net_query);
 +        if (time_net) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timing_pool, net_query);
          for (size_t i = 0; i < s.steps.size(); ++i) {
              const auto& step = s.steps[i];
              const nrvk::Kernel* use = step.k;
-@@ -3481,7 +3596,7 @@
+@@ -3481,7 +3601,7 @@
              compute_barrier(cmd, s.runner.exec_barrier && !last,
                              s.runner.inv_barrier && !last);
          }
@@ -367,7 +375,7 @@
          if (impl_->network_segments) cmd = impl_->network_segments(cmd, false);
          if (temporal && !t.pingpong) {
              // History is a copy of what the MODEL wrote - the temporal post variant
-@@ -3548,6 +3663,10 @@
+@@ -3548,6 +3668,10 @@
          s.ctx.destroy(impl_->retiring[i].first);
          impl_->retiring.erase(impl_->retiring.begin() + long(i));
      }
@@ -378,7 +386,7 @@
      info.network_dispatches = uint32_t(s.steps.size()) * passes;
      if (prep_on) {
          // The answer back into the frame's own domain. With later passes the
-@@ -3595,11 +3714,11 @@
+@@ -3595,11 +3719,11 @@
                                          (impl_->store_native && impl_->round_u8 ? kTransferRoundU8 : 0u),
                                      c.transfer_sigma};
              const nrvk::Kernel& transfer = prep_variant ? impl_->transfer_prep : impl_->transfer_pass;
@@ -392,11 +400,12 @@
                  stages_written |= 2;
              }
              compute_barrier(cmd);
-@@ -3710,15 +3829,20 @@
+@@ -3710,15 +3834,20 @@
                             depth_direct, game_depth && !impl_->depth_unread,
                             history_consumed && *history_consumed, impl_->mw, impl_->mh, mv_direct);
-     if (impl_->timing_ok) {
+-    if (impl_->timing_ok) {
 -        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, impl_->timing,
++    if (timing_active) {
 +        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timing_pool,
                              timing_slot * impl_->timing_stride + 1);
 -        impl_->slot_passes[timing_slot] = impl_->split_timing ? passes : 0;

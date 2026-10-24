@@ -2823,6 +2823,7 @@ struct Session
     std::wstring assets;
     Microsoft::WRL::ComPtr<ID3D12Resource> pipelineInvalidator;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> invalidatorCpu, invalidatorGpu;
+    bool invalidatorFailed = false;
     uint64_t directRecorded = 0, directSubmitted = 0, directCompleted = 0;
     std::shared_ptr<FrameBuffers> allocation;
     std::shared_ptr<ImageInput> colourInput;

@@ -139,7 +139,7 @@
          const auto it = sets.find(key);
          if (it != sets.end()) return it->second;
          const VkDescriptorSet set = set_for(programs[p], views, buffers);
-@@ -661,12 +739,12 @@
+@@ -661,18 +739,18 @@
      // and the sets naming them (the linearize's, the commit's, each pass's compose) are this recording's only - a
      // game's image handle can come back for another image once the game frees it - and are freed once the frames in
      // flight are past them, as the retired images are.
@@ -155,7 +155,14 @@
          if (b.in) vkDestroyImageView(device, b.in, nullptr);
          if (b.out) vkDestroyImageView(device, b.out, nullptr);
          if (b.motion) vkDestroyImageView(device, b.motion, nullptr);
-@@ -709,14 +787,37 @@
+         b.in = b.out = b.motion = VK_NULL_HANDLE;
+         if (!b.pool) {
+-            constexpr uint32_t kSets = 2 + kMaxUnlockedPasses;
++            constexpr uint32_t kSets = 2 + 2 * kMaxUnlockedPasses;
+             VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 8 * kSets},
+                                             {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 12 * kSets},
+                                             {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4 * kSets}};
+@@ -709,14 +787,41 @@
          std::map<std::string, std::pair<double, uint32_t>> acc;
      } prof;
      void mark(VkCommandBuffer cmd, const std::string& name) {
@@ -179,24 +186,28 @@
 +                if (!sample || prof_sample(sample->pool, 0, sample->names)) it = pending_profiles.erase(it);
 +                else ++it;
 +            }
-+            auto sample = std::make_shared<RecordingProfile>(device);
-+            VkPhysicalDeviceProperties props{};
-+            vkGetPhysicalDeviceProperties(physical, &props);
-+            prof.ns = props.limits.timestampPeriod;
-+            VkQueryPoolCreateInfo qi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
-+            qi.queryType = VK_QUERY_TYPE_TIMESTAMP; qi.queryCount = Prof::kMax;
-+            check(vkCreateQueryPool(device, &qi, nullptr, &sample->pool), "recording profile queries");
-+            recording_resources->profiles.push_back(sample);
-+            pending_profiles.push_back(sample);
-+            recording_profile = std::move(sample);
-+            vkCmdResetQueryPool(cmd, recording_profile->pool, 0, Prof::kMax);
-+            mark(cmd, "start");
++            try {
++                auto sample = std::make_shared<RecordingProfile>(device);
++                VkPhysicalDeviceProperties props{};
++                vkGetPhysicalDeviceProperties(physical, &props);
++                prof.ns = props.limits.timestampPeriod;
++                VkQueryPoolCreateInfo qi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
++                qi.queryType = VK_QUERY_TYPE_TIMESTAMP; qi.queryCount = Prof::kMax;
++                if (vkCreateQueryPool(device, &qi, nullptr, &sample->pool) != VK_SUCCESS || !sample->pool) return;
++                recording_resources->profiles.push_back(sample);
++                pending_profiles.push_back(sample);
++                recording_profile = std::move(sample);
++                vkCmdResetQueryPool(cmd, recording_profile->pool, 0, Prof::kMax);
++                mark(cmd, "start");
++            } catch (...) {
++                recording_profile.reset();
++            }
 +            return;
 +        }
          if (!prof.pool) {
              VkPhysicalDeviceProperties props{};
              vkGetPhysicalDeviceProperties(physical, &props);
-@@ -730,21 +831,29 @@
+@@ -730,21 +835,29 @@
          mark(cmd, "start");
      }
      void prof_end() {
@@ -239,7 +250,7 @@
      }
  
      void dispatch(VkCommandBuffer cmd, P p, VkDescriptorSet set, const void* push, uint32_t bytes, uint32_t x, uint32_t y) {
-@@ -810,6 +920,7 @@
+@@ -810,6 +924,7 @@
      // An image out of use: destroyed once frames in flight are past it, with every kept set (one may name it).
      void retire(Image& im) {
          if (im.handle) {
@@ -247,7 +258,7 @@
              retired.push_back({recordings + 64, im});
              for (const auto& [key, set] : sets) retired_sets.push_back({recordings + 64, set});
              sets.clear();
-@@ -1078,6 +1189,8 @@
+@@ -1078,6 +1193,8 @@
  
  Stage::~Stage() {
      Impl& m = *impl_;
@@ -256,7 +267,7 @@
      if (m.prof.pool) vkDestroyQueryPool(m.device, m.prof.pool, nullptr);
      if (m.probe_memory) { vkUnmapMemory(m.device, m.probe_memory); vkFreeMemory(m.device, m.probe_memory, nullptr); }
      if (m.probe) vkDestroyBuffer(m.device, m.probe, nullptr);
-@@ -1105,6 +1218,18 @@
+@@ -1105,6 +1222,18 @@
          if (b) vkDestroyBuffer(m.device, b, nullptr);
          if (mem) vkFreeMemory(m.device, mem, nullptr);
      }

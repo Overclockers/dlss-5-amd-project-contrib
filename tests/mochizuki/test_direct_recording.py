@@ -83,6 +83,9 @@ class DirectRecordingContract(unittest.TestCase):
         invalidator = body(direct, "EnsureDirectInvalidator")
         self.assertIn("desc.Width = 2", invalidator)
         self.assertIn("desc.Height =", invalidator)
+        self.assertIn("invalidatorFailed", invalidator)
+        self.assertNotIn("Check(", invalidator)
+        self.assertIn("if (!EnsureDirectInvalidator(s)) return", invalidate)
         self.assertRegex(invalidate, r"D3D12_RECT\s+rect\s*\{\s*0,\s*0,\s*1,\s*1\s*\}")
         self.assertLess(record.rindex("target.after"), record.rindex("ForgetDirectPipeline"))
 
@@ -100,6 +103,9 @@ class DirectRecordingContract(unittest.TestCase):
         self.assertLess(record, host.index("p->api.RecordInputs(", record))
         direct = host[host.rfind("if (directRecording)", attach, record):host.index("p->api.RecordInputs(", record)]
         self.assertIn("InvalidateDirectComputeBindings()", direct)
+        self.assertIn("p->api.InvalidateRecording(p->owner->context, job.handle)", direct)
+        self.assertIn("p->api.CollectRecording(p->owner->context, job.handle)", direct)
+        self.assertIn("rc == LMXXF_NR_DEVICE_LOST", direct)
         self.assertIn("return", direct)
         for forbidden in ("RecordOutputs(", "EnqueueHip(", "Split(", "ApplyTo(", "SetPipelineState(", "SetComputeRootSignature("):
             self.assertNotIn(forbidden, direct)
@@ -150,7 +156,9 @@ class DirectRecordingContract(unittest.TestCase):
         vendor = source(ROOT / "third_party/mochizuki/windows/src/core/nr_runtime.cpp")
         for fresh in ("frames", "depth", "direct"):
             self.assertIn("recording_resources->" + fresh + ".emplace_back()", vendor)
-        self.assertIn("recording_resources->timings.push_back(recording_timing)", vendor)
+        self.assertIn("recording_resources->timings.push_back(sample)", vendor)
+        self.assertNotIn("NR recording timestamp pool creation failed", vendor)
+        self.assertIn("const bool timing_active = impl_->timing_ok && timing_pool != VK_NULL_HANDLE", vendor)
         self.assertIn("recording_resources->histories", vendor)
         self.assertIn("return std::move(impl_->recording_resources)", vendor)
         lifecycle = source(RUNTIME / "MochizukiRecording.inl")
@@ -167,6 +175,8 @@ class DirectRecordingContract(unittest.TestCase):
         self.assertIn("recording_resources ? recording_resources->sets : this->sets", reno)
         self.assertIn("recording_resources ? recording_pool() : pool", reno)
         self.assertIn("recording_resources->images", reno)
+        self.assertNotIn("recording profile queries", reno)
+        self.assertIn("2 + 2 * kMaxUnlockedPasses", reno)
         self.assertIn("return std::move(impl_->recording_resources)", reno)
         observe = body(lifecycle, "ObserveDirectCompletions")
         for gate in ("r.tail", "r.executingQueue", "r.uncertain", "r.completedExecutions == r.executions", "completed == UINT64_MAX", "completed < r.tailValue"):

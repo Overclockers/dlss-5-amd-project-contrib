@@ -67,9 +67,10 @@ nr::ColourFrame DirectResource(Session* s, ID3D12Resource* resource, D3D12_RESOU
     return out;
 }
 
-void EnsureDirectInvalidator(Session* s)
+bool EnsureDirectInvalidator(Session* s) noexcept
 {
-    if (s->pipelineInvalidator) return;
+    if (s->pipelineInvalidator && s->invalidatorCpu && s->invalidatorGpu) return true;
+    if (s->invalidatorFailed || !s->device) return false;
     D3D12_HEAP_PROPERTIES heap {}; heap.Type = D3D12_HEAP_TYPE_DEFAULT;
     D3D12_RESOURCE_DESC desc {};
     desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -78,12 +79,18 @@ void EnsureDirectInvalidator(Session* s)
     desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
     Microsoft::WRL::ComPtr<ID3D12Resource> image;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> cpu, gpu;
-    Check(s->device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&image)), "direct pipeline invalidator");
+    HRESULT hr = s->device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&image));
     D3D12_DESCRIPTOR_HEAP_DESC hd {}; hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.NumDescriptors = 1;
-    Check(s->device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&cpu)), "direct invalidator CPU heap");
+    if (SUCCEEDED(hr)) hr = s->device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&cpu));
     hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-    Check(s->device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&gpu)), "direct invalidator GPU heap");
+    if (SUCCEEDED(hr)) hr = s->device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&gpu));
+    if (FAILED(hr) || !image || !cpu || !gpu) {
+        s->invalidatorFailed = true;
+        nr::logf("[mochizuki] could not build the direct pipeline invalidator (0x%08lX); keeping null compute PSO/root only",
+                 static_cast<unsigned long>(hr));
+        return false;
+    }
     D3D12_UNORDERED_ACCESS_VIEW_DESC uav {}; uav.Format = desc.Format; uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
     s->device->CreateUnorderedAccessView(image.Get(), nullptr, &uav, cpu->GetCPUDescriptorHandleForHeapStart());
     s->device->CreateUnorderedAccessView(image.Get(), nullptr, &uav, gpu->GetCPUDescriptorHandleForHeapStart());
@@ -91,12 +98,14 @@ void EnsureDirectInvalidator(Session* s)
     nr::logf("[mochizuki] direct interfaces: ID3D12GraphicsCommandListExt/GetVulkanHandle, "
              "ID3D12DXVKInteropDevice/GetVulkanResourceInfo+GetVulkanImageLayout; "
              "state restore=ALL_COMMANDS/layouts/null compute PSO+root/partial 2x1 ClearUAV meta");
+    return true;
 }
 
-void ForgetDirectPipeline(Session* s, ID3D12GraphicsCommandList* list)
+void ForgetDirectPipeline(Session* s, ID3D12GraphicsCommandList* list) noexcept
 {
     list->SetPipelineState(nullptr);
     list->SetComputeRootSignature(nullptr);
+    if (!EnsureDirectInvalidator(s)) return;
     // A partial rect forces vkd3d's meta shader, invalidating command_buffer_pipeline,
     // which the two D3D12 setters above cannot reach (official forget_bound_pipeline).
     const UINT zero[4] {};
@@ -120,7 +129,7 @@ int32_t RecordDirect(void* context, void* token, void* nativeList, uint64_t comm
         auto* list = static_cast<ID3D12GraphicsCommandList*>(nativeList);
         auto c = reinterpret_cast<VkCommandBuffer>(uintptr_t(commandBuffer));
         Job& j = s->job;
-        EnsureDirectInvalidator(s); // Fail before recording anything if restoration cannot be guaranteed.
+        EnsureDirectInvalidator(s);
         auto source = DirectResource(s, j.colour, j.colourState, s->colourVk);
         auto target = DirectResource(s, s->result, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, s->colourVk);
         auto motion = j.motion ? DirectResource(s, j.motion, j.motionState, s->motionVk) : nr::ColourFrame {};
@@ -244,17 +253,22 @@ int32_t RecordDirect(void* context, void* token, void* nativeList, uint64_t comm
                     sf.exposure.image = image; sf.exposure.format = VK_FORMAT_R32_SFLOAT;
                     sf.exposure.width = sf.exposure.height = 1; sf.exposure.usage = kImageUsage;
                 }
-                r->directTiming = std::make_unique<MochizukiStageTiming>();
-                VkPhysicalDeviceProperties timingProperties {};
-                vkGetPhysicalDeviceProperties(s->vk.physical, &timingProperties);
-                uint32_t familyCount = 0;
-                vkGetPhysicalDeviceQueueFamilyProperties(s->vk.physical, &familyCount, nullptr);
-                std::vector<VkQueueFamilyProperties> timingFamilies(familyCount);
-                vkGetPhysicalDeviceQueueFamilyProperties(s->vk.physical, &familyCount, timingFamilies.data());
-                r->directTiming->Create(s->vk.device, timingProperties.limits.timestampPeriod,
-                    timingFamilies[s->vk.family].timestampValidBits, 0);
+                try {
+                    r->directTiming = std::make_unique<MochizukiStageTiming>();
+                    VkPhysicalDeviceProperties timingProperties {};
+                    vkGetPhysicalDeviceProperties(s->vk.physical, &timingProperties);
+                    uint32_t familyCount = 0;
+                    vkGetPhysicalDeviceQueueFamilyProperties(s->vk.physical, &familyCount, nullptr);
+                    std::vector<VkQueueFamilyProperties> timingFamilies(familyCount);
+                    vkGetPhysicalDeviceQueueFamilyProperties(s->vk.physical, &familyCount, timingFamilies.data());
+                    r->directTiming->Create(s->vk.device, timingProperties.limits.timestampPeriod,
+                        s->vk.family < familyCount ? timingFamilies[s->vk.family].timestampValidBits : 0, 0);
+                    r->directTimingSlot = r->directTiming->Begin(c, false);
+                } catch (...) {
+                    r->directTiming.reset();
+                    r->directTimingSlot = MochizukiStageTiming::kUnavailable;
+                }
                 uint32_t dispatches = 0;
-                r->directTimingSlot = r->directTiming->Begin(c, false);
                 s->runtime->reno->record(c, sf, [&](uint32_t pass, const nr::ColourFrame& proxy, const nr::ColourFrame& output, bool resetPass) {
                     auto frame = engine; frame.colour = proxy; frame.target = output; frame.feature = pass + 1; frame.reset = resetPass;
                     frame.motion_scale_x = sf.motion_scale_x; frame.motion_scale_y = sf.motion_scale_y;
@@ -271,13 +285,13 @@ int32_t RecordDirect(void* context, void* token, void* nativeList, uint64_t comm
                         controls.local_structure = std::min(controls.local_structure, 1.f);
                         if (controls.skin_structure < 0.f) controls.skin_structure = 1.f;
                     }
-                    r->directTiming->BeginNetwork(c, r->directTimingSlot);
+                    if (r->directTiming) r->directTiming->BeginNetwork(c, r->directTimingSlot);
                     const auto result = s->runtime->record_engine(c, frame, controls);
-                    r->directTiming->EndNetwork(c, r->directTimingSlot);
+                    if (r->directTiming) r->directTiming->EndNetwork(c, r->directTimingSlot);
                     dispatches += result.frame.network_dispatches; consumed |= result.history_consumed;
                 });
                 r->renoResources = s->runtime->reno->end_recording_resources();
-                r->directTiming->End(c, r->directTimingSlot);
+                if (r->directTiming) r->directTiming->End(c, r->directTimingSlot);
                 s->dispatches.store(dispatches);
             } else if (motion.image) {
                 const auto result = s->runtime->record_engine(c, engine, j.controls);

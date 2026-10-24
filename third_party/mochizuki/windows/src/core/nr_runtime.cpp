@@ -2910,23 +2910,27 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
     // Timed from here: a disabled pass records nothing and is not a cost.
     impl_->read_recording_timings();
     std::shared_ptr<Impl::RecordingTiming> recording_timing;
-    VkQueryPool timing_pool = impl_->timing;
+    VkQueryPool timing_pool = impl_->recording_resources ? VK_NULL_HANDLE : impl_->timing;
     if (impl_->recording_resources && impl_->timing_ok) {
-        recording_timing = std::make_shared<Impl::RecordingTiming>(impl_->session.ctx.device);
-        VkQueryPoolCreateInfo qi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
-        qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
-        qi.queryCount = impl_->timing_stride;
-        const VkResult created = vkCreateQueryPool(impl_->session.ctx.device, &qi, nullptr, &recording_timing->pool);
-        if (created != VK_SUCCESS) throw std::runtime_error("NR recording timestamp pool creation failed");
-        impl_->recording_resources->timings.push_back(recording_timing);
-        impl_->pending_recording_timings.push_back(recording_timing);
-        timing_pool = recording_timing->pool;
+        try {
+            auto sample = std::make_shared<Impl::RecordingTiming>(impl_->session.ctx.device);
+            VkQueryPoolCreateInfo qi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+            qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+            qi.queryCount = impl_->timing_stride;
+            if (vkCreateQueryPool(impl_->session.ctx.device, &qi, nullptr, &sample->pool) == VK_SUCCESS && sample->pool) {
+                impl_->recording_resources->timings.push_back(sample);
+                impl_->pending_recording_timings.push_back(sample);
+                recording_timing = std::move(sample);
+                timing_pool = recording_timing->pool;
+            }
+        } catch (...) {}
     }
+    const bool timing_active = impl_->timing_ok && timing_pool != VK_NULL_HANDLE;
     const uint32_t timing_slot = recording_timing ? 0 : impl_->timing_slot;
-    const bool time_stages = impl_->timing_ok && impl_->split_timing && impl_->stage_timing;
+    const bool time_stages = timing_active && impl_->split_timing && impl_->stage_timing;
     const uint32_t stage_query = timing_slot * impl_->timing_stride + impl_->stage_base;
     uint8_t stages_written = 0;
-    if (impl_->timing_ok) {
+    if (timing_active) {
         vkCmdResetQueryPool(cmd, timing_pool, timing_slot * impl_->timing_stride, impl_->timing_stride);
         vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, timing_pool, timing_slot * impl_->timing_stride);
     }
@@ -3535,7 +3539,7 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
             if (temporal) copy_general(impl_->history_store[pass], t.history);
         }
         if (impl_->network_segments) cmd = impl_->network_segments(cmd, true);
-        const bool time_net = impl_->timing_ok && impl_->split_timing;
+        const bool time_net = timing_active && impl_->split_timing;
         const uint32_t net_query = timing_slot * impl_->timing_stride + 2 + 2 * pass;
         if (time_net) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timing_pool, net_query);
         for (size_t i = 0; i < s.steps.size(); ++i) {
@@ -3828,7 +3832,7 @@ ControlMaskResult Runtime::record_all(VkCommandBuffer cmd, const ColourFrame& fr
         impl_->incheck.end(s.ctx, cmd, tgt && (tgt->usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) ? *tgt : frame, *engine, impl_->temporal.flow[0], impl_->temporal.depth,
                            depth_direct, game_depth && !impl_->depth_unread,
                            history_consumed && *history_consumed, impl_->mw, impl_->mh, mv_direct);
-    if (impl_->timing_ok) {
+    if (timing_active) {
         vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timing_pool,
                             timing_slot * impl_->timing_stride + 1);
         if (recording_timing) {
